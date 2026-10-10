@@ -38,9 +38,10 @@ type entry struct {
 }
 
 type Registry struct {
-	logf  func(format string, args ...any)
-	probe func(ctx context.Context, raw string) (browser.Endpoint, error)
-	onAdd func(ctx context.Context, id string, hostports []string)
+	logf    func(format string, args ...any)
+	probe   func(ctx context.Context, raw string) (browser.Endpoint, error)
+	onAdd   func(ctx context.Context, id string, hostports []string)
+	onCheck func(ctx context.Context, id string, hostports []string)
 
 	mu      sync.Mutex
 	entries []*entry
@@ -74,6 +75,12 @@ func probe(ctx context.Context, raw string) (browser.Endpoint, error) {
 func (r *Registry) OnAdd(fn func(ctx context.Context, id string, hostports []string)) {
 	r.mu.Lock()
 	r.onAdd = fn
+	r.mu.Unlock()
+}
+
+func (r *Registry) OnCheck(fn func(ctx context.Context, id string, hostports []string)) {
+	r.mu.Lock()
+	r.onCheck = fn
 	r.mu.Unlock()
 }
 
@@ -272,6 +279,7 @@ func (r *Registry) Watch(ctx context.Context, every time.Duration) {
 func (r *Registry) watchOnce(ctx context.Context, misses map[string]int) {
 	r.mu.Lock()
 	live := append([]*entry(nil), r.entries...)
+	onCheck := r.onCheck
 	gone := make([]*entry, 0, len(r.gone))
 	for _, e := range r.gone {
 		gone = append(gone, e)
@@ -280,6 +288,9 @@ func (r *Registry) watchOnce(ctx context.Context, misses map[string]int) {
 	for _, e := range live {
 		if answers(ctx, e.key) {
 			misses[e.info.ID] = 0
+			if onCheck != nil {
+				onCheck(ctx, e.info.ID, endpointHostPorts(e.key, e.ep))
+			}
 			continue
 		}
 		misses[e.info.ID]++

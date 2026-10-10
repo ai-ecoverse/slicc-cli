@@ -304,6 +304,7 @@ A node checks every address it connects to for the link's `tcp`, `http` and `ssh
 **Browser endpoints.** Each listed `cdp` browser's own endpoints are denied too, so a browser on another machine (`--cdp http://10.0.0.5:9222 --allow 10.0.0.0/8`) is reachable only through `cdp`:
 - the host and port of its CDP URL, and of the `webSocketDebuggerUrl` it reports;
 - a host that is a name is resolved when the browser is added (the `--hosts` file first, then the system resolver), and every address it resolves to is denied on that port;
+- while the browser is listed, its names are resolved again on every 2 s check, and new addresses are added to the old ones, so nothing is dropped while it's listed. IP literals aren't looked up again;
 - when the browser is listed again after it stopped answering, its endpoints are resolved again and replace the old ones. If resolving fails, the old ones stay.
 
 They are listed in HELLO's `policy.deny` as `<address>/32:port` or `[<address>]/128:port`.

@@ -29,6 +29,18 @@ func (e *endpoints) set(id string, addrs []netip.AddrPort) {
 	e.byID[id] = addrs
 }
 
+func (e *endpoints) union(id string, addrs []netip.AddrPort) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	list := e.byID[id]
+	for _, ap := range addrs {
+		if !slices.Contains(list, ap) {
+			list = append(list, ap)
+		}
+	}
+	e.byID[id] = list
+}
+
 func (e *endpoints) get(id string) []netip.AddrPort {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -86,10 +98,7 @@ func (e *endpoints) rules() []Rule {
 	return out
 }
 
-func (p *Policy) ProtectEndpoints(id string, addrs []netip.AddrPort) {
-	if p == nil || p.endpoints == nil {
-		return
-	}
+func normalizeEndpoints(addrs []netip.AddrPort) []netip.AddrPort {
 	var out []netip.AddrPort
 	for _, ap := range addrs {
 		if ap.Port() == 0 || !ap.Addr().IsValid() {
@@ -101,7 +110,40 @@ func (p *Policy) ProtectEndpoints(id string, addrs []netip.AddrPort) {
 			out = append(out, n)
 		}
 	}
-	p.endpoints.set(id, out)
+	return out
+}
+
+func (p *Policy) ProtectEndpoints(id string, addrs []netip.AddrPort) {
+	if p == nil || p.endpoints == nil {
+		return
+	}
+	p.endpoints.set(id, normalizeEndpoints(addrs))
+}
+
+func (p *Policy) AddProtectedEndpoints(id string, addrs []netip.AddrPort) {
+	if p == nil || p.endpoints == nil {
+		return
+	}
+	p.endpoints.union(id, normalizeEndpoints(addrs))
+}
+
+func (p *Policy) RefreshBrowser(ctx context.Context, id string, hostports []string, hosts *Hosts) error {
+	var names []string
+	for _, hp := range hostports {
+		host, _, err := net.SplitHostPort(hp)
+		if err != nil {
+			continue
+		}
+		if _, err := netip.ParseAddr(host); err != nil {
+			names = append(names, hp)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	addrs, err := ResolveEndpoints(ctx, names, hosts)
+	p.AddProtectedEndpoints(id, addrs)
+	return err
 }
 
 func (p *Policy) ProtectedEndpoints(id string) []netip.AddrPort {
