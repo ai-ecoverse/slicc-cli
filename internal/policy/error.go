@@ -27,6 +27,8 @@ func (e *Error) Error() string {
 		target += " (as " + e.Checked.String() + ")"
 	}
 	switch {
+	case e.Rule != "" && e.Reason != "":
+		return fmt.Sprintf("policy denies %s: deny %s, %s", target, e.Rule, e.Reason)
 	case e.Rule != "":
 		return fmt.Sprintf("policy denies %s: deny %s", target, e.Rule)
 	case e.Reason != "":

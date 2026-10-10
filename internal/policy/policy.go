@@ -9,6 +9,8 @@ import (
 type entry struct {
 	rule Rule
 	deny bool
+	user bool
+	why  string
 }
 
 type Policy struct {
@@ -18,6 +20,8 @@ type Policy struct {
 	deny      []Rule
 	userAllow []Rule
 	userDeny  []Rule
+	hostPorts []uint16
+	hosts     *addrCache
 }
 
 var remoteDeny = []string{
@@ -29,6 +33,7 @@ var remoteDeny = []string{
 	"224.0.0.0/4", "ff00::/8",
 	"240.0.0.0/4", "255.255.255.255/32", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15",
 	"198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32", "100::/64",
+	"::/96", "::ffff:0:0:0/96",
 }
 
 var localAllows = []string{
@@ -54,22 +59,20 @@ func Remote() *Policy {
 func Local(loopbackPorts ...uint16) *Policy {
 	p := &Policy{base: "every public address, this machine, and the local network"}
 	for _, s := range remoteDeny {
-		if !slices.Contains(localAllows, s) {
-			p.entries = append(p.entries, entry{rule: mustRule(s), deny: true})
-		}
+		p.entries = append(p.entries, entry{rule: mustRule(s), deny: !slices.Contains(localAllows, s)})
 	}
-	seen := map[uint16]bool{}
 	for _, port := range loopbackPorts {
-		if port == 0 || seen[port] {
+		if port == 0 || slices.Contains(p.hostPorts, port) {
 			continue
 		}
-		seen[port] = true
+		p.hostPorts = append(p.hostPorts, port)
 		for _, host := range loopbackHosts {
 			r := Rule{Prefix: netip.MustParsePrefix(host), Port: port}
 			p.entries = append(p.entries, entry{rule: r, deny: true})
 			p.deny = append(p.deny, r)
 		}
 	}
+	p.hosts = hostAddrs
 	return p
 }
 
@@ -90,13 +93,15 @@ func (p *Policy) With(allow, deny []Rule) *Policy {
 		deny:      slices.Clone(p.deny),
 		userAllow: append(slices.Clone(p.userAllow), allow...),
 		userDeny:  append(slices.Clone(p.userDeny), deny...),
+		hostPorts: slices.Clone(p.hostPorts),
+		hosts:     p.hosts,
 	}
 	for _, r := range allow {
-		q.entries = append(q.entries, entry{rule: r})
+		q.entries = append(q.entries, entry{rule: r, user: true})
 		q.allow = append(q.allow, r)
 	}
 	for _, r := range deny {
-		q.entries = append(q.entries, entry{rule: r, deny: true})
+		q.entries = append(q.entries, entry{rule: r, deny: true, user: true})
 		q.deny = append(q.deny, r)
 	}
 	return q
@@ -123,7 +128,7 @@ func (p *Policy) check(ap netip.AddrPort) error {
 		return &Error{Addr: ap, Checked: addr, Reason: why}
 	}
 	if e, ok := p.decide(addr, ap.Port()); ok && e.deny {
-		return &Error{Addr: ap, Checked: addr, Rule: e.rule.String()}
+		return &Error{Addr: ap, Checked: addr, Rule: e.rule.String(), Reason: e.why}
 	}
 	return nil
 }
@@ -131,12 +136,33 @@ func (p *Policy) check(ap netip.AddrPort) error {
 func (p *Policy) decide(addr netip.Addr, port uint16) (entry, bool) {
 	var best entry
 	found := false
-	for _, e := range p.entries {
+	consider := func(e entry) {
 		if e.rule.matches(addr, port) && (!found || beats(e, best)) {
 			best, found = e, true
 		}
 	}
+	for _, e := range p.entries {
+		consider(e)
+	}
+	if e, ok := p.hostEntry(addr, port); ok {
+		consider(e)
+	}
 	return best, found
+}
+
+func (p *Policy) hostEntry(addr netip.Addr, port uint16) (entry, bool) {
+	if port == 0 || p.hosts == nil || !slices.Contains(p.hostPorts, port) {
+		return entry{}, false
+	}
+	why := "a protected port on an address of this machine"
+	isHost, err := p.hosts.isHost(addr)
+	if err != nil {
+		why = "this machine's addresses are unknown: " + err.Error()
+	} else if !isHost {
+		return entry{}, false
+	}
+	r := Rule{Prefix: netip.PrefixFrom(addr, addr.BitLen()), Port: port}
+	return entry{rule: r, deny: true, why: why}, true
 }
 
 func beats(a, b entry) bool {
@@ -145,6 +171,9 @@ func beats(a, b entry) bool {
 	}
 	if (a.rule.Port != 0) != (b.rule.Port != 0) {
 		return a.rule.Port != 0
+	}
+	if a.user != b.user {
+		return a.user
 	}
 	return a.deny && !b.deny
 }
@@ -157,7 +186,7 @@ func (p *Policy) AllowsAny(addr netip.Addr) bool {
 	if why != "" {
 		return false
 	}
-	ports := []uint16{0}
+	ports := append([]uint16{0}, p.hostPorts...)
 	for _, e := range p.entries {
 		if e.rule.Port != 0 && e.rule.Prefix.Contains(checked) {
 			ports = append(ports, e.rule.Port)
