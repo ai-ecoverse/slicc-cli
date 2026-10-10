@@ -68,6 +68,7 @@ func (p *pump) wait(grace time.Duration) {
 
 type pipeProc struct {
 	cmd    *exec.Cmd
+	tree   *procTree
 	stdin  *os.File
 	stdout *os.File
 	stderr *os.File
@@ -80,20 +81,19 @@ type pipeProc struct {
 func startPipes(argv, env []string, dir string, ch ssh.Channel) (process, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env, cmd.Dir = env, dir
-	setProcAttr(cmd)
 	files, err := pipes()
 	if err != nil {
 		return nil, err
 	}
 	inR, inW, outR, outW, errR, errW := files[0], files[1], files[2], files[3], files[4], files[5]
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, errW
-	err = cmd.Start()
+	tree, err := startTree(cmd)
 	closeAll(inR, outW, errW)
 	if err != nil {
 		closeAll(inW, outR, errR)
 		return nil, err
 	}
-	p := &pipeProc{cmd: cmd, stdin: inW, stdout: outR, stderr: errR}
+	p := &pipeProc{cmd: cmd, tree: tree, stdin: inW, stdout: outR, stderr: errR}
 	go func() {
 		_, _ = io.Copy(inW, ch)
 		_ = inW.Close()
@@ -126,7 +126,7 @@ func (p *pipeProc) Signal(name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.done {
-		signalGroup(p.cmd.Process, name)
+		p.tree.signal(name)
 	}
 }
 
@@ -140,6 +140,7 @@ func (p *pipeProc) Wait() exitStatus {
 	_ = p.stdin.Close()
 	p.out.wait(drainGrace)
 	p.errOut.wait(drainGrace)
+	p.tree.release()
 	go closeAll(p.stdout, p.stderr)
 	return exitFrom(p.cmd.ProcessState, err)
 }

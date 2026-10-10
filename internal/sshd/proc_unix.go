@@ -25,15 +25,27 @@ var signalNames = map[string]syscall.Signal{
 	"USR2": syscall.SIGUSR2,
 }
 
-func setProcAttr(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+type procTree struct {
+	pid int
 }
 
-func signalGroup(p *os.Process, name string) {
-	if p != nil {
-		signalPgid(p.Pid, name)
+func startTree(cmd *exec.Cmd) (*procTree, error) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return nil, err
 	}
+	return &procTree{pid: cmd.Process.Pid}, nil
 }
+
+func (t *procTree) signal(name string) {
+	signalPgid(t.pid, name)
+}
+
+func (t *procTree) interrupt() {
+	signalPgid(t.pid, "INT")
+}
+
+func (t *procTree) release() {}
 
 func signalPgid(pgid int, name string) {
 	sig, ok := signalNames[name]
@@ -43,10 +55,6 @@ func signalPgid(pgid int, name string) {
 	if syscall.Kill(-pgid, sig) != nil {
 		_ = syscall.Kill(pgid, sig)
 	}
-}
-
-func interrupt(p *os.Process) {
-	signalGroup(p, "INT")
 }
 
 func exitFrom(ps *os.ProcessState, err error) exitStatus {

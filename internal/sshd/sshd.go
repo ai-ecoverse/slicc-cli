@@ -57,13 +57,14 @@ type Server struct {
 	eval   *evalHost
 	mu     sync.Mutex
 	closed bool
+	procs  map[process]struct{}
 }
 
 func New(cfg Config) (*Server, error) {
 	if cfg.HostKey == nil {
 		return nil, errors.New("sshd: a host key is required")
 	}
-	s := &Server{cfg: cfg, dialer: cfg.Dialer, shell: cfg.Shell}
+	s := &Server{cfg: cfg, dialer: cfg.Dialer, shell: cfg.Shell, procs: map[process]struct{}{}}
 	if s.dialer == nil {
 		s.dialer = RefuseAll{}
 	}
@@ -117,11 +118,34 @@ func (s *Server) ServeConn(c net.Conn) error {
 func (s *Server) Close() error {
 	s.mu.Lock()
 	s.closed = true
+	procs := make([]process, 0, len(s.procs))
+	for p := range s.procs {
+		procs = append(procs, p)
+	}
 	s.mu.Unlock()
+	for _, p := range procs {
+		p.Signal("KILL")
+	}
 	if s.eval != nil {
 		s.eval.close()
 	}
 	return nil
+}
+
+func (s *Server) track(p process) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.procs[p] = struct{}{}
+	return true
+}
+
+func (s *Server) untrack(p process) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.procs, p)
 }
 
 func (s *Server) isClosed() bool {
@@ -131,6 +155,10 @@ func (s *Server) isClosed() bool {
 }
 
 func (s *Server) handleChannel(ctx context.Context, nc ssh.NewChannel) {
+	if s.isClosed() {
+		_ = nc.Reject(ssh.Prohibited, "slicc: the SSH server is shutting down")
+		return
+	}
 	switch nc.ChannelType() {
 	case "session":
 		if len(s.cfg.Runner) == 0 {

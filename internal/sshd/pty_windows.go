@@ -16,6 +16,7 @@ import (
 
 type conProc struct {
 	cpty   *conpty.ConPty
+	tree   *procTree
 	handle windows.Handle
 	output *os.File
 	out    *pump
@@ -41,13 +42,22 @@ func startPTY(argv, env []string, dir string, ch ssh.Channel, req *ptyRequest) (
 		_ = cpty.Close()
 		return nil, err
 	}
-	_, handle, err := cpty.Spawn(path, argv, &syscall.ProcAttr{Dir: dir, Env: env})
+	attr := &syscall.ProcAttr{Dir: dir, Env: env, Sys: &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}}
+	pid, handle, err := cpty.Spawn(path, argv, attr)
 	if err != nil {
 		_ = output.Close()
 		_ = cpty.Close()
 		return nil, err
 	}
-	p := &conProc{cpty: cpty, handle: windows.Handle(handle), output: output}
+	tree, err := adoptSuspended(windows.Handle(handle), pid)
+	if err != nil {
+		_ = windows.TerminateProcess(windows.Handle(handle), 1)
+		_ = windows.CloseHandle(windows.Handle(handle))
+		_ = output.Close()
+		_ = cpty.Close()
+		return nil, err
+	}
+	p := &conProc{cpty: cpty, tree: tree, handle: windows.Handle(handle), output: output}
 	go func() { _, _ = io.Copy(cpty, ch) }()
 	p.out = startPump(ch, output)
 	return p, nil
@@ -72,9 +82,7 @@ func (p *conProc) Signal(name string) {
 		_, _ = p.cpty.Write([]byte{3})
 		return
 	}
-	if terminating[name] {
-		_ = windows.TerminateProcess(p.handle, 1)
-	}
+	p.tree.signal(name)
 }
 
 func (p *conProc) Resize(cols, rows uint32) {
@@ -97,6 +105,7 @@ func (p *conProc) Wait() exitStatus {
 	_ = windows.CloseHandle(p.handle)
 	go func() { _ = p.cpty.Close() }()
 	p.out.wait(drainGrace)
+	p.tree.release()
 	go func() { _ = p.output.Close() }()
 	return exitStatus{code: int(code)}
 }
