@@ -353,7 +353,7 @@ func TestFollowWithoutExitRefusesTCP(t *testing.T) {
 	if res.Reset != "EOPNOTSUPP" {
 		t.Fatalf("tcp without --exit: %+v", res)
 	}
-	for _, open := range []string{`{kind: 'resolve', name: 'localhost', family: 0}`, `{kind: 'http'}`} {
+	for _, open := range []string{`{kind: 'resolve', name: 'localhost', family: 0}`, `{kind: 'http'}`, `{kind: 'cdp', browser: 'chrome'}`} {
 		p.eval("linkTest.open("+open+")", &res)
 		if res.Reset != "EOPNOTSUPP" {
 			t.Fatalf("%s without --exit: %+v", open, res)
@@ -660,4 +660,33 @@ func TestFollowStopsWhenTheAnswerHasNoFingerprint(t *testing.T) {
 	if !strings.Contains(fp.stderr.String(), want) {
 		t.Fatalf("output:\n%s", fp.stderr.String())
 	}
+}
+
+func TestFollowCDP(t *testing.T) {
+	env, h, trays, p, _ := followSetup(t, 1)
+	fp := startFollow(t, env, h.joinURL(trays[0]), "--cdp", p.b.endpoint)
+	fp.waitStderr(t, "slicc: cdp on (chrome): seven gets full control", 15*time.Second)
+	p.waitUp(t, "")
+	var hello struct {
+		Caps     []string       `json:"caps"`
+		Browsers []helloBrowser `json:"browsers"`
+	}
+	p.eval("linkTest.ready()", &hello)
+	if !strings.Contains(strings.Join(hello.Caps, ","), "cdp") || len(hello.Browsers) != 1 || hello.Browsers[0].ID != "chrome" || hello.Browsers[0].Seven {
+		t.Fatalf("hello %+v", hello)
+	}
+	var r struct {
+		TargetID string    `json:"targetId"`
+		Closed   cdpClosed `json:"closed"`
+		Reset    string    `json:"reset"`
+		Error    string    `json:"error"`
+	}
+	p.eval("linkTest.cdp.createTarget('chrome', 'about:blank')", &r)
+	if r.TargetID == "" || !r.Closed.End {
+		t.Fatalf("createTarget through follow: %+v", r)
+	}
+	if !targetIDs(t, p.b)[r.TargetID] {
+		t.Fatalf("target %s is not in the followed browser", r.TargetID)
+	}
+	_ = p.b.client.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": r.TargetID}, nil)
 }

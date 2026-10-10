@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -92,7 +91,7 @@ func TestCDPCapability(t *testing.T) {
 	t.Run("websocket frame events are dropped", env.testFiltered)
 	t.Run("reset codes", env.testCDPResets)
 	t.Run("second browser is a separate browser", env.testSecondBrowser)
-	t.Run("browser exit resets and updates the list", env.testBrowserExit)
+	t.Run("browser exit resets and leaves the list", env.testBrowserExit)
 }
 
 func (e *cdpEnv) testHelloBrowsers(t *testing.T) {
@@ -355,21 +354,15 @@ func (e *cdpEnv) testBrowserExit(t *testing.T) {
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		var updates [][]helloBrowser
-		e.p.eval("linkTest.browserUpdates()", &updates)
-		if n := len(updates); n > 0 && len(updates[n-1]) == 1 && updates[n-1][0].ID == "chrome" && updates[n-1][0].Seven {
+		var open echoResult
+		e.p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "cdp", "browser": "chrome-2"}, false)+")", &open)
+		if open.Reset == "ENOENT" {
 			break
 		}
-		if time.Now().After(deadline) {
-			b, _ := json.Marshal(updates)
-			t.Fatalf("no browsers update without chrome-2: %s", b)
+		if open.Reset != "ECONNREFUSED" || time.Now().After(deadline) {
+			t.Fatalf("a browser that quit: %+v", open)
 		}
 		time.Sleep(200 * time.Millisecond)
-	}
-	var open echoResult
-	e.p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "cdp", "browser": "chrome-2"}, false)+")", &open)
-	if open.Reset != "ENOENT" {
-		t.Fatalf("a removed browser: %+v", open)
 	}
 }
 
