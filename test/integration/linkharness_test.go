@@ -204,8 +204,13 @@ type attachProc struct {
 
 func startAttach(t *testing.T, stdio bool, args ...string) *attachProc {
 	t.Helper()
+	return startAttachEnv(t, stdio, nil, args...)
+}
+
+func startAttachEnv(t *testing.T, stdio bool, env []string, args ...string) *attachProc {
+	t.Helper()
 	cmd := exec.Command(binary, append([]string{"attach"}, args...)...)
-	cmd.Env = append(os.Environ(), "SLICC_DEBUG=1")
+	cmd.Env = append(append(os.Environ(), "SLICC_DEBUG=1"), env...)
 	a := &attachProc{cmd: cmd, stderr: &syncBuffer{}}
 	cmd.Stderr = a.stderr
 	if stdio {
