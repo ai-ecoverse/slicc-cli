@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift.
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
 ## Commands (planned)
 
@@ -11,7 +11,7 @@
 | `slicc` | pick browsers in a small TUI; Enter launches or attaches to the best match, opens seven and links it (works now; see [The default](#the-default-slicc)) |
 | `slicc attach --cdp <url>` | link a seven that is open in an already-running CDP browser (works now; see [Local setup](#local-setup-slicc-attach)) |
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
-| `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>]` | follow a seven's tray from another machine and offer its network, compute (over SSH) or browsers (`--exit`, `--runner` and `--cdp` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)) |
+| `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)) |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
 | `slicc update [--check]` | replace this binary with the latest release (works now; see [Updates](#updates)) |
 
@@ -60,7 +60,8 @@ Release builds send operational telemetry through [go-optel](https://github.com/
 
 ```
 slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]... [--profile <name>] [--headless]
-      [--name <name>] [--kernel-port <n>] [--no-kernel] [--allow <rule>]... [--deny <rule>]... [--yes] [--plain] [--json]
+      [--name <name>] [--kernel-port <n>] [--no-kernel] [--allow <rule>]... [--deny <rule>]... [--mount <path>[:<name>][:ro]]...
+      [--yes] [--plain] [--json]
       [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
 ```
 
@@ -75,7 +76,7 @@ slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]...
 
 An Electron app can't host seven. Each further browser is an extra: an installed one is launched without a start page, and an endpoint is used as it is. Then the link is set up as for `slicc attach` (see [Local setup](#local-setup-slicc-attach)): over CDP with the browser that hosts seven, the first page tab on an allowed origin.
 
-**What the link offers:** `net` (tcp, resolve), `http`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected; and kernel services on `--kernel-port` (default 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)); and `ssh` only with `--runner` (see [SSH server](#ssh-server)). seven gets full control of every listed browser.
+**What the link offers:** `net` (tcp, resolve), `http`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected; and kernel services on `--kernel-port` (default 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)); and `ssh` only with `--runner` (see [SSH server](#ssh-server)); and `fs` with each `--mount` folder (see [Host folders](#host-folders)). seven gets full control of every listed browser.
 
 The cdp list follows the browsers: an extra that stops answering is taken off the list (`browser-gone`), and listed again with the same id when it answers on the same endpoint again (`browser-back`).
 
@@ -83,7 +84,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `--browser <id>`: an id from `slicc browsers` (an installed id such as `chrome`, or `cdp:<host>:<port>`), or a name, case-insensitively. Repeatable: the first hosts seven, the others are extras. Without it, the best match that can host seven.
 - `--cdp <url>`: also consider this CDP endpoint, as `slicc browsers --cdp`.
 - `--page <url>`: the seven page, default `https://seven.sliccy.ai/`. It must be `http` or `https`, and its origin is accepted as a seven origin.
-- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
+- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--mount`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven.
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
@@ -223,6 +224,7 @@ Plain output: the CDP HTTP URL on stdout, status lines on stderr. With `--json`,
 ```
 slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp] [--kernel-port <n>] [--no-kernel]
+             [--mount <path>[:<name>][:ro]]...
 ```
 
 `attach` links a seven that is open in a running CDP browser and serves the link until it is interrupted (`SIGINT`, `SIGTERM`), or until stdin closes with `--signal stdio`. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics, pion's included. pion never writes to stderr itself.
@@ -238,6 +240,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - `--shell <argv…>`: the interactive form for `ssh` without a command, in the same argv syntax. The default is derived from the runner.
 - `--eval <argv…>` and `--eval-quiet <duration>`: the REPL behind the `slicc-eval` subsystem (for example `--eval python3 -i`), and the silence that ends one response (default `500ms`).
 - `--sftp`, `--no-sftp`: serve the `sftp` subsystem or not. The default is on only for a plain local shell as the runner.
+- `--mount <path>[:<name>][:ro]`: share this folder with seven's kernel (cap `fs`, repeatable); see [Host folders](#host-folders).
 - `--kernel-port`: the local port for [kernel services](#kernel-services) (1–65535, default `80`).
 - `--no-kernel`: no kernel services; nothing listens.
 
@@ -280,7 +283,7 @@ One WebRTC peer connection. seven offers and the node answers. The node:
 - **Resets with `EOPNOTSUPP`:** an OPEN for a kind it doesn't serve.
 - **Closes the link:** an unknown frame type, a short or malformed frame (END with a payload, CREDIT that isn't 4 bytes), stream id 0, a reused id, an id with the wrong parity (page streams are odd, node streams even), or a second OPEN on a stream channel.
 
-HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "caps": ["net", "http", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`.
+HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "caps": ["net", "http", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`. With `--mount`, `caps` adds `"fs"` and HELLO adds `"mounts"` (see [Host folders](#host-folders)).
 
 **`ssh`** (cap `ssh`), page → node, with `--runner` only:
 - OPEN `{ "kind": "ssh" }`, OPENED `{}` at once. The stream's bytes are one SSH connection to the node's SSH server.
@@ -344,7 +347,7 @@ HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode
 
 **`browsers` updates** (page cap `browsers`), node → page. When the list changes while a link is up and the page's HELLO has `browsers` in `caps`, the node opens `OPEN { "kind": "browsers", "browsers": [ … ] }` on the control channel with the full current list in HELLO's shape. It replaces the previous list; there are no deltas. The page answers OPENED `{}` and END, and the node sends END. Updates are sent one at a time per link, a change that comes while one is in flight is sent after it, with the list as it is then, and an update the page doesn't finish within 10 s is reset with `ETIMEDOUT`. A change between the HELLO and the link coming up is sent as an update right away.
 
-`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`. `cdp.js` next to it is a CDP client over `cdp` streams, and `page.js` answers `browsers` updates. Loaded with `?kernel`, the test page lists `kernel-in` and answers `kernel` OPENs with `kernel.js`, a small HTTP and WebSocket echo server in the page.
+`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`. `cdp.js` next to it is a CDP client over `cdp` streams, `fs.js` an op-shaped client for `fs` streams (`call`, `list`, `read`, `write`, `watch`), and `page.js` answers `browsers` and `mounts` updates. Loaded with `?kernel`, the test page lists `kernel-in` and answers `kernel` OPENs with `kernel.js`, a small HTTP and WebSocket echo server in the page.
 
 ### Kernel services
 
@@ -379,6 +382,119 @@ seven's kernel runs servers (vite, `python -m http.server`), and kernel port `N`
 The browser's connection waits unread for `OPENED`.
 
 **Security.** The `Host` check defends against DNS rebinding. Kernel services are reachable like any dev server on localhost: by any local process, and by any web page Chrome lets reach loopback. Use `--no-kernel` to keep them inside the page.
+
+## Host folders
+
+`--mount <path>[:<name>][:ro]` shares a folder of this machine with seven's kernel, which mounts it with its `hostfs` driver. It is repeatable and works on `slicc`, `slicc attach` and `slicc <join-url> follow`. This is slicc-node's hostfs (its README, *Host folders*), with the same operations and the same rules, carried on `fs` link streams instead of HTTP. There are no tokens: the link is the trust boundary, as for `ssh`, and seven decides which kernel mounts it creates. With `follow`, the folders go to the seven on the other machine.
+
+**Export.**
+- A trailing `:ro` makes the folder read-only. After that, the text after the last `:` is the name if it isn't empty and has no `/` or `\`, so `C:\work` is a path and `C:\work:proj` is named `proj`. The default name is the folder's own.
+- The folder is resolved with `realpath` at start. A missing path or a file is skipped with `--mount <spec>: not an existing folder, skipping`, a name of `.` or `..` with `invalid name, skipping`, and a second folder under a name already used with `the name <name> is taken, skipping`.
+- Names never reveal host paths, and neither does anything else on the link.
+- Without a folder, the node doesn't advertise `fs`, and an `fs` OPEN gets `EOPNOTSUPP`.
+
+**HELLO.** `caps` lists `fs`, and `"mounts"` lists the folders:
+
+```json
+"mounts": [{ "name": "project", "readonly": false,
+             "capabilities": { "maxIo": 16777216, "symlinks": true, "chmod": true,
+                               "caseInsensitive": true, "normalization": "nfd-insensitive", "ranges": true } }]
+```
+
+- `capabilities` is slicc-node's grant answer, so seven hands it to the driver unchanged.
+- `symlinks` and `chmod` are `false` on Windows and `true` elsewhere.
+- `caseInsensitive` is probed per folder on its own volume. The last component of the folder's path that has letters is looked up again with its case swapped, and the probe is `true` when that finds the same file. When no component has letters, it is `true` on macOS and Windows.
+- `normalization` is `nfd-insensitive` on macOS and `none` elsewhere.
+- `ranges: true` says `setattr` takes `size`, so the kernel reads and writes in pages.
+
+**Streams.** Each operation is one stream, `OPEN { "kind": "fs", "mount", "readonly"?, "op", …arguments }`. An OPEN is one frame, so at most 64 KiB.
+- The node answers OPENED (followed by DATA for `list` and `read`), then END. The page sends END once it has OPENED.
+- An error is `RESET <ERRNO>: <message>`, before OPENED or, for `list`, `read`, `write` and `watch`, after it.
+- `readonly: true` on an OPEN makes that call `EROFS` if it writes, opens for writing or changes the namespace, even on a writable folder. A `:ro` folder is that way for every call.
+- `read` and `list` may go on the control channel or on their own stream channel. Pages should give reads over 64 KiB their own channel. `write` and `watch` belong on their own channel.
+
+**Paths** are relative to the folder, `/`-separated, with `""` (or a missing or `null` `path`) for the root. Empty and `.` components are ignored.
+- `..` and a leading `/` are `EACCES`, and NUL is `EINVAL`. On Windows `\` and `:` are `EINVAL` too, which also rules out alternate data streams and drive letters.
+- Every operation resolves the parent directory with `realpath`, and refuses it with `EACCES` when it lies outside the folder.
+- The last component gets lstat semantics. The kernel follows symlinks itself, so `stat` reports a symlink as one, `list` on a symlink is `ENOTDIR`, and `open` on a symlink is `ELOOP`.
+- Operations that change the namespace run one at a time, and no other operation runs alongside them. The lock covers every link and every folder of the node, so no page can swap a directory for a symlink between the check and the use.
+
+**Operations**, with slicc-node's arguments and answers:
+
+| op | arguments | answer |
+| --- | --- | --- |
+| `stat` | `path` | OPENED `attr` |
+| `list` | `path` | OPENED `{}`, then NDJSON lines `{"name","attr"}` as DATA; an entry that vanishes meanwhile is left out |
+| `mkdir` | `path` | `{}`; not recursive, mode `0777` minus the umask |
+| `rmdir` | `path` | `{}` |
+| `unlink` | `path` | `{}`; `EISDIR` for a directory |
+| `rename` | `from`, `to` | `{}`, `rename(2)`; it replaces a file or an empty directory, a directory onto a non-empty one is `ENOTEMPTY`, a directory onto a file `ENOTDIR`, a file onto a directory `EISDIR` |
+| `symlink` | `target`, `path` | `{}`; `target` is stored as given; `EPERM` on Windows |
+| `readlink` | `path` | `{ "target" }`; `EINVAL` for anything but a symlink |
+| `setattr` | `path`, `size?`, `mode?`, `mtime?` (ms) | `{}`; `size` truncates or extends with zeros, like `truncate(2)`, then `mode` and `mtime` apply. `size` on a directory is `EISDIR`, `size` or `mode` on a symlink is `EINVAL`, and `mtime` doesn't follow a symlink |
+| `statfs` | | `{ "bsize", "blocks", "bfree", "bavail" }` of the folder's volume |
+| `open` | `path`, `write?`, `create?`, `truncate?`, `exclusive?`, `mode?` | `{ "fh", "attr" }` |
+| `read` | `fh`, `offset`, `size` (≤ `maxIo`), `ifMatch?` | OPENED `{ "etag", "size", "offset", "length" }`, then `length` bytes as DATA |
+| `write` | `fh`, `offset` | OPENED `{}`; the page sends the bytes, then END, and the node ENDs once they are written |
+| `release` | `fh` | `{ "attr" }` for a write handle, `{}` otherwise |
+| `watch` | `mounts` (no `mount`) | OPENED `{}`, then NDJSON lines as DATA |
+
+- `attr` is `{ "kind": "file"|"directory"|"symlink", "size", "mtime" (ms, fractional), "mode" (permission bits), "ino", "etag" }`.
+- `etag` is `"<size>-<mtimeNs>-<ino>"`, quotes included, so `attr.etag` and `ifMatch` compare as plain strings.
+- The folder's root can't be removed or renamed, or replaced by a rename (`EBUSY`).
+- **Arguments:**
+  - `write`, `create`, `truncate`, `exclusive` and `readonly` count when they are truthy, as in JavaScript.
+  - Offsets and sizes are integers from 0 to 2^53−1, `mode` an integer up to `0o7777`, and `mtime` a number. `fh` is a positive integer, and any other `fh` is `EBADF`.
+  - A `path`, `from`, `to` or `target` that isn't a string is `EINVAL`, and so is any other argument of the wrong type, `null` included.
+  - An unknown `op`, or no `op`, is `EINVAL`. A `mount` that isn't exported is `ENOENT` with `no such folder`.
+
+**Handles.** `open` without `write`, `create`, `truncate` or `exclusive` gives a name handle, which holds nothing open between calls. Any of those flags gives a write handle, which keeps the file open (read and write) until `release`.
+- `create`, `exclusive` (with `create`), `truncate` and `mode` (default `0666` minus the umask) apply at `open`, and their errors come back there. A directory is `EISDIR` (`EEXIST` with `create` and `exclusive`), anything but a regular file `EINVAL`.
+- Handles are numbered per link from 1. A link holds at most 4096 per folder, and the next `open` is `EMFILE`.
+- An `fh` sent with another `mount` than the one it was opened on is `EBADF`, and so is one already released.
+- When the link closes, its handles close. What was written stays, as with a crashed local process.
+
+**Reads.** A read on a name handle opens the file again, through the path rules. When `ifMatch` is given and differs from the file's current etag, it is `ESTALE` with `file changed since it was opened`, so the kernel starts over instead of mixing two versions. A read on a write handle reads its descriptor and ignores `ifMatch`.
+- OPENED carries the file's `etag` and `size` with the `offset` asked for and the `length` that follows. The read is short at EOF, and `length` is 0 past it.
+- If the file shrinks while the bytes are being sent, the stream is `RESET ESTALE`.
+
+**Writes happen in place,** like `open(2)` and `pwrite(2)`, in any order and with holes. Writing in place keeps hard links, extended attributes, ACLs and ownership. Programs that want atomic replacement write a temporary file and rename it, and those are operations too.
+- Before OPENED, the node checks the call: `EROFS` for a read-only folder or `readonly: true`, `EINVAL` for a bad `offset`, `EBADF` for an unknown handle, one from another folder, or a name handle.
+- Each DATA is written at its place before it is credited, so the stream window bounds the memory used. More than `maxIo` bytes in one call is `RESET EINVAL`, and what came before stays written.
+- After the page's END and the last write, the node sends END. A page RESET leaves what was written.
+
+**Watch.** `OPEN { "kind": "fs", "op": "watch", "mounts": ["project", …] }` streams NDJSON lines until the page sends END or the link closes:
+
+```
+{"mount":"project","paths":["src/a.ts","src"]}
+{"mount":"project","all":true}
+{"ping":1}
+```
+
+- A missing or empty `mounts`, or one that isn't a list of strings, is `EINVAL`, and a name that isn't exported is `ENOENT`.
+- `paths` name what changed and its parent directory (`""` for the root), coalesced over 50 ms. Past 256 paths the line is `all`, and so is a change the watcher can't name (the root itself, an event-queue overflow).
+- A watcher that fails or can't start is retried every second. It sends one `all` when it is lost and one when it is back. A folder that is renamed away or removed is lost until it comes back.
+- A ping goes out every 15 s.
+- Changes seven made itself come back too.
+- One watcher per folder serves every watch stream on every link, and it lingers 5 s after the last stream ends, so replacing a watch is cheap.
+- A page that doesn't read gets its backlog folded into one `all` per folder instead of a growing queue.
+
+The watcher per OS:
+- **Linux:** inotify through fsnotify, one watch per directory, so the node walks the folder at start and adds every new directory. Symlinks aren't followed. A tree past `fs.inotify.max_user_watches` makes the watcher fail, which is then retried every second.
+- **macOS:** kqueue through fsnotify, which holds one descriptor per watched directory and file. A very large tree can run out of descriptors in the same way.
+- **Windows:** one `ReadDirectoryChangesW` on the folder with `bWatchSubtree`, which is what libuv does. A handle on every directory would stop Windows from renaming any of their parents.
+
+**Mount updates** (page cap `mounts`). When folders are added or removed while a link is up (`fs.Server.Add` and `Remove`, for the TUI), the node opens `OPEN { "kind": "mounts", "mounts": [ … ] }` on the control channel, with the full list in HELLO's shape. It replaces the previous list, and there are no deltas. The page answers OPENED `{}` and END, and the node sends END. Updates go one at a time per link, and one the page doesn't finish within 10 s is reset with `ETIMEDOUT`. A removed folder's handles close (`EBADF` if the name comes back), its operations are `ENOENT`, and a watch stream covering it ends with `RESET ENOENT: no such folder`. `--mount` alone never changes the set.
+
+**Errors.** The code is the POSIX name, `EIO` when there is none. The message is libuv's lower-case text for it (`no such file or directory`), or slicc-node's own for the cases it names (`path escapes the folder`, `read-only folder`, `file changed since it was opened`, `the folder root cannot be moved or removed`). It never contains a host path. Windows errors are mapped the way libuv maps them, for example `ERROR_ACCESS_DENIED` to `EPERM` and `ERROR_SHARING_VIOLATION` to `EBUSY`.
+
+**Windows.**
+- Paths go through `\\?\` and `GetFinalPathNameByHandle`, so device names (`CON`, `NUL`) and 8.3 short names are plain names inside the folder.
+- Files are opened with `FILE_SHARE_DELETE` and without following reparse points.
+- Symlinks and junctions both show as `kind: "symlink"`, `readlink` works on both, and `unlink` removes the link itself.
+- `ino` is the file index, and `mode` is `0666`, or `0444` for a read-only file, plus `0111` for a directory. `setattr` `mode` sets or clears the read-only attribute.
+- `unlink` clears the read-only attribute first, as `DeleteFile` would refuse otherwise.
+- `rename` gives the POSIX answers above, replacing an empty directory itself.
 
 ## Network policy
 
@@ -457,6 +573,7 @@ A command that can't start exits 127 with the reason on stderr.
 ```
 slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name <name>] [--cdp <url>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
+             [--mount <path>[:<name>][:ro]]...
 ```
 
 `follow` links this machine to a seven on another machine through the tray hub (see [Tray hub signaling](#tray-hub-signaling-remote-setup)). It serves the link until interrupted (`SIGINT`, `SIGTERM`) and reconnects when the link drops. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics. The join URL is never printed.
@@ -467,8 +584,9 @@ slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name 
 - `--name`: the link's `name` and `host` in HELLO, as for `attach`.
 - `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: compute over SSH (cap `ssh`), exactly as for `attach`. `direct-tcpip` forwarding goes through the remote policy, so it reaches public addresses only unless `--allow` says otherwise. `--runner` works with or without `--exit`.
 - `--cdp <url>`: let seven drive this browser over the link (repeatable, in any form `slicc browsers --cdp` takes; each must answer when `follow` starts). See [`cdp`](#cdp-browser-control), and its warning: the seven on the other machine gets full control of every browser listed. No browser is `seven: true`. Without `--cdp`, `follow` doesn't offer `cdp`, and a `cdp` OPEN is refused with `EOPNOTSUPP`. Each browser's debugging port and its own endpoint addresses are [denied](#network-policy) to `tcp`, `http` and `ssh` forwarding.
+- `--mount <path>[:<name>][:ro]`: share this folder with the seven on the other machine (cap `fs`, repeatable); see [Host folders](#host-folders). It can read the folder, and change it unless `:ro`.
 
-HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` and `http` with `--exit`, `ssh` with `--runner` (plus `sshHostKey`), `cdp` (and HELLO `browsers`) with `--cdp`, and always `join`.
+HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` and `http` with `--exit`, `ssh` with `--runner` (plus `sshHostKey`), `cdp` (and HELLO `browsers`) with `--cdp`, `fs` (and HELLO `mounts`) with `--mount`, and always `join`.
 
 **Identity.** The device is its DTLS certificate. `follow` keeps one ECDSA P-256 certificate per hub origin (`scheme://host:port`), valid for 20 years, in `<config>/slicc/tray-certs.json` (mode `0600`). Every link to that hub uses it, so the fingerprint stays the same across reconnects, restarts and updates. The first run on a hub mints it and says `new device, fingerprint sha-256 …`; later runs say `device, fingerprint …`. Every dial attaches with a fresh `controllerId`, which is only a routing handle.
 

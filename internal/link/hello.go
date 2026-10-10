@@ -43,6 +43,21 @@ type Browser struct {
 	Seven   bool   `json:"seven"`
 }
 
+type FSCapabilities struct {
+	MaxIO           int    `json:"maxIo"`
+	Symlinks        bool   `json:"symlinks"`
+	Chmod           bool   `json:"chmod"`
+	CaseInsensitive bool   `json:"caseInsensitive"`
+	Normalization   string `json:"normalization"`
+	Ranges          bool   `json:"ranges"`
+}
+
+type Mount struct {
+	Name         string         `json:"name"`
+	Readonly     bool           `json:"readonly"`
+	Capabilities FSCapabilities `json:"capabilities"`
+}
+
 type Hello struct {
 	V          int       `json:"v"`
 	Role       Role      `json:"role"`
@@ -55,6 +70,7 @@ type Hello struct {
 	Policy     *Policy   `json:"policy,omitempty"`
 	SSHHostKey string    `json:"sshHostKey,omitempty"`
 	Browsers   []Browser `json:"browsers,omitempty"`
+	Mounts     []Mount   `json:"mounts,omitempty"`
 
 	Raw json.RawMessage `json:"-"`
 }

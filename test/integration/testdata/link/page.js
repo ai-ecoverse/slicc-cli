@@ -1,13 +1,20 @@
 import { kernel, onKernel } from './kernel.js';
 import { Frame, Link, ResetError, fetchRaw, resolve } from './link.js';
 import { cdpTest } from './cdp.js';
+import { fsTest } from './fs-test.js';
 
 const kernelIn = new URLSearchParams(location.search).has('kernel');
 
-const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null, browserUpdates: [] };
+const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null, browserUpdates: [], mountUpdates: [] };
 
 function onBrowsers(stream) {
   state.browserUpdates.push(stream.open.browsers);
+  stream.accept({});
+  stream.end();
+}
+
+function onMounts(stream) {
+  state.mountUpdates.push(stream.open.mounts);
   stream.accept({});
   stream.end();
 }
@@ -37,8 +44,8 @@ async function setup(nonce) {
   state.hellos += 1;
   const pc = new RTCPeerConnection();
   const link = new Link(pc, {
-    hello: { name: 'link test page', caps: kernelIn ? ['browsers', 'kernel-in'] : ['browsers'] },
-    handlers: kernelIn ? { browsers: onBrowsers, kernel: onKernel } : { browsers: onBrowsers },
+    hello: { name: 'link test page', caps: kernelIn ? ['browsers', 'mounts', 'kernel-in'] : ['browsers', 'mounts'] },
+    handlers: kernelIn ? { browsers: onBrowsers, mounts: onMounts, kernel: onKernel } : { browsers: onBrowsers, mounts: onMounts },
   });
   state.pc = pc;
   state.link = link;
@@ -299,7 +306,11 @@ globalThis.linkTest = {
   browserUpdates() {
     return state.browserUpdates;
   },
+  mountUpdates() {
+    return state.mountUpdates;
+  },
   cdp: cdpTest(() => state.link, describe),
+  fs: fsTest(() => state.link, describe, { sha256, toBase64, fromBase64, prng }),
   kernel() {
     return { opens: kernel.opens, hanging: kernel.hanging.length, requests: kernel.requests };
   },
