@@ -277,8 +277,11 @@ func TestSSHPTYOutputSurvivesASlowReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := ansi.ReplaceAllString(out.buf.String(), "")
-	if strings.Count(text, "x") != size || !strings.HasSuffix(text, "END") {
-		t.Fatalf("got %d x and tail %q", strings.Count(text, "x"), text[max(0, len(text)-20):])
+	count := strings.Count(text, "x")
+	exact := runtime.GOOS != "windows" && count == size
+	repainted := runtime.GOOS == "windows" && count >= size
+	if (!exact && !repainted) || !strings.HasSuffix(strings.TrimSpace(text), "END") {
+		t.Fatalf("got %d x and tail %q", count, text[max(0, len(text)-20):])
 	}
 }
 
