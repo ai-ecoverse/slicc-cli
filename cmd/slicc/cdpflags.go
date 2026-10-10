@@ -53,6 +53,13 @@ func cdpBrowsers(ctx context.Context, seven string, extra []string, pol *policy.
 		}
 		logf("cdp: browser %s endpoints denied to tcp: %v", id, pol.ProtectedEndpoints(id))
 	})
+	r.OnCheck(func(ctx context.Context, id string, hostports []string) {
+		pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if err := pol.RefreshBrowser(pctx, id, hostports, hosts); err != nil {
+			logf("cdp: browser %s: %v", id, err)
+		}
+	})
 	add := func(raw string, isSeven bool) error {
 		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
