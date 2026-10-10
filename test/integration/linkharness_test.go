@@ -35,7 +35,7 @@ func findChrome() string {
 		}
 	case "windows":
 		for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"} {
-			if dir := os.Getenv(env); dir != "" {
+			if dir := realGetenv(env); dir != "" {
 				candidates = append(candidates, filepath.Join(dir, "Google", "Chrome", "Application", "chrome.exe"))
 			}
 		}
@@ -83,6 +83,7 @@ func launchBrowser(t *testing.T) *chromeProc {
 		args = append([]string{"--no-sandbox"}, args...)
 	}
 	cmd := exec.Command(chrome, args...)
+	cmd.Env = realEnv
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

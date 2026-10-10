@@ -21,6 +21,8 @@ func TestMain(m *testing.M) {
 		name += ".exe"
 	}
 	binary = filepath.Join(dir, name)
+	home := filepath.Join(dir, "home")
+	isolateProcess(home)
 	build := exec.Command("go", "build", "-ldflags", "-X main.version=1.2.3-test", "-o", binary, "../../cmd/slicc")
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
 	if err := build.Run(); err != nil {

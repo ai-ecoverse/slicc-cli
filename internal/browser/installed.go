@@ -9,6 +9,9 @@ import (
 )
 
 func DiscoverInstalled(ctx context.Context, o Options) []Installed {
+	if !discoveryFor(o).installed {
+		return nil
+	}
 	o = o.withDefaults()
 	p := o.platform(runtime.GOOS)
 	var list []Installed

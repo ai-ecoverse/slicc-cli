@@ -133,12 +133,17 @@ func (o Options) profilesDir(p platform) string {
 	return p.profilesDir()
 }
 
-func activePortCandidates(o Options, p platform) []candidate {
+func activePortCandidates(o Options, p platform, d discovery) []candidate {
 	var out []candidate
-	for _, k := range knownBrowsers {
-		for _, dir := range p.userDataDirs(k) {
-			out = appendActivePort(out, dir, k.id, "")
+	if d.userData {
+		for _, k := range knownBrowsers {
+			for _, dir := range p.userDataDirs(k) {
+				out = appendActivePort(out, dir, k.id, "")
+			}
 		}
+	}
+	if !d.profiles {
+		return out
 	}
 	roots := []string{o.profilesDir(p)}
 	if p.goos == "linux" {
@@ -174,10 +179,11 @@ func appendActivePort(out []candidate, dir, browserID, profile string) []candida
 }
 
 func DiscoverEndpoints(ctx context.Context, o Options) ([]Endpoint, []error) {
+	d := discoveryFor(o)
 	o = o.withDefaults()
 	p := o.platform(runtime.GOOS)
 	var cands []candidate
-	cands = append(cands, activePortCandidates(o, p)...)
+	cands = append(cands, activePortCandidates(o, p, d)...)
 	var errs []error
 	for _, raw := range o.CDPURLs {
 		base, ws, err := NormalizeCDPURL(raw)
@@ -187,7 +193,7 @@ func DiscoverEndpoints(ctx context.Context, o Options) ([]Endpoint, []error) {
 		}
 		cands = append(cands, candidate{base: base, wsPath: ws, source: SourceFlag})
 	}
-	if !o.NoProbe {
+	if !o.NoProbe && d.probe {
 		for _, port := range o.ProbePorts {
 			cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), source: SourceProbe})
 		}

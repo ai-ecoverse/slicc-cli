@@ -54,6 +54,7 @@ Release builds send operational telemetry through [go-optel](https://github.com/
 | `SLICC_TELEMETRY_URL` | telemetry collector base (default `https://rum.hlx.page/`) |
 | `OPTEL_RATE`, `OPTEL_DEBUG` | go-optel's sampling rate and beacon logging |
 | `SLICC_LAUNCHER` | set to `npm` by the npm launcher; removed from the environment that `slicc` passes on |
+| `SLICC_DISCOVERY` | test-only: limits browser discovery, see [Development](#development) |
 
 ## The default: `slicc`
 
@@ -500,6 +501,13 @@ Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`
 **Test names: `--hosts <file>`** (test-only, left out of `--help`). `slicc attach` and `slicc <join-url> follow` take a hosts file, so tests get deterministic names without public DNS. Each line is `<ip> <name> [<name>…]`, and `#` starts a comment. Names match case-insensitively, with or without a trailing dot, and a name on several lines gets every address, in file order. Wherever the node resolves a name (`resolve`, `tcp` by name, `http`, and the policy's [browser endpoints](#network-policy)), a name in the file gets the file's addresses of the requested family, possibly none, and never the system resolver's. Other names go to the system resolver. The policy applies afterwards as usual: `resolve` drops refused addresses, and a dial to a refused address is `EACCES`. `tcp` and `http` try the addresses in file order. A file that can't be read or parsed exits 2. A name mapped to a loopback address only helps the node's own dials, `http` and `tcp` by name: a seven kernel that gets a loopback address from `resolve` dials its own loopback, because loopback never goes out through an exit. For end-to-end exit tests, map test names to a non-loopback address of the machine.
 
 Front ends and capabilities follow a node's links with `node.Node.Subscribe(func(node.Event)) (unsubscribe func())`. Events: `connecting` (an offer was answered), `linked` (the peer's HELLO arrived, in `Peer`), `link-down` (`Reason` when the node closed the link: seven's `bye` reason, `replaced by a new offer` or `slicc is exiting`; otherwise `Err` for a failure; a failed answer has no `Link`), and `stream-open` and `stream-close` for each page-opened stream, with its kind. Every event but a failed answer carries its `*link.Link`. A link's `link-down` comes before the next link's `connecting`, but its streams' `stream-close` can come after its `link-down`. Events are delivered synchronously on the node's and the link's goroutines, so a subscriber must return quickly and never block; one that needs to wait hands the event to its own goroutine.
+
+**Test isolation: `SLICC_DISCOVERY`** (test-only). When it is set, browser discovery (`slicc browsers`, the default flow, and `browser.Discover` in the same process) never probes ports 9222–9229 and finds only `--cdp` URLs, plus:
+- `isolated`, or any value not listed here: nothing else;
+- `installed`: installed browsers too;
+- `home`: installed browsers, and the `DevToolsActivePort` files under the home and config dirs from the environment (`HOME`, `APPDATA`, `LOCALAPPDATA`, `XDG_CONFIG_HOME`).
+
+In the same process, probe ports and dirs passed in explicitly (`Options.ProbePorts`, `Options.Home`, `Options.ProfilesDir`) are still used. `test/integration`'s `TestMain` sets `SLICC_DISCOVERY=isolated` and points `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and the XDG dirs at a temporary directory for itself and every `slicc` it starts, so no test can reach the browsers of the machine it runs on. Tests opt in to more with a fake home or fake endpoints. The Chrome the harness starts itself gets the real environment.
 
 The real-Chrome tests in `test/integration/` launch headless, so they run the executable directly. A windowed launch on macOS goes through `open -n -W -a`, which CI doesn't cover: on GitHub's macOS runners, Chrome started that way never writes `DevToolsActivePort`.
 
