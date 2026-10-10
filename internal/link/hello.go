@@ -36,17 +36,25 @@ type Policy struct {
 	Summary string   `json:"summary"`
 }
 
+type Browser struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Seven   bool   `json:"seven"`
+}
+
 type Hello struct {
-	V          int      `json:"v"`
-	Role       Role     `json:"role"`
-	Name       string   `json:"name,omitempty"`
-	Host       string   `json:"host,omitempty"`
-	Version    string   `json:"version,omitempty"`
-	Mode       string   `json:"mode,omitempty"`
-	Caps       []string `json:"caps"`
-	Routes     *Routes  `json:"routes,omitempty"`
-	Policy     *Policy  `json:"policy,omitempty"`
-	SSHHostKey string   `json:"sshHostKey,omitempty"`
+	V          int       `json:"v"`
+	Role       Role      `json:"role"`
+	Name       string    `json:"name,omitempty"`
+	Host       string    `json:"host,omitempty"`
+	Version    string    `json:"version,omitempty"`
+	Mode       string    `json:"mode,omitempty"`
+	Caps       []string  `json:"caps"`
+	Routes     *Routes   `json:"routes,omitempty"`
+	Policy     *Policy   `json:"policy,omitempty"`
+	SSHHostKey string    `json:"sshHostKey,omitempty"`
+	Browsers   []Browser `json:"browsers,omitempty"`
 
 	Raw json.RawMessage `json:"-"`
 }
