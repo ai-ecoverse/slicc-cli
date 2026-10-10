@@ -15,6 +15,7 @@ import (
 	"time"
 
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
+	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
@@ -41,6 +42,9 @@ flags:
   --name <name>        the name and host this link shows in seven
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
+  --kernel-port <n>    serve http://<port>.kernel.localhost on this local
+                       port instead of 80
+  --no-kernel          don't serve <port>.kernel.localhost at all
 ` + computeUsage + `
 The link offers the net capability (tcp and resolve streams) and the http
 capability (fetches without redirects) under the local policy: public
@@ -49,18 +53,25 @@ or the browsers' debugging ports and endpoints. With --runner it also offers ssh
 kernel reaches this machine's SSH server, which never listens on a port, and
 its forwarding goes through the same policy. With --cdp or --cdp-extra it
 also offers cdp: seven gets full control of every browser listed.
+
+When seven offers kernel-in, slicc listens on 127.0.0.1:<kernel port> and
+carries navigations and WebSockets to http://<port>.kernel.localhost/ into
+the page's kernel. If that port can't be bound, slicc says so and runs on
+without it.
 `
 
 type attachFlags struct {
-	cdp     string
-	extra   []string
-	origins []string
-	signal  string
-	name    string
-	allow   policy.Rules
-	deny    policy.Rules
-	compute computeFlags
-	hosts   hostsFlag
+	cdp        string
+	extra      []string
+	origins    []string
+	signal     string
+	name       string
+	allow      policy.Rules
+	deny       policy.Rules
+	compute    computeFlags
+	hosts      hostsFlag
+	kernelPort int
+	noKernel   bool
 }
 
 type multi []string
@@ -87,6 +98,8 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	fs.Var(&f.deny, "deny", "")
 	f.compute.register(fs)
 	fs.Var(&f.hosts, "hosts", "")
+	fs.IntVar(&f.kernelPort, "kernel-port", kernelin.DefaultPort, "")
+	fs.BoolVar(&f.noKernel, "no-kernel", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stderr, attachUsage)
@@ -109,6 +122,9 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 		return f, 2
 	case f.signal == "cdp" && f.cdp == "":
 		fmt.Fprintf(stderr, "slicc attach: --cdp is required\n\n%s", attachUsage)
+		return f, 2
+	case f.kernelPort < 1 || f.kernelPort > 65535:
+		fmt.Fprintf(stderr, "slicc attach: --kernel-port must be 1-65535\n")
 		return f, 2
 	}
 	return f, -1
@@ -143,7 +159,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer closer()
-	pol := policy.Local(cdpPorts(append([]string{f.cdp}, f.extra...)...)...).With(f.allow, f.deny)
+	pol := policy.Local(append(cdpPorts(append([]string{f.cdp}, f.extra...)...), kernelPolicyPort(f))...).With(f.allow, f.deny)
 	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, pol, f.hosts.hosts, logf)
 	if err != nil {
 		status("%v", err)
@@ -160,6 +176,15 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer closeSSH()
 	serveBrowsers(ctx, n, browsers)
+	if !f.noKernel {
+		kern := kernelin.New(kernelin.Config{Port: f.kernelPort, Logf: logf, Status: status})
+		defer func() { _ = kern.Close() }()
+		n.Subscribe(func(e node.Event) {
+			if e.Kind == node.EventLinked {
+				go kern.Add(e.Link)
+			}
+		})
+	}
 	if err := n.Serve(ctx, conn); err != nil && ctx.Err() == nil {
 		status("%v", err)
 		return 1
@@ -185,6 +210,13 @@ func openSignal(ctx context.Context, f attachFlags, origins *signal.Origins, std
 	status("connected to %s", f.cdp)
 	s := signal.NewCDP(signal.CDPOptions{Client: client, Origins: origins, Logf: logf, Status: status})
 	return s, func() { _ = s.Close(); _ = client.Close() }, nil
+}
+
+func kernelPolicyPort(f attachFlags) uint16 {
+	if f.noKernel {
+		return 0
+	}
+	return uint16(f.kernelPort)
 }
 
 func debugPort(raw string) uint16 {

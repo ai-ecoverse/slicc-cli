@@ -154,7 +154,7 @@ Plain output: the CDP HTTP URL on stdout, status lines on stderr. With `--json`,
 
 ```
 slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]...
-             [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
+             [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp] [--kernel-port <n>] [--no-kernel]
 ```
 
 `attach` links a seven that is open in a running CDP browser and serves the link until it is interrupted (`SIGINT`, `SIGTERM`), or until stdin closes with `--signal stdio`. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics, pion's included. pion never writes to stderr itself.
@@ -170,6 +170,8 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - `--shell <argv…>`: the interactive form for `ssh` without a command, in the same argv syntax. The default is derived from the runner.
 - `--eval <argv…>` and `--eval-quiet <duration>`: the REPL behind the `slicc-eval` subsystem (for example `--eval python3 -i`), and the silence that ends one response (default `500ms`).
 - `--sftp`, `--no-sftp`: serve the `sftp` subsystem or not. The default is on only for a plain local shell as the runner.
+- `--kernel-port`: the local port for [kernel services](#kernel-services) (1–65535, default `80`).
+- `--no-kernel`: no kernel services; nothing listens.
 
 **Setup over CDP.**
 1. slicc picks the first page tab whose URL has an allowed origin. Until there is one it says `waiting for a seven tab` and watches for new tabs.
@@ -244,6 +246,10 @@ HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode
 - **RESET before the response head:** `EPROTO` for a malformed head or one of the refusals above, and for a `206` with a coding the node would decode, since its `Content-Range` wouldn't match. A failed fetch is `<code>: fetch failed: <reason>`, with `tcp`'s codes: `EACCES` for a policy refusal, `ENOTFOUND` for a name that doesn't resolve, `ETIMEDOUT`, `ECONNRESET`, and `ECONNREFUSED` for anything else, TLS failures included.
 - **After the head:** an upstream error or a broken coding mid-body is `RESET ECONNRESET`.
 
+**`kernel`** (page cap `kernel-in`), node → page:
+- OPEN `{ "kind": "kernel", "port" }`, sent only to a page whose HELLO lists `kernel-in`. The page dials that kernel port and answers OPENED or RESET (`ECONNREFUSED` when nothing listens). See [Kernel services](#kernel-services).
+- Then raw bytes both ways: the node's first DATA is everything it has read from the browser's connection so far, request head included. END half-closes, as for `tcp`.
+
 ### `cdp` (browser control)
 
 > **Warning:** a seven with the `cdp` capability has full control of every listed browser: its tabs, cookies, stored passwords and logged-in sessions, files it can download, and anything a page in it can reach. List only browsers you would let that seven use as you. For `follow` that is a seven on another machine.
@@ -270,7 +276,41 @@ HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode
 
 **`browsers` updates** (§5.8.1 of the link spec, a node → page stream that tells the page about list changes) are not sent yet: a link sees the list in its HELLO, and a browser removed later answers `ENOENT`.
 
-`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`. `cdp.js` next to it is a CDP client over `cdp` streams.
+`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`. `cdp.js` next to it is a CDP client over `cdp` streams. Loaded with `?kernel`, the test page lists `kernel-in` and answers `kernel` OPENs with `kernel.js`, a small HTTP and WebSocket echo server in the page.
+
+### Kernel services
+
+seven's kernel runs servers (vite, `python -m http.server`), and kernel port `N` is `http://N.kernel.localhost/`. seven's service worker carries subresources itself, but not top-level navigations or WebSockets. `*.kernel.localhost` resolves to loopback, so `attach` runs a listener that carries those connections into the page as `kernel` streams.
+
+**Listener.**
+- It binds `127.0.0.1:<kernel port>` (default `80`, which macOS lets any user bind) when the first page whose HELLO lists `kernel-in` links up, and keeps it until `attach` exits. With `--kernel-port 8080` the URLs carry the port: `http://5173.kernel.localhost:8080/`. `--no-kernel` turns it off, and remote nodes never listen.
+- If the port can't be bound (something else uses it, or Linux refuses an unprivileged bind on `80`), `attach` prints `kernel services are off: cannot listen on 127.0.0.1:<port> (<reason>); try --kernel-port` and runs on without it. It tries once.
+- The kernel port is denied in the [network policy](#network-policy) from startup, like the browser's debugging port, unless `--no-kernel` is given.
+
+**Each connection.**
+1. The node reads the first request head, at most 64 KiB and within 30 s. A connection that sends no complete head in time is closed without an answer.
+2. The request line must be `<method token> <target> HTTP/1.0` or `HTTP/1.1`, and the head must hold exactly one `Host`.
+3. The `Host` must be `<1–65535>.kernel.localhost`, in any case, with no port or the listener's own port, no leading zeros and no trailing dot.
+4. Port `9222` (seven's CDP facade) is refused here, before anything is sent to the page.
+5. The node opens a `kernel` stream to the page that linked most recently and is still linked. When that page goes, the one linked before it takes new connections. Open connections stay where they are.
+6. It sends what it has read, then pipes bytes both ways with half-close, without parsing anything else. Keep-alive, chunked bodies and WebSocket upgrades pass through as they are, and a connection belongs to the host of its first request.
+
+**Errors** are plain text (`Content-Type: text/plain; charset=utf-8`) with `X-Proxy-Error: 1`, `Cache-Control: no-store` and `Connection: close`:
+
+| case | answer |
+| --- | --- |
+| `Host` not `<port>.kernel.localhost` | `421` `only <port>.kernel.localhost is served here` |
+| malformed request line, or not exactly one `Host` | `400` `malformed request head` |
+| head over 64 KiB | `431` `request head too large` |
+| port `9222` | `502` `kernel port 9222: EACCES` |
+| no page with `kernel-in` linked, or the link closes before `OPENED` | `502` `no seven page connected` |
+| the page answers `RESET` `ECONNREFUSED` | `502` `nothing listening on kernel port N` |
+| the page answers another `RESET` | `502` `kernel port N: <reason>` (printable ASCII, at most 200 characters) |
+| no `OPENED` within 10 s | `504` `kernel port N did not answer` |
+
+The browser's connection waits unread for `OPENED`.
+
+**Security.** The `Host` check defends against DNS rebinding. Kernel services are reachable like any dev server on localhost: by any local process, and by any web page Chrome lets reach loopback. Use `--no-kernel` to keep them inside the page.
 
 ## Network policy
 
