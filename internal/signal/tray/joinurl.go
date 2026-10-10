@@ -90,3 +90,19 @@ func (r *redactor) redact(s string) string {
 	}
 	return s
 }
+
+var ErrJoinOrigin = errors.New("join URL is not on the hub origin this node follows")
+
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if strings.EqualFold(u.Scheme, "http") {
+		return "80"
+	}
+	return "443"
+}
