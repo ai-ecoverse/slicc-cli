@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -137,9 +138,9 @@ type listener struct {
 	changed  chan struct{}
 }
 
-func listen(t *testing.T, address string) *listener {
+func listen(t *testing.T) *listener {
 	t.Helper()
-	ln, err := net.Listen("tcp", address)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,20 +217,6 @@ func (l *listener) assertNoLeak(t *testing.T) {
 	}
 }
 
-func dialAccepted(t *testing.T, d *policy.Dialer, l *listener) error {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	c, err := d.DialContext(ctx, "tcp", l.Addr().String())
-	if err != nil {
-		return err
-	}
-	defer func() { _ = c.Close() }()
-	dialed.Store(c.LocalAddr().String(), true)
-	l.waitAccepted(t, c.LocalAddr().String())
-	return nil
-}
-
 func dialAndGreet(t *testing.T, d *policy.Dialer, address string) (string, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -288,7 +275,7 @@ func dualLoopback(t *testing.T) (*listener, *listener) {
 
 func TestPolicyRefusesANameThatResolvesToLoopback(t *testing.T) {
 	dns := newFakeDNS(t)
-	v4 := listen(t, "127.0.0.1:0")
+	v4 := listen(t)
 	dns.set("loop.slicc.test", "127.0.0.1")
 	port := strconv.Itoa(v4.port())
 	_, err := dialAndGreet(t, dns.dialer(policy.Remote()), "loop.slicc.test.:"+port)
@@ -305,7 +292,7 @@ func TestPolicyRefusesANameThatResolvesToLoopback(t *testing.T) {
 
 func TestPolicyRefusesARebindAfterResolve(t *testing.T) {
 	dns := newFakeDNS(t)
-	v4 := listen(t, "127.0.0.1:0")
+	v4 := listen(t)
 	dns.set("rebind.slicc.test", "93.184.215.14", "127.0.0.1")
 	r := &policy.Resolver{Policy: policy.Remote(), Base: dns.resolver()}
 	got, err := r.LookupNetIP(context.Background(), "ip4", "rebind.slicc.test.")
@@ -352,8 +339,8 @@ func TestPolicyResolverDropsRefusedAddresses(t *testing.T) {
 
 func TestPolicyPortSpecificDeny(t *testing.T) {
 	dns := newFakeDNS(t)
-	blocked := listen(t, "127.0.0.1:0")
-	open := listen(t, "127.0.0.1:0")
+	blocked := listen(t)
+	open := listen(t)
 	dns.set("ports.slicc.test", "127.0.0.1")
 	deny, err := policy.ParseRules([]string{"127.0.0.1/32:" + strconv.Itoa(blocked.port())})
 	if err != nil {
@@ -459,7 +446,7 @@ func TestPolicyDialerInHTTPTransport(t *testing.T) {
 }
 
 func TestPolicyUserAllowWinsATieWithTheDefault(t *testing.T) {
-	v4 := listen(t, "127.0.0.1:0")
+	v4 := listen(t)
 	dns := newFakeDNS(t)
 	dns.set("tie.slicc.test", "127.0.0.1")
 	address := "tie.slicc.test.:" + strconv.Itoa(v4.port())
@@ -535,28 +522,75 @@ func lanAddress(t *testing.T) netip.Addr {
 	return netip.Addr{}
 }
 
+var errPassedPolicy = errors.New("passed the policy")
+
+type connectRecorder struct {
+	mu    sync.Mutex
+	addrs []string
+}
+
+func (r *connectRecorder) dialer(p *policy.Policy) *policy.Dialer {
+	d := policy.NewDialer(p)
+	d.Base.Control = func(_, address string, _ syscall.RawConn) error {
+		r.mu.Lock()
+		r.addrs = append(r.addrs, address)
+		r.mu.Unlock()
+		return errPassedPolicy
+	}
+	return d
+}
+
+func (r *connectRecorder) dial(t *testing.T, p *policy.Policy, address string) error {
+	t.Helper()
+	before := len(r.seen())
+	_, err := r.dialer(p).DialContext(context.Background(), "tcp", address)
+	got := r.seen()[before:]
+	if errors.Is(err, errPassedPolicy) {
+		if len(got) != 1 || got[0] != address {
+			t.Fatalf("dial %s reached connect for %q", address, got)
+		}
+		return nil
+	}
+	if len(got) != 0 {
+		t.Fatalf("dial %s was refused (%v) but reached connect for %q", address, err, got)
+	}
+	return err
+}
+
+func (r *connectRecorder) seen() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.addrs)
+}
+
 func TestPolicyLocalDeniesPortsOnTheMachinesLANAddress(t *testing.T) {
 	addr := lanAddress(t)
-	blocked := listen(t, netip.AddrPortFrom(addr, 0).String())
-	open := listen(t, netip.AddrPortFrom(addr, 0).String())
 	allow, err := policy.ParseRules([]string{netip.PrefixFrom(addr, addr.BitLen()).String()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := uint16(blocked.port())
-	for _, p := range []*policy.Policy{policy.Local(port), policy.Local(port).With(allow, nil)} {
-		err := dialAccepted(t, policy.NewDialer(p), blocked)
+	const protected, other = 40001, 40002
+	blocked := netip.AddrPortFrom(addr, protected).String()
+	open := netip.AddrPortFrom(addr, other).String()
+	var rec connectRecorder
+	for _, p := range []*policy.Policy{policy.Local(protected), policy.Local(protected).With(allow, nil)} {
+		err := rec.dial(t, p, blocked)
 		requireDenied(t, err)
 		var pe *policy.Error
 		if !errors.As(err, &pe) || !strings.Contains(pe.Reason, "this machine") {
 			t.Fatalf("%v", err)
 		}
 	}
-	if err := dialAccepted(t, policy.NewDialer(policy.Local(port).With(allow, nil)), open); err != nil {
+	if err := rec.dial(t, policy.Local(protected).With(allow, nil), open); err != nil {
 		t.Fatalf("%s: other port refused: %v", addr, err)
 	}
-	if err := dialAccepted(t, policy.NewDialer(policy.Remote().With(allow, nil)), blocked); err != nil {
+	if err := rec.dial(t, policy.Remote().With(allow, nil), blocked); err != nil {
 		t.Fatalf("remote default denied a host port: %v", err)
 	}
-	blocked.assertNoLeak(t)
+	if err := rec.dial(t, policy.Local(protected), netip.AddrPortFrom(netip.MustParseAddr("192.0.2.1"), protected).String()); err == nil {
+		t.Fatal("192.0.2.1 should still be denied as documentation space")
+	}
+	if got := rec.seen(); len(got) != 2 || got[0] != open || got[1] != blocked {
+		t.Fatalf("connect attempts %q", got)
+	}
 }
