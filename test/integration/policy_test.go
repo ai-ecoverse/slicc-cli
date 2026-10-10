@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -127,15 +128,13 @@ func (d *fakeDNS) dialer(p *policy.Policy) *policy.Dialer {
 	return pd
 }
 
-type slot struct {
-	data string
-	done bool
-}
+var dialed sync.Map
 
 type listener struct {
 	net.Listener
 	mu       sync.Mutex
-	accepted []*slot
+	accepted []string
+	changed  chan struct{}
 }
 
 func listen(t *testing.T, address string) *listener {
@@ -148,7 +147,7 @@ func listen(t *testing.T, address string) *listener {
 }
 
 func serve(t *testing.T, ln net.Listener) *listener {
-	l := &listener{Listener: ln}
+	l := &listener{Listener: ln, changed: make(chan struct{})}
 	t.Cleanup(func() { _ = ln.Close() })
 	go func() {
 		for {
@@ -156,28 +155,47 @@ func serve(t *testing.T, ln net.Listener) *listener {
 			if err != nil {
 				return
 			}
-			s := &slot{}
 			l.mu.Lock()
-			l.accepted = append(l.accepted, s)
+			l.accepted = append(l.accepted, c.RemoteAddr().String())
+			close(l.changed)
+			l.changed = make(chan struct{})
 			l.mu.Unlock()
-			go l.handle(c, s)
+			go l.handle(c)
 		}
 	}()
 	return l
 }
 
-func (l *listener) handle(c net.Conn, s *slot) {
+func (l *listener) handle(c net.Conn) {
 	defer func() { _ = c.Close() }()
-	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
 	_, _ = c.Write([]byte(l.Addr().String()))
-	buf := make([]byte, 8)
-	n, _ := io.ReadFull(c, buf)
-	l.mu.Lock()
-	s.data, s.done = string(buf[:n]), true
-	l.mu.Unlock()
+	_, _ = io.Copy(io.Discard, c)
 }
 
 func (l *listener) port() int { return l.Addr().(*net.TCPAddr).Port }
+
+func (l *listener) waitAccepted(t *testing.T, remote string) []string {
+	t.Helper()
+	timeout := time.After(30 * time.Second)
+	for {
+		l.mu.Lock()
+		changed := l.changed
+		for i, a := range l.accepted {
+			if a == remote {
+				before := slices.Clone(l.accepted[:i])
+				l.mu.Unlock()
+				return before
+			}
+		}
+		l.mu.Unlock()
+		select {
+		case <-changed:
+		case <-timeout:
+			t.Fatalf("%s never accepted %s", l.Addr(), remote)
+		}
+	}
+}
 
 func (l *listener) assertNoLeak(t *testing.T) {
 	t.Helper()
@@ -186,36 +204,30 @@ func (l *listener) assertNoLeak(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
-	_, _ = c.Write([]byte("sentinel"))
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if leaked, ok := l.beforeSentinel(); ok {
-			if len(leaked) > 0 {
-				t.Fatalf("%s was reached through the policy: %q", l.Addr(), leaked)
-			}
-			return
+	dialed.Store(c.LocalAddr().String(), true)
+	var leaked []string
+	for _, remote := range l.waitAccepted(t, c.LocalAddr().String()) {
+		if _, ok := dialed.Load(remote); !ok {
+			leaked = append(leaked, remote)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("sentinel never arrived at %s", l.Addr())
+	if len(leaked) > 0 {
+		t.Fatalf("%s was reached through the policy from %q", l.Addr(), leaked)
+	}
 }
 
-func (l *listener) beforeSentinel() ([]string, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	var leaked []string
-	for _, s := range l.accepted {
-		if !s.done {
-			return nil, false
-		}
-		if s.data == "sentinel" {
-			return leaked, true
-		}
-		if s.data != "greeting" {
-			leaked = append(leaked, s.data)
-		}
+func dialAccepted(t *testing.T, d *policy.Dialer, l *listener) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	c, err := d.DialContext(ctx, "tcp", l.Addr().String())
+	if err != nil {
+		return err
 	}
-	return nil, false
+	defer func() { _ = c.Close() }()
+	dialed.Store(c.LocalAddr().String(), true)
+	l.waitAccepted(t, c.LocalAddr().String())
+	return nil
 }
 
 func dialAndGreet(t *testing.T, d *policy.Dialer, address string) (string, error) {
@@ -227,7 +239,7 @@ func dialAndGreet(t *testing.T, d *policy.Dialer, address string) (string, error
 		return "", err
 	}
 	defer func() { _ = c.Close() }()
-	_, _ = c.Write([]byte("greeting"))
+	dialed.Store(c.LocalAddr().String(), true)
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 64)
 	n, err := c.Read(buf)
@@ -533,17 +545,17 @@ func TestPolicyLocalDeniesPortsOnTheMachinesLANAddress(t *testing.T) {
 	}
 	port := uint16(blocked.port())
 	for _, p := range []*policy.Policy{policy.Local(port), policy.Local(port).With(allow, nil)} {
-		_, err := dialAndGreet(t, policy.NewDialer(p), blocked.Addr().String())
+		err := dialAccepted(t, policy.NewDialer(p), blocked)
 		requireDenied(t, err)
 		var pe *policy.Error
 		if !errors.As(err, &pe) || !strings.Contains(pe.Reason, "this machine") {
 			t.Fatalf("%v", err)
 		}
 	}
-	if _, err := dialAndGreet(t, policy.NewDialer(policy.Local(port).With(allow, nil)), open.Addr().String()); err != nil {
+	if err := dialAccepted(t, policy.NewDialer(policy.Local(port).With(allow, nil)), open); err != nil {
 		t.Fatalf("%s: other port refused: %v", addr, err)
 	}
-	if _, err := dialAndGreet(t, policy.NewDialer(policy.Remote().With(allow, nil)), blocked.Addr().String()); err != nil {
+	if err := dialAccepted(t, policy.NewDialer(policy.Remote().With(allow, nil)), blocked); err != nil {
 		t.Fatalf("remote default denied a host port: %v", err)
 	}
 	blocked.assertNoLeak(t)
