@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
@@ -26,7 +27,6 @@ type Config struct {
 	Logf         func(format string, args ...any)
 	Status       func(format string, args ...any)
 	Certificates []webrtc.Certificate
-	OnLink       func(*link.Link)
 }
 
 type Node struct {
@@ -36,6 +36,7 @@ type Node struct {
 	sshHostKey string
 	api        *webrtc.API
 	helloHooks []func(*link.Hello)
+	subs       subscribers
 }
 
 func New(cfg Config) *Node {
@@ -120,7 +121,7 @@ func (n *Node) Hello() link.Hello {
 func (n *Node) Options() link.Options {
 	handlers := make(map[string]link.Handler, len(n.handlers))
 	for k, v := range n.handlers {
-		handlers[k] = v
+		handlers[k] = n.counted(k, v)
 	}
 	return link.Options{Hello: n.Hello(), Handlers: handlers, Logf: n.cfg.Logf, Certificates: n.cfg.Certificates}
 }
@@ -133,8 +134,23 @@ func (n *Node) API() *webrtc.API {
 }
 
 type current struct {
-	nonce string
-	l     *link.Link
+	nonce   string
+	l       *link.Link
+	mu      sync.Mutex
+	reason  string
+	watched chan struct{}
+}
+
+func (c *current) setReason(r string) {
+	c.mu.Lock()
+	c.reason = r
+	c.mu.Unlock()
+}
+
+func (c *current) getReason() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reason
 }
 
 func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
@@ -146,7 +162,9 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		if bye {
 			_ = conn.Send(context.Background(), signal.Message{T: signal.TypeBye, Nonce: cur.nonce, Reason: reason})
 		}
+		cur.setReason(reason)
 		_ = cur.l.Close()
+		<-cur.watched
 		cur = nil
 	}
 	defer closeCur("slicc is exiting", true)
@@ -160,7 +178,7 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		}
 		switch m.T {
 		case signal.TypeOffer:
-			closeCur("", false)
+			closeCur("replaced by a new offer", false)
 			cur = n.answer(ctx, conn, m, n.Options())
 		case signal.TypeCandidate:
 			if cur != nil && cur.nonce == m.Nonce {
@@ -171,7 +189,7 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		case signal.TypeBye:
 			if cur != nil && cur.nonce == m.Nonce {
 				n.cfg.Status("link closed by seven: %s", m.Reason)
-				closeCur("", false)
+				closeCur(m.Reason, false)
 			}
 		}
 	}
@@ -181,16 +199,18 @@ func (n *Node) answer(ctx context.Context, conn signal.Conn, m signal.Message, o
 	l, err := link.Answer(ctx, n.API(), m, conn.Send, opts)
 	if err != nil {
 		n.cfg.Status("could not answer seven: %v", err)
+		n.emit(Event{Kind: EventLinkDown, Err: err})
 		return nil
 	}
-	if n.cfg.OnLink != nil {
-		n.cfg.OnLink(l)
-	}
-	go n.watch(l)
-	return &current{nonce: m.Nonce, l: l}
+	c := &current{nonce: m.Nonce, l: l, watched: make(chan struct{})}
+	n.emit(Event{Kind: EventConnecting, Link: l})
+	go n.watch(c)
+	return c
 }
 
-func (n *Node) watch(l *link.Link) {
+func (n *Node) watch(c *current) {
+	defer close(c.watched)
+	l := c.l
 	select {
 	case <-l.Ready():
 		h, _ := l.PeerHello()
@@ -199,10 +219,16 @@ func (n *Node) watch(l *link.Link) {
 			name = "seven"
 		}
 		n.cfg.Status("link up with %q", name)
+		n.emit(Event{Kind: EventLinked, Link: l, Peer: h})
 	case <-l.Done():
 	}
 	<-l.Done()
+	e := Event{Kind: EventLinkDown, Link: l}
 	if err := l.Err(); err != nil && !errors.Is(err, link.ErrClosed) {
 		n.cfg.Status("link down: %v", err)
+		e.Err = err
+	} else {
+		e.Reason = c.getReason()
 	}
+	n.emit(e)
 }

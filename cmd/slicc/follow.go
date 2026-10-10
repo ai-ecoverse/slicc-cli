@@ -206,7 +206,12 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	}
 	r.node = node.New(node.Config{
 		Name: ff.name, Host: ff.name, Version: version, Mode: "remote", Policy: pol, Hosts: ff.hosts.hosts, Exit: ff.exit,
-		Logf: logf, Status: r.nodeStatus, Certificates: []webrtc.Certificate{cert}, OnLink: r.onLink,
+		Logf: logf, Status: r.nodeStatus, Certificates: []webrtc.Certificate{cert},
+	})
+	r.node.Subscribe(func(e node.Event) {
+		if e.Kind == node.EventConnecting {
+			r.onLink(e.Link)
+		}
 	})
 	if ff.exit {
 		tcp.Register(r.node)
