@@ -40,11 +40,13 @@ flags:
   --name <name>        the name and host this link shows in seven
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
-
+` + computeUsage + `
 The link offers the net capability (tcp and resolve streams) and the http
 capability (fetches without redirects) under the local policy: public
 addresses, this machine and the local network, but not link-local addresses
-or the browser's debugging port.
+or the browser's debugging port. With --runner it also offers ssh: seven's
+kernel reaches this machine's SSH server, which never listens on a port, and
+its forwarding goes through the same policy.
 `
 
 type attachFlags struct {
@@ -54,6 +56,7 @@ type attachFlags struct {
 	name    string
 	allow   policy.Rules
 	deny    policy.Rules
+	compute computeFlags
 }
 
 type multi []string
@@ -63,6 +66,12 @@ func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
 
 func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	var f attachFlags
+	args, compute, err := extractCompute(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "slicc attach: %v\n\n%s", err, attachUsage)
+		return f, 2
+	}
+	f.compute = compute
 	fs := flag.NewFlagSet("attach", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&f.cdp, "cdp", "", "")
@@ -71,6 +80,7 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	fs.StringVar(&f.name, "name", "", "")
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
+	f.compute.register(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stderr, attachUsage)
@@ -81,6 +91,10 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "slicc attach: unexpected argument %q\n\n%s", fs.Arg(0), attachUsage)
+		return f, 2
+	}
+	if err := f.compute.validate(); err != nil {
+		fmt.Fprintf(stderr, "slicc attach: %v\n\n%s", err, attachUsage)
 		return f, 2
 	}
 	switch {
@@ -128,6 +142,12 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	tcp.Register(n)
 	resolve.Register(n)
 	httpcap.Register(n)
+	closeSSH, err := f.compute.serve(n, status)
+	if err != nil {
+		status("%v", err)
+		return 1
+	}
+	defer closeSSH()
 	if err := n.Serve(ctx, conn); err != nil && ctx.Err() == nil {
 		status("%v", err)
 		return 1

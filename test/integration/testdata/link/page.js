@@ -157,6 +157,47 @@ globalThis.linkTest = {
       return describe(error);
     }
   },
+  async hello() {
+    return state.ready;
+  },
+  async bridge(payload, url) {
+    let stream;
+    try {
+      stream = await state.link.open(payload);
+    } catch (error) {
+      return describe(error);
+    }
+    const ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    try {
+      await new Promise((resolve, reject) => {
+        ws.onopen = resolve;
+        ws.onerror = () => reject(new Error('websocket failed'));
+      });
+    } catch (error) {
+      stream.reset('ECANCELED');
+      return describe(error);
+    }
+    let writing = Promise.resolve();
+    ws.onmessage = (event) => {
+      const bytes = new Uint8Array(event.data);
+      writing = writing.then(() => stream.write(bytes)).catch(() => ws.close());
+    };
+    ws.onclose = () => {
+      writing.then(() => {
+        try {
+          stream.end();
+        } catch {}
+      });
+    };
+    (async () => {
+      try {
+        for (let chunk = await stream.read(); chunk; chunk = await stream.read()) ws.send(chunk);
+      } catch {}
+      ws.close();
+    })();
+    return { opened: stream.opened };
+  },
   async many(n, host, port, size) {
     const results = await Promise.all([...Array(n).keys()].map((i) => this.echo(host, port, size + i, i % 3 === 0)));
     return { ok: results.filter((r) => r.ok).length, shared: results.filter((r) => r.shared).length, failures: results.filter((r) => !r.ok) };
