@@ -50,6 +50,9 @@ func requireChrome(t *testing.T, env []string) {
 			return
 		}
 	}
+	if os.Getenv("CI") != "" {
+		t.Fatal("no Google Chrome found, and CI images have it")
+	}
 	t.Skip("no Google Chrome found on this machine; skipping the real launch")
 }
 
@@ -184,7 +187,7 @@ func TestLaunchPackageAPIClosesBrowser(t *testing.T) {
 	installed := browser.DiscoverInstalled(context.Background(), browser.Options{})
 	chrome, ok := browser.FindInstalled(installed, "chrome")
 	if !ok {
-		t.Skip("no Google Chrome found on this machine")
+		t.Fatal("slicc browsers found Google Chrome but DiscoverInstalled did not")
 	}
 	profiles := filepath.Join(root, "profiles")
 	b, err := browser.Launch(context.Background(), chrome, browser.LaunchOptions{

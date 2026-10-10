@@ -80,7 +80,7 @@ func ElectronArgs(port int, extra []string) []string {
 	return append([]string{"--remote-debugging-port=" + strconv.Itoa(port)}, extra...)
 }
 
-func spawnCommand(in Installed, args []string, profileDir string) (string, []string) {
+func spawnCommand(in Installed, args []string, profileDir string, headless bool) (string, []string) {
 	switch {
 	case in.Via == "flatpak":
 		pre := []string{"run"}
@@ -89,7 +89,7 @@ func spawnCommand(in Installed, args []string, profileDir string) (string, []str
 		}
 		pre = append(pre, in.Package)
 		return in.Executable, append(pre, args...)
-	case runtime.GOOS == "darwin" && strings.HasSuffix(in.Path, ".app"):
+	case runtime.GOOS == "darwin" && strings.HasSuffix(in.Path, ".app") && !headless:
 		return "/usr/bin/open", append([]string{"-n", "-W", "-a", in.Path, "--args"}, args...)
 	default:
 		return in.Executable, args
@@ -110,7 +110,7 @@ func Launch(ctx context.Context, in Installed, lo LaunchOptions) (*Browser, erro
 	if err := prepareProfile(dir); err != nil {
 		return nil, err
 	}
-	name, args := spawnCommand(in, ChromiumArgs(dir, lo.URL, lo.Headless, lo.ExtraArgs), dir)
+	name, args := spawnCommand(in, ChromiumArgs(dir, lo.URL, lo.Headless, lo.ExtraArgs), dir, lo.Headless)
 	b, err := start(in, name, args)
 	if err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func launchElectron(ctx context.Context, in Installed, lo LaunchOptions) (*Brows
 	if err != nil {
 		return nil, err
 	}
-	name, args := spawnCommand(in, ElectronArgs(port, lo.ExtraArgs), "")
+	name, args := spawnCommand(in, ElectronArgs(port, lo.ExtraArgs), "", false)
 	b, err := start(in, name, args)
 	if err != nil {
 		return nil, err
