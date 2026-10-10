@@ -1,0 +1,23 @@
+{
+  "name": "slicc-cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SLICC's command line: launches and links browsers, and shares a machine's network, compute and browsers with seven over WebRTC",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ai-ecoverse/slicc-cli.git"
+  },
+  "scripts": {
+    "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && golangci-lint run",
+    "format": "gofmt -w .",
+    "test": "go test -race -count=1 ./test/integration/...",
+    "test:unit": "go test -race -cover ./cmd/... ./internal/...",
+    "release": "semantic-release",
+    "build": "go build -trimpath -ldflags \"-s -w\" -o bin/slicc ./cmd/slicc"
+  },
+  "devDependencies": {
+    "@ai-ecoverse/slicc-shared-web": "1.12.0",
+    "semantic-release": "25.0.9"
+  }
+}
