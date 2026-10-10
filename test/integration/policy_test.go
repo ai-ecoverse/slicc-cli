@@ -516,6 +516,9 @@ func lanAddress(t *testing.T) netip.Addr {
 	if len(v6) > 0 {
 		return v6[0]
 	}
+	if os.Getenv("CI") != "" {
+		t.Fatal("the CI runner has no non-loopback address")
+	}
 	t.Skip("this machine has no non-loopback address")
 	return netip.Addr{}
 }
