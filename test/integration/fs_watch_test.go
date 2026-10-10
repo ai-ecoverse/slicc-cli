@@ -155,16 +155,32 @@ func (e *fsEnv) testFSWatchBurst(t *testing.T, w *fsWatch) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		lines, _ := w.state(t)
+		named := map[string]bool{}
 		for _, l := range lines[seen:] {
-			if len(paths(l)) > 257 {
+			if len(paths(l)) > 256 {
 				t.Fatalf("a line with %d paths", len(paths(l)))
 			}
 			if l.str("mount") == "project" && l["all"] == true {
 				return
 			}
+			for _, p := range paths(l) {
+				named[p] = true
+			}
+		}
+		missing := 0
+		for g := range 8 {
+			for i := range 250 {
+				if !named[fmt.Sprintf("burst/f-%d-%d", g, i)] {
+					missing++
+				}
+			}
+		}
+		if missing == 0 {
+			t.Logf("the burst came in %d lines of at most 256 paths", len(lines)-seen)
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("2000 changes never folded into all: %d lines", len(lines)-seen)
+			t.Fatalf("2000 changes: no all and %d never named, in %d lines", missing, len(lines)-seen)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
