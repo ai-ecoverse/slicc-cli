@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift.
 
-**Status:** being built. `slicc attach`, `slicc <join-url> follow`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
 ## Commands (planned)
 
@@ -153,18 +153,19 @@ Plain output: the CDP HTTP URL on stdout, status lines on stderr. With `--json`,
 ## Local setup: `slicc attach`
 
 ```
-slicc attach --cdp <url> [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]...
+slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
 ```
 
 `attach` links a seven that is open in a running CDP browser and serves the link until it is interrupted (`SIGINT`, `SIGTERM`), or until stdin closes with `--signal stdio`. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics, pion's included. pion never writes to stderr itself.
 
 **Flags.**
-- `--cdp`: the browser's endpoint. `http://host:port` is looked up through `GET /json/version`, and `ws://…` is used as is. slicc talks to the browser WebSocket only and attaches to the tab with `Target.attachToTarget { flatten: true }`.
+- `--cdp`: the browser's endpoint. `http://host:port` is looked up through `GET /json/version`, and `ws://…` is used as is. slicc talks to the browser WebSocket only and attaches to the tab with `Target.attachToTarget { flatten: true }`. It names one browser; a second `--cdp` is an error. This browser is also listed for the [`cdp`](#cdp-browser-control) capability, with `seven: true`.
+- `--cdp-extra`: another browser seven may drive over the link (repeatable), in any form `slicc browsers --cdp` takes. Each must answer when `attach` starts.
 - `--origin`: also accept seven on this origin (`scheme://host[:port]`), repeatable. `https://<label>.sliccy.ai` is always accepted, except `www`.
 - `--signal`: `cdp` (default) or `stdio`.
 - `--name`: the link's `name` and `host` in HELLO. The default name is `slicc on <host>`, with this machine's short host name, lower-cased.
-- `--allow`, `--deny`: policy rules on top of the local default (see [Network policy](#network-policy)). The `--cdp` port is denied as the browser's debugging port.
+- `--allow`, `--deny`: policy rules on top of the local default (see [Network policy](#network-policy)). The `--cdp` and `--cdp-extra` ports are denied as debugging ports.
 - `--runner <argv…>`: offer compute over SSH (cap `ssh`, see [SSH server](#ssh-server)). Each command runs as `<argv…> <command>`. The argv is every word after `--runner` up to a lone `--` or the end of the command line, so `--runner bash -c` or `--runner docker exec -i box sh -c -- --name box`. An argv can't contain a lone `--` itself. `--runner=…` is refused. Without `--runner` the link has no `ssh` capability, and the flags below are refused.
 - `--shell <argv…>`: the interactive form for `ssh` without a command, in the same argv syntax. The default is derived from the runner.
 - `--eval <argv…>` and `--eval-quiet <duration>`: the REPL behind the `slicc-eval` subsystem (for example `--eval python3 -i`), and the silence that ends one response (default `500ms`).
@@ -189,7 +190,7 @@ slicc attach --cdp <url> [--origin <origin>]... [--signal cdp|stdio] [--name <na
 **Setup over stdio** (`--signal stdio`), for a test harness that owns CDP itself:
 - The same messages go as NDJSON: slicc writes `hello`, `answer`, `candidate` and `bye` lines to stdout, and reads `offer`, `candidate` and `bye` lines from stdin. Messages with another nonce are ignored.
 - The harness writes `{"t":"hello"}` to stdin to get a fresh `hello` with a new nonce, for example after it reloaded the page.
-- `--cdp` is optional here and only names the debugging port to deny.
+- `--cdp` is optional here. When given, it names the debugging port to deny and the `seven: true` browser for `cdp`.
 
 **ICE.**
 - No STUN or TURN, so only host candidates are used, loopback included.
@@ -209,7 +210,7 @@ One WebRTC peer connection. seven offers and the node answers. The node:
 - **Resets with `EOPNOTSUPP`:** an OPEN for a kind it doesn't serve.
 - **Closes the link:** an unknown frame type, a short or malformed frame (END with a payload, CREDIT that isn't 4 bytes), stream id 0, a reused id, an id with the wrong parity (page streams are odd, node streams even), or a second OPEN on a stream channel.
 
-HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "caps": ["net", "http"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" } }`. With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`.
+HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "caps": ["net", "http", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`.
 
 **`ssh`** (cap `ssh`), page → node, with `--runner` only:
 - OPEN `{ "kind": "ssh" }`, OPENED `{}` at once. The stream's bytes are one SSH connection to the node's SSH server.
@@ -243,7 +244,33 @@ HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode
 - **RESET before the response head:** `EPROTO` for a malformed head or one of the refusals above, and for a `206` with a coding the node would decode, since its `Content-Range` wouldn't match. A failed fetch is `<code>: fetch failed: <reason>`, with `tcp`'s codes: `EACCES` for a policy refusal, `ENOTFOUND` for a name that doesn't resolve, `ETIMEDOUT`, `ECONNRESET`, and `ECONNREFUSED` for anything else, TLS failures included.
 - **After the head:** an upstream error or a broken coding mid-body is `RESET ECONNRESET`.
 
-`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`.
+### `cdp` (browser control)
+
+> **Warning:** a seven with the `cdp` capability has full control of every listed browser: its tabs, cookies, stored passwords and logged-in sessions, files it can download, and anything a page in it can reach. List only browsers you would let that seven use as you. For `follow` that is a seven on another machine.
+
+**HELLO** lists the browsers: `"browsers": [{ "id": "chrome", "name": "Chrome (headless)", "version": "154.0.8037.98", "seven": true }]`. Every entry has all four fields.
+- `id` is the browser kind, then `-2`, `-3`… for a second or third of the same kind. The kind comes from `/json/version`: `electron` for an Electron user agent, else by product `chrome` (also `HeadlessChrome`, and browsers such as Brave that report `Chrome`), `edge` (`Edg`), `opera` (`OPR`), else the product lower-cased, else `chromium`.
+- An id keeps its meaning for the life of the node. A removed id is never given to another browser, and the same endpoint (CDP host and port) added again gets its old id back.
+- `name` and `version` come from the endpoint's `/json/version`, as in `slicc browsers`.
+- `seven: true` marks the browser that hosts this seven tab (`attach --cdp`).
+
+**OPEN** `{ "kind": "cdp", "browser": "<id>" }`, page → node. For each stream the node reads the browser's `/json/version` again and opens a fresh WebSocket to its `webSocketDebuggerUrl`, so each stream is its own CDP client with its own sessions. A `wsOnly` browser is dialled at its websocket URL directly. Dial and handshake together get 10 s.
+- **OPENED:** `{ "product", "protocolVersion" }`, the `Browser` and `Protocol-Version` fields of `/json/version` (from `Browser.getVersion` for a `wsOnly` browser).
+- **RESET:** `ENOENT` for an id that isn't listed, `ECONNREFUSED` when the browser doesn't answer, `EPROTO` for an OPEN without `browser`.
+
+**Bytes**, both directions: a sequence of messages, each a `u32` BE length plus one UTF-8 CDP JSON message of at most 64 MiB (67 108 864 bytes). The node sends each page message as one WebSocket text message, and each text message from the browser as one stream message. A length over 64 MiB from the page, or a browser message over 64 MiB, is `RESET EMSGSIZE`, and a page END in the middle of a message is `RESET EPROTO`. Browser messages that start with `{"method":"Network.webSocketFrameReceived"` or `{"method":"Network.webSocketFrameSent"` are dropped: seven runs inside a browser it may debug, so those events would carry the CDP traffic itself and grow without bound (parity with slicc-node's `/cdp`).
+
+**Closing.**
+- The browser closes the socket with a normal close (1000): the node sends END, then discards whatever the page still sends until its END.
+- The browser socket fails or closes any other way: `RESET ECONNRESET`.
+- END from the page: the node closes the socket with a normal close, then sends END.
+- RESET from the page, or the link going down: the socket is closed at once.
+
+**List changes.** The node checks every listed browser's debugging port every 2 s. One that fails twice in a row is removed: its open streams get `RESET ECONNRESET: browser quit`, and a later OPEN for it gets `ENOENT`. Once its port answers again it is listed again under the same id. A browser removed through the API (`Registry.Remove`, for the TUI) has its streams reset with `ECONNRESET: browser removed`.
+
+**`browsers` updates** (page cap `browsers`), node → page. When the list changes while a link is up and the page's HELLO has `browsers` in `caps`, the node opens `OPEN { "kind": "browsers", "browsers": [ … ] }` on the control channel with the full current list in HELLO's shape. It replaces the previous list; there are no deltas. The page answers OPENED `{}` and END, and the node sends END. Updates are sent one at a time per link, a change that comes while one is in flight is sent after it, with the list as it is then, and an update the page doesn't finish within 10 s is reset with `ETIMEDOUT`. A change between the HELLO and the link coming up is sent as an update right away.
+
+`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`. `cdp.js` next to it is a CDP client over `cdp` streams, and `page.js` answers `browsers` updates.
 
 ## Network policy
 

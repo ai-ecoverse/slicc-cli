@@ -58,6 +58,7 @@ type chromeProc struct {
 	endpoint string
 	port     int
 	client   *cdp.Client
+	cmd      *exec.Cmd
 }
 
 func launchBrowser(t *testing.T) *chromeProc {
@@ -100,7 +101,7 @@ func launchBrowser(t *testing.T) *chromeProc {
 	if port == 0 {
 		t.Fatal("Chrome did not write DevToolsActivePort")
 	}
-	b := &chromeProc{endpoint: fmt.Sprintf("http://127.0.0.1:%d", port), port: port}
+	b := &chromeProc{endpoint: fmt.Sprintf("http://127.0.0.1:%d", port), port: port, cmd: cmd}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	b.client, err = cdp.Dial(ctx, b.endpoint)
