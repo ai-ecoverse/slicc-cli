@@ -439,3 +439,57 @@ export class Link {
     handler(stream);
   }
 }
+
+export function encodeHead(head) {
+  const json = encoder.encode(JSON.stringify(head));
+  const out = new Uint8Array(4 + json.byteLength);
+  new DataView(out.buffer).setUint32(0, json.byteLength);
+  out.set(json, 4);
+  return out;
+}
+
+export async function readHead(stream) {
+  let buf = new Uint8Array(0);
+  const need = async (n) => {
+    while (buf.byteLength < n) {
+      const chunk = await stream.read();
+      if (!chunk) throw new LinkError('the response ended inside its head');
+      const next = new Uint8Array(buf.byteLength + chunk.byteLength);
+      next.set(buf);
+      next.set(chunk, buf.byteLength);
+      buf = next;
+    }
+  };
+  await need(4);
+  const size = new DataView(buf.buffer, buf.byteOffset, 4).getUint32(0);
+  await need(4 + size);
+  return { head: JSON.parse(decoder.decode(buf.subarray(4, 4 + size))), rest: buf.slice(4 + size) };
+}
+
+export async function resolve(link, name, family = 0, { shared = true } = {}) {
+  const stream = await link.open({ kind: 'resolve', name, family }, { shared });
+  const extra = await stream.readAll();
+  stream.end();
+  await stream.done;
+  return { ...stream.opened, extra: extra.byteLength, shared: stream.shared };
+}
+
+export async function fetchRaw(link, { url, method = 'GET', headers = [], body = null, head = null }, { shared = false } = {}) {
+  const stream = await link.open({ kind: 'http' }, { shared });
+  const sending = (async () => {
+    await stream.write(head ?? encodeHead({ url, method, headers }));
+    if (body instanceof Uint8Array) {
+      if (body.byteLength > 0) await stream.write(body);
+    } else if (body) {
+      for await (const chunk of body) await stream.write(chunk);
+    }
+    stream.end();
+  })();
+  sending.catch(() => {});
+  const { head: response, rest } = await readHead(stream);
+  async function* chunks() {
+    if (rest.byteLength > 0) yield rest;
+    for (let chunk = await stream.read(); chunk; chunk = await stream.read()) yield chunk;
+  }
+  return { stream, head: response, sending, body: chunks() };
+}

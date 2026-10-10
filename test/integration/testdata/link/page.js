@@ -1,4 +1,4 @@
-import { Frame, Link, ResetError } from './link.js';
+import { Frame, Link, ResetError, fetchRaw, resolve } from './link.js';
 
 const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null };
 
@@ -72,6 +72,42 @@ function equal(a, b) {
 function describe(error) {
   if (error instanceof ResetError) return { reset: error.code, detail: error.detail };
   return { error: String(error?.message ?? error) };
+}
+
+function toBase64(bytes) {
+  let out = '';
+  for (let at = 0; at < bytes.byteLength; at += 32768) out += String.fromCharCode(...bytes.subarray(at, at + 32768));
+  return btoa(out);
+}
+
+function fromBase64(text) {
+  return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+}
+
+function concat(parts, total) {
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.byteLength;
+  }
+  return out;
+}
+
+async function* prng(size, seed) {
+  let x = seed >>> 0;
+  for (let at = 0; at < size; at += 65536) {
+    const n = Math.min(65536, size - at);
+    const words = new Uint32Array(Math.ceil(n / 4));
+    for (let i = 0; i < words.length; i += 1) {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      x >>>= 0;
+      words[i] = x;
+    }
+    yield new Uint8Array(words.buffer, 0, n);
+  }
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -177,6 +213,34 @@ globalThis.linkTest = {
     const result = await reply;
     frame.remove();
     return result;
+  },
+  async resolve(name, family, shared = true) {
+    try {
+      return await resolve(state.link, name, family, { shared });
+    } catch (error) {
+      return describe(error);
+    }
+  },
+  async http(request, shared = false, keep = 1 << 20) {
+    try {
+      const req = { ...request };
+      if (request.body64 !== undefined) req.body = fromBase64(request.body64);
+      if (request.head64 !== undefined) req.head = fromBase64(request.head64);
+      if (request.prng) req.body = prng(request.prng.size, request.prng.seed);
+      const res = await fetchRaw(state.link, req, { shared });
+      const parts = [];
+      let total = 0;
+      for await (const chunk of res.body) {
+        parts.push(chunk);
+        total += chunk.byteLength;
+      }
+      await res.sending;
+      await res.stream.done;
+      const all = concat(parts, total);
+      return { ...res.head, shared: res.stream.shared, bytes: total, sha256: await sha256(all), body64: total <= keep ? toBase64(all) : null };
+    } catch (error) {
+      return describe(error);
+    }
   },
   forgeStale() {
     globalThis.sliccLinkSend(JSON.stringify({ t: 'bye', nonce: 'stale-nonce', reason: 'stale' }));
