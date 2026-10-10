@@ -9,7 +9,7 @@
     "url": "git+https://github.com/ai-ecoverse/slicc-cli.git"
   },
   "scripts": {
-    "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && golangci-lint run",
+    "lint": "sh scripts/lint-comments.sh && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && golangci-lint run",
     "format": "gofmt -w .",
     "test": "go test -race -count=1 ./test/integration/...",
     "test:unit": "go test -race -cover ./cmd/... ./internal/...",
