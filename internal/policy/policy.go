@@ -48,20 +48,26 @@ func New() *Policy {
 	return &Policy{base: "every address"}
 }
 
-func Remote() *Policy {
+func Remote(protectedPorts ...uint16) *Policy {
 	p := &Policy{base: "every public address"}
 	for _, s := range remoteDeny {
 		p.entries = append(p.entries, entry{rule: mustRule(s), deny: true})
 	}
+	p.protect(protectedPorts)
 	return p
 }
 
-func Local(loopbackPorts ...uint16) *Policy {
+func Local(protectedPorts ...uint16) *Policy {
 	p := &Policy{base: "every public address, this machine, and the local network"}
 	for _, s := range remoteDeny {
 		p.entries = append(p.entries, entry{rule: mustRule(s), deny: !slices.Contains(localAllows, s)})
 	}
-	for _, port := range loopbackPorts {
+	p.protect(protectedPorts)
+	return p
+}
+
+func (p *Policy) protect(ports []uint16) {
+	for _, port := range ports {
 		if port == 0 || slices.Contains(p.hostPorts, port) {
 			continue
 		}
@@ -73,7 +79,6 @@ func Local(loopbackPorts ...uint16) *Policy {
 		}
 	}
 	p.hosts = hostAddrs
-	return p
 }
 
 func mustRule(s string) Rule {

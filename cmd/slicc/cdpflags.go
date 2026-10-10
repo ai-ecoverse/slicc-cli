@@ -56,21 +56,13 @@ func cdpBrowsers(ctx context.Context, seven string, extra []string, logf func(st
 	return r, ports, nil
 }
 
-func followBrowsers(n *node.Node, urls []string, logf, status func(string, ...any)) (*capcdp.Registry, error) {
-	if len(urls) == 0 {
-		return nil, nil
-	}
-	r, _, err := cdpBrowsers(context.Background(), "", urls, logf)
-	if err != nil {
-		return nil, err
-	}
+func followBrowsers(n *node.Node, r *capcdp.Registry, status func(string, ...any)) {
 	capcdp.Register(n, r)
 	ids := make([]string, 0, r.Len())
 	for _, b := range r.List() {
 		ids = append(ids, b.ID)
 	}
 	status("cdp on (%s): seven gets full control of these browsers", strings.Join(ids, ", "))
-	return r, nil
 }
 
 func serveBrowsers(ctx context.Context, n *node.Node, r *capcdp.Registry) {
