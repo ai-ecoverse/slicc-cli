@@ -28,7 +28,7 @@ type linkEnv struct {
 
 const sourceSize = 4 << 20
 
-func setupLink(t *testing.T, stdio bool) *linkEnv {
+func setupLink(t *testing.T, stdio bool, extra ...string) *linkEnv {
 	t.Helper()
 	b := launchBrowser(t)
 	srv := pageServer(t)
@@ -51,7 +51,7 @@ func setupLink(t *testing.T, stdio bool) *linkEnv {
 	} else {
 		args = append(args, "--origin", srv.URL)
 	}
-	env.a = startAttach(t, stdio, args...)
+	env.a = startAttach(t, stdio, append(args, extra...)...)
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	if stdio {
 		relayStdio(t, env.p, env.a)

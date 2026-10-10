@@ -9,6 +9,7 @@ import (
 type Resolver struct {
 	Policy *Policy
 	Base   *net.Resolver
+	Hosts  *Hosts
 }
 
 func NewResolver(p *Policy) *Resolver {
@@ -16,6 +17,9 @@ func NewResolver(p *Policy) *Resolver {
 }
 
 func (r *Resolver) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	if addrs, ok := r.Hosts.Lookup(network, host); ok {
+		return r.Policy.Filter(addrs), nil
+	}
 	base := r.Base
 	if base == nil {
 		base = net.DefaultResolver

@@ -20,6 +20,7 @@ type Config struct {
 	Version      string
 	Mode         string
 	Policy       *policy.Policy
+	Hosts        *policy.Hosts
 	Exit         bool
 	Prefixes     []string
 	Logf         func(format string, args ...any)
@@ -81,7 +82,17 @@ func (n *Node) SetSSHHostKey(key string) { n.sshHostKey = key }
 
 func (n *Node) Policy() *policy.Policy { return n.cfg.Policy }
 
-func (n *Node) Dialer() *policy.Dialer { return policy.NewDialer(n.cfg.Policy) }
+func (n *Node) Dialer() *policy.Dialer {
+	d := policy.NewDialer(n.cfg.Policy)
+	d.Hosts = n.cfg.Hosts
+	return d
+}
+
+func (n *Node) Resolver() *policy.Resolver {
+	r := policy.NewResolver(n.cfg.Policy)
+	r.Hosts = n.cfg.Hosts
+	return r
+}
 
 func (n *Node) Logf(format string, args ...any) { n.cfg.Logf(format, args...) }
 

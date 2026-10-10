@@ -13,6 +13,7 @@ const ConnectTimeout = 30 * time.Second
 type Dialer struct {
 	Policy *Policy
 	Base   net.Dialer
+	Hosts  *Hosts
 }
 
 func NewDialer(p *Policy) *Dialer {
@@ -44,7 +45,32 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 		}
 		return nil
 	}
+	if host, port, err := net.SplitHostPort(address); err == nil {
+		if addrs, ok := d.Hosts.Lookup(network, host); ok {
+			return dialHosts(ctx, &nd, network, host, port, addrs)
+		}
+	}
 	return nd.DialContext(ctx, network, address)
+}
+
+func dialHosts(ctx context.Context, nd *net.Dialer, network, host, port string, addrs []netip.Addr) (net.Conn, error) {
+	if len(addrs) == 0 {
+		return nil, &net.OpError{Op: "dial", Net: network, Err: &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}}
+	}
+	var first error
+	for _, a := range addrs {
+		c, err := nd.DialContext(ctx, network, net.JoinHostPort(a.String(), port))
+		if err == nil {
+			return c, nil
+		}
+		if first == nil {
+			first = err
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, first
 }
 
 func (d *Dialer) Control(_, address string, _ syscall.RawConn) error {

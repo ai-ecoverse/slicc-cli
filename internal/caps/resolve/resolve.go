@@ -34,7 +34,7 @@ type Opened struct {
 }
 
 func Register(n *node.Node) {
-	n.Handle(Cap, Kind, Handler(policy.NewResolver(n.Policy()), n.Logf))
+	n.Handle(Cap, Kind, Handler(n.Resolver(), n.Logf))
 }
 
 func Handler(r *policy.Resolver, logf func(format string, args ...any)) link.Handler {

@@ -57,6 +57,7 @@ type attachFlags struct {
 	allow   policy.Rules
 	deny    policy.Rules
 	compute computeFlags
+	hosts   hostsFlag
 }
 
 type multi []string
@@ -81,6 +82,7 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
 	f.compute.register(fs)
+	fs.Var(&f.hosts, "hosts", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stderr, attachUsage)
@@ -138,7 +140,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer closer()
 	pol := policy.Local(debugPort(f.cdp)).With(f.allow, f.deny)
-	n := node.New(node.Config{Name: f.name, Host: f.name, Version: version, Mode: "local", Policy: pol, Exit: true, Logf: logf, Status: status})
+	n := node.New(node.Config{Name: f.name, Host: f.name, Version: version, Mode: "local", Policy: pol, Hosts: f.hosts.hosts, Exit: true, Logf: logf, Status: status})
 	tcp.Register(n)
 	resolve.Register(n)
 	httpcap.Register(n)
