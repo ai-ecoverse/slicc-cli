@@ -148,7 +148,7 @@ func (e *linkEnv) testHello(t *testing.T) {
 	if h.V != 1 || h.Role != "node" || h.Name != "it-node" || h.Host != "it-node" || h.Version != "1.2.3-test" || h.Mode != "local" {
 		t.Fatalf("hello %+v", h)
 	}
-	if len(h.Caps) != 1 || h.Caps[0] != "net" || !h.Routes.Exit || h.Policy.Summary == "" {
+	if strings.Join(h.Caps, ",") != "net,http" || !h.Routes.Exit || h.Policy.Summary == "" {
 		t.Fatalf("hello %+v", h)
 	}
 	want := fmt.Sprintf("127.0.0.1/32:%d", e.b.port)

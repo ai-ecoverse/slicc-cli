@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
+	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
@@ -39,9 +41,10 @@ flags:
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
 
-The link offers the net capability (tcp streams) under the local policy:
-public addresses, this machine and the local network, but not link-local
-addresses or the browser's debugging port.
+The link offers the net capability (tcp and resolve streams) and the http
+capability (fetches without redirects) under the local policy: public
+addresses, this machine and the local network, but not link-local addresses
+or the browser's debugging port.
 `
 
 type attachFlags struct {
@@ -123,6 +126,8 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	pol := policy.Local(debugPort(f.cdp)).With(f.allow, f.deny)
 	n := node.New(node.Config{Name: f.name, Host: f.name, Version: version, Mode: "local", Policy: pol, Exit: true, Logf: logf, Status: status})
 	tcp.Register(n)
+	resolve.Register(n)
+	httpcap.Register(n)
 	if err := n.Serve(ctx, conn); err != nil && ctx.Err() == nil {
 		status("%v", err)
 		return 1

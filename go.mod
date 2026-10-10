@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/ai-ecoverse/go-optel v1.0.0
+	github.com/andybalholm/brotli v1.2.6
 	github.com/charmbracelet/x/conpty v0.2.0
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
