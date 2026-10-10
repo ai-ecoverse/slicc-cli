@@ -2,14 +2,14 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift.
 
-**Status:** being built. `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc attach`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
 ## Commands (planned)
 
 | command | what it does |
 | --- | --- |
 | `slicc` | pick browsers in a small TUI; Enter launches the best match with CDP, opens seven and links it |
-| `slicc attach --cdp <url>` | link a seven that is open in an already-running CDP browser |
+| `slicc attach --cdp <url>` | link a seven that is open in an already-running CDP browser (works now; see [Local setup](#local-setup-slicc-attach)) |
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>]` | follow a seven's tray from another machine and offer its network, compute (over SSH) or browsers |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
@@ -149,6 +149,70 @@ Plain output: the CDP HTTP URL on stdout, status lines on stderr. With `--json`,
 - `{"event":"closed"}` after `slicc launch` closed the browser;
 - `{"event":"exited"}` when the browser exited by itself;
 - `{"event":"error","message"}`, then exit 1.
+
+## Local setup: `slicc attach`
+
+```
+slicc attach --cdp <url> [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]...
+```
+
+`attach` links a seven that is open in a running CDP browser and serves the link until it is interrupted (`SIGINT`, `SIGTERM`), or until stdin closes with `--signal stdio`. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics, pion's included. pion never writes to stderr itself.
+
+**Flags.**
+- `--cdp`: the browser's endpoint. `http://host:port` is looked up through `GET /json/version`, and `ws://…` is used as is. slicc talks to the browser WebSocket only and attaches to the tab with `Target.attachToTarget { flatten: true }`.
+- `--origin`: also accept seven on this origin (`scheme://host[:port]`), repeatable. `https://<label>.sliccy.ai` is always accepted, except `www`.
+- `--signal`: `cdp` (default) or `stdio`.
+- `--name`: the link's `name` and `host` in HELLO. The default name is `slicc on <host>`, with this machine's short host name, lower-cased.
+- `--allow`, `--deny`: policy rules on top of the local default (see [Network policy](#network-policy)). The `--cdp` port is denied as the browser's debugging port.
+
+**Setup over CDP.**
+1. slicc picks the first page tab whose URL has an allowed origin. Until there is one it says `waiting for a seven tab` and watches for new tabs.
+2. It attaches, grants the tab's origin `local-network-access`, `local-network` and `loopback-network` with `Browser.setPermission` (best effort), calls `Runtime.addBinding { name: "sliccLinkSend" }`, then `Runtime.enable`.
+3. For each new default execution context of the main frame whose origin is allowed, slicc mints a nonce (16 random bytes, base64url). It then calls `globalThis.sliccLinkReceive({ "t": "hello", "v": 1, "nonce" })` in that context. The call is retried every 100 ms to 1 s until `sliccLinkReceive` is a function.
+4. seven answers through `sliccLinkSend(JSON.stringify(message))`:
+   - `{ "t": "offer", "nonce", "sdp" }`;
+   - `{ "t": "candidate", "nonce", "candidate" }`, where `candidate` is `RTCIceCandidate.toJSON()`, or `null` at the end of gathering;
+   - `{ "t": "bye", "nonce", "reason" }`.
+5. slicc sends `answer`, its own `candidate`s and, when it exits, `bye` in the same shapes through `globalThis.sliccLinkReceive?.(message)`, in the same context.
+
+**Rules for incoming setup messages.**
+- A binding call counts only when it comes from that main-frame context and carries its nonce. Calls from iframes, workers, other contexts and other origins, and stale nonces, are ignored.
+- Each offer starts a new link and replaces the current one.
+- A navigation or reload ends the link, and the next allowed context starts the setup again with a new nonce.
+- A closed tab ends the link, and slicc waits for another seven tab.
+
+**Setup over stdio** (`--signal stdio`), for a test harness that owns CDP itself:
+- The same messages go as NDJSON: slicc writes `hello`, `answer`, `candidate` and `bye` lines to stdout, and reads `offer`, `candidate` and `bye` lines from stdin. Messages with another nonce are ignored.
+- The harness writes `{"t":"hello"}` to stdin to get a fresh `hello` with a new nonce, for example after it reloaded the page.
+- `--cdp` is optional here and only names the debugging port to deny.
+
+**ICE.**
+- No STUN or TURN, so only host candidates are used, loopback included.
+- Chrome's `<uuid>.local` candidates are resolved with mDNS in query-only mode.
+- The link is declared failed after 15 s without connectivity.
+
+## Link
+
+One WebRTC peer connection. seven offers and the node answers. The node:
+- **Control channel:** expects `slicc.link.v1` from the page. It sends its HELLO as the first (text) message, and closes the link when the peer's first message isn't a valid HELLO with `role: "page"` and `v` ≥ 1, when no HELLO arrives within 10 s, or on any text message after HELLO.
+- **Streams:** accepts streams on their own `slicc.link.v1.stream` channel or on the control channel. A stream lives on the channel its OPEN came on, and frames for that id on other channels are ignored.
+- **Its own streams:** opens them on a channel of their own, or on the control channel once it has 256 stream channels open. It closes a stream's channel once both sides sent END, or after a RESET. A stream whose channel closes early is reset locally with `ECONNRESET`.
+- **Reading:** reads every channel all the time and buffers up to the window. Stream frames that arrive before the peer's HELLO are held until it arrives. The SCTP receive buffer is 4 MiB.
+- **Frames:** `type u8 | stream id u32 BE | payload`. OPEN, OPENED, DATA, END, RESET (`ERRNO` or `ERRNO: message`) and CREDIT (`u32` bytes consumed). DATA carries at most 65 536 bytes.
+- **Credit:** at most 256 KiB of uncredited DATA per stream and direction. The node credits bytes once it has written them on, for `tcp` once the socket write returned.
+- **Resets the stream with `EPROTO`:** DATA or END before OPENED or after the peer's END, empty DATA, DATA past the window, CREDIT of 0 or past what was sent, an unexpected OPENED, or an OPEN without a JSON `kind`.
+- **Resets with `EOPNOTSUPP`:** an OPEN for a kind it doesn't serve.
+- **Closes the link:** an unknown frame type, a short or malformed frame (END with a payload, CREDIT that isn't 4 bytes), stream id 0, a reused id, an id with the wrong parity (page streams are odd, node streams even), or a second OPEN on a stream channel.
+
+HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "caps": ["net"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" } }`.
+
+**`tcp`** (cap `net`), page → node:
+- OPEN `{ "kind": "tcp", "host", "port" }`. `host` is an IP literal or a name for the system resolver. The dial goes through the policy and gives up after 30 s.
+- OPENED `{ "localAddr", "remoteAddr" }`.
+- END half-closes the socket (`CloseWrite`), and the socket's EOF becomes END.
+- RESET codes: `ECONNREFUSED`, `ENETUNREACH`, `EHOSTUNREACH`, `ETIMEDOUT`, `ECONNRESET` (also for a socket error mid-stream), `EACCES` for a policy refusal, `ENOTFOUND` for a name that doesn't resolve, and `EPROTO` for an OPEN without a host or with a port outside 1–65535.
+
+`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts and the violation rules) that the integration tests run in Chrome against `slicc attach`.
 
 ## Network policy
 
