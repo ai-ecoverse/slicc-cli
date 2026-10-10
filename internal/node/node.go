@@ -15,15 +15,17 @@ import (
 )
 
 type Config struct {
-	Name     string
-	Host     string
-	Version  string
-	Mode     string
-	Policy   *policy.Policy
-	Exit     bool
-	Prefixes []string
-	Logf     func(format string, args ...any)
-	Status   func(format string, args ...any)
+	Name         string
+	Host         string
+	Version      string
+	Mode         string
+	Policy       *policy.Policy
+	Exit         bool
+	Prefixes     []string
+	Logf         func(format string, args ...any)
+	Status       func(format string, args ...any)
+	Certificates []webrtc.Certificate
+	OnLink       func(*link.Link)
 }
 
 type Node struct {
@@ -109,7 +111,7 @@ func (n *Node) Options() link.Options {
 	for k, v := range n.handlers {
 		handlers[k] = v
 	}
-	return link.Options{Hello: n.Hello(), Handlers: handlers, Logf: n.cfg.Logf}
+	return link.Options{Hello: n.Hello(), Handlers: handlers, Logf: n.cfg.Logf, Certificates: n.cfg.Certificates}
 }
 
 func (n *Node) API() *webrtc.API {
@@ -148,13 +150,7 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		switch m.T {
 		case signal.TypeOffer:
 			closeCur("", false)
-			l, err := link.Answer(ctx, n.API(), m, conn.Send, n.Options())
-			if err != nil {
-				n.cfg.Status("could not answer seven: %v", err)
-				continue
-			}
-			cur = &current{nonce: m.Nonce, l: l}
-			go n.watch(l)
+			cur = n.answer(ctx, conn, m, n.Options())
 		case signal.TypeCandidate:
 			if cur != nil && cur.nonce == m.Nonce {
 				if err := cur.l.AddCandidate(m.Candidate); err != nil {
@@ -168,6 +164,19 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 			}
 		}
 	}
+}
+
+func (n *Node) answer(ctx context.Context, conn signal.Conn, m signal.Message, opts link.Options) *current {
+	l, err := link.Answer(ctx, n.API(), m, conn.Send, opts)
+	if err != nil {
+		n.cfg.Status("could not answer seven: %v", err)
+		return nil
+	}
+	if n.cfg.OnLink != nil {
+		n.cfg.OnLink(l)
+	}
+	go n.watch(l)
+	return &current{nonce: m.Nonce, l: l}
 }
 
 func (n *Node) watch(l *link.Link) {
