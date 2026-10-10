@@ -272,7 +272,7 @@ func TestTUIDashboard(t *testing.T) {
 	ev(flow.Event{Event: flow.Launched, Browser: "chrome", Name: "Google Chrome", Version: "141.0.7390.1", Role: flow.RoleSeven, CDP: "http://127.0.0.1:50000"})
 	ev(flow.Event{Event: flow.Attached, Browser: "chrome", Name: "Google Chrome", Version: "141.0.7390.1", Role: flow.RoleSeven, Launched: true, CDP: "http://127.0.0.1:50000"})
 	ev(flow.Event{Event: flow.Attached, Browser: "cdp:127.0.0.1:9333", Name: "Brave", Role: flow.RoleExtra, CDP: "http://127.0.0.1:9333"})
-	ev(flow.Event{Event: flow.Serving, Caps: []string{"net", "http", "cdp"}, Policy: "every public address, this machine, and the local network"})
+	ev(flow.Event{Event: flow.Serving, Caps: []string{"net", "http", "cdp", "ssh"}, Policy: "every public address, this machine, and the local network", Compute: "ssh via bash -c"})
 	if !strings.Contains(h.view(), "waiting for seven") {
 		t.Fatalf("before an offer:\n%s", h.view())
 	}
@@ -292,11 +292,19 @@ func TestTUIDashboard(t *testing.T) {
 		"https://seven.sliccy.ai/", `linked with "seven" · up 3m12s`,
 		"net · http · cdp", "policy   every public address",
 		"tcp 2 open, 3 total", "cdp 1 open, 1 total", "kernel   http://<port>.kernel.localhost/",
-		"slicc 9.9.9 is available",
+		"slicc 9.9.9 is available", "compute  ssh via bash -c",
 	} {
 		if !strings.Contains(v, s) {
 			t.Fatalf("dashboard lacks %q:\n%s", s, v)
 		}
+	}
+	ev(flow.Event{Event: flow.BrowserGone, Browser: "cdp:127.0.0.1:9333", Name: "Brave", Role: flow.RoleExtra})
+	if !strings.Contains(h.view(), "extra cdp · gone") {
+		t.Fatalf("after browser-gone:\n%s", h.view())
+	}
+	ev(flow.Event{Event: flow.BrowserBack, Browser: "cdp:127.0.0.1:9333", Name: "Brave", Role: flow.RoleExtra})
+	if strings.Contains(h.view(), "· gone") || !strings.Contains(h.view(), "Brave is back") {
+		t.Fatalf("after browser-back:\n%s", h.view())
 	}
 	ev(flow.Event{Event: flow.LinkLost, Reason: "page navigated"})
 	if !strings.Contains(h.view(), "reconnecting") {

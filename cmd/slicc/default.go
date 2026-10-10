@@ -54,7 +54,7 @@ flags for slicc with no command:
   --yes               no picker: take the best match
   --plain             no picker and no dashboard: plain status lines
   --json              NDJSON events on stdout (see README.md)
-`
+` + computeUsage
 
 type defaultFlags struct {
 	browsers []string
@@ -71,6 +71,7 @@ type defaultFlags struct {
 	yes      bool
 	plain    bool
 	json     bool
+	compute  computeFlags
 }
 
 func isDefault(args []string) bool {
@@ -79,8 +80,15 @@ func isDefault(args []string) bool {
 
 func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	var f defaultFlags
+	args, compute, err := extractCompute(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "slicc: %v\n\n%s", err, defaultUsage)
+		return f, 2
+	}
+	f.compute = compute
 	fs := flag.NewFlagSet("slicc", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	f.compute.register(fs)
 	fs.Var((*multi)(&f.browsers), "browser", "")
 	fs.Var((*multi)(&f.cdp), "cdp", "")
 	fs.StringVar(&f.page, "page", flow.DefaultPage, "")
@@ -103,6 +111,10 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 		fmt.Fprintf(stderr, "slicc: unexpected argument %q\n\n%s", fs.Arg(0), defaultUsage)
 		return f, 2
 	}
+	if err := f.compute.validate(); err != nil {
+		fmt.Fprintf(stderr, "slicc: %v\n\n%s", err, defaultUsage)
+		return f, 2
+	}
 	if f.kernel < 1 || f.kernel > 65535 {
 		fmt.Fprintf(stderr, "slicc: --kernel-port must be 1-65535\n")
 		return f, 2
@@ -121,28 +133,56 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	return f, -1
 }
 
-func registerCaps(logf func(string, ...any)) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (func(), error) {
-	return func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []flow.Browser) (func(), error) {
+func registerCaps(cf computeFlags, logf func(string, ...any)) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
+	return func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []flow.Browser) (flow.Caps, error) {
 		tcp.Register(n)
 		resolve.Register(n)
 		httpcap.Register(n)
 		var seven string
-		var extra []string
+		var extra, order []string
 		for _, b := range browsers {
 			if b.Seven {
 				seven = b.CDP
+				order = append([]string{b.ID}, order...)
 			} else {
 				extra = append(extra, b.CDP)
+				order = append(order, b.ID)
 			}
 		}
 		reg, err := cdpBrowsers(ctx, seven, extra, pol, nil, logf)
 		if err != nil {
-			return nil, err
+			return flow.Caps{}, err
+		}
+		closeSSH, err := cf.serve(n, logf)
+		if err != nil {
+			return flow.Caps{}, err
+		}
+		ids := map[string]string{}
+		for i, b := range reg.List() {
+			if i < len(order) {
+				ids[b.ID] = order[i]
+			}
 		}
 		wctx, cancel := context.WithCancel(ctx)
 		serveBrowsers(wctx, n, reg)
-		return cancel, nil
+		live := func() map[string]bool {
+			out := map[string]bool{}
+			for _, b := range reg.List() {
+				if id, ok := ids[b.ID]; ok {
+					out[id] = true
+				}
+			}
+			return out
+		}
+		return flow.Caps{Release: func() { cancel(); closeSSH() }, Live: live}, nil
 	}
+}
+
+func (cf *computeFlags) dashboard() string {
+	if len(cf.runner) == 0 {
+		return ""
+	}
+	return "ssh via " + strings.Join(cf.runner, " ")
 }
 
 func isTerminal(w any) bool {
@@ -162,7 +202,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Register: registerCaps(logf), Logf: logf,
+		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, logf), Compute: f.compute.dashboard(), Logf: logf,
 	}
 	origins, _ := flow.PageOrigins(f.page, f.origins)
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
@@ -234,7 +274,15 @@ func plainLine(e flow.Event) string {
 		}
 		return fmt.Sprintf("attached to %s at %s (%s)", named(e), e.CDP, role)
 	case flow.Serving:
-		return fmt.Sprintf("offering %s; policy: %s", strings.Join(e.Caps, ", "), e.Policy)
+		line := fmt.Sprintf("offering %s; policy: %s", strings.Join(e.Caps, ", "), e.Policy)
+		if e.Compute != "" {
+			line += "; compute: " + e.Compute
+		}
+		return line
+	case flow.BrowserGone:
+		return e.Name + " quit; it is no longer listed for cdp"
+	case flow.BrowserBack:
+		return e.Name + " is back and listed for cdp again"
 	case flow.Linked:
 		return fmt.Sprintf("linked with %q in %s", firstNonEmpty(e.Peer, "seven"), firstNonEmpty(e.Tab, "the seven tab"))
 	case flow.LinkLost:

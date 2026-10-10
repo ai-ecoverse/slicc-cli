@@ -18,6 +18,7 @@ type dashBrowser struct {
 	role     string
 	cdp      string
 	launched bool
+	gone     bool
 }
 
 type streamCount struct {
@@ -29,6 +30,7 @@ type dashboard struct {
 	browsers []dashBrowser
 	tab      string
 	kernel   string
+	compute  string
 	state    string
 	since    time.Time
 	peer     string
@@ -74,7 +76,7 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 		b.launched = b.launched || e.Launched || e.Event == flow.Launched
 		d.log(now, fmt.Sprintf("%s %s", e.Event, e.Name))
 	case flow.Serving:
-		d.caps, d.policy = e.Caps, e.Policy
+		d.caps, d.policy, d.compute = e.Caps, e.Policy, e.Compute
 		d.setState(StateWaiting, now)
 	case flow.Connecting:
 		d.setState(StateConnecting, now)
@@ -98,6 +100,12 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 		if c := d.count(e.Stream); c.open > 0 {
 			c.open--
 		}
+	case flow.BrowserGone:
+		d.browser(e.Browser).gone = true
+		d.log(now, e.Name+" quit")
+	case flow.BrowserBack:
+		d.browser(e.Browser).gone = false
+		d.log(now, e.Name+" is back")
 	case flow.Kernel:
 		d.kernel = e.Kernel
 	case flow.Status:
@@ -202,7 +210,11 @@ func (d dashboard) view(st styles, mode Mode, now time.Time) string {
 		if br.version != "" {
 			name += " " + shortVersion(br.version)
 		}
-		fmt.Fprintf(&b, "  %-26s %s · CDP %s · %s\n", name, how, hostPort(br.cdp), role)
+		line := fmt.Sprintf("  %-26s %s · CDP %s · %s", name, how, hostPort(br.cdp), role)
+		if br.gone {
+			line += " · " + st.bad.Render("gone")
+		}
+		b.WriteString(line + "\n")
 	}
 	fmt.Fprintf(&b, "\n%-8s %s\n", "seven", firstOf(d.tab, st.faint.Render("no tab yet")))
 	fmt.Fprintf(&b, "%-8s %s\n", "link", d.stateLine(st, now))
@@ -211,6 +223,9 @@ func (d dashboard) view(st styles, mode Mode, now time.Time) string {
 	}
 	if d.policy != "" {
 		fmt.Fprintf(&b, "%-8s %s\n", "policy", d.policy)
+	}
+	if d.compute != "" {
+		fmt.Fprintf(&b, "%-8s %s\n", "compute", d.compute)
 	}
 	if d.kernel != "" {
 		fmt.Fprintf(&b, "%-8s %s\n", "kernel", d.kernel)

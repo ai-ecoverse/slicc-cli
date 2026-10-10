@@ -61,6 +61,7 @@ Release builds send operational telemetry through [go-optel](https://github.com/
 ```
 slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]... [--profile <name>] [--headless]
       [--name <name>] [--kernel-port <n>] [--no-kernel] [--allow <rule>]... [--deny <rule>]... [--yes] [--plain] [--json]
+      [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
 ```
 
 `slicc` with no command (`npx sliccy`) finds browsers, launches or attaches to the best one, opens seven in it and links it. It serves the link until it is told to stop: `q` or Ctrl-C in the dashboard, or `SIGINT` or `SIGTERM`. Then it says `bye` to seven, closes the browsers this run launched (as `slicc launch` does), leaves the browsers it attached to running, and exits 0. If the browser that hosts seven goes away, `slicc` closes the rest and exits 0 too. Setup failures (no browser, a launch or attach that fails) exit 1, and bad flags exit 2.
@@ -74,13 +75,15 @@ slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]...
 
 An Electron app can't host seven. Each further browser is an extra: an installed one is launched without a start page, and an endpoint is used as it is. Then the link is set up as for `slicc attach` (see [Local setup](#local-setup-slicc-attach)): over CDP with the browser that hosts seven, the first page tab on an allowed origin.
 
-**What the link offers:** `net` (tcp, resolve), `http`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected; and kernel services on `--kernel-port` (default 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)). seven gets full control of every listed browser.
+**What the link offers:** `net` (tcp, resolve), `http`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected; and kernel services on `--kernel-port` (default 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)); and `ssh` only with `--runner` (see [SSH server](#ssh-server)). seven gets full control of every listed browser.
+
+The cdp list follows the browsers: an extra that stops answering is taken off the list (`browser-gone`), and listed again with the same id when it answers on the same endpoint again (`browser-back`).
 
 **Flags.**
 - `--browser <id>`: an id from `slicc browsers` (an installed id such as `chrome`, or `cdp:<host>:<port>`), or a name, case-insensitively. Repeatable: the first hosts seven, the others are extras. Without it, the best match that can host seven.
 - `--cdp <url>`: also consider this CDP endpoint, as `slicc browsers --cdp`.
 - `--page <url>`: the seven page, default `https://seven.sliccy.ai/`. It must be `http` or `https`, and its origin is accepted as a seven origin.
-- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`: as for `slicc attach`.
+- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven.
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
@@ -97,9 +100,9 @@ An Electron app can't host seven. Each further browser is an extra: an installed
 | Esc | back, in the profile chooser |
 | `q`, Ctrl-C | quit; in the dashboard, close down as described above |
 
-**The dashboard** follows: the linked browsers (launched or attached, their CDP port, hosts seven or extra), the seven tab, the link state (`waiting for seven`, `connecting`, `linked` with its uptime, or `reconnecting` after a link is lost, while slicc waits for seven to offer again), the capabilities offered, the policy summary, the kernel services URL, stream counts per kind (open and total, never contents), the last status lines, and the update notice, which then isn't printed on stderr. `NO_COLOR` turns colors off.
+**The dashboard** follows: the linked browsers (launched or attached, their CDP port, hosts seven or extra, and `gone` while one doesn't answer), the seven tab, the link state (`waiting for seven`, `connecting`, `linked` with its uptime, or `reconnecting` after a link is lost, while slicc waits for seven to offer again), the capabilities offered, the policy summary, `compute  ssh via <runner>` with `--runner`, the kernel services URL, stream counts per kind (open and total, never contents), the last status lines, and the update notice, which then isn't printed on stderr. `NO_COLOR` turns colors off.
 
-**Plain mode** (no terminal, `--yes`, `--browser` or `--plain`): no picker and no dashboard, just the default, with status lines on stderr (`slicc: launched …`, `slicc: attached to …`, `slicc: linked with "<name>" in <tab>`, `slicc: link lost: …`, `slicc: closed <ids>`). It never writes ANSI escapes or cursor codes. `SLICC_DEBUG=1` adds diagnostics.
+**Plain mode** (no terminal, `--yes`, `--browser` or `--plain`): no picker and no dashboard, just the default, with status lines on stderr (`slicc: launched …`, `slicc: attached to …`, `slicc: offering …; policy: …; compute: ssh via <runner>`, `slicc: linked with "<name>" in <tab>`, `slicc: link lost: …`, `slicc: <name> quit …`, `slicc: <name> is back …`, `slicc: closed <ids>`). It never writes ANSI escapes or cursor codes. `SLICC_DEBUG=1` adds diagnostics.
 
 **`--json`** prints NDJSON events on stdout and nothing else there, for Sliccstart (`slicc --json --browser <id>`). Errors are also printed on stderr. Every event has `"schema": 1` and `event`. Fields marked `?` are left out when empty; new fields and events may be added, and existing ones keep their meaning.
 - `discovered`: `entries`, the ranked list in the shape of `slicc browsers --json` (always a list).
@@ -107,6 +110,7 @@ An Electron app can't host seven. Each further browser is an extra: an installed
 - `attached`: `browser`, `name`, `version?`, `role`, `launched?` (`true` when this run launched it), `cdp`, `webSocketDebuggerUrl?`. For `seven` slicc is connected to it over CDP; an `extra` is listed for `cdp`.
 - `linked`: `peer?` (the name in seven's HELLO), `tab?` (the seven tab's URL), `caps`, `policy` (the summary).
 - `link-lost`: `reason?` when slicc or seven closed the link (`slicc is exiting`, seven's `bye` reason, `replaced by a new offer`), or `message?` for a failure. seven sets the link up again after a reload, and a new `linked` follows.
+- `browser-gone`, `browser-back`: `browser`, `name`, `role`. A browser stopped answering and left the cdp list, or answers again and is back on it.
 - `closed`: `browsers`, the ids slicc closed (always a list). It is the last event of every run that got past choosing its browsers.
 - `error`: `message`, and `browser?` when closing that browser failed. A setup error ends the run with exit 1.
 
@@ -508,6 +512,8 @@ Front ends and capabilities follow a node's links with `node.Node.Subscribe(func
 - `home`: installed browsers, and the `DevToolsActivePort` files under the home and config dirs from the environment (`HOME`, `APPDATA`, `LOCALAPPDATA`, `XDG_CONFIG_HOME`).
 
 In the same process, probe ports and dirs passed in explicitly (`Options.ProbePorts`, `Options.Home`, `Options.ProfilesDir`) are still used. `test/integration`'s `TestMain` sets `SLICC_DISCOVERY=isolated` and points `HOME`, `APPDATA` and the XDG dirs (and `USERPROFILE` and `LOCALAPPDATA` except on Windows, where a Chrome started with temporary ones never writes `DevToolsActivePort`) at a temporary directory for itself and every `slicc` it starts, so no test can reach the browsers of the machine it runs on. Tests opt in to more with a fake home or fake endpoints. The Chrome the harness starts itself gets the real environment.
+
+On macOS, a headless Chrome started with `HOME` pointed at a temporary dir may never load a page (seen on a developer Mac, not on CI). So on macOS the test that has `slicc` launch Chrome for seven runs it with the real `HOME` and a unique `--profile`, which it deletes afterwards.
 
 The real-Chrome tests in `test/integration/` launch headless, so they run the executable directly. A windowed launch on macOS goes through `open -n -W -a`, which CI doesn't cover: on GitHub's macOS runners, Chrome started that way never writes `DevToolsActivePort`.
 

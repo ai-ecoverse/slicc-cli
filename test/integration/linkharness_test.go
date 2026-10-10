@@ -63,6 +63,11 @@ type chromeProc struct {
 
 func launchBrowser(t *testing.T) *chromeProc {
 	t.Helper()
+	return launchBrowserOn(t, 0)
+}
+
+func launchBrowserOn(t *testing.T, debugPort int) *chromeProc {
+	t.Helper()
 	chrome := findChrome()
 	if chrome == "" {
 		if os.Getenv("CI") != "" {
@@ -75,7 +80,7 @@ func launchBrowser(t *testing.T) *chromeProc {
 		t.Fatal(err)
 	}
 	args := []string{
-		"--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + dir,
+		"--headless=new", "--remote-debugging-port=" + strconv.Itoa(debugPort), "--user-data-dir=" + dir,
 		"--no-first-run", "--no-default-browser-check", "--disable-background-networking",
 		"--disable-component-update", "--disable-sync", "about:blank",
 	}
@@ -93,6 +98,11 @@ func launchBrowser(t *testing.T) *chromeProc {
 		_ = os.RemoveAll(dir)
 	})
 	port := 0
+	for deadline := time.Now().Add(30 * time.Second); debugPort != 0 && time.Now().Before(deadline) && port == 0; time.Sleep(100 * time.Millisecond) {
+		if _, err := getVersion(fmt.Sprintf("http://127.0.0.1:%d", debugPort)); err == nil {
+			port = debugPort
+		}
+	}
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline) && port == 0; time.Sleep(100 * time.Millisecond) {
 		b, err := os.ReadFile(filepath.Join(dir, "DevToolsActivePort"))
 		if err == nil {

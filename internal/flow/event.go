@@ -12,23 +12,25 @@ const Schema = 1
 type Kind string
 
 const (
-	Discovered Kind = "discovered"
-	Launched   Kind = "launched"
-	Attached   Kind = "attached"
-	Serving    Kind = "serving"
-	Connecting Kind = "connecting"
-	Linked     Kind = "linked"
-	LinkLost   Kind = "link-lost"
-	StreamOpen Kind = "stream-open"
-	StreamDone Kind = "stream-close"
-	Status     Kind = "status"
-	Kernel     Kind = "kernel"
-	Closed     Kind = "closed"
-	Error      Kind = "error"
+	Discovered  Kind = "discovered"
+	Launched    Kind = "launched"
+	Attached    Kind = "attached"
+	Serving     Kind = "serving"
+	Connecting  Kind = "connecting"
+	Linked      Kind = "linked"
+	LinkLost    Kind = "link-lost"
+	StreamOpen  Kind = "stream-open"
+	StreamDone  Kind = "stream-close"
+	Status      Kind = "status"
+	Kernel      Kind = "kernel"
+	BrowserGone Kind = "browser-gone"
+	BrowserBack Kind = "browser-back"
+	Closed      Kind = "closed"
+	Error       Kind = "error"
 )
 
 var Public = map[Kind]bool{
-	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, Closed: true, Error: true,
+	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, Closed: true, Error: true,
 }
 
 const (
@@ -59,6 +61,7 @@ type Event struct {
 	Browsers     []string        `json:"browsers,omitempty"`
 	Stream       string          `json:"stream,omitempty"`
 	Kernel       string          `json:"kernel,omitempty"`
+	Compute      string          `json:"compute,omitempty"`
 	Time         time.Time       `json:"-"`
 }
 
