@@ -22,6 +22,7 @@ type Policy struct {
 	userDeny  []Rule
 	hostPorts []uint16
 	hosts     *addrCache
+	endpoints *endpoints
 }
 
 var remoteDeny = []string{
@@ -45,11 +46,11 @@ var localAllows = []string{
 var loopbackHosts = []string{"127.0.0.0/8", "127.0.0.1/32", "::1/128"}
 
 func New() *Policy {
-	return &Policy{base: "every address"}
+	return &Policy{base: "every address", endpoints: newEndpoints()}
 }
 
 func Remote(protectedPorts ...uint16) *Policy {
-	p := &Policy{base: "every public address"}
+	p := &Policy{base: "every public address", endpoints: newEndpoints()}
 	for _, s := range remoteDeny {
 		p.entries = append(p.entries, entry{rule: mustRule(s), deny: true})
 	}
@@ -58,7 +59,7 @@ func Remote(protectedPorts ...uint16) *Policy {
 }
 
 func Local(protectedPorts ...uint16) *Policy {
-	p := &Policy{base: "every public address, this machine, and the local network"}
+	p := &Policy{base: "every public address, this machine, and the local network", endpoints: newEndpoints()}
 	for _, s := range remoteDeny {
 		p.entries = append(p.entries, entry{rule: mustRule(s), deny: !slices.Contains(localAllows, s)})
 	}
@@ -100,6 +101,7 @@ func (p *Policy) With(allow, deny []Rule) *Policy {
 		userDeny:  append(slices.Clone(p.userDeny), deny...),
 		hostPorts: slices.Clone(p.hostPorts),
 		hosts:     p.hosts,
+		endpoints: p.endpoints,
 	}
 	for _, r := range allow {
 		q.entries = append(q.entries, entry{rule: r, user: true})
@@ -152,6 +154,9 @@ func (p *Policy) decide(addr netip.Addr, port uint16) (entry, bool) {
 	if e, ok := p.hostEntry(addr, port); ok {
 		consider(e)
 	}
+	if port != 0 && p.endpoints.has(netip.AddrPortFrom(addr, port)) {
+		consider(entry{rule: Rule{Prefix: netip.PrefixFrom(addr, addr.BitLen()), Port: port}, deny: true, why: endpointWhy})
+	}
 	return best, found
 }
 
@@ -192,6 +197,7 @@ func (p *Policy) AllowsAny(addr netip.Addr) bool {
 		return false
 	}
 	ports := append([]uint16{0}, p.hostPorts...)
+	ports = append(ports, p.endpoints.ports(checked)...)
 	for _, e := range p.entries {
 		if e.rule.Port != 0 && e.rule.Prefix.Contains(checked) {
 			ports = append(ports, e.rule.Port)
@@ -240,7 +246,13 @@ func (p *Policy) Deny() []string {
 	if p == nil {
 		return []string{}
 	}
-	return ruleStrings(p.deny)
+	out := ruleStrings(p.deny)
+	for _, r := range p.endpoints.rules() {
+		if s := r.String(); !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func ruleStrings(rules []Rule) []string {

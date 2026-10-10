@@ -45,7 +45,7 @@ flags:
 The link offers the net capability (tcp and resolve streams) and the http
 capability (fetches without redirects) under the local policy: public
 addresses, this machine and the local network, but not link-local addresses
-or the browsers' debugging ports. With --runner it also offers ssh: seven's
+or the browsers' debugging ports and endpoints. With --runner it also offers ssh: seven's
 kernel reaches this machine's SSH server, which never listens on a port, and
 its forwarding goes through the same policy. With --cdp or --cdp-extra it
 also offers cdp: seven gets full control of every browser listed.
@@ -143,12 +143,12 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer closer()
-	browsers, ports, err := cdpBrowsers(ctx, f.cdp, f.extra, logf)
+	pol := policy.Local(cdpPorts(append([]string{f.cdp}, f.extra...)...)...).With(f.allow, f.deny)
+	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, pol, f.hosts.hosts, logf)
 	if err != nil {
 		status("%v", err)
 		return 1
 	}
-	pol := policy.Local(ports...).With(f.allow, f.deny)
 	n := node.New(node.Config{Name: f.name, Host: f.name, Version: version, Mode: "local", Policy: pol, Hosts: f.hosts.hosts, Exit: true, Logf: logf, Status: status})
 	tcp.Register(n)
 	resolve.Register(n)
