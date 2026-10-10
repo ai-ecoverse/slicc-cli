@@ -24,9 +24,11 @@ type trayLeader struct {
 	p      *page
 	toPage chan string
 
-	mu       sync.Mutex
-	swallow  int
-	joinFail *hubFailure
+	mu         sync.Mutex
+	swallow    int
+	joinFail   *hubFailure
+	answerFail *hubFailure
+	failLater  time.Duration
 }
 
 func newTrayLeader(t *testing.T, h *fakeHub, p *page, trays ...*fakeTray) *trayLeader {
@@ -77,6 +79,13 @@ func (l *trayLeader) onFollower(action string, b *hubBootstrap, body map[string]
 	switch action {
 	case "answer":
 		l.mu.Lock()
+		answerFail := l.answerFail
+		l.mu.Unlock()
+		if answerFail != nil {
+			l.failAfterAnswer(b, body, *answerFail)
+			return
+		}
+		l.mu.Lock()
 		swallow := l.swallow > 0
 		if swallow {
 			l.swallow--
@@ -94,6 +103,29 @@ func (l *trayLeader) onFollower(action string, b *hubBootstrap, body map[string]
 	case "ice-candidate":
 		l.push(map[string]any{"t": "candidate", "nonce": b.ID, "candidate": body["candidate"]})
 	}
+}
+
+func (l *trayLeader) failAfterAnswer(b *hubBootstrap, body map[string]any, f hubFailure) {
+	l.mu.Lock()
+	later := l.failLater
+	l.mu.Unlock()
+	fail := func() {
+		f.FailedAt = hubNow()
+		b.State, b.Failure = "failed", &f
+		appendEvent(b, hubEvent{Type: "bootstrap.failed", Failure: &f})
+	}
+	if later == 0 {
+		fail()
+		l.push(map[string]any{"t": "bye", "nonce": b.ID, "reason": f.Code})
+		return
+	}
+	answer, _ := body["answer"].(map[string]any)
+	l.push(map[string]any{"t": "answer", "nonce": b.ID, "sdp": answer["sdp"]})
+	l.push(map[string]any{"t": "bye", "nonce": b.ID, "reason": f.Code})
+	go func() {
+		time.Sleep(later)
+		l.h.with(fail)
+	}()
 }
 
 func (l *trayLeader) fromPage(sub *cdp.Subscription, trays []*fakeTray) {
@@ -282,7 +314,7 @@ func TestFollowLinksThroughTheTrayAndServesTCP(t *testing.T) {
 	fp.waitStderr(t, "slicc: exit on (tcp)", 10*time.Second)
 	fp.waitStderr(t, "slicc: linked to link test page", 60*time.Second)
 	p.waitUp(t, "")
-	if got := p.fingerprint(); got != fingerprint {
+	if got := p.fingerprint(); got != fingerprint || !strings.HasPrefix(got, "sha-256 ") {
 		t.Fatalf("page sees fingerprint %q, slicc says %q", got, fingerprint)
 	}
 	var res struct {
@@ -559,5 +591,66 @@ func TestFollowReportsDialFailuresToTelemetry(t *testing.T) {
 	}
 	for _, b := range col.got() {
 		assertNoSecret(t, b.raw, h.joinURL(expired))
+	}
+}
+
+func TestFollowUnlinkedAfterTheAnswer(t *testing.T) {
+	for _, later := range []time.Duration{0, 1500 * time.Millisecond} {
+		t.Run(later.String(), func(t *testing.T) { unlinkedAfterAnswer(t, later) })
+	}
+}
+
+func unlinkedAfterAnswer(t *testing.T, later time.Duration) {
+	env, h, trays, p, l := followSetup(t, 1)
+	l.mu.Lock()
+	l.failLater = later
+	l.mu.Unlock()
+	fp := startFollow(t, env, h.joinURL(trays[0]))
+	before, _ := fp.fingerprint(t)
+	first := p.waitUp(t, "")
+	l.mu.Lock()
+	l.answerFail = &hubFailure{Code: "UNLINKED", Message: "This device was unlinked", Retryable: false}
+	l.mu.Unlock()
+	var dropped map[string]any
+	p.eval("linkTest.drop()", &dropped)
+	if code := fp.wait(t, 30*time.Second); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	out := fp.stderr.String()
+	if !strings.Contains(out, "slicc: unlinked by link test page\n") {
+		t.Fatalf("no unlink line:\n%s", out)
+	}
+	answered := 0
+	h.with(func() {
+		for _, a := range trays[0].answers {
+			if a.BootstrapID != first.Nonce {
+				answered++
+			}
+		}
+	})
+	if answered == 0 {
+		t.Fatal("the unlink did not come after an answer")
+	}
+	assertForgotten(t, h.joinURL(trays[0]))
+	l.mu.Lock()
+	l.answerFail = nil
+	l.mu.Unlock()
+	if refollowFingerprint(t, env, h.joinURL(trays[0])) == before {
+		t.Fatal("re-follow kept the old identity")
+	}
+}
+
+func TestFollowStopsWhenTheAnswerHasNoFingerprint(t *testing.T) {
+	env, h, trays, _, l := followSetup(t, 1)
+	l.mu.Lock()
+	l.answerFail = &hubFailure{Code: "NO_FINGERPRINT", Message: "answer has no sha-256 fingerprint", Retryable: false}
+	l.mu.Unlock()
+	fp := startFollow(t, env, h.joinURL(trays[0]))
+	if code := fp.wait(t, 30*time.Second); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	want := "slicc: internal error: seven found no SHA-256 fingerprint in this device's answer; please report this (NO_FINGERPRINT)\n"
+	if !strings.Contains(fp.stderr.String(), want) {
+		t.Fatalf("output:\n%s", fp.stderr.String())
 	}
 }
