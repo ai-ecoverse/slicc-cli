@@ -306,11 +306,11 @@ slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name 
 `follow` links this machine to a seven on another machine through the tray hub (see [Tray hub signaling](#tray-hub-signaling-remote-setup)). It serves the link until interrupted (`SIGINT`, `SIGTERM`) and reconnects when the link drops. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics. The join URL is never printed.
 
 **Flags.**
-- `--exit`: offer this machine's network to seven, as `tcp` streams (cap `net`) under the remote policy, so public addresses only by default. Without `--exit`, `tcp` is refused with `EOPNOTSUPP`.
+- `--exit`: offer this machine's network to seven, as `tcp` and `resolve` streams (cap `net`) and `http` streams (cap `http`) under the remote policy, so public addresses only by default. Without `--exit`, all three are refused with `EOPNOTSUPP`.
 - `--allow`, `--deny`: policy rules on top of the remote default (see [Network policy](#network-policy)).
 - `--name`: the link's `name` and `host` in HELLO, as for `attach`.
 
-HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` with `--exit`, and always `join`.
+HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` and `http` with `--exit`, and always `join`.
 
 **Identity.** The device is its DTLS certificate. `follow` keeps one ECDSA P-256 certificate per hub origin (`scheme://host:port`), valid for 20 years, in `<config>/slicc/tray-certs.json` (mode `0600`). Every link to that hub uses it, so the fingerprint stays the same across reconnects, restarts and updates. The first run on a hub mints it and says `new device, fingerprint sha-256 …`; later runs say `device, fingerprint …`. Every dial attaches with a fresh `controllerId`, which is only a routing handle.
 
