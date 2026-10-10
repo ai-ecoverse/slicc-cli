@@ -90,12 +90,13 @@ func Go(ctx context.Context, cfg Config, sel []browser.Entry) error {
 	r := &run{cfg: cfg}
 	r.cfg.Emit = r.serialize(cfg.Emit)
 	err := r.start(ctx, sel)
-	r.cleanup()
 	if err != nil && ctx.Err() == nil {
 		r.emit(Event{Event: Error, Message: err.Error()})
-		return err
+	} else {
+		err = nil
 	}
-	return nil
+	r.cleanup()
+	return err
 }
 
 func (r *run) serialize(emit func(Event)) func(Event) {

@@ -507,7 +507,7 @@ Front ends and capabilities follow a node's links with `node.Node.Subscribe(func
 - `installed`: installed browsers too;
 - `home`: installed browsers, and the `DevToolsActivePort` files under the home and config dirs from the environment (`HOME`, `APPDATA`, `LOCALAPPDATA`, `XDG_CONFIG_HOME`).
 
-In the same process, probe ports and dirs passed in explicitly (`Options.ProbePorts`, `Options.Home`, `Options.ProfilesDir`) are still used. `test/integration`'s `TestMain` sets `SLICC_DISCOVERY=isolated` and points `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and the XDG dirs at a temporary directory for itself and every `slicc` it starts, so no test can reach the browsers of the machine it runs on. Tests opt in to more with a fake home or fake endpoints. The Chrome the harness starts itself gets the real environment.
+In the same process, probe ports and dirs passed in explicitly (`Options.ProbePorts`, `Options.Home`, `Options.ProfilesDir`) are still used. `test/integration`'s `TestMain` sets `SLICC_DISCOVERY=isolated` and points `HOME`, `APPDATA` and the XDG dirs (and `USERPROFILE` and `LOCALAPPDATA` except on Windows, where a Chrome started with temporary ones never writes `DevToolsActivePort`) at a temporary directory for itself and every `slicc` it starts, so no test can reach the browsers of the machine it runs on. Tests opt in to more with a fake home or fake endpoints. The Chrome the harness starts itself gets the real environment.
 
 The real-Chrome tests in `test/integration/` launch headless, so they run the executable directly. A windowed launch on macOS goes through `open -n -W -a`, which CI doesn't cover: on GitHub's macOS runners, Chrome started that way never writes `DevToolsActivePort`.
 
