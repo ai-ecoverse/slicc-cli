@@ -1,5 +1,8 @@
+import { kernel, onKernel } from './kernel.js';
 import { Frame, Link, ResetError, fetchRaw, resolve } from './link.js';
 import { cdpTest } from './cdp.js';
+
+const kernelIn = new URLSearchParams(location.search).has('kernel');
 
 const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null, browserUpdates: [] };
 
@@ -33,7 +36,10 @@ async function setup(nonce) {
   state.nonce = nonce;
   state.hellos += 1;
   const pc = new RTCPeerConnection();
-  const link = new Link(pc, { hello: { name: 'link test page', caps: ['browsers'] }, handlers: { browsers: onBrowsers } });
+  const link = new Link(pc, {
+    hello: { name: 'link test page', caps: kernelIn ? ['browsers', 'kernel-in'] : ['browsers'] },
+    handlers: kernelIn ? { browsers: onBrowsers, kernel: onKernel } : { browsers: onBrowsers },
+  });
   state.pc = pc;
   state.link = link;
   const early = [];
@@ -294,6 +300,14 @@ globalThis.linkTest = {
     return state.browserUpdates;
   },
   cdp: cdpTest(() => state.link, describe),
+  kernel() {
+    return { opens: kernel.opens, hanging: kernel.hanging.length, requests: kernel.requests };
+  },
+  drop() {
+    send({ t: 'bye', reason: 'dropped by the test' });
+    teardown();
+    return { dropped: true };
+  },
   forgeStale() {
     globalThis.sliccLinkSend(JSON.stringify({ t: 'bye', nonce: 'stale-nonce', reason: 'stale' }));
     return { sent: true };
