@@ -418,3 +418,20 @@ func (e *linkEnv) testHTTPErrors(t *testing.T, up *upstream) {
 		}
 	}
 }
+
+func followExitKinds(t *testing.T, p *page) {
+	t.Helper()
+	up := newUpstream(t)
+	env := &linkEnv{t: t, p: p}
+	env.wantAddresses(t, "127.0.0.1", 0, "127.0.0.1")
+	env.wantAddresses(t, "10.0.0.1", 0)
+	env.wantAddresses(t, "127.0.0.2", 4)
+	r := env.get(t, up.srv.URL+"/coded?enc=gzip&cl=1")
+	if r.Status != 200 || r.body(t) != repeatPlain() {
+		t.Fatalf("follow http: %+v", r)
+	}
+	r = env.http(t, map[string]any{"url": "http://127.0.0.2:" + portOf(t, up.srv.URL) + "/", "method": "GET", "headers": [][2]string{}}, true)
+	if r.Reset != "EACCES" {
+		t.Fatalf("follow http outside the allow rule: %+v", r)
+	}
+}
