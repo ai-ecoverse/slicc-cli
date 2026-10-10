@@ -252,3 +252,28 @@ func newUUID() string {
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
+
+func (f *Follower) Rejoin(joinURL string) error {
+	joinURL = strings.TrimSpace(joinURL)
+	f.red.add(joinURL)
+	next, err := ParseJoinURL(joinURL)
+	if err != nil {
+		return err
+	}
+	cur, err := ParseJoinURL(f.currentURL())
+	if err != nil || !sameOrigin(cur, next) {
+		return ErrJoinOrigin
+	}
+	if f.cfg.State != nil {
+		if err := f.cfg.State.Save(f.origin, joinURL); err != nil {
+			return err
+		}
+	}
+	f.mu.Lock()
+	f.current = joinURL
+	f.mu.Unlock()
+	if f.cfg.OnJoinURLChanged != nil {
+		f.cfg.OnJoinURLChanged(joinURL)
+	}
+	return nil
+}
