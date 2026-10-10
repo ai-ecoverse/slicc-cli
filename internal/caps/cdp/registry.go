@@ -102,6 +102,11 @@ func endpointHostPorts(key string, ep browser.Endpoint) []string {
 func Register(n *node.Node, r *Registry) {
 	n.Handle(Cap, Kind, r.Handler())
 	n.OnHello(r.hello)
+	n.Subscribe(func(e node.Event) {
+		if e.Kind == node.EventLinked && e.Link != nil {
+			r.Attach(e.Link)
+		}
+	})
 }
 
 func endpointKey(raw string) (string, error) {
