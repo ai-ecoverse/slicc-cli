@@ -32,6 +32,7 @@ type Node struct {
 	handlers   map[string]link.Handler
 	sshHostKey string
 	api        *webrtc.API
+	helloHooks []func(*link.Hello)
 }
 
 func New(cfg Config) *Node {
@@ -72,6 +73,8 @@ func (n *Node) Handle(capability, kind string, h link.Handler) {
 	n.handlers[kind] = h
 }
 
+func (n *Node) OnHello(f func(*link.Hello)) { n.helloHooks = append(n.helloHooks, f) }
+
 func (n *Node) SetSSHHostKey(key string) { n.sshHostKey = key }
 
 func (n *Node) Policy() *policy.Policy { return n.cfg.Policy }
@@ -94,6 +97,9 @@ func (n *Node) Hello() link.Hello {
 	}
 	if p := n.cfg.Policy; p != nil {
 		h.Policy = &link.Policy{Allow: p.Allow(), Deny: p.Deny(), Summary: p.Summary()}
+	}
+	for _, f := range n.helloHooks {
+		f(&h)
 	}
 	return h
 }
@@ -131,7 +137,6 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		cur = nil
 	}
 	defer closeCur("slicc is exiting", true)
-	opts := n.Options()
 	for {
 		m, err := conn.Recv(ctx)
 		if err != nil {
@@ -143,7 +148,7 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		switch m.T {
 		case signal.TypeOffer:
 			closeCur("", false)
-			l, err := link.Answer(ctx, n.API(), m, conn.Send, opts)
+			l, err := link.Answer(ctx, n.API(), m, conn.Send, n.Options())
 			if err != nil {
 				n.cfg.Status("could not answer seven: %v", err)
 				continue
