@@ -163,7 +163,6 @@ func TestJoinURLArgumentsAreNeverEchoed(t *testing.T) {
 		{"https://www.sliccy.ai/join/" + secret, "frobnicate"},
 		{"http://www.sliccy.ai/join/" + secret, "follow", "--signal-only"},
 		{"https://www.sliccy.ai/nojoin/" + secret, "follow"},
-		{"https://www.sliccy.ai/join/" + secret, "follow"},
 		{"https://www.sliccy.ai/join/" + secret, "follow", "--bogus"},
 		{"https://www.sliccy.ai/join/" + secret, "follow", "--signal-only", "extra"},
 	}
@@ -180,7 +179,11 @@ func TestJoinURLArgumentsAreNeverEchoed(t *testing.T) {
 
 func TestHelpDoesNotAdvertiseTheDiagnostic(t *testing.T) {
 	out, _, _ := slicc(t, "--help")
-	if strings.Contains(out, "signal-only") || strings.Contains(out, "follow") {
-		t.Fatalf("help mentions follow: %q", out)
+	if strings.Contains(out, "signal-only") || !strings.Contains(out, "slicc <join-url> follow") {
+		t.Fatalf("help %q", out)
+	}
+	out, _, code := slicc(t, "https://www.sliccy.ai/join/trayx.5e5e5e5e5e5e5e5e", "follow", "--help")
+	if code != 0 || !strings.Contains(out, "usage: slicc <join-url> follow") || strings.Contains(out, "signal-only") || strings.Contains(out, "5e5e5e5e") {
+		t.Fatalf("follow --help: code %d, %q", code, out)
 	}
 }

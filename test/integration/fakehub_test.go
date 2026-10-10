@@ -85,6 +85,8 @@ type fakeTray struct {
 	SupersedeOnPoll  string
 	LegacySupersede  bool
 	LinkOnly         bool
+	OnJoin           func(b *hubBootstrap)
+	OnFollower       func(action string, b *hubBootstrap, body map[string]any)
 
 	bootstraps []*hubBootstrap
 	answers    []hubAnswer
@@ -273,7 +275,7 @@ func (h *fakeHub) attach(tray *fakeTray, controllerID string, body map[string]an
 	}
 	var b *hubBootstrap
 	for _, existing := range tray.bootstraps {
-		if existing.ControllerID == controllerID && existing.State != "failed" {
+		if existing.ControllerID == controllerID && (b == nil || existing.RetryCount >= b.RetryCount) {
 			b = existing
 		}
 	}
@@ -305,6 +307,10 @@ func (h *fakeHub) leaderJoinRequested(tray *fakeTray, b *hubBootstrap) {
 		b.State = "failed"
 		b.Failure = failure
 		appendEvent(b, hubEvent{Type: "bootstrap.failed", Failure: failure})
+		return
+	}
+	if tray.OnJoin != nil {
+		tray.OnJoin(b)
 		return
 	}
 	if tray.OfferSDP == "" {
@@ -371,6 +377,9 @@ func (h *fakeHub) answer(tray *fakeTray, controllerID string, body map[string]an
 	}
 	tray.answers = append(tray.answers, hubAnswer{ControllerID: controllerID, BootstrapID: b.ID, SDP: sdp})
 	b.State = "connected"
+	if tray.OnFollower != nil {
+		tray.OnFollower("answer", b, body)
+	}
 	return http.StatusOK, h.bootstrapResponse(tray, b, nil)
 }
 
@@ -388,6 +397,9 @@ func (h *fakeHub) iceCandidate(tray *fakeTray, controllerID string, body map[str
 		return http.StatusConflict, h.bootstrapResponse(tray, b, nil)
 	}
 	tray.candidates = append(tray.candidates, hubSentCandidate{ControllerID: controllerID, BootstrapID: b.ID, Candidate: c})
+	if tray.OnFollower != nil {
+		tray.OnFollower("ice-candidate", b, body)
+	}
 	return http.StatusOK, h.bootstrapResponse(tray, b, nil)
 }
 

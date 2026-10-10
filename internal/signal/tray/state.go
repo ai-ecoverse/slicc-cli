@@ -101,7 +101,7 @@ func (s *JoinState) Save(origin, current string) error {
 			trays = append(trays, e)
 		}
 	}
-	return s.write(stateFile{Version: stateVersion, Trays: trays})
+	return writePrivateJSON(s.path, stateFile{Version: stateVersion, Trays: trays})
 }
 
 func (s *JoinState) Forget(origin string) error {
@@ -118,7 +118,7 @@ func (s *JoinState) Forget(origin string) error {
 	if len(trays) == len(f.Trays) {
 		return nil
 	}
-	return s.write(stateFile{Version: stateVersion, Trays: trays})
+	return writePrivateJSON(s.path, stateFile{Version: stateVersion, Trays: trays})
 }
 
 func (s *JoinState) load() stateFile {
@@ -133,8 +133,8 @@ func (s *JoinState) load() stateFile {
 	return f
 }
 
-func (s *JoinState) write(f stateFile) error {
-	dir := filepath.Dir(s.path)
+func writePrivateJSON(path string, v any) error {
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return stateError(err)
 	}
@@ -143,11 +143,11 @@ func (s *JoinState) write(f stateFile) error {
 			return stateError(err)
 		}
 	}
-	data, err := json.MarshalIndent(f, "", "  ")
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, stateFileName+".*")
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*")
 	if err != nil {
 		return stateError(err)
 	}
@@ -164,7 +164,7 @@ func (s *JoinState) write(f stateFile) error {
 	if err := tmp.Close(); err != nil {
 		return stateError(err)
 	}
-	if err := os.Rename(name, s.path); err != nil {
+	if err := os.Rename(name, path); err != nil {
 		return stateError(err)
 	}
 	return nil
@@ -173,11 +173,29 @@ func (s *JoinState) write(f stateFile) error {
 func stateError(err error) error {
 	var pe *fs.PathError
 	if errors.As(err, &pe) {
-		return &Error{Code: CodeState, Message: "cannot write the join URL state: " + pe.Op + ": " + pe.Err.Error()}
+		return &Error{Code: CodeState, Message: "cannot write the slicc config: " + pe.Op + ": " + pe.Err.Error()}
 	}
 	var le *os.LinkError
 	if errors.As(err, &le) {
-		return &Error{Code: CodeState, Message: "cannot write the join URL state: " + le.Op + ": " + le.Err.Error()}
+		return &Error{Code: CodeState, Message: "cannot write the slicc config: " + le.Op + ": " + le.Err.Error()}
 	}
-	return &Error{Code: CodeState, Message: "cannot write the join URL state"}
+	return &Error{Code: CodeState, Message: "cannot write the slicc config"}
+}
+
+func (s *JoinState) ForgetHub(origin string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := originKey(origin)
+	hub := HubOrigin(origin)
+	f := s.load()
+	trays := make([]stateEntry, 0, len(f.Trays))
+	for _, e := range f.Trays {
+		if e.Origin != key && HubOrigin(e.JoinURL) != hub {
+			trays = append(trays, e)
+		}
+	}
+	if len(trays) == len(f.Trays) {
+		return nil
+	}
+	return writePrivateJSON(s.path, stateFile{Version: stateVersion, Trays: trays})
 }

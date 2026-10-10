@@ -317,3 +317,5 @@ func (s *Session) superseded(next string) error {
 	s.f.advance(next)
 	return &Error{Code: CodeSuperseded, Message: supersedeMovedMessage, Retryable: true}
 }
+
+func (s *Session) BootstrapID() string { return s.current() }

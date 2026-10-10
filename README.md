@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift.
 
-**Status:** being built. `slicc attach`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc attach`, `slicc <join-url> follow`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
 ## Commands (planned)
 
@@ -11,7 +11,7 @@
 | `slicc` | pick browsers in a small TUI; Enter launches the best match with CDP, opens seven and links it |
 | `slicc attach --cdp <url>` | link a seven that is open in an already-running CDP browser (works now; see [Local setup](#local-setup-slicc-attach)) |
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
-| `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>]` | follow a seven's tray from another machine and offer its network, compute (over SSH) or browsers |
+| `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>]` | follow a seven's tray from another machine and offer its network, compute (over SSH) or browsers (`--exit` works now; see [Remote setup](#remote-setup-slicc-join-url-follow)) |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
 | `slicc update [--check]` | replace this binary with the latest release (works now; see [Updates](#updates)) |
 
@@ -275,6 +275,31 @@ A command that can't start exits 127 with the reason on stderr.
 **`slicc-eval` subsystem**: one persistent REPL per node (for example `python3 -i`), started on first use and shared by every session, so state survives between them. Input is read in lines. The lines available at once are written to the REPL together, and its output is forwarded (stdout and stderr apart) until it has been quiet for 500 ms. At EOF the session exits 0. `INT` interrupts the REPL's current computation on Unix (Windows ignores it), and other signals go to the REPL as for exec. If the REPL exits, the session prints its exit code on stderr and exits 1, and the next session starts a new REPL. Without a REPL the subsystem exits 1 with the reason.
 
 **Forwarding.** `direct-tcpip` dials through the node's policy (see Network policy). A refused address is `administratively prohibited` with the policy's message, and a failed connect is `connect failed`. Without a policy every target is refused. Remote forwarding (`tcpip-forward`), agent and X11 forwarding are refused.
+
+## Remote setup: `slicc <join-url> follow`
+
+```
+slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name <name>]
+```
+
+`follow` links this machine to a seven on another machine through the tray hub (see [Tray hub signaling](#tray-hub-signaling-remote-setup)). It serves the link until interrupted (`SIGINT`, `SIGTERM`) and reconnects when the link drops. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics. The join URL is never printed.
+
+**Flags.**
+- `--exit`: offer this machine's network to seven, as `tcp` streams (cap `net`) under the remote policy, so public addresses only by default. Without `--exit`, `tcp` is refused with `EOPNOTSUPP`.
+- `--allow`, `--deny`: policy rules on top of the remote default (see [Network policy](#network-policy)).
+- `--name`: the link's `name` and `host` in HELLO, as for `attach`.
+
+HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` with `--exit`, and always `join`.
+
+**Identity.** The device is its DTLS certificate. `follow` keeps one ECDSA P-256 certificate per hub origin (`scheme://host:port`), valid for 20 years, in `<config>/slicc/tray-certs.json` (mode `0600`). Every link to that hub uses it, so the fingerprint stays the same across reconnects, restarts and updates. The first run on a hub mints it and says `new device, fingerprint sha-256 …`; later runs say `device, fingerprint …`. Every dial attaches with a fresh `controllerId`, which is only a routing handle.
+
+**`join`** (cap `join`), page → node. OPEN `{ "kind": "join", "url" }` carries a rotated join URL (see Rotation below). The node answers OPENED `{}` then END, or `RESET EACCES` when the URL is not a join URL on the hub it follows.
+
+**`unlink`** (cap `join`), page → node. OPEN `{ "kind": "unlink" }`. The node answers OPENED `{}` then END, deletes the join state and the certificate for that hub, closes the link, says `unlinked by <name>` with the name from seven's HELLO, and exits 0. A `bootstrap.failed` with code `UNLINKED` does the same, with the name from the last link to that hub. The next `follow` mints a new certificate, so seven sees a new device.
+
+**Reconnects.** A link that drops, a link not up within 45 s of the offer, a failed bootstrap and any other signaling error lead to a new dial. Dials are spaced 1 s apart at first, doubling up to 30 s, each wait randomized by ±25 %, and back to 1 s after a link was up. A bootstrap the hub restarts (a retryable `bootstrap.failed`) starts a new peer connection without a new dial. While a link is up, the node stops polling the hub.
+
+**Stops** with exit 1 and says why on `INVALID_JOIN_CAPABILITY`, `TRAY_EXPIRED` or `TRAY_SUPERSEDED_MISSING_JOIN_URL` from the hub, and on `UNTRUSTED` or `UNSUPPORTED_RUNTIME` from seven.
 
 ## Tray hub signaling (remote setup)
 
