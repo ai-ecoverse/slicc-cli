@@ -1,3 +1,5 @@
+github.com/ai-ecoverse/go-optel v1.0.0 h1:+LC8RjVulyUx+OAtjMZAC7WMVLqdmf3SezTm0V0t3QA=
+github.com/ai-ecoverse/go-optel v1.0.0/go.mod h1:zih/Uqhz7WEH9+UX2Zh7LZeBid7+ZaGTjDDGbCC2ts8=
 github.com/charmbracelet/x/conpty v0.2.0 h1:eKtA2hm34qNfgJCDp/M6Dc0gLy7e07YEK4qAdNGOvVY=
 github.com/charmbracelet/x/conpty v0.2.0/go.mod h1:fexgUnVrZgw8scD49f6VSi0Ggj9GWYIrpedRthAwW/8=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
