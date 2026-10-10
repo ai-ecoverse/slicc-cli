@@ -15,7 +15,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 )
 
-const launchUsage = `usage: slicc launch [--browser <id>] [--profile <name>] [--url <url>] [--headless] [--no-seven-flags] [--json]
+const launchUsage = `usage: slicc launch [--browser <id>] [--profile <name>] [--url <url>] [--headless] [--no-seven-flags] [--kill] [--json]
 
 Launch a browser with CDP in a separate SLICC profile, print its CDP URL and
 keep running until interrupted. On exit, close the browser it started.
@@ -27,6 +27,8 @@ keep running until interrupted. On exit, close the browser it started.
   --headless         run without a window
   --no-seven-flags   leave out the flags that keep a background seven tab
                      running (see README.md)
+  --kill             an Electron app that is already running is quit and
+                     started again with remote debugging
   --json             print NDJSON events instead of plain text
 `
 
@@ -36,6 +38,7 @@ type launchFlags struct {
 	url       string
 	headless  bool
 	noSeven   bool
+	kill      bool
 	json      bool
 }
 
@@ -47,6 +50,7 @@ func parseLaunch(args []string, stdout, stderr io.Writer) (launchFlags, int, boo
 	fs.StringVar(&f.url, "url", "", "")
 	fs.BoolVar(&f.headless, "headless", false, "")
 	fs.BoolVar(&f.noSeven, "no-seven-flags", false, "")
+	fs.BoolVar(&f.kill, "kill", false, "")
 	fs.BoolVar(&f.json, "json", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -129,7 +133,7 @@ func runLaunch(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return out.fail(err)
 	}
-	b, err := browser.Launch(ctx, in, browser.LaunchOptions{Profile: f.profile, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven})
+	b, err := browser.Launch(ctx, in, browser.LaunchOptions{Profile: f.profile, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Kill: f.kill})
 	if err != nil {
 		return out.fail(err)
 	}
