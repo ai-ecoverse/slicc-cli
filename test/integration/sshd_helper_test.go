@@ -97,6 +97,15 @@ func helperCommand(words []string) (int, bool) {
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
+	case "blob":
+		n, _ := strconv.Atoi(args)
+		chunk := []byte(strings.Repeat("x", 4096))
+		for n > 0 {
+			k := min(n, len(chunk))
+			_, _ = os.Stdout.Write(chunk[:k])
+			n -= k
+		}
+		fmt.Print("END")
 	case "sleep":
 		secs, _ := strconv.Atoi(args)
 		time.Sleep(time.Duration(secs) * time.Second)
