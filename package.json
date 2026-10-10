@@ -24,7 +24,7 @@
     ]
   },
   "scripts": {
-    "lint": "sh scripts/lint-comments.sh && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && golangci-lint run",
+    "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && golangci-lint run",
     "format": "gofmt -w .",
     "test": "go test -race -count=1 ./test/integration/...",
     "test:unit": "go test -race -cover ./cmd/... ./internal/...",
@@ -37,7 +37,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-shared-web": "1.12.0",
+    "@ai-ecoverse/slicc-shared-web": "1.12.1",
     "@semantic-release/exec": "7.1.0",
     "semantic-release": "25.0.9"
   }
