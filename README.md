@@ -20,12 +20,12 @@ A node checks every address it connects to for the link's `tcp`, `http` and `ssh
 
 **Rules.** `--allow` and `--deny` take `CIDR` or `CIDR:port`, repeated or comma-separated: `10.0.0.0/8`, `127.0.0.1/32:9222`, `[::1]/128:9222`. A bare address is a single-host rule (`127.0.0.1`, `[::1]:22`). Host bits are masked off, and `::ffff:a.b.c.d` rules become IPv4 rules. A rule that can never match is rejected: one inside `64:ff9b::/96`, `64:ff9b:1::/48`, `2002::/16`, `2001::/32`, `0.0.0.0/8` or `::/128`.
 
-**Precedence.** The longest prefix wins. At the same prefix, a rule with a port wins over one without. At a full tie, deny wins, so an `--allow` exactly equal to a default deny has no effect. An address no rule matches is allowed.
+**Precedence.** The longest prefix wins. At the same prefix, a rule with a port wins over one without. At a full tie, a user flag wins over a default rule, so `--allow 192.168.0.0/16` opens exactly that range. Between two user flags, deny wins. An address no rule matches is allowed.
 
 **Normalization**, before matching:
 - IPv4-mapped IPv6 (`::ffff:a.b.c.d`) is checked as IPv4.
-- NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) is checked as the IPv4 in its last 32 bits, and 6to4 (`2002::/16`) as the IPv4 in bits 16–47.
-- Teredo (`2001::/32`), `0.0.0.0/8` and `::` are always denied, whatever the rules say.
+- NAT64 (`64:ff9b::/96`) is checked as the IPv4 in its last 32 bits, and 6to4 (`2002::/16`) as the IPv4 in bits 16–47.
+- Local-use NAT64 (`64:ff9b:1::/48`), Teredo (`2001::/32`), `0.0.0.0/8` and `::` are always denied, whatever the rules say.
 
 **Remote default** (a node following a tray from another machine). Every public address is allowed. Denied:
 - loopback: `127.0.0.0/8`, `::1/128`;
@@ -34,13 +34,18 @@ A node checks every address it connects to for the link's `tcp`, `http` and `ssh
 - link-local and cloud metadata: `169.254.0.0/16`, `fe80::/10`;
 - ULA: `fc00::/7`;
 - multicast: `224.0.0.0/4`, `ff00::/8`;
-- reserved and documentation: `240.0.0.0/4`, `255.255.255.255/32`, `192.0.0.0/24`, `192.0.2.0/24`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`, `100::/64`.
+- reserved and documentation: `240.0.0.0/4`, `255.255.255.255/32`, `192.0.0.0/24`, `192.0.2.0/24`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`, `100::/64`;
+- IPv4-compatible `::/96` (deprecated) and SIIT `::ffff:0:0:0/96`.
 
-**Local default** (the bridge to the browser `slicc` controls). The remote default without the loopback and private denies, so this machine and the LAN are reachable. The browser's debugging port and the CLI's own ports are denied on loopback, each as `127.0.0.0/8:port`, `127.0.0.1/32:port` and `[::1]/128:port`, so `--allow 127.0.0.1/32` doesn't reopen them. `--deny 127.0.0.0/8` and `--deny 192.168.0.0/16` take loopback and the LAN back out.
+**Local default** (the bridge to the browser `slicc` controls). The remote default, with loopback and the private ranges (`127.0.0.0/8`, `::1/128`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) allowed instead of denied, so this machine and the LAN are reachable. The browser's debugging port and the CLI's own ports are denied:
+- on loopback, each as `127.0.0.0/8:port`, `127.0.0.1/32:port` and `[::1]/128:port`, so `--allow 127.0.0.1/32` doesn't reopen them;
+- on every address of this machine, as `<address>/32:port` or `<address>/128:port`. The interfaces are enumerated at check time and cached for 5 seconds, so a new interface counts. If they can't be enumerated, those ports are denied on every address.
+
+Only a user allow for exactly the same address and port reopens one of these. `--deny 127.0.0.0/8` and `--deny 192.168.0.0/16` take loopback and the LAN back out.
 
 **`resolve` filtering.** An address is kept when the policy allows it on at least one port. When every address is dropped, the answer is an empty list.
 
-**HELLO.** `policy.summary` names the default and lists the `--allow` and `--deny` rules on top of it. `policy.allow` and `policy.deny` list the `--allow` and `--deny` rules plus the local default's loopback port denies, not the default ranges.
+**HELLO.** `policy.summary` names the default and lists the `--allow` and `--deny` rules on top of it. `policy.allow` and `policy.deny` list the `--allow` and `--deny` rules plus the local default's loopback port denies, not the default ranges or the per-interface denies.
 
 ## SSH server
 
