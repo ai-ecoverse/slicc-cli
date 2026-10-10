@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -35,6 +36,10 @@ func isolateProcess(root string) {
 		"XDG_CONFIG_HOME": filepath.Join(root, ".config"),
 		"XDG_CACHE_HOME":  filepath.Join(root, ".cache"),
 		"XDG_DATA_HOME":   filepath.Join(root, ".local", "share"),
+	}
+	if runtime.GOOS == "windows" {
+		delete(set, "USERPROFILE")
+		delete(set, "LOCALAPPDATA")
 	}
 	for k, v := range set {
 		_ = os.MkdirAll(v, 0o700)
