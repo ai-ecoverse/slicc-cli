@@ -28,6 +28,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	default:
+		if looksLikeURL(args[0]) {
+			return joinCommand(args, stdout, stderr)
+		}
 		fmt.Fprintf(stderr, "slicc: unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
