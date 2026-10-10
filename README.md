@@ -2,13 +2,13 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift.
 
-**Status:** being built. `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
 ## Commands (planned)
 
 | command | what it does |
 | --- | --- |
-| `slicc` | pick browsers in a small TUI; Enter launches the best match with CDP, opens seven and links it |
+| `slicc` | pick browsers in a small TUI; Enter launches or attaches to the best match, opens seven and links it (works now; see [The default](#the-default-slicc)) |
 | `slicc attach --cdp <url>` | link a seven that is open in an already-running CDP browser (works now; see [Local setup](#local-setup-slicc-attach)) |
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>]` | follow a seven's tray from another machine and offer its network, compute (over SSH) or browsers (`--exit`, `--runner` and `--cdp` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)) |
@@ -39,7 +39,7 @@ Release builds outside npm and app bundles print a notice on stderr when a newer
 ## Telemetry
 
 Release builds send operational telemetry through [go-optel](https://github.com/ai-ecoverse/go-optel) with the app id `slicc-cli`, sampled once per process (1 in 100 by default):
-- `enter`, with the subcommand as `source`, from a fixed list (`attach`, `browsers`, `follow`, `launch`, `prompt`, `update`, `watch`, `default` for no arguments, `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
+- `enter`, with the subcommand as `source`, from a fixed list (`attach`, `browsers`, `follow`, `launch`, `prompt`, `update`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
 - `error`, for operational failures, from a fixed set of sources (`update`, `signal`, `link`, `browser`, `ssh`, `cdp`). Messages pass through go-optel's sanitizer, which strips URLs and paths.
 
 `--version` and `--help` send nothing, and development builds never configure a client.
@@ -54,6 +54,69 @@ Release builds send operational telemetry through [go-optel](https://github.com/
 | `SLICC_TELEMETRY_URL` | telemetry collector base (default `https://rum.hlx.page/`) |
 | `OPTEL_RATE`, `OPTEL_DEBUG` | go-optel's sampling rate and beacon logging |
 | `SLICC_LAUNCHER` | set to `npm` by the npm launcher; removed from the environment that `slicc` passes on |
+
+## The default: `slicc`
+
+```
+slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]... [--profile <name>] [--headless]
+      [--name <name>] [--kernel-port <n>] [--no-kernel] [--allow <rule>]... [--deny <rule>]... [--yes] [--plain] [--json]
+```
+
+`slicc` with no command (`npx sliccy`) finds browsers, launches or attaches to the best one, opens seven in it and links it. It serves the link until it is told to stop: `q` or Ctrl-C in the dashboard, or `SIGINT` or `SIGTERM`. Then it says `bye` to seven, closes the browsers this run launched (as `slicc launch` does), leaves the browsers it attached to running, and exits 0. If the browser that hosts seven goes away, `slicc` closes the rest and exits 0 too. Setup failures (no browser, a launch or attach that fails) exit 1, and bad flags exit 2.
+
+**Discovery** is `slicc browsers`' discovery and ranking (see [Browsers](#browsers)), with each `--cdp` URL added and the `--page` origin counted as a seven origin.
+
+**Going with a browser.** The first browser hosts seven:
+- a running endpoint with a seven tab open: slicc attaches to it;
+- a running endpoint without one: slicc opens `--page` in a new tab (`Target.createTarget`) and attaches;
+- an installed browser: slicc launches it as `slicc launch --url <page>` does, in its SLICC profile (`--profile`, or the one picked with `p`; default: the browser id), with the seven flags and prefs, and `--headless=new` with `--headless`, then attaches.
+
+An Electron app can't host seven. Each further browser is an extra: an installed one is launched without a start page, and an endpoint is used as it is. Then the link is set up as for `slicc attach` (see [Local setup](#local-setup-slicc-attach)): over CDP with the browser that hosts seven, the first page tab on an allowed origin.
+
+**What the link offers:** `net` (tcp, resolve), `http`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected; and kernel services on `--kernel-port` (default 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)). seven gets full control of every listed browser.
+
+**Flags.**
+- `--browser <id>`: an id from `slicc browsers` (an installed id such as `chrome`, or `cdp:<host>:<port>`), or a name, case-insensitively. Repeatable: the first hosts seven, the others are extras. Without it, the best match that can host seven.
+- `--cdp <url>`: also consider this CDP endpoint, as `slicc browsers --cdp`.
+- `--page <url>`: the seven page, default `https://seven.sliccy.ai/`. It must be `http` or `https`, and its origin is accepted as a seven origin.
+- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`: as for `slicc attach`.
+- `--profile <name>`: the SLICC profile for a launched browser that hosts seven.
+- `--headless`: launch browsers without a window.
+- `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
+- Any other flag, or an argument, is an error.
+
+**The picker** comes up when stdin and stdout are both terminals and none of `--yes`, `--browser`, `--plain` or `--json` is given. It lists the ranking best first, one row each, with its state: `CDP :<port>` and `seven open` for a running endpoint, `installed · profile <name>` (or `new SLICC profile <name>` when the profile doesn't exist yet) for a browser slicc would launch, and `installed · Electron` for an Electron app. The first row is marked `best match`. A list longer than the terminal scrolls with the cursor.
+
+| key | what it does |
+| --- | --- |
+| ↑ ↓ (`k`, `j`) | move |
+| space | select or unselect the row; the first selected hosts seven, and the rest are `extra cdp` browsers, in the order selected |
+| Enter | go: with the selected rows, or with the highlighted row when nothing is selected |
+| `p` | choose the highlighted browser's SLICC profile: its default, an existing profile in the profiles dir, or `new profile…` with a name (letters, digits, `.`, `_`, `-`) |
+| Esc | back, in the profile chooser |
+| `q`, Ctrl-C | quit; in the dashboard, close down as described above |
+
+**The dashboard** follows: the linked browsers (launched or attached, their CDP port, hosts seven or extra), the seven tab, the link state (`waiting for seven`, `connecting`, `linked` with its uptime, or `reconnecting` after a link is lost, while slicc waits for seven to offer again), the capabilities offered, the policy summary, the kernel services URL, stream counts per kind (open and total, never contents), the last status lines, and the update notice, which then isn't printed on stderr. `NO_COLOR` turns colors off.
+
+**Plain mode** (no terminal, `--yes`, `--browser` or `--plain`): no picker and no dashboard, just the default, with status lines on stderr (`slicc: launched …`, `slicc: attached to …`, `slicc: linked with "<name>" in <tab>`, `slicc: link lost: …`, `slicc: closed <ids>`). It never writes ANSI escapes or cursor codes. `SLICC_DEBUG=1` adds diagnostics.
+
+**`--json`** prints NDJSON events on stdout and nothing else there, for Sliccstart (`slicc --json --browser <id>`). Errors are also printed on stderr. Every event has `"schema": 1` and `event`. Fields marked `?` are left out when empty; new fields and events may be added, and existing ones keep their meaning.
+- `discovered`: `entries`, the ranked list in the shape of `slicc browsers --json` (always a list).
+- `launched`: `browser` (the id), `name`, `version?`, `role` (`seven` or `extra`), `pid`, `profile?`, `profileDir?`, `cdp`, `webSocketDebuggerUrl`.
+- `attached`: `browser`, `name`, `version?`, `role`, `launched?` (`true` when this run launched it), `cdp`, `webSocketDebuggerUrl?`. For `seven` slicc is connected to it over CDP; an `extra` is listed for `cdp`.
+- `linked`: `peer?` (the name in seven's HELLO), `tab?` (the seven tab's URL), `caps`, `policy` (the summary).
+- `link-lost`: `reason?` when slicc or seven closed the link (`slicc is exiting`, seven's `bye` reason, `replaced by a new offer`), or `message?` for a failure. seven sets the link up again after a reload, and a new `linked` follows.
+- `closed`: `browsers`, the ids slicc closed (always a list). It is the last event of every run that got past choosing its browsers.
+- `error`: `message`, and `browser?` when closing that browser failed. A setup error ends the run with exit 1.
+
+```
+{"schema":1,"event":"discovered","entries":[…]}
+{"schema":1,"event":"launched","browser":"chrome","name":"Google Chrome","version":"154.0.8037.98","role":"seven","pid":4242,"profile":"chrome","profileDir":"…/slicc/profiles/chrome","cdp":"http://127.0.0.1:53211","webSocketDebuggerUrl":"ws://127.0.0.1:53211/devtools/browser/…"}
+{"schema":1,"event":"attached","browser":"chrome","name":"Google Chrome","version":"154.0.8037.98","role":"seven","launched":true,"cdp":"http://127.0.0.1:53211","webSocketDebuggerUrl":"ws://127.0.0.1:53211/devtools/browser/…"}
+{"schema":1,"event":"linked","tab":"https://seven.sliccy.ai/","peer":"seven","caps":["net","http","cdp"],"policy":"every public address, this machine, and the local network"}
+{"schema":1,"event":"link-lost","reason":"slicc is exiting"}
+{"schema":1,"event":"closed","browsers":["chrome"]}
+```
 
 ## Browsers
 
@@ -436,7 +499,7 @@ Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`
 
 **Test names: `--hosts <file>`** (test-only, left out of `--help`). `slicc attach` and `slicc <join-url> follow` take a hosts file, so tests get deterministic names without public DNS. Each line is `<ip> <name> [<name>…]`, and `#` starts a comment. Names match case-insensitively, with or without a trailing dot, and a name on several lines gets every address, in file order. Wherever the node resolves a name (`resolve`, `tcp` by name, `http`, and the policy's [browser endpoints](#network-policy)), a name in the file gets the file's addresses of the requested family, possibly none, and never the system resolver's. Other names go to the system resolver. The policy applies afterwards as usual: `resolve` drops refused addresses, and a dial to a refused address is `EACCES`. `tcp` and `http` try the addresses in file order. A file that can't be read or parsed exits 2. A name mapped to a loopback address only helps the node's own dials, `http` and `tcp` by name: a seven kernel that gets a loopback address from `resolve` dials its own loopback, because loopback never goes out through an exit. For end-to-end exit tests, map test names to a non-loopback address of the machine.
 
-Front ends and capabilities follow a node's links with `node.Node.Subscribe(func(node.Event)) (unsubscribe func())`. Events: `connecting` (an offer was answered), `linked` (the peer's HELLO arrived, in `Peer`), `link-down` (`Err` for a failure, otherwise `Reason`: seven's `bye` reason, `replaced by a new offer` or `slicc is exiting`; a failed answer has no `Link`), and `stream-open` and `stream-close` for each page-opened stream, with its kind. Every event but a failed answer carries its `*link.Link`. A link's `link-down` comes before the next link's `connecting`, but its streams' `stream-close` can come after its `link-down`. Events are delivered synchronously on the node's and the link's goroutines, so a subscriber must return quickly and never block; one that needs to wait hands the event to its own goroutine.
+Front ends and capabilities follow a node's links with `node.Node.Subscribe(func(node.Event)) (unsubscribe func())`. Events: `connecting` (an offer was answered), `linked` (the peer's HELLO arrived, in `Peer`), `link-down` (`Reason` when the node closed the link: seven's `bye` reason, `replaced by a new offer` or `slicc is exiting`; otherwise `Err` for a failure; a failed answer has no `Link`), and `stream-open` and `stream-close` for each page-opened stream, with its kind. Every event but a failed answer carries its `*link.Link`. A link's `link-down` comes before the next link's `connecting`, but its streams' `stream-close` can come after its `link-down`. Events are delivered synchronously on the node's and the link's goroutines, so a subscriber must return quickly and never block; one that needs to wait hands the event to its own goroutine.
 
 The real-Chrome tests in `test/integration/` launch headless, so they run the executable directly. A windowed launch on macOS goes through `open -n -W -a`, which CI doesn't cover: on GitHub's macOS runners, Chrome started that way never writes `DevToolsActivePort`.
 

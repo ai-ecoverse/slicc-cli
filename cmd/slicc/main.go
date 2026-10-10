@@ -11,6 +11,8 @@ var version = "dev"
 const usage = `slicc: SLICC's command line for seven
 
 usage:
+  slicc [flags]             find browsers, open seven in the best one and link
+                            it; flags below
   slicc attach --cdp <url>  link a seven open in a running CDP browser
   slicc <join-url> follow   follow a seven's tray from this machine
   slicc browsers            list CDP endpoints and installed browsers, ranked
@@ -18,13 +20,12 @@ usage:
   slicc update [--check]    replace this binary with the latest release
   slicc --version           print the version
   slicc --help              print this help
-`
+` + defaultHelp
 
 func run(args []string, stdout, stderr io.Writer) int {
 	defer startup(args, stderr)()
-	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
-		return 2
+	if isDefault(args) {
+		return runDefault(args, stdout, stderr)
 	}
 	switch args[0] {
 	case "--version", "-V", "version":
