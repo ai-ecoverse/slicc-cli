@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -689,4 +692,51 @@ func TestFollowCDP(t *testing.T) {
 		t.Fatalf("target %s is not in the followed browser", r.TargetID)
 	}
 	_ = p.b.client.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": r.TargetID}, nil)
+}
+
+func TestFollowExitProtectsTheCDPPort(t *testing.T) {
+	env, h, trays, p, _ := followSetup(t, 1)
+	echo := serveTCP(t, func(c net.Conn) {
+		_, _ = io.Copy(c, c)
+		_ = c.(*net.TCPConn).CloseWrite()
+		_, _ = io.Copy(io.Discard, c)
+	})
+	host, port := hostPort(t, echo)
+	args := []string{"--exit", "--allow", "127.0.0.1/32", "--allow", "[::1]/128", "--cdp", p.b.endpoint}
+	lan, haveLAN := findLANAddress()
+	if haveLAN {
+		args = append(args, "--allow", netip.PrefixFrom(lan, lan.BitLen()).String())
+	}
+	fp := startFollow(t, env, h.joinURL(trays[0]), args...)
+	fp.waitStderr(t, "slicc: cdp on (chrome)", 15*time.Second)
+	p.waitUp(t, "")
+	var hello struct {
+		Policy struct {
+			Deny []string `json:"deny"`
+		} `json:"policy"`
+	}
+	p.eval("linkTest.ready()", &hello)
+	want := "127.0.0.1/32:" + strconv.Itoa(p.b.port)
+	if !slices.Contains(hello.Policy.Deny, want) {
+		t.Fatalf("policy deny %v lacks %s", hello.Policy.Deny, want)
+	}
+	hosts := []string{"127.0.0.1", "127.0.0.2", "::1", "localhost"}
+	if haveLAN {
+		hosts = append(hosts, lan.String())
+	}
+	for _, target := range hosts {
+		var r echoResult
+		p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "tcp", "host": target, "port": p.b.port}, false)+")", &r)
+		if r.Reset != "EACCES" {
+			t.Fatalf("tcp to %s:%d (the debugging port): %+v", target, p.b.port, r)
+		}
+	}
+	var res struct {
+		OK    bool   `json:"ok"`
+		Reset string `json:"reset"`
+	}
+	p.eval("linkTest.echo("+jsArgs(host, port, 100000)+")", &res)
+	if !res.OK {
+		t.Fatalf("echo on another loopback port: %+v", res)
+	}
 }

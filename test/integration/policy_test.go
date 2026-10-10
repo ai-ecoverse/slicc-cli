@@ -487,11 +487,10 @@ func TestPolicyDeniesLocalUseNAT64(t *testing.T) {
 	}
 }
 
-func lanAddress(t *testing.T) netip.Addr {
-	t.Helper()
+func findLANAddress() (netip.Addr, bool) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		t.Skipf("no interface addresses: %v", err)
+		return netip.Addr{}, false
 	}
 	var v6 []netip.Addr
 	for _, a := range addrs {
@@ -508,12 +507,20 @@ func lanAddress(t *testing.T) netip.Addr {
 			continue
 		}
 		if ip.Is4() {
-			return ip
+			return ip, true
 		}
 		v6 = append(v6, ip)
 	}
 	if len(v6) > 0 {
-		return v6[0]
+		return v6[0], true
+	}
+	return netip.Addr{}, false
+}
+
+func lanAddress(t *testing.T) netip.Addr {
+	t.Helper()
+	if addr, ok := findLANAddress(); ok {
+		return addr
 	}
 	if os.Getenv("CI") != "" {
 		t.Fatal("the CI runner has no non-loopback address")
