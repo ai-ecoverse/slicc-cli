@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	capcdp "github.com/ai-ecoverse/slicc-cli/internal/caps/cdp"
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
@@ -49,6 +50,8 @@ flags:
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
   --name <name>        the name and host this link shows in seven
+  --cdp <url>          let seven drive this browser over the link (cdp,
+                       repeatable); seven gets full control of it
 ` + computeUsage + `
 With --runner the link also offers ssh: seven's kernel reaches this machine's
 SSH server, which never listens on a port, and its forwarding goes through
@@ -64,6 +67,7 @@ type followFlags struct {
 	timeout    time.Duration
 	compute    computeFlags
 	hosts      hostsFlag
+	cdp        stringList
 }
 
 func looksLikeURL(arg string) bool {
@@ -97,6 +101,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
 	fs.Var(&f.hosts, "hosts", "")
+	fs.Var(&f.cdp, "cdp", "")
 	fs.BoolVar(&f.signalOnly, "signal-only", false, "")
 	fs.DurationVar(&f.timeout, "timeout", defaultSignalOnlyTimeout, "")
 	f.compute.register(fs)
@@ -161,6 +166,7 @@ type followRun struct {
 	state    *tray.JoinState
 	certs    *tray.Certs
 	node     *node.Node
+	cdp      *capcdp.Registry
 	status   func(format string, a ...any)
 	events   chan followEvent
 	closeSSH func()
@@ -205,6 +211,9 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 		status("exit off")
 	}
 	if r.closeSSH, err = ff.compute.serve(r.node, status); err != nil {
+		return nil, err
+	}
+	if r.cdp, err = followBrowsers(r.node, ff.cdp, logf, status); err != nil {
 		return nil, err
 	}
 	r.node.Handle(capJoin, "join", r.handleJoin)
@@ -346,6 +355,9 @@ const (
 )
 
 func (r *followRun) run(ctx context.Context) int {
+	if r.cdp != nil {
+		go r.cdp.Watch(ctx, 2*time.Second)
+	}
 	backoff := followBackoffBase
 	for {
 		r.status("connecting to the tray hub")
