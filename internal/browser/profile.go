@@ -1,15 +1,19 @@
 package browser
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var profileNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -62,7 +66,7 @@ func profileOwner(dir string) int {
 	return 0
 }
 
-func prepareProfile(dir string) error {
+func prepareProfile(dir string, sites []string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -79,30 +83,136 @@ func prepareProfile(dir string) error {
 	_ = os.RemoveAll(filepath.Join(def, "Sessions"))
 	_ = os.Remove(filepath.Join(def, "Last Session"))
 	_ = os.Remove(filepath.Join(def, "Last Tabs"))
-	markCleanExit(filepath.Join(def, "Preferences"))
+	_ = seedPreferences(filepath.Join(def, "Preferences"), sites, sites != nil)
 	return nil
 }
 
-func markCleanExit(prefsPath string) {
+const SevenSitePattern = "[*.]sliccy.ai"
+
+func SevenSites(extra []string) []string {
+	sites := []string{SevenSitePattern}
+	for _, o := range extra {
+		if n := NormalizeOrigin(o); n != "" {
+			if u, err := url.Parse(n); err == nil {
+				sites = append(sites, u.Host)
+			}
+		}
+	}
+	return uniqueStrings(sites)
+}
+
+func SeedPreferences(prefsPath string, sites []string) error {
+	return seedPreferences(prefsPath, sites, true)
+}
+
+func seedPreferences(prefsPath string, sites []string, seven bool) error {
+	prefs := map[string]any{}
+	existed := false
 	b, err := os.ReadFile(prefsPath)
+	switch {
+	case err == nil:
+		existed = true
+		d := json.NewDecoder(bytes.NewReader(b))
+		d.UseNumber()
+		if err := d.Decode(&prefs); err != nil || prefs == nil {
+			return fmt.Errorf("%s: not a JSON object, left alone", prefsPath)
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return err
+	}
+	changed := false
+	if existed {
+		changed = markCleanExit(prefs)
+	}
+	if seven {
+		changed = applySevenPrefs(prefs, sites, time.Now()) || changed
+	}
+	if !changed {
+		return nil
+	}
+	out, err := json.Marshal(prefs)
 	if err != nil {
-		return
+		return err
 	}
-	var prefs map[string]any
-	if json.Unmarshal(b, &prefs) != nil {
-		return
+	if err := os.MkdirAll(filepath.Dir(prefsPath), 0o700); err != nil {
+		return err
 	}
-	profile, _ := prefs["profile"].(map[string]any)
-	if profile == nil {
-		profile = map[string]any{}
-		prefs["profile"] = profile
+	tmp := prefsPath + ".slicc-tmp"
+	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+		return err
 	}
-	if profile["exit_type"] == "Normal" && profile["exited_cleanly"] == true {
-		return
+	return os.Rename(tmp, prefsPath)
+}
+
+func setPref(m map[string]any, key string, v any, changed *bool) {
+	if !reflect.DeepEqual(m[key], v) {
+		m[key] = v
+		*changed = true
 	}
-	profile["exit_type"] = "Normal"
-	profile["exited_cleanly"] = true
-	if out, err := json.Marshal(prefs); err == nil {
-		_ = os.WriteFile(prefsPath, out, 0o600)
+}
+
+func markCleanExit(prefs map[string]any) bool {
+	changed := false
+	profile := child(prefs, "profile", &changed)
+	setPref(profile, "exit_type", "Normal", &changed)
+	setPref(profile, "exited_cleanly", true, &changed)
+	return changed
+}
+
+func applySevenPrefs(prefs map[string]any, sites []string, now time.Time) bool {
+	changed := false
+	setPref(prefs, "tab_freezing_enabled", false, &changed)
+	tuning := child(prefs, "performance_tuning", &changed)
+	setPref(child(tuning, "tab_freezing", &changed), "enabled", false, &changed)
+	setPref(child(tuning, "high_efficiency_mode", &changed), "state", json.Number("0"), &changed)
+	discard := child(tuning, "tab_discarding", &changed)
+	if mergeSiteList(discard, sites) {
+		changed = true
 	}
+	withTime := child(discard, "exceptions_with_time", &changed)
+	stamp := chromeTime(now)
+	for _, site := range sites {
+		if _, ok := withTime[site]; !ok {
+			withTime[site] = stamp
+			changed = true
+		}
+	}
+	return changed
+}
+
+func mergeSiteList(discard map[string]any, sites []string) bool {
+	list, ok := discard["exceptions"].([]any)
+	changed := !ok
+	have := map[string]bool{}
+	exceptions := []any{}
+	for _, e := range list {
+		if s, ok := e.(string); ok && !have[s] {
+			have[s] = true
+			exceptions = append(exceptions, s)
+		}
+	}
+	changed = changed || len(exceptions) != len(list)
+	for _, site := range sites {
+		if !have[site] {
+			have[site] = true
+			exceptions = append(exceptions, site)
+			changed = true
+		}
+	}
+	discard["exceptions"] = exceptions
+	return changed
+}
+
+func chromeTime(t time.Time) string {
+	return strconv.FormatInt(t.UnixMicro()+11644473600000000, 10)
+}
+
+func child(m map[string]any, key string, changed *bool) map[string]any {
+	if c, ok := m[key].(map[string]any); ok {
+		return c
+	}
+	c := map[string]any{}
+	m[key] = c
+	*changed = true
+	return c
 }

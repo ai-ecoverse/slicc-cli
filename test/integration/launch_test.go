@@ -180,6 +180,7 @@ func TestLaunchRealChromeAndCloseOnInterrupt(t *testing.T) {
 	if _, err := getVersion(ev.CDP); err == nil {
 		t.Errorf("CDP still answers at %s after close", ev.CDP)
 	}
+	assertSevenPrefs(t, readPrefs(t, ev.ProfileDir), true)
 }
 
 func assertSevenFlags(t *testing.T, cmdline string, want bool) {
@@ -227,6 +228,7 @@ func TestLaunchWithoutSevenFlags(t *testing.T) {
 		t.Fatalf("/json/version: %v %v", v, err)
 	}
 	assertSevenFlags(t, chromeCommandLine(t, ev.CDP), false)
+	assertSevenPrefs(t, readPrefs(t, ev.ProfileDir), false)
 	if err := interrupt(l.cmd); err != nil {
 		t.Fatal(err)
 	}
@@ -304,5 +306,159 @@ func TestLaunchReportsBrowserExit(t *testing.T) {
 	}
 	if code := l.wait(t); code != 0 {
 		t.Errorf("exit %d; stderr %s", code, l.stderr.String())
+	}
+}
+
+func readPrefs(t *testing.T, profileDir string) map[string]any {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(profileDir, "Default", "Preferences"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]any{}
+		}
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("Preferences: %v", err)
+	}
+	return m
+}
+
+func dig(m map[string]any, path ...string) any {
+	var v any = m
+	for _, k := range path {
+		mm, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = mm[k]
+	}
+	return v
+}
+
+func assertSevenPrefs(t *testing.T, prefs map[string]any, want bool) {
+	t.Helper()
+	withTime, _ := dig(prefs, "performance_tuning", "tab_discarding", "exceptions_with_time").(map[string]any)
+	_, hasSite := withTime[browser.SevenSitePattern]
+	if !want {
+		if hasSite || dig(prefs, "tab_freezing_enabled") != nil {
+			t.Errorf("seven prefs without seven flags: %v", prefs["performance_tuning"])
+		}
+		return
+	}
+	if !hasSite {
+		t.Errorf("no %s in exceptions_with_time: %v", browser.SevenSitePattern, prefs["performance_tuning"])
+	}
+	if dig(prefs, "tab_freezing_enabled") != false || dig(prefs, "performance_tuning", "tab_freezing", "enabled") != false {
+		t.Errorf("tab freezing not off: %v %v", prefs["tab_freezing_enabled"], prefs["performance_tuning"])
+	}
+	if dig(prefs, "performance_tuning", "high_efficiency_mode", "state") != float64(0) {
+		t.Errorf("Memory Saver not off: %v", prefs["performance_tuning"])
+	}
+	list, _ := dig(prefs, "performance_tuning", "tab_discarding", "exceptions").([]any)
+	n := 0
+	for _, e := range list {
+		if e == browser.SevenSitePattern {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("exceptions list %v", list)
+	}
+}
+
+func settingsPref(t *testing.T, base, key string) string {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPut, base+"/json/new?chrome://settings/performance", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target struct {
+		WebSocketURL string `json:"webSocketDebuggerUrl"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&target)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := dialCDP(target.WebSocketURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		res, err := c.call("Runtime.evaluate", map[string]any{
+			"expression":    `new Promise(r => (window.chrome && chrome.settingsPrivate) ? chrome.settingsPrivate.getPref("` + key + `", p => r(JSON.stringify(p.value))) : r(""))`,
+			"awaitPromise":  true,
+			"returnByValue": true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var v struct {
+			Result struct {
+				Value string `json:"value"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(res, &v) == nil && v.Result.Value != "" {
+			return v.Result.Value
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatal("chrome://settings did not answer")
+	return ""
+}
+
+func TestLaunchMergesSevenPrefsIntoExistingProfile(t *testing.T) {
+	env, root := launchEnv(t)
+	requireChrome(t, env)
+	profileDir := filepath.Join(launchProfilesDir(root), "merge")
+	writeFile(t, filepath.Join(profileDir, "Default", "Preferences"),
+		`{"slicc_test":{"keep":"untouched"},"profile":{"name":"Mine","exit_type":"Crashed"},"performance_tuning":{"tab_discarding":{"exceptions":["mine.example"],"exceptions_with_time":{"mine.example":"13400000000000000"}}}}`)
+	for round := 0; round < 2; round++ {
+		l := startLaunch(t, env, "--browser", "chrome", "--profile", "merge", "--headless")
+		ev := l.next(t)
+		if ev.Event != "launched" || ev.ProfileDir != profileDir {
+			t.Fatalf("%+v want %s; stderr %s", ev, profileDir, l.stderr.String())
+		}
+		if round == 0 {
+			got := settingsPref(t, ev.CDP, "performance_tuning.tab_discarding.exceptions_with_time")
+			if !strings.Contains(got, `"`+browser.SevenSitePattern+`"`) || !strings.Contains(got, `"mine.example"`) {
+				t.Errorf("Chrome's own view of the exceptions: %s", got)
+			}
+		}
+		if err := interrupt(l.cmd); err != nil {
+			t.Fatal(err)
+		}
+		if e := l.next(t); e.Event != "closed" {
+			t.Fatalf("%+v", e)
+		}
+		l.wait(t)
+		prefs := readPrefs(t, profileDir)
+		assertSevenPrefs(t, prefs, true)
+		raw, _ := os.ReadFile(filepath.Join(profileDir, "Default", "Preferences"))
+		if !strings.Contains(string(raw), `"keep":"untouched"`) || dig(prefs, "profile", "name") != "Mine" {
+			t.Errorf("round %d clobbered the existing Preferences: %v", round, prefs["slicc_test"])
+		}
+		if dig(prefs, "performance_tuning", "tab_discarding", "exceptions_with_time", "mine.example") != "13400000000000000" {
+			t.Errorf("round %d lost an existing exception: %v", round, prefs["performance_tuning"])
+		}
+		if list, _ := dig(prefs, "performance_tuning", "tab_discarding", "exceptions").([]any); len(list) != 2 || list[0] != "mine.example" {
+			t.Errorf("round %d exceptions list %v", round, list)
+		}
+	}
+}
+
+func launchProfilesDir(root string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(root, "Library", "Application Support", "slicc", "profiles")
+	case "windows":
+		return filepath.Join(root, "Roaming", "slicc", "profiles")
+	default:
+		return filepath.Join(root, ".config", "slicc", "profiles")
 	}
 }
