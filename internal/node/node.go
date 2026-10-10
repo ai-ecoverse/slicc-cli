@@ -159,10 +159,10 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		if cur == nil {
 			return
 		}
+		cur.setReason(reason)
 		if bye {
 			_ = conn.Send(context.Background(), signal.Message{T: signal.TypeBye, Nonce: cur.nonce, Reason: reason})
 		}
-		cur.setReason(reason)
 		_ = cur.l.Close()
 		<-cur.watched
 		cur = nil
@@ -223,12 +223,10 @@ func (n *Node) watch(c *current) {
 	case <-l.Done():
 	}
 	<-l.Done()
-	e := Event{Kind: EventLinkDown, Link: l}
-	if err := l.Err(); err != nil && !errors.Is(err, link.ErrClosed) {
+	e := Event{Kind: EventLinkDown, Link: l, Reason: c.getReason()}
+	if err := l.Err(); e.Reason == "" && err != nil && !errors.Is(err, link.ErrClosed) {
 		n.cfg.Status("link down: %v", err)
 		e.Err = err
-	} else {
-		e.Reason = c.getReason()
 	}
 	n.emit(e)
 }
