@@ -165,7 +165,11 @@ func Launch(ctx context.Context, in Installed, lo LaunchOptions) (*Browser, erro
 	if err != nil {
 		return nil, err
 	}
-	if err := prepareProfile(dir); err != nil {
+	var sites []string
+	if !lo.NoSevenFlags {
+		sites = SevenSites(lo.Origins)
+	}
+	if err := prepareProfile(dir, sites); err != nil {
 		return nil, err
 	}
 	name, args := spawnCommand(in, ChromiumArgs(dir, lo.URL, lo.Headless, !lo.NoSevenFlags, lo.ExtraArgs), dir, lo.Headless)
