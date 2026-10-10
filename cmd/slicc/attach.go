@@ -31,12 +31,13 @@ the link until interrupted. Status lines go to stderr.
 
 flags:
   --cdp <url>          the browser's CDP endpoint: http://host:port or ws://...
+                       seven can drive this browser over the link (cdp)
+  --cdp-extra <url>    also let seven drive this browser (repeatable)
   --origin <origin>    also accept seven on this origin (repeatable); the
                        default is https://<label>.sliccy.ai, except www
   --signal cdp|stdio   carry the setup messages over CDP (default), or as
                        NDJSON on stdin and stdout for a harness that relays
-                       them itself; --cdp is then optional and only names
-                       the debugging port to deny
+                       them itself; --cdp is then optional
   --name <name>        the name and host this link shows in seven
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
@@ -44,13 +45,15 @@ flags:
 The link offers the net capability (tcp and resolve streams) and the http
 capability (fetches without redirects) under the local policy: public
 addresses, this machine and the local network, but not link-local addresses
-or the browser's debugging port. With --runner it also offers ssh: seven's
+or the browsers' debugging ports. With --runner it also offers ssh: seven's
 kernel reaches this machine's SSH server, which never listens on a port, and
-its forwarding goes through the same policy.
+its forwarding goes through the same policy. With --cdp or --cdp-extra it
+also offers cdp: seven gets full control of every browser listed.
 `
 
 type attachFlags struct {
 	cdp     string
+	extra   []string
 	origins []string
 	signal  string
 	name    string
@@ -75,7 +78,8 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	f.compute = compute
 	fs := flag.NewFlagSet("attach", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&f.cdp, "cdp", "", "")
+	fs.Var(singleCDP{&f.cdp}, "cdp", "")
+	fs.Var((*multi)(&f.extra), "cdp-extra", "")
 	fs.Var((*multi)(&f.origins), "origin", "")
 	fs.StringVar(&f.signal, "signal", "cdp", "")
 	fs.StringVar(&f.name, "name", "", "")
@@ -139,7 +143,12 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer closer()
-	pol := policy.Local(debugPort(f.cdp)).With(f.allow, f.deny)
+	browsers, ports, err := cdpBrowsers(ctx, f.cdp, f.extra, logf)
+	if err != nil {
+		status("%v", err)
+		return 1
+	}
+	pol := policy.Local(ports...).With(f.allow, f.deny)
 	n := node.New(node.Config{Name: f.name, Host: f.name, Version: version, Mode: "local", Policy: pol, Hosts: f.hosts.hosts, Exit: true, Logf: logf, Status: status})
 	tcp.Register(n)
 	resolve.Register(n)
@@ -150,6 +159,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer closeSSH()
+	serveBrowsers(ctx, n, browsers)
 	if err := n.Serve(ctx, conn); err != nil && ctx.Err() == nil {
 		status("%v", err)
 		return 1

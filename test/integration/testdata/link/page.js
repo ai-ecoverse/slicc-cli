@@ -1,6 +1,13 @@
 import { Frame, Link, ResetError, fetchRaw, resolve } from './link.js';
+import { cdpTest } from './cdp.js';
 
-const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null };
+const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null, browserUpdates: [] };
+
+function onBrowsers(stream) {
+  state.browserUpdates.push(stream.open.browsers);
+  stream.accept({});
+  stream.end();
+}
 
 function freshReady() {
   state.ready = new Promise((resolve) => {
@@ -26,7 +33,7 @@ async function setup(nonce) {
   state.nonce = nonce;
   state.hellos += 1;
   const pc = new RTCPeerConnection();
-  const link = new Link(pc, { hello: { name: 'link test page', caps: [] } });
+  const link = new Link(pc, { hello: { name: 'link test page', caps: ['browsers'] }, handlers: { browsers: onBrowsers } });
   state.pc = pc;
   state.link = link;
   const early = [];
@@ -283,6 +290,10 @@ globalThis.linkTest = {
       return describe(error);
     }
   },
+  browserUpdates() {
+    return state.browserUpdates;
+  },
+  cdp: cdpTest(() => state.link, describe),
   forgeStale() {
     globalThis.sliccLinkSend(JSON.stringify({ t: 'bye', nonce: 'stale-nonce', reason: 'stale' }));
     return { sent: true };

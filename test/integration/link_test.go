@@ -143,13 +143,17 @@ func (e *linkEnv) testHello(t *testing.T) {
 			Deny    []string `json:"deny"`
 			Summary string   `json:"summary"`
 		} `json:"policy"`
+		Browsers []helloBrowser `json:"browsers"`
 	}
 	e.p.eval("linkTest.ready()", &h)
 	if h.V != 1 || h.Role != "node" || h.Name != "it-node" || h.Host != "it-node" || h.Version != "1.2.3-test" || h.Mode != "local" {
 		t.Fatalf("hello %+v", h)
 	}
-	if strings.Join(h.Caps, ",") != "net,http" || !h.Routes.Exit || h.Policy.Summary == "" {
+	if strings.Join(h.Caps, ",") != "net,http,cdp" || !h.Routes.Exit || h.Policy.Summary == "" {
 		t.Fatalf("hello %+v", h)
+	}
+	if len(h.Browsers) != 1 || h.Browsers[0].ID != "chrome" || !h.Browsers[0].Seven {
+		t.Fatalf("browsers %+v", h.Browsers)
 	}
 	want := fmt.Sprintf("127.0.0.1/32:%d", e.b.port)
 	if !strings.Contains(strings.Join(h.Policy.Deny, " "), want) {
