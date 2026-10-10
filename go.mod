@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/x/conpty v0.2.0
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/pion/ice/v4 v4.4.7
 	github.com/pion/logging v0.2.4
 	github.com/pion/webrtc/v4 v4.2.23

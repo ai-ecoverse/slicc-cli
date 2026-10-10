@@ -17,6 +17,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
@@ -49,6 +50,8 @@ flags for slicc with no command:
   --kernel-port <n>   serve http://<port>.kernel.localhost on this local
                       port instead of 80
   --no-kernel         don't serve <port>.kernel.localhost at all
+  --mount <path>[:<name>][:ro]
+                      share this folder with seven's kernel (repeatable)
   --allow <rule>      allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>       deny CIDR or CIDR:port (repeatable, comma-separated)
   --yes               no picker: take the best match
@@ -72,6 +75,7 @@ type defaultFlags struct {
 	plain    bool
 	json     bool
 	compute  computeFlags
+	mounts   stringList
 }
 
 func isDefault(args []string) bool {
@@ -103,6 +107,7 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	fs.BoolVar(&f.yes, "yes", false, "")
 	fs.BoolVar(&f.plain, "plain", false, "")
 	fs.BoolVar(&f.json, "json", false, "")
+	fs.Var(&f.mounts, "mount", "")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(stderr, "slicc: %v\n\n%s", err, defaultUsage)
 		return f, 2
@@ -133,11 +138,12 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	return f, -1
 }
 
-func registerCaps(cf computeFlags, logf func(string, ...any)) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
+func registerCaps(cf computeFlags, logf func(string, ...any), mounts []hostfs.Mount) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
 	return func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []flow.Browser) (flow.Caps, error) {
 		tcp.Register(n)
 		resolve.Register(n)
 		httpcap.Register(n)
+		closeMounts := serveMounts(n, mounts, logf)
 		var seven string
 		var extra, order []string
 		for _, b := range browsers {
@@ -151,10 +157,12 @@ func registerCaps(cf computeFlags, logf func(string, ...any)) func(context.Conte
 		}
 		reg, err := cdpBrowsers(ctx, seven, extra, pol, nil, logf)
 		if err != nil {
+			closeMounts()
 			return flow.Caps{}, err
 		}
 		closeSSH, err := cf.serve(n, logf)
 		if err != nil {
+			closeMounts()
 			return flow.Caps{}, err
 		}
 		ids := map[string]string{}
@@ -174,7 +182,7 @@ func registerCaps(cf computeFlags, logf func(string, ...any)) func(context.Conte
 			}
 			return out
 		}
-		return flow.Caps{Release: func() { cancel(); closeSSH() }, Live: live}, nil
+		return flow.Caps{Release: func() { cancel(); closeSSH(); closeMounts() }, Live: live}, nil
 	}
 }
 
@@ -200,9 +208,10 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	if os.Getenv("SLICC_DEBUG") != "" && !interactive {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
+	mounts := hostfs.Load(f.mounts, func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) })
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, logf), Compute: f.compute.dashboard(), Logf: logf,
+		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, logf, mounts), Compute: f.compute.dashboard(), Logf: logf,
 	}
 	origins, _ := flow.PageOrigins(f.page, f.origins)
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}

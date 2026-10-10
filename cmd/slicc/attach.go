@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
@@ -45,14 +46,16 @@ flags:
   --kernel-port <n>    serve http://<port>.kernel.localhost on this local
                        port instead of 80
   --no-kernel          don't serve <port>.kernel.localhost at all
-` + computeUsage + `
+` + mountUsage + computeUsage + `
 The link offers the net capability (tcp and resolve streams) and the http
 capability (fetches without redirects) under the local policy: public
 addresses, this machine and the local network, but not link-local addresses
-or the browsers' debugging ports and endpoints. With --runner it also offers ssh: seven's
-kernel reaches this machine's SSH server, which never listens on a port, and
-its forwarding goes through the same policy. With --cdp or --cdp-extra it
-also offers cdp: seven gets full control of every browser listed.
+or the browsers' debugging ports and endpoints. With --runner it also offers
+ssh: seven's kernel reaches this machine's SSH server, which never listens on
+a port, and its forwarding goes through the same policy. With --cdp or
+--cdp-extra it also offers cdp: seven gets full control of every browser
+listed. With --mount it also offers fs: seven's kernel can mount the folders
+listed, read-only with :ro.
 
 When seven offers kernel-in, slicc listens on 127.0.0.1:<kernel port> and
 carries navigations and WebSockets to http://<port>.kernel.localhost/ into
@@ -72,6 +75,7 @@ type attachFlags struct {
 	hosts      hostsFlag
 	kernelPort int
 	noKernel   bool
+	mounts     stringList
 }
 
 type multi []string
@@ -100,6 +104,7 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	fs.Var(&f.hosts, "hosts", "")
 	fs.IntVar(&f.kernelPort, "kernel-port", kernelin.DefaultPort, "")
 	fs.BoolVar(&f.noKernel, "no-kernel", false, "")
+	fs.Var(&f.mounts, "mount", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stderr, attachUsage)
@@ -175,6 +180,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer closeSSH()
+	defer serveMounts(n, hostfs.Load(f.mounts, status), status)()
 	serveBrowsers(ctx, n, browsers)
 	if !f.noKernel {
 		kern := kernelin.New(kernelin.Config{Port: f.kernelPort, Logf: logf, Status: status})

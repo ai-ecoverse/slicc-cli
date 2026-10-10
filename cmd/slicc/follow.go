@@ -16,6 +16,7 @@ import (
 	"time"
 
 	capcdp "github.com/ai-ecoverse/slicc-cli/internal/caps/cdp"
+	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
@@ -53,10 +54,11 @@ flags:
   --cdp <url>          let seven drive this browser over the link (cdp,
                        repeatable); seven gets full control of it, and its
                        endpoint and port are denied to tcp, http and ssh
-` + computeUsage + `
+` + mountUsage + computeUsage + `
 With --runner the link also offers ssh: seven's kernel reaches this machine's
 SSH server, which never listens on a port, and its forwarding goes through
-the remote policy.
+the remote policy. With --mount it also offers fs: the seven on the other
+machine can read, and unless :ro, change the folders listed.
 `
 
 type followFlags struct {
@@ -69,6 +71,7 @@ type followFlags struct {
 	compute    computeFlags
 	hosts      hostsFlag
 	cdp        stringList
+	mounts     stringList
 }
 
 func looksLikeURL(arg string) bool {
@@ -103,6 +106,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.Var(&f.deny, "deny", "")
 	fs.Var(&f.hosts, "hosts", "")
 	fs.Var(&f.cdp, "cdp", "")
+	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.signalOnly, "signal-only", false, "")
 	fs.DurationVar(&f.timeout, "timeout", defaultSignalOnlyTimeout, "")
 	f.compute.register(fs)
@@ -221,9 +225,12 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	} else {
 		status("exit off")
 	}
-	if r.closeSSH, err = ff.compute.serve(r.node, status); err != nil {
+	closeSSH, err := ff.compute.serve(r.node, status)
+	if err != nil {
 		return nil, err
 	}
+	closeMounts := serveMounts(r.node, hostfs.Load(ff.mounts, status), status)
+	r.closeSSH = func() { closeMounts(); closeSSH() }
 	if r.cdp != nil {
 		followBrowsers(r.node, r.cdp, status)
 	}
