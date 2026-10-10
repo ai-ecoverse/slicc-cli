@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 type ResetError struct {
@@ -64,6 +66,10 @@ type Stream struct {
 	reset       *ResetError
 	finished    bool
 	done        chan struct{}
+	readBy      time.Time
+	writeBy     time.Time
+	readTimer   *time.Timer
+	writeTimer  *time.Timer
 }
 
 func newStream(l *Link, ch *channel, id uint32, kind string, open json.RawMessage, local bool) *Stream {
@@ -135,6 +141,9 @@ func (s *Stream) Read(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for len(s.rbuf) == 0 && !s.peerEnd && s.reset == nil {
+		if expired(s.readBy) {
+			return 0, os.ErrDeadlineExceeded
+		}
 		s.cond.Wait()
 	}
 	if s.reset != nil {
@@ -204,6 +213,9 @@ func (s *Stream) Write(p []byte) (int, error) {
 	defer s.mu.Unlock()
 	for len(p) > 0 {
 		for s.reset == nil && !s.sentEnd && s.estab && s.outstanding >= Window {
+			if expired(s.writeBy) {
+				return total, os.ErrDeadlineExceeded
+			}
 			s.cond.Wait()
 		}
 		switch {
@@ -224,6 +236,41 @@ func (s *Stream) Write(p []byte) (int, error) {
 		total += n
 	}
 	return total, nil
+}
+
+func (s *Stream) SetReadDeadline(t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readBy = t
+	s.readTimer = s.armLocked(s.readTimer, t)
+	return nil
+}
+
+func (s *Stream) SetWriteDeadline(t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeBy = t
+	s.writeTimer = s.armLocked(s.writeTimer, t)
+	return nil
+}
+
+func (s *Stream) armLocked(old *time.Timer, t time.Time) *time.Timer {
+	if old != nil {
+		old.Stop()
+	}
+	s.cond.Broadcast()
+	if t.IsZero() {
+		return nil
+	}
+	return time.AfterFunc(time.Until(t), func() {
+		s.mu.Lock()
+		s.cond.Broadcast()
+		s.mu.Unlock()
+	})
+}
+
+func expired(t time.Time) bool {
+	return !t.IsZero() && !time.Now().Before(t)
 }
 
 func (s *Stream) CloseWrite() error {
