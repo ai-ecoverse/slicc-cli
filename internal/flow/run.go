@@ -42,7 +42,8 @@ type Config struct {
 	Allow    policy.Rules
 	Deny     policy.Rules
 	Browser  browser.Options
-	Register func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []Browser) (func(), error)
+	Register func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []Browser) (Caps, error)
+	Compute  string
 	Emit     func(Event)
 	Logf     func(format string, args ...any)
 }
@@ -85,7 +86,7 @@ func Go(ctx context.Context, cfg Config, sel []browser.Entry) error {
 		cfg.Logf = func(string, ...any) {}
 	}
 	if cfg.Register == nil {
-		cfg.Register = func(context.Context, *node.Node, *policy.Policy, []Browser) (func(), error) { return func() {}, nil }
+		cfg.Register = func(context.Context, *node.Node, *policy.Policy, []Browser) (Caps, error) { return Caps{}, nil }
 	}
 	r := &run{cfg: cfg}
 	r.cfg.Emit = r.serialize(cfg.Emit)
@@ -264,11 +265,14 @@ func portOf(raw string) uint16 {
 func (r *run) serve(ctx context.Context) error {
 	pol := r.policy()
 	n := node.New(node.Config{Name: r.cfg.Name, Host: r.cfg.Name, Version: r.cfg.Version, Mode: "local", Policy: pol, Exit: true, Logf: r.cfg.Logf, Status: r.cfg.Logf})
-	release, err := r.cfg.Register(ctx, n, pol, append([]Browser(nil), r.browsers...))
+	caps, err := r.cfg.Register(ctx, n, pol, append([]Browser(nil), r.browsers...))
 	if err != nil {
 		return err
 	}
-	defer release()
+	if caps.Release != nil {
+		defer caps.Release()
+	}
+	defer r.watchBrowsers(ctx, caps.Live)()
 	q := newQueue()
 	unsubscribe := n.Subscribe(q.push)
 	defer r.serveKernel(n)()
@@ -283,7 +287,7 @@ func (r *run) serve(ctx context.Context) error {
 		Logf:    r.cfg.Logf,
 		Status:  func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) },
 	})
-	r.emit(Event{Event: Serving, Caps: n.Caps(), Policy: pol.Summary()})
+	r.emit(Event{Event: Serving, Caps: n.Caps(), Policy: pol.Summary(), Compute: r.cfg.Compute})
 	err = n.Serve(ctx, sig)
 	unsubscribe()
 	q.close()
@@ -299,6 +303,59 @@ func (r *run) serve(ctx context.Context) error {
 	}
 	_ = r.client.Close()
 	return err
+}
+
+type Caps struct {
+	Release func()
+	Live    func() map[string]bool
+}
+
+const browserCheck = 2 * time.Second
+
+func (r *run) watchBrowsers(ctx context.Context, live func() map[string]bool) func() {
+	if live == nil {
+		return func() {}
+	}
+	wctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		gone := map[string]bool{}
+		t := time.NewTicker(browserCheck / 2)
+		defer t.Stop()
+		for {
+			select {
+			case <-wctx.Done():
+				return
+			case <-t.C:
+			}
+			r.checkBrowsers(live(), gone)
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (r *run) checkBrowsers(now, gone map[string]bool) {
+	for _, b := range r.browsers {
+		switch {
+		case !now[b.ID] && !gone[b.ID]:
+			gone[b.ID] = true
+			r.emit(Event{Event: BrowserGone, Browser: b.ID, Name: b.Name, Role: roleOf(b)})
+		case now[b.ID] && gone[b.ID]:
+			delete(gone, b.ID)
+			r.emit(Event{Event: BrowserBack, Browser: b.ID, Name: b.Name, Role: roleOf(b)})
+		}
+	}
+}
+
+func roleOf(b Browser) string {
+	if b.Seven {
+		return RoleSeven
+	}
+	return RoleExtra
 }
 
 func (r *run) serveKernel(n *node.Node) func() {

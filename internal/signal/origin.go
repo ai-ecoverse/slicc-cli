@@ -34,3 +34,7 @@ func (o *Origins) AllowedURL(raw string) bool {
 	origin := browser.OriginOf(raw)
 	return origin != "" && o.Allowed(origin)
 }
+
+func BlankOrigin(origin string) bool {
+	return origin == "" || origin == "://"
+}

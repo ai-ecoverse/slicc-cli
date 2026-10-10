@@ -313,6 +313,9 @@ func TestDefaultPlainOpensSevenInARunningBrowser(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	out := f.stderr.String()
+	if strings.Contains(out, "not an allowed origin") {
+		t.Fatalf("the new tab's blank context was reported: %q", out)
+	}
 	if !strings.Contains(out, "slicc: done") || strings.Contains(out, "\x1b[") {
 		t.Fatalf("stderr %q", out)
 	}
@@ -362,6 +365,25 @@ func TestDefaultAttachesToAnOpenSevenWithAnExtraBrowser(t *testing.T) {
 	p.eval("linkTest.hello()", &hello)
 	if len(hello.Browsers) != 2 || !hello.Browsers[0].Seven || hello.Browsers[1].Seven {
 		t.Fatalf("HELLO browsers %+v", hello.Browsers)
+	}
+	_ = extra.client.Close()
+	_ = extra.cmd.Process.Kill()
+	if g := f.next(t, "browser-gone"); g.Browser != extraID || g.Role != "extra" {
+		t.Fatalf("browser-gone %s", g.raw)
+	}
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", extra.port), time.Second)
+		if err != nil {
+			break
+		}
+		_ = c.Close()
+		if time.Now().After(deadline) {
+			t.Fatalf("port %d still answers after the kill", extra.port)
+		}
+	}
+	launchBrowserOn(t, extra.port)
+	if g := f.next(t, "browser-back"); g.Browser != extraID || g.Role != "extra" {
+		t.Fatalf("browser-back %s", g.raw)
 	}
 	if err := interrupt(f.cmd); err != nil {
 		t.Fatal(err)
@@ -498,5 +520,32 @@ func TestDefaultExitsWhenTheSevenBrowserGoesAway(t *testing.T) {
 	}
 	if code := f.wait(t); code != 0 {
 		t.Fatalf("exit %d", code)
+	}
+}
+
+func TestDefaultOffersComputeWithARunner(t *testing.T) {
+	b := launchBrowser(t)
+	env, _ := launchEnv(t)
+	srv := pageServer(t)
+	pageURL := srv.URL + "/"
+	id := "cdp:127.0.0.1:" + strings.TrimPrefix(b.endpoint, "http://127.0.0.1:")
+	args := append([]string{"--plain", "--cdp", b.endpoint, "--browser", id, "--page", pageURL, "--no-kernel"}, runnerArgs()...)
+	f := startFlow(t, env, args...)
+	f.waitStderr(t, "compute: ssh via "+strings.Join(helperRunner(), " "))
+	f.waitStderr(t, "linked with")
+	p := dialPage(t, b.endpoint, pageURL)
+	var h struct {
+		Caps       []string `json:"caps"`
+		SSHHostKey string   `json:"sshHostKey"`
+	}
+	p.eval("linkTest.ready()", &h)
+	if !slices.Contains(h.Caps, "ssh") || !strings.HasPrefix(h.SSHHostKey, "ssh-ed25519 ") {
+		t.Fatalf("HELLO caps %v, host key %q", h.Caps, h.SSHHostKey)
+	}
+	for _, bad := range [][]string{{"--shell", "sh"}, {"--runner"}, {"--sftp"}} {
+		_, errOut, code := runWithEnv(t, env, bad...)
+		if code != 2 || !strings.Contains(errOut, "runner") {
+			t.Errorf("%v: code %d, stderr %q", bad, code, errOut)
+		}
 	}
 }

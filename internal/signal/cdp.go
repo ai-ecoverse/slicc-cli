@@ -277,6 +277,10 @@ func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 		w.c.opts.Logf("signal: ignoring context %d (%s, frame %s)", ec.ID, ec.Origin, ec.AuxData.FrameID)
 		return
 	}
+	if BlankOrigin(ec.Origin) {
+		w.c.opts.Logf("signal: ignoring the blank context %d of a new tab", ec.ID)
+		return
+	}
 	if !w.c.opts.Origins.Allowed(ec.Origin) {
 		w.c.opts.Status("seven tab is now on %s, which is not an allowed origin", ec.Origin)
 		return
