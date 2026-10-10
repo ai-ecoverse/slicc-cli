@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -83,6 +84,19 @@ func helperCommand(words []string) (int, bool) {
 	case "size":
 		w, h, err := term.GetSize(int(os.Stdout.Fd()))
 		fmt.Printf("size=%dx%d err=%v\n", w, h, err)
+	case "spawn":
+		exe, _ := os.Executable()
+		if err := exec.Command(exe, helperFlag, "-c", "beat "+args).Start(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1, true
+		}
+	case "beat":
+		for i := 0; ; i++ {
+			if os.WriteFile(args, []byte(strconv.Itoa(i)), 0o600) != nil {
+				return 1, true
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	case "sleep":
 		secs, _ := strconv.Atoi(args)
 		time.Sleep(time.Duration(secs) * time.Second)

@@ -177,7 +177,14 @@ func (s *session) run(argv []string) {
 	s.mu.Lock()
 	s.proc = p
 	s.mu.Unlock()
-	go func() { s.exit(p.Wait()) }()
+	if !s.srv.track(p) {
+		p.Signal("KILL")
+	}
+	go func() {
+		st := p.Wait()
+		s.srv.untrack(p)
+		s.exit(st)
+	}()
 }
 
 func (s *session) process() process {

@@ -337,9 +337,6 @@ func TestShellForDerivesTheInteractiveForm(t *testing.T) {
 	}
 	for runner, want := range cases {
 		got := strings.Join(sshd.ShellFor(strings.Fields(runner)), " ")
-		if runtime.GOOS != "windows" && strings.Contains(runner, "\\") {
-			continue
-		}
 		if got != want {
 			t.Errorf("ShellFor(%q) = %q, want %q", runner, got, want)
 		}

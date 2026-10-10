@@ -1,12 +1,17 @@
 package sshd
 
-import (
-	"path/filepath"
-	"strings"
-)
+import "strings"
 
 var loginShells = map[string]bool{
 	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "mksh": true, "ash": true, "fish": true,
+}
+
+var plainShells = map[string]bool{
+	"bash": true, "sh": true, "zsh": true, "fish": true, "pwsh": true, "powershell": true, "cmd": true,
+}
+
+func SFTPDefault(runner []string) bool {
+	return len(runner) > 0 && plainShells[shellName(runner[0])]
 }
 
 func ShellFor(runner []string) []string {
@@ -33,6 +38,6 @@ func ExecArgv(runner []string, command string) []string {
 }
 
 func shellName(arg string) string {
-	name := strings.ToLower(filepath.Base(arg))
+	name := strings.ToLower(arg[strings.LastIndexAny(arg, `/\`)+1:])
 	return strings.TrimSuffix(name, ".exe")
 }

@@ -31,6 +31,7 @@ type evalEvent struct {
 
 type repl struct {
 	cmd    *exec.Cmd
+	tree   *procTree
 	stdin  io.WriteCloser
 	events chan evalEvent
 	exited chan struct{}
@@ -116,14 +117,13 @@ func (h *evalHost) close() {
 }
 
 func (r *repl) kill() {
-	signalGroup(r.cmd.Process, "KILL")
+	r.tree.signal("KILL")
 	_ = r.stdin.Close()
 }
 
 func startREPL(argv []string, dir string) (*repl, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir, cmd.Env = dir, os.Environ()
-	setProcAttr(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -136,10 +136,11 @@ func startREPL(argv []string, dir string) (*repl, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	tree, err := startTree(cmd)
+	if err != nil {
 		return nil, err
 	}
-	r := &repl{cmd: cmd, stdin: stdin, events: make(chan evalEvent, 64), exited: make(chan struct{})}
+	r := &repl{cmd: cmd, tree: tree, stdin: stdin, events: make(chan evalEvent, 64), exited: make(chan struct{})}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go r.pump(stdout, false, &wg)
@@ -149,6 +150,7 @@ func startREPL(argv []string, dir string) (*repl, error) {
 		close(r.events)
 		err := cmd.Wait()
 		r.status = exitFrom(cmd.ProcessState, err)
+		tree.release()
 		close(r.exited)
 	}()
 	return r, nil
@@ -221,14 +223,14 @@ func (r *repl) collect(ctx context.Context, quiet time.Duration, stdout, stderr 
 		case <-timer.C:
 			return nil
 		case <-ctx.Done():
-			interrupt(r.cmd.Process)
+			r.tree.interrupt()
 			return ctx.Err()
 		case name := <-signals:
 			if name == "INT" {
-				interrupt(r.cmd.Process)
+				r.tree.interrupt()
 				continue
 			}
-			signalGroup(r.cmd.Process, name)
+			r.tree.signal(name)
 		}
 	}
 }
