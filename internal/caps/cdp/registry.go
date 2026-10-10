@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ type entry struct {
 type Registry struct {
 	logf  func(format string, args ...any)
 	probe func(ctx context.Context, raw string) (browser.Endpoint, error)
+	onAdd func(ctx context.Context, id string, hostports []string)
 
 	mu      sync.Mutex
 	entries []*entry
@@ -67,6 +69,27 @@ func NewRegistry(logf func(format string, args ...any)) *Registry {
 
 func probe(ctx context.Context, raw string) (browser.Endpoint, error) {
 	return browser.ProbeEndpoint(ctx, raw, browser.Options{NoProbe: true, Timeout: ProbeTimeout})
+}
+
+func (r *Registry) OnAdd(fn func(ctx context.Context, id string, hostports []string)) {
+	r.mu.Lock()
+	r.onAdd = fn
+	r.mu.Unlock()
+}
+
+func endpointHostPorts(key string, ep browser.Endpoint) []string {
+	out := []string{key}
+	for _, raw := range []string{ep.CDP, ep.WebSocketURL} {
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" || u.Port() == "" {
+			continue
+		}
+		hp := net.JoinHostPort(strings.ToLower(u.Hostname()), u.Port())
+		if !slices.Contains(out, hp) {
+			out = append(out, hp)
+		}
+	}
+	return out
 }
 
 func Register(n *node.Node, r *Registry) {
@@ -122,7 +145,11 @@ func (r *Registry) Add(ctx context.Context, raw string, seven bool) (link.Browse
 	e := &entry{key: key, raw: raw, ep: ep, relays: map[*relay]struct{}{}, info: link.Browser{ID: id, Name: ep.Name, Version: ep.Version, Seven: seven}}
 	delete(r.gone, id)
 	r.entries = append(r.entries, e)
+	onAdd := r.onAdd
 	r.mu.Unlock()
+	if onAdd != nil {
+		onAdd(ctx, id, endpointHostPorts(key, ep))
+	}
 	r.logf("cdp: browser %s is %s at %s", id, ep.Name, ep.CDP)
 	r.changed()
 	return e.info, nil

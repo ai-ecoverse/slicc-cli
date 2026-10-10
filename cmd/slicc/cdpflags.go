@@ -10,6 +10,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 	capcdp "github.com/ai-ecoverse/slicc-cli/internal/caps/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
+	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 )
 
 type singleCDP struct{ v *string }
@@ -29,13 +30,30 @@ func (s singleCDP) Set(v string) error {
 	return nil
 }
 
-func cdpBrowsers(ctx context.Context, seven string, extra []string, logf func(string, ...any)) (*capcdp.Registry, []uint16, error) {
-	r := capcdp.NewRegistry(logf)
+func cdpPorts(urls ...string) []uint16 {
 	var ports []uint16
-	add := func(raw string, isSeven bool) error {
+	for _, raw := range urls {
+		if raw == "" {
+			continue
+		}
 		if base, _, err := browser.NormalizeCDPURL(raw); err == nil {
 			ports = append(ports, debugPort(base))
 		}
+	}
+	return ports
+}
+
+func cdpBrowsers(ctx context.Context, seven string, extra []string, pol *policy.Policy, hosts *policy.Hosts, logf func(string, ...any)) (*capcdp.Registry, error) {
+	r := capcdp.NewRegistry(logf)
+	r.OnAdd(func(ctx context.Context, id string, hostports []string) {
+		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := pol.ProtectBrowser(pctx, id, hostports, hosts); err != nil {
+			logf("cdp: browser %s: %v", id, err)
+		}
+		logf("cdp: browser %s endpoints denied to tcp: %v", id, pol.ProtectedEndpoints(id))
+	})
+	add := func(raw string, isSeven bool) error {
 		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if _, err := r.Add(pctx, raw, isSeven); err != nil {
@@ -45,15 +63,15 @@ func cdpBrowsers(ctx context.Context, seven string, extra []string, logf func(st
 	}
 	if seven != "" {
 		if err := add(seven, true); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 	for _, raw := range extra {
 		if err := add(raw, false); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
-	return r, ports, nil
+	return r, nil
 }
 
 func followBrowsers(n *node.Node, r *capcdp.Registry, status func(string, ...any)) {

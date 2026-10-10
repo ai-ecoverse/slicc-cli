@@ -52,7 +52,7 @@ flags:
   --name <name>        the name and host this link shows in seven
   --cdp <url>          let seven drive this browser over the link (cdp,
                        repeatable); seven gets full control of it, and its
-                       debugging port is denied to tcp, http and ssh
+                       endpoint and port are denied to tcp, http and ssh
 ` + computeUsage + `
 With --runner the link also offers ssh: seven's kernel reaches this machine's
 SSH server, which never listens on a port, and its forwarding goes through
@@ -198,13 +198,12 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	if err != nil {
 		return nil, err
 	}
-	var protected []uint16
+	pol := policy.Remote(cdpPorts(ff.cdp...)...).With(ff.allow, ff.deny)
 	if len(ff.cdp) > 0 {
-		if r.cdp, protected, err = cdpBrowsers(context.Background(), "", ff.cdp, logf); err != nil {
+		if r.cdp, err = cdpBrowsers(context.Background(), "", ff.cdp, pol, ff.hosts.hosts, logf); err != nil {
 			return nil, err
 		}
 	}
-	pol := policy.Remote(protected...).With(ff.allow, ff.deny)
 	r.node = node.New(node.Config{
 		Name: ff.name, Host: ff.name, Version: version, Mode: "remote", Policy: pol, Hosts: ff.hosts.hosts, Exit: ff.exit,
 		Logf: logf, Status: r.nodeStatus, Certificates: []webrtc.Certificate{cert}, OnLink: r.onLink,

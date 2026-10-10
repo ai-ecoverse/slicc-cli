@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
+	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 	"github.com/ai-ecoverse/slicc-cli/internal/signal/tray"
 )
 
@@ -738,5 +741,101 @@ func TestFollowExitProtectsTheCDPPort(t *testing.T) {
 	p.eval("linkTest.echo("+jsArgs(host, port, 100000)+")", &res)
 	if !res.OK {
 		t.Fatalf("echo on another loopback port: %+v", res)
+	}
+}
+
+func fakeCDPVersion(t *testing.T, wsPort int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/json/version":
+			ws := "ws://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(wsPort)) + "/devtools/browser/fake"
+			_ = json.NewEncoder(w).Encode(map[string]string{"Browser": "HeadlessChrome/140.0.0.0", "Protocol-Version": "1.3", "webSocketDebuggerUrl": ws})
+		case "/json/list":
+			_, _ = io.WriteString(w, "[]")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestFollowExitProtectsEveryAddressOfACDPEndpoint(t *testing.T) {
+	lan := lanAddress(t)
+	env, h, trays, p, _ := followSetup(t, 1)
+	wsPort := closedPort(t)
+	cdpSrv := fakeCDPVersion(t, wsPort)
+	cdpPort := cdpSrv.Listener.Addr().(*net.TCPAddr).Port
+	other := closedPortOn(t, lan)
+	hosts := writeHosts(t, "127.0.0.1 localhost\n"+lan.String()+" localhost\n")
+	lanNet := netip.PrefixFrom(lan, min(24, lan.BitLen())).Masked().String()
+	cdpURL := "http://localhost:" + strconv.Itoa(cdpPort)
+	fp := startFollow(t, env, h.joinURL(trays[0]), "--exit", "--allow", lanNet, "--allow", "127.0.0.1/32", "--hosts", hosts, "--cdp", cdpURL)
+	fp.waitStderr(t, "slicc: cdp on (chrome)", 30*time.Second)
+	p.waitUp(t, "")
+	var hello struct {
+		Policy struct {
+			Deny []string `json:"deny"`
+		} `json:"policy"`
+	}
+	p.eval("linkTest.ready()", &hello)
+	lanRule := policy.Rule{Prefix: netip.PrefixFrom(lan, lan.BitLen()), Port: uint16(cdpPort)}.String()
+	for _, want := range []string{lanRule, "127.0.0.1/32:" + strconv.Itoa(cdpPort), "127.0.0.1/32:" + strconv.Itoa(wsPort)} {
+		if !slices.Contains(hello.Policy.Deny, want) {
+			t.Fatalf("policy deny %v lacks %s", hello.Policy.Deny, want)
+		}
+	}
+	open := func(host string, port int) echoResult {
+		var r echoResult
+		p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "tcp", "host": host, "port": port}, false)+")", &r)
+		return r
+	}
+	for _, c := range []struct {
+		host string
+		port int
+	}{{lan.String(), cdpPort}, {"127.0.0.1", cdpPort}, {"127.0.0.1", wsPort}} {
+		if r := open(c.host, c.port); r.Reset != "EACCES" {
+			t.Fatalf("tcp to the cdp endpoint %s:%d: %+v", c.host, c.port, r)
+		}
+	}
+	if r := open(lan.String(), other); r.Reset == "EACCES" {
+		t.Fatalf("tcp to another port on %s was refused by the policy: %+v", lan, r)
+	}
+}
+
+func closedPortOn(t *testing.T, addr netip.Addr) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", netip.AddrPortFrom(addr, 0).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
+}
+
+func TestAttachProtectsEveryAddressOfACDPEndpoint(t *testing.T) {
+	lan := lanAddress(t)
+	wsPort := closedPort(t)
+	cdpSrv := fakeCDPVersion(t, wsPort)
+	cdpPort := cdpSrv.Listener.Addr().(*net.TCPAddr).Port
+	other := closedPortOn(t, lan)
+	hosts := writeHosts(t, "127.0.0.1 localhost\n"+lan.String()+" localhost\n")
+	env := setupLink(t, false, "--hosts", hosts, "--cdp-extra", "http://localhost:"+strconv.Itoa(cdpPort), "--allow", netip.PrefixFrom(lan, lan.BitLen()).String())
+	for _, c := range []struct {
+		host string
+		port int
+	}{{lan.String(), cdpPort}, {"127.0.0.1", cdpPort}, {"127.0.0.1", wsPort}} {
+		var r echoResult
+		env.p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "tcp", "host": c.host, "port": c.port}, false)+")", &r)
+		if r.Reset != "EACCES" {
+			t.Fatalf("tcp to the cdp endpoint %s:%d: %+v", c.host, c.port, r)
+		}
+	}
+	var r echoResult
+	env.p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "tcp", "host": lan.String(), "port": other}, false)+")", &r)
+	if r.Reset == "EACCES" {
+		t.Fatalf("tcp to another port on %s was refused by the policy: %+v", lan, r)
 	}
 }

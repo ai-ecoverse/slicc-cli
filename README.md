@@ -165,7 +165,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - `--origin`: also accept seven on this origin (`scheme://host[:port]`), repeatable. `https://<label>.sliccy.ai` is always accepted, except `www`.
 - `--signal`: `cdp` (default) or `stdio`.
 - `--name`: the link's `name` and `host` in HELLO. The default name is `slicc on <host>`, with this machine's short host name, lower-cased.
-- `--allow`, `--deny`: policy rules on top of the local default (see [Network policy](#network-policy)). The `--cdp` and `--cdp-extra` ports are denied as debugging ports.
+- `--allow`, `--deny`: policy rules on top of the local default (see [Network policy](#network-policy)). The `--cdp` and `--cdp-extra` ports and endpoint addresses are denied.
 - `--runner <argv…>`: offer compute over SSH (cap `ssh`, see [SSH server](#ssh-server)). Each command runs as `<argv…> <command>`. The argv is every word after `--runner` up to a lone `--` or the end of the command line, so `--runner bash -c` or `--runner docker exec -i box sh -c -- --name box`. An argv can't contain a lone `--` itself. `--runner=…` is refused. Without `--runner` the link has no `ssh` capability, and the flags below are refused.
 - `--shell <argv…>`: the interactive form for `ssh` without a command, in the same argv syntax. The default is derived from the runner.
 - `--eval <argv…>` and `--eval-quiet <duration>`: the REPL behind the `slicc-eval` subsystem (for example `--eval python3 -i`), and the silence that ends one response (default `500ms`).
@@ -301,11 +301,18 @@ A node checks every address it connects to for the link's `tcp`, `http` and `ssh
 - on loopback, each as `127.0.0.0/8:port`, `127.0.0.1/32:port` and `[::1]/128:port`, so `--allow 127.0.0.1/32` doesn't reopen them;
 - on every address of this machine, as `<address>/32:port` or `<address>/128:port`. The interfaces are enumerated at check time and cached for 5 seconds, so a new interface counts. If they can't be enumerated, those ports are denied on every address.
 
+**Browser endpoints.** Each listed `cdp` browser's own endpoints are denied too, so a browser on another machine (`--cdp http://10.0.0.5:9222 --allow 10.0.0.0/8`) is reachable only through `cdp`:
+- the host and port of its CDP URL, and of the `webSocketDebuggerUrl` it reports;
+- a host that is a name is resolved when the browser is added (the `--hosts` file first, then the system resolver), and every address it resolves to is denied on that port;
+- when the browser is listed again after it stopped answering, its endpoints are resolved again and replace the old ones. If resolving fails, the old ones stay.
+
+They are listed in HELLO's `policy.deny` as `<address>/32:port` or `[<address>]/128:port`.
+
 Only a user allow for exactly the same address and port reopens one of these.
 
 **`resolve` filtering.** An address is kept when the policy allows it on at least one port. When every address is dropped, the answer is an empty list.
 
-**HELLO.** `policy.summary` names the default and lists the `--allow` and `--deny` rules on top of it. `policy.allow` and `policy.deny` list the `--allow` and `--deny` rules plus the protected ports' loopback denies, not the default ranges or the per-interface denies.
+**HELLO.** `policy.summary` names the default and lists the `--allow` and `--deny` rules on top of it. `policy.allow` and `policy.deny` list the `--allow` and `--deny` rules plus the protected ports' loopback denies and the browser endpoints, not the default ranges or the per-interface denies.
 
 ## SSH server
 
@@ -350,7 +357,7 @@ slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name 
 - `--allow`, `--deny`: policy rules on top of the remote default (see [Network policy](#network-policy)).
 - `--name`: the link's `name` and `host` in HELLO, as for `attach`.
 - `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: compute over SSH (cap `ssh`), exactly as for `attach`. `direct-tcpip` forwarding goes through the remote policy, so it reaches public addresses only unless `--allow` says otherwise. `--runner` works with or without `--exit`.
-- `--cdp <url>`: let seven drive this browser over the link (repeatable, in any form `slicc browsers --cdp` takes; each must answer when `follow` starts). See [`cdp`](#cdp-browser-control), and its warning: the seven on the other machine gets full control of every browser listed. No browser is `seven: true`. Without `--cdp`, `follow` doesn't offer `cdp`, and a `cdp` OPEN is refused with `EOPNOTSUPP`. Each browser's debugging port is a [protected port](#network-policy) for `tcp`, `http` and `ssh` forwarding.
+- `--cdp <url>`: let seven drive this browser over the link (repeatable, in any form `slicc browsers --cdp` takes; each must answer when `follow` starts). See [`cdp`](#cdp-browser-control), and its warning: the seven on the other machine gets full control of every browser listed. No browser is `seven: true`. Without `--cdp`, `follow` doesn't offer `cdp`, and a `cdp` OPEN is refused with `EOPNOTSUPP`. Each browser's debugging port and its own endpoint addresses are [denied](#network-policy) to `tcp`, `http` and `ssh` forwarding.
 
 HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` and `http` with `--exit`, `ssh` with `--runner` (plus `sshHostKey`), `cdp` (and HELLO `browsers`) with `--cdp`, and always `join`.
 
