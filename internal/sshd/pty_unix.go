@@ -17,6 +17,7 @@ import (
 type ptyProc struct {
 	cmd  *exec.Cmd
 	ptmx *os.File
+	tty  *os.File
 	out  *pump
 	mu   sync.Mutex
 	done bool
@@ -25,11 +26,21 @@ type ptyProc struct {
 func startPTY(argv, env []string, dir string, ch ssh.Channel, req *ptyRequest) (process, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env, cmd.Dir = env, dir
-	ptmx, err := pty.StartWithAttrs(cmd, winsize(req.Cols, req.Rows), &syscall.SysProcAttr{Setsid: true, Setctty: true})
+	ptmx, tty, err := pty.Open()
 	if err != nil {
 		return nil, err
 	}
-	p := &ptyProc{cmd: cmd, ptmx: ptmx}
+	if err := pty.Setsize(ptmx, winsize(req.Cols, req.Rows)); err != nil {
+		closeAll(ptmx, tty)
+		return nil, err
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	if err := cmd.Start(); err != nil {
+		closeAll(ptmx, tty)
+		return nil, err
+	}
+	p := &ptyProc{cmd: cmd, ptmx: ptmx, tty: tty}
 	go func() { _, _ = io.Copy(ptmx, ch) }()
 	p.out = startPump(ch, ptmx)
 	return p, nil
@@ -70,6 +81,7 @@ func (p *ptyProc) Wait() exitStatus {
 	p.mu.Lock()
 	p.done = true
 	p.mu.Unlock()
+	_ = p.tty.Close()
 	p.out.wait(drainGrace)
 	go func() { _ = p.ptmx.Close() }()
 	return exitFrom(p.cmd.ProcessState, err)

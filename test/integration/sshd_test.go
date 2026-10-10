@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -244,6 +245,40 @@ func TestSSHExecWithPTY(t *testing.T) {
 	}
 	if text := out.text(); !strings.Contains(text, "tty=true") || !strings.Contains(text, "size=100x30") {
 		t.Fatalf("output %q", text)
+	}
+}
+
+type slowWriter struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	first bool
+}
+
+func (w *slowWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.first {
+		w.first = true
+		time.Sleep(2 * time.Second)
+	}
+	return w.buf.Write(p)
+}
+
+func TestSSHPTYOutputSurvivesASlowReader(t *testing.T) {
+	f := startRunnerSSHD(t)
+	s := f.session(t)
+	if err := s.RequestPty("xterm", 24, 80, ssh.TerminalModes{}); err != nil {
+		t.Fatal(err)
+	}
+	out := &slowWriter{}
+	s.Stdout = out
+	const size = 3 << 20
+	if err := s.Run("blob " + strconv.Itoa(size)); err != nil {
+		t.Fatal(err)
+	}
+	text := ansi.ReplaceAllString(out.buf.String(), "")
+	if strings.Count(text, "x") != size || !strings.HasSuffix(text, "END") {
+		t.Fatalf("got %d x and tail %q", strings.Count(text, "x"), text[max(0, len(text)-20):])
 	}
 }
 
