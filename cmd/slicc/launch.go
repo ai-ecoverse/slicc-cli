@@ -15,7 +15,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 )
 
-const launchUsage = `usage: slicc launch [--browser <id>] [--profile <name>] [--url <url>] [--headless] [--json]
+const launchUsage = `usage: slicc launch [--browser <id>] [--profile <name>] [--url <url>] [--headless] [--no-seven-flags] [--json]
 
 Launch a browser with CDP in a separate SLICC profile, print its CDP URL and
 keep running until interrupted. On exit, close the browser it started.
@@ -25,6 +25,8 @@ keep running until interrupted. On exit, close the browser it started.
   --profile <name>   profile directory name (default: the browser id)
   --url <url>        page to open at start
   --headless         run without a window
+  --no-seven-flags   leave out the flags that keep a background seven tab
+                     running (see README.md)
   --json             print NDJSON events instead of plain text
 `
 
@@ -33,6 +35,7 @@ type launchFlags struct {
 	profile   string
 	url       string
 	headless  bool
+	noSeven   bool
 	json      bool
 }
 
@@ -43,6 +46,7 @@ func parseLaunch(args []string, stdout, stderr io.Writer) (launchFlags, int, boo
 	fs.StringVar(&f.profile, "profile", "", "")
 	fs.StringVar(&f.url, "url", "", "")
 	fs.BoolVar(&f.headless, "headless", false, "")
+	fs.BoolVar(&f.noSeven, "no-seven-flags", false, "")
 	fs.BoolVar(&f.json, "json", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -125,7 +129,7 @@ func runLaunch(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return out.fail(err)
 	}
-	b, err := browser.Launch(ctx, in, browser.LaunchOptions{Profile: f.profile, URL: f.url, Headless: f.headless})
+	b, err := browser.Launch(ctx, in, browser.LaunchOptions{Profile: f.profile, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven})
 	if err != nil {
 		return out.fail(err)
 	}

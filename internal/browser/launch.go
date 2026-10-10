@@ -25,6 +25,7 @@ type LaunchOptions struct {
 	URL           string
 	Headless      bool
 	ExtraArgs     []string
+	NoSevenFlags  bool
 	LaunchTimeout time.Duration
 }
 
@@ -59,21 +60,78 @@ func (b *Browser) Err() error {
 	}
 }
 
-func ChromiumArgs(profileDir, startURL string, headless bool, extra []string) []string {
+var SevenSwitches = []string{
+	"--disable-background-timer-throttling",
+	"--disable-backgrounding-occluded-windows",
+	"--disable-renderer-backgrounding",
+	"--disable-background-tracing",
+}
+
+var SevenDisabledFeatures = []string{
+	"LocalNetworkAccessChecks",
+	"LocalNetworkAccessChecksWebSockets",
+	"IntensiveWakeUpThrottling",
+	"HighEfficiencyModeAvailable",
+	"InfiniteTabsFreezing",
+	"InfiniteTabsFreezingOnMemoryPressure",
+	"CPUMeasurementInFreezingPolicy",
+	"MemoryMeasurementInFreezingPolicy",
+	"AllowDevtoolsConnectedDiscard",
+}
+
+const disableFeatures = "--disable-features="
+
+func ChromiumArgs(profileDir, startURL string, headless, sevenFlags bool, extra []string) []string {
 	args := []string{
 		"--remote-debugging-port=0",
 		"--user-data-dir=" + profileDir,
 		"--no-first-run",
 		"--no-default-browser-check",
 	}
+	if sevenFlags {
+		args = append(args, SevenSwitches...)
+		args = append(args, disableFeatures+strings.Join(SevenDisabledFeatures, ","))
+	}
 	if headless {
 		args = append(args, "--headless=new")
 	}
-	args = append(args, extra...)
+	args = mergeDisableFeatures(append(args, extra...))
 	if startURL != "" {
 		args = append(args, startURL)
 	}
 	return args
+}
+
+func mergeDisableFeatures(args []string) []string {
+	var features []string
+	seen := map[string]bool{}
+	at := -1
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		v, ok := strings.CutPrefix(a, disableFeatures)
+		if !ok {
+			out = append(out, a)
+			continue
+		}
+		if at < 0 {
+			at = len(out)
+			out = append(out, "")
+		}
+		for _, f := range strings.Split(v, ",") {
+			if f = strings.TrimSpace(f); f != "" && !seen[f] {
+				seen[f] = true
+				features = append(features, f)
+			}
+		}
+	}
+	if at < 0 {
+		return out
+	}
+	if len(features) == 0 {
+		return append(out[:at], out[at+1:]...)
+	}
+	out[at] = disableFeatures + strings.Join(features, ",")
+	return out
 }
 
 func ElectronArgs(port int, extra []string) []string {
@@ -110,7 +168,7 @@ func Launch(ctx context.Context, in Installed, lo LaunchOptions) (*Browser, erro
 	if err := prepareProfile(dir); err != nil {
 		return nil, err
 	}
-	name, args := spawnCommand(in, ChromiumArgs(dir, lo.URL, lo.Headless, lo.ExtraArgs), dir, lo.Headless)
+	name, args := spawnCommand(in, ChromiumArgs(dir, lo.URL, lo.Headless, !lo.NoSevenFlags, lo.ExtraArgs), dir, lo.Headless)
 	b, err := start(in, name, args)
 	if err != nil {
 		return nil, err

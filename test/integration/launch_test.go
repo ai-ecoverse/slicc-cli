@@ -154,6 +154,7 @@ func TestLaunchRealChromeAndCloseOnInterrupt(t *testing.T) {
 	if err != nil || v["webSocketDebuggerUrl"] != ev.WebSocketURL {
 		t.Fatalf("/json/version: %v %v", v, err)
 	}
+	assertSevenFlags(t, chromeCommandLine(t, ev.CDP), true)
 	port, ws, err := browser.ReadActivePort(ev.ProfileDir)
 	if err != nil || !strings.HasSuffix(ev.CDP, ":"+strconv.Itoa(port)) || !strings.HasSuffix(ev.WebSocketURL, ws) {
 		t.Errorf("DevToolsActivePort %d %q %v", port, ws, err)
@@ -179,6 +180,60 @@ func TestLaunchRealChromeAndCloseOnInterrupt(t *testing.T) {
 	if _, err := getVersion(ev.CDP); err == nil {
 		t.Errorf("CDP still answers at %s after close", ev.CDP)
 	}
+}
+
+func assertSevenFlags(t *testing.T, cmdline string, want bool) {
+	t.Helper()
+	fields := strings.Fields(cmdline)
+	var features []string
+	for _, f := range fields {
+		if v, ok := strings.CutPrefix(f, "--disable-features="); ok {
+			features = append(features, v)
+		}
+	}
+	has := func(s string) bool {
+		for _, f := range fields {
+			if f == s {
+				return true
+			}
+		}
+		return false
+	}
+	for _, s := range browser.SevenSwitches {
+		if has(s) != want {
+			t.Errorf("%s on the command line: %v, want %v\n%s", s, has(s), want, cmdline)
+		}
+	}
+	if !want {
+		if len(features) != 0 {
+			t.Errorf("--disable-features without seven flags: %q", features)
+		}
+		return
+	}
+	if len(features) != 1 || features[0] != strings.Join(browser.SevenDisabledFeatures, ",") {
+		t.Errorf("want one --disable-features=%s, got %q", strings.Join(browser.SevenDisabledFeatures, ","), features)
+	}
+}
+
+func TestLaunchWithoutSevenFlags(t *testing.T) {
+	env, _ := launchEnv(t)
+	requireChrome(t, env)
+	l := startLaunch(t, env, "--browser", "chrome", "--profile", "plain", "--headless", "--no-seven-flags")
+	ev := l.next(t)
+	if ev.Event != "launched" {
+		t.Fatalf("%+v; stderr %s", ev, l.stderr.String())
+	}
+	if v, err := getVersion(ev.CDP); err != nil || v["webSocketDebuggerUrl"] != ev.WebSocketURL {
+		t.Fatalf("/json/version: %v %v", v, err)
+	}
+	assertSevenFlags(t, chromeCommandLine(t, ev.CDP), false)
+	if err := interrupt(l.cmd); err != nil {
+		t.Fatal(err)
+	}
+	if e := l.next(t); e.Event != "closed" {
+		t.Errorf("after interrupt: %+v", e)
+	}
+	l.wait(t)
 }
 
 func TestLaunchPackageAPIClosesBrowser(t *testing.T) {
