@@ -426,7 +426,12 @@ func followExitKinds(t *testing.T, p *page) {
 	env.wantAddresses(t, "127.0.0.1", 0, "127.0.0.1")
 	env.wantAddresses(t, "10.0.0.1", 0)
 	env.wantAddresses(t, "127.0.0.2", 4)
-	r := env.get(t, up.srv.URL+"/coded?enc=gzip&cl=1")
+	env.wantAddresses(t, "ref.link.test", 0, "127.0.0.1")
+	r := env.get(t, "http://ref.link.test:"+portOf(t, up.srv.URL)+"/target")
+	if r.Status != 200 || r.body(t) != "followed" {
+		t.Fatalf("follow http by hosts name: %+v", r)
+	}
+	r = env.get(t, up.srv.URL+"/coded?enc=gzip&cl=1")
 	if r.Status != 200 || r.body(t) != repeatPlain() {
 		t.Fatalf("follow http: %+v", r)
 	}

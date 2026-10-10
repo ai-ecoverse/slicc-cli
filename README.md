@@ -356,6 +356,8 @@ A node on another machine sets up its link through the tray hub, the `slicc-tray
 
 Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`. `npm run lint` runs the slicc lint tools, `gofmt`, `go mod tidy -diff`, `go vet` and golangci-lint. `npm test` runs the integration tests in `test/integration/`, which build the binary and drive it. Unit tests stay next to the code and out of git (`npm run test:unit`). `npm run dist` cross-builds all six targets into `artifacts/release/` with `SHA256SUMS`, unsigned. `npm run npm:stage` then stages the npm packages into `dist/npm/`, and `npm run npm:check` packs them with `npm publish --dry-run`.
 
+**Test names: `--hosts <file>`** (test-only, left out of `--help`). `slicc attach` and `slicc <join-url> follow` take a hosts file, so tests get deterministic names without public DNS. Each line is `<ip> <name> [<name>…]`, and `#` starts a comment. Names match case-insensitively, with or without a trailing dot, and a name on several lines gets every address, in file order. Wherever the node resolves a name (`resolve`, `tcp` by name, `http`), a name in the file gets the file's addresses of the requested family, possibly none, and never the system resolver's. Other names go to the system resolver. The policy applies afterwards as usual: `resolve` drops refused addresses, and a dial to a refused address is `EACCES`. `tcp` and `http` try the addresses in file order. A file that can't be read or parsed exits 2.
+
 The real-Chrome tests in `test/integration/` launch headless, so they run the executable directly. A windowed launch on macOS goes through `open -n -W -a`, which CI doesn't cover: on GitHub's macOS runners, Chrome started that way never writes `DevToolsActivePort`.
 
 ## Releases

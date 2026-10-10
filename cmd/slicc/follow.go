@@ -63,6 +63,7 @@ type followFlags struct {
 	signalOnly bool
 	timeout    time.Duration
 	compute    computeFlags
+	hosts      hostsFlag
 }
 
 func looksLikeURL(arg string) bool {
@@ -95,6 +96,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.StringVar(&f.name, "name", "", "")
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
+	fs.Var(&f.hosts, "hosts", "")
 	fs.BoolVar(&f.signalOnly, "signal-only", false, "")
 	fs.DurationVar(&f.timeout, "timeout", defaultSignalOnlyTimeout, "")
 	f.compute.register(fs)
@@ -191,7 +193,7 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	}
 	pol := policy.Remote().With(ff.allow, ff.deny)
 	r.node = node.New(node.Config{
-		Name: ff.name, Host: ff.name, Version: version, Mode: "remote", Policy: pol, Exit: ff.exit,
+		Name: ff.name, Host: ff.name, Version: version, Mode: "remote", Policy: pol, Hosts: ff.hosts.hosts, Exit: ff.exit,
 		Logf: logf, Status: r.nodeStatus, Certificates: []webrtc.Certificate{cert}, OnLink: r.onLink,
 	})
 	if ff.exit {

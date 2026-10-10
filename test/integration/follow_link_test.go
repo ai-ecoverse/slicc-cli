@@ -306,7 +306,7 @@ func TestFollowLinksThroughTheTrayAndServesTCP(t *testing.T) {
 		_, _ = io.Copy(io.Discard, c)
 	})
 	host, port := hostPort(t, echo)
-	fp := startFollow(t, env, h.joinURL(trays[0]), "--exit", "--allow", "127.0.0.1/32", "--name", "laptop")
+	fp := startFollow(t, env, h.joinURL(trays[0]), "--exit", "--allow", "127.0.0.1/32", "--name", "laptop", "--hosts", writeHosts(t, hostsFile))
 	fingerprint, created := fp.fingerprint(t)
 	if !created {
 		t.Fatal("first run did not mint a device")
