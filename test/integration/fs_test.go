@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -600,11 +602,17 @@ func (e *fsEnv) testFSErrnos(t *testing.T) {
 		t.Fatalf("a 300-byte name: %v", r)
 	}
 	attr := c.ok(t, "stat", map[string]any{"path": "hello.txt"})
-	want := `"` + itoa(attr.num("size")) + "-"
-	if !strings.HasPrefix(attr.str("etag"), want) || !strings.HasSuffix(attr.str("etag"), "-"+itoa(attr.num("ino"))+`"`) || attr.num("ino") == 0 {
+	if !etagShape.MatchString(attr.str("etag")) || attr.num("ino") == 0 {
 		t.Fatalf("etag %v", attr)
 	}
+	parts := strings.Split(strings.Trim(attr.str("etag"), `"`), "-")
+	ino, _ := strconv.ParseUint(parts[2], 10, 64)
+	if parts[0] != itoa(attr.num("size")) || parts[1] != "1000000000000000000" || float64(ino) != attr.num("ino") {
+		t.Fatalf("etag %v does not match its attr", attr)
+	}
 }
+
+var etagShape = regexp.MustCompile(`^"[0-9]+-[0-9]+-[0-9]+"$`)
 
 func itoa(f float64) string {
 	b, _ := json.Marshal(int64(f))
