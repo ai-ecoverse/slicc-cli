@@ -26,6 +26,7 @@ type LaunchOptions struct {
 	Headless      bool
 	ExtraArgs     []string
 	NoSevenFlags  bool
+	Kill          bool
 	LaunchTimeout time.Duration
 }
 
@@ -197,7 +198,12 @@ func launchElectron(ctx context.Context, in Installed, lo LaunchOptions) (*Brows
 		return nil, fmt.Errorf("%s blocks remote debugging", in.Name)
 	}
 	if findProcess(ctx, in.Executable) > 0 {
-		return nil, fmt.Errorf("%s is %w; quit it first so it can start with remote debugging", in.Name, ErrAlreadyRunning)
+		if !lo.Kill {
+			return nil, fmt.Errorf("%s is %w; quit it first, or use --kill to restart it with remote debugging", in.Name, ErrAlreadyRunning)
+		}
+		if err := stopRunning(ctx, in); err != nil {
+			return nil, err
+		}
 	}
 	port, err := freePort()
 	if err != nil {

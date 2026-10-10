@@ -94,3 +94,25 @@ func TestElectronLaunchRefusesRunningApp(t *testing.T) {
 		t.Errorf("disabled app: %v", err)
 	}
 }
+
+func TestElectronLaunchKillRestartsRunningApp(t *testing.T) {
+	t.Setenv("FAKE_ELECTRON_MODE", "close")
+	in := buildFakeElectron(t, "fakekill")
+	old := launchFake(t, in)
+	b, err := browser.Launch(context.Background(), in, browser.LaunchOptions{Kill: true, LaunchTimeout: 20 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-old.Done():
+	case <-time.After(15 * time.Second):
+		t.Fatal("the running app was not stopped")
+	}
+	if b.PID <= 0 || b.PID == old.PID || b.CDP == old.CDP {
+		t.Errorf("restarted %+v, old %+v", b, old)
+	}
+	if _, err := getVersion(b.CDP); err != nil {
+		t.Errorf("restarted app: %v", err)
+	}
+	closeAndCheck(t, b)
+}
