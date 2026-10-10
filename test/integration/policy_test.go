@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,6 +262,9 @@ func dualLoopback(t *testing.T) (*listener, *listener) {
 		}
 		_ = v4.Close()
 		if probe, perr := net.Listen("tcp6", "[::1]:0"); perr != nil {
+			if os.Getenv("CI") != "" {
+				t.Fatalf("no IPv6 loopback: %v", perr)
+			}
 			t.Skipf("no IPv6 loopback: %v", perr)
 		} else {
 			_ = probe.Close()
