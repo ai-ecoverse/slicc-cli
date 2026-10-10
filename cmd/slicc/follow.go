@@ -49,6 +49,10 @@ flags:
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
   --name <name>        the name and host this link shows in seven
+` + computeUsage + `
+With --runner the link also offers ssh: seven's kernel reaches this machine's
+SSH server, which never listens on a port, and its forwarding goes through
+the remote policy.
 `
 
 type followFlags struct {
@@ -58,6 +62,7 @@ type followFlags struct {
 	deny       policy.Rules
 	signalOnly bool
 	timeout    time.Duration
+	compute    computeFlags
 }
 
 func looksLikeURL(arg string) bool {
@@ -78,6 +83,12 @@ func joinCommand(args []string, stdout, stderr io.Writer) int {
 
 func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	var f followFlags
+	args, compute, err := extractCompute(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "slicc follow: %v\n\n%s", err, followUsage)
+		return f, 2
+	}
+	f.compute = compute
 	fs := flag.NewFlagSet("follow", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&f.exit, "exit", false, "")
@@ -86,6 +97,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.Var(&f.deny, "deny", "")
 	fs.BoolVar(&f.signalOnly, "signal-only", false, "")
 	fs.DurationVar(&f.timeout, "timeout", defaultSignalOnlyTimeout, "")
+	f.compute.register(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stdout, followUsage)
@@ -96,6 +108,10 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "slicc follow: unexpected arguments\n\n%s", followUsage)
+		return f, 2
+	}
+	if err := f.compute.validate(); err != nil {
+		fmt.Fprintf(stderr, "slicc follow: %v\n\n%s", err, followUsage)
 		return f, 2
 	}
 	return f, -1
@@ -118,6 +134,7 @@ func follow(joinURL string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "slicc follow: %v\n", err)
 		return 1
 	}
+	defer r.closeSSH()
 	return r.run(ctx)
 }
 
@@ -136,14 +153,15 @@ type followEvent struct {
 }
 
 type followRun struct {
-	f       *tray.Follower
-	joinURL string
-	hub     string
-	state   *tray.JoinState
-	certs   *tray.Certs
-	node    *node.Node
-	status  func(format string, a ...any)
-	events  chan followEvent
+	f        *tray.Follower
+	joinURL  string
+	hub      string
+	state    *tray.JoinState
+	certs    *tray.Certs
+	node     *node.Node
+	status   func(format string, a ...any)
+	events   chan followEvent
+	closeSSH func()
 
 	mu   sync.Mutex
 	conn *tray.Conn
@@ -183,6 +201,9 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 		status("exit on (tcp, resolve, http), %s", pol.Summary())
 	} else {
 		status("exit off")
+	}
+	if r.closeSSH, err = ff.compute.serve(r.node, status); err != nil {
+		return nil, err
 	}
 	r.node.Handle(capJoin, "join", r.handleJoin)
 	r.node.Handle(capJoin, "unlink", r.handleUnlink)
