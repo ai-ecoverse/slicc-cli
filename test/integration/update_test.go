@@ -62,6 +62,7 @@ func isolatedEnv(t *testing.T, extra ...string) []string {
 		env = append(env, kv)
 	}
 	env = append(env,
+		"SLICC_DISCOVERY=isolated",
 		"HOME="+home,
 		"USERPROFILE="+home,
 		"XDG_CACHE_HOME="+filepath.Join(home, "cache"),

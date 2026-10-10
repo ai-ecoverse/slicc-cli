@@ -75,6 +75,7 @@ func newFakeHome(t *testing.T) fakeHome {
 		"LOCALAPPDATA":    filepath.Join(root, "Local"),
 		"APPDATA":         filepath.Join(root, "Roaming"),
 		"XDG_CONFIG_HOME": filepath.Join(root, ".config"),
+		"SLICC_DISCOVERY": "home",
 	})
 	return h
 }

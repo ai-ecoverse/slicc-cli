@@ -230,7 +230,7 @@ func TestDefaultJSONLaunchesLinksAndCloses(t *testing.T) {
 	env, _ := launchEnv(t)
 	profile := "it-default-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if runtime.GOOS == "darwin" {
-		env = os.Environ()
+		env = withDiscovery(realEnv, "installed")
 	}
 	requireChrome(t, env)
 	srv := pageServer(t)

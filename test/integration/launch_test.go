@@ -35,6 +35,7 @@ func launchEnv(t *testing.T) ([]string, string) {
 	set := map[string]string{
 		"XDG_CONFIG_HOME": filepath.Join(root, ".config"),
 		"APPDATA":         filepath.Join(root, "Roaming"),
+		"SLICC_DISCOVERY": "installed",
 	}
 	if runtime.GOOS != "windows" {
 		set["HOME"] = root
@@ -241,6 +242,7 @@ func TestLaunchWithoutSevenFlags(t *testing.T) {
 func TestLaunchPackageAPIClosesBrowser(t *testing.T) {
 	env, root := launchEnv(t)
 	requireChrome(t, env)
+	t.Setenv(browser.DiscoveryEnv, "installed")
 	installed := browser.DiscoverInstalled(context.Background(), browser.Options{})
 	chrome, ok := browser.FindInstalled(installed, "chrome")
 	if !ok {
