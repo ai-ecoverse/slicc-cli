@@ -3,6 +3,7 @@ module github.com/ai-ecoverse/slicc-cli
 go 1.26.5
 
 require (
+	github.com/ai-ecoverse/go-optel v1.0.0
 	github.com/charmbracelet/x/conpty v0.2.0
 	github.com/creack/pty v1.1.24
 	github.com/pkg/sftp v1.13.11

@@ -11,11 +11,13 @@ var version = "dev"
 const usage = `slicc: SLICC's command line for seven
 
 usage:
-  slicc --version    print the version
-  slicc --help       print this help
+  slicc update [--check]    replace this binary with the latest release
+  slicc --version           print the version
+  slicc --help              print this help
 `
 
 func run(args []string, stdout, stderr io.Writer) int {
+	defer startup(args, stderr)()
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -27,6 +29,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "--help", "-h", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
+	case "update":
+		return runUpdate(args[1:], stdout, stderr)
 	default:
 		if looksLikeURL(args[0]) {
 			return joinCommand(args, stdout, stderr)

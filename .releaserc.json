@@ -3,6 +3,26 @@
   "plugins": [
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
-    "@semantic-release/github"
+    [
+      "@semantic-release/exec",
+      {
+        "verifyReleaseCmd": "test \"$(cat dist/VERSION)\" = '${nextRelease.version}'"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          { "path": "artifacts/release/slicc-*" },
+          { "path": "artifacts/release/SHA256SUMS", "label": "SHA256SUMS" }
+        ]
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "publishCmd": "node scripts/npm-publish.mjs"
+      }
+    ]
   ]
 }
