@@ -19,6 +19,7 @@ type Options struct {
 	Logf         func(format string, args ...any)
 	HelloTimeout time.Duration
 	MaxChannels  int
+	Certificates []webrtc.Certificate
 }
 
 type OpenOptions struct {

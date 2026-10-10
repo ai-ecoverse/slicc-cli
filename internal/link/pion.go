@@ -70,7 +70,7 @@ func (l pionLogger) Error(msg string)               { l.emit("error", msg) }
 func (l pionLogger) Errorf(format string, a ...any) { l.emitf("error", format, a...) }
 
 func Answer(ctx context.Context, api *webrtc.API, offer signal.Message, send func(context.Context, signal.Message) error, opts Options) (*Link, error) {
-	var cfg webrtc.Configuration
+	cfg := webrtc.Configuration{Certificates: opts.Certificates}
 	for _, s := range offer.ICEServers {
 		cfg.ICEServers = append(cfg.ICEServers, webrtc.ICEServer{URLs: s.URLs, Username: s.Username, Credential: s.Credential})
 	}
