@@ -12,7 +12,7 @@ import (
 
 const (
 	MaxRedirects          = 5
-	DefaultRuntime        = "slicc-cli"
+	DefaultRuntime        = "slicc-link/1"
 	DefaultPollInterval   = time.Second
 	DefaultOfferTimeout   = 30 * time.Second
 	defaultRetryAfter     = time.Second

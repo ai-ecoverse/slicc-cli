@@ -101,7 +101,7 @@ func TestTrayAttachSignalsWithICEServers(t *testing.T) {
 		t.Fatalf("attempt %d", s.Attempt())
 	}
 	reqs := attachRequests(h, tr.Token)
-	if len(reqs) != 1 || reqs[0].Body["runtime"] != tray.DefaultRuntime || reqs[0].Body["controllerId"] == "" {
+	if len(reqs) != 1 || reqs[0].Body["runtime"] != "slicc-link/1" || reqs[0].Body["controllerId"] == "" {
 		t.Fatalf("attach requests %+v", reqs)
 	}
 }
@@ -242,7 +242,7 @@ func TestTrayRetryableFailureMintsAFreshBootstrap(t *testing.T) {
 	for _, r := range h.requestLog() {
 		if r.Action == "retry" {
 			retries++
-			if r.Body["runtime"] != tray.DefaultRuntime {
+			if r.Body["runtime"] != "slicc-link/1" {
 				t.Errorf("retry runtime %v", r.Body["runtime"])
 			}
 		}
