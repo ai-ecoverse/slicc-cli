@@ -91,6 +91,14 @@ globalThis.linkTest = {
   async ready() {
     return state.ready;
   },
+  fingerprint() {
+    const match = (state.pc?.remoteDescription?.sdp ?? '').match(/a=fingerprint:(\S+) (\S+)/);
+    return match ? `${match[1]} ${match[2].toUpperCase()}` : null;
+  },
+  drop() {
+    teardown();
+    return { dropped: true };
+  },
   async open(payload, shared = false) {
     try {
       const stream = await state.link.open(payload, { shared });
