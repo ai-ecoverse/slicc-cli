@@ -29,6 +29,7 @@ const (
 	followBackoffBase        = time.Second
 	followBackoffMax         = 30 * time.Second
 	followSetupTimeout       = 45 * time.Second
+	followDropGrace          = 3 * time.Second
 	capJoin                  = "join"
 )
 
@@ -379,6 +380,11 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 				up = true
 				r.status("linked to %s", ev.name)
 			case evDown:
+				if !up {
+					if code, outcome, ok := r.drainEarlyDrop(ctx, served); ok {
+						return code, outcome
+					}
+				}
 				cancel()
 				<-served
 				return 0, r.after(up)
@@ -388,6 +394,21 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 				return r.unlink(ev.name), outcomeStop
 			}
 		}
+	}
+}
+
+func (r *followRun) drainEarlyDrop(ctx context.Context, served <-chan error) (int, followOutcome, bool) {
+	select {
+	case err := <-served:
+		if err == nil {
+			return 0, outcomeReconnect, true
+		}
+		code, outcome := r.failed(ctx, err, false)
+		return code, outcome, true
+	case <-time.After(followDropGrace):
+		return 0, 0, false
+	case <-ctx.Done():
+		return 0, 0, false
 	}
 }
 
@@ -404,6 +425,7 @@ var fatalFollowCodes = map[string]string{
 	tray.CodeSupersededMissingJoin: "seven's tray moved without saying where; get a new join URL from seven",
 	"UNSUPPORTED_RUNTIME":          "seven does not support this slicc version; update slicc or seven",
 	"UNTRUSTED":                    "seven does not trust this device; link it again from seven",
+	"NO_FINGERPRINT":               "internal error: seven found no SHA-256 fingerprint in this device's answer; please report this",
 }
 
 func (r *followRun) failed(ctx context.Context, err error, up bool) (int, followOutcome) {
