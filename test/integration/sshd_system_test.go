@@ -13,12 +13,21 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/sshd"
 )
 
+func requireBinary(t *testing.T, name string) string {
+	t.Helper()
+	bin, err := exec.LookPath(name)
+	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("no %s binary in CI: %v", name, err)
+		}
+		t.Skipf("no %s binary", name)
+	}
+	return bin
+}
+
 func systemSSH(t *testing.T, f *sshFixture, knownHost string, stdin string, args ...string) (string, string, int) {
 	t.Helper()
-	bin, err := exec.LookPath("ssh")
-	if err != nil {
-		t.Skip("no ssh binary")
-	}
+	bin := requireBinary(t, "ssh")
 	host, port, _ := net.SplitHostPort(f.addr)
 	dir := t.TempDir()
 	known := filepath.Join(dir, "known_hosts")
@@ -46,6 +55,7 @@ func systemSSH(t *testing.T, f *sshFixture, knownHost string, stdin string, args
 		t.Fatal(err)
 	}
 	go func() { done <- cmd.Wait() }()
+	var err error
 	select {
 	case err = <-done:
 	case <-time.After(60 * time.Second):
@@ -96,9 +106,7 @@ func TestSystemSSHWithAForcedPTY(t *testing.T) {
 }
 
 func TestSystemSSHSubsystemSFTP(t *testing.T) {
-	if _, err := exec.LookPath("sftp"); err != nil {
-		t.Skip("no sftp binary")
-	}
+	sftpBin := requireBinary(t, "sftp")
 	dir := t.TempDir()
 	f := startSSHD(t, sshd.Config{Runner: helperRunner(), Dir: dir})
 	if err := os.WriteFile(filepath.Join(dir, "remote.txt"), []byte("remote file\n"), 0o644); err != nil {
@@ -113,7 +121,7 @@ func TestSystemSSHSubsystemSFTP(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(work, "local.txt"), []byte("local file\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("sftp", "-F", "none", "-b", "-",
+	cmd := exec.Command(sftpBin, "-F", "none", "-b", "-",
 		"-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile="+known, "-o", "GlobalKnownHostsFile="+known,
 		"-o", "BatchMode=yes", "-P", port, "anyone@"+host)
 	cmd.Dir = work
