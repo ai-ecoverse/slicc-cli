@@ -112,6 +112,7 @@ jobs:
         if: steps.plan.outputs.version != '' && env.DRY_RUN != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLICC_NPM_PUBLISH: ${{ vars.SLICC_NPM_PUBLISH }}
         run: npx semantic-release
 
   smoke:

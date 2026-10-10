@@ -34,6 +34,10 @@ const dirs = readdirSync(values.dir)
   .map((dir) => ({ dir, pkg: JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) }))
   .sort((a, b) => Number(Boolean(a.pkg.optionalDependencies)) - Number(Boolean(b.pkg.optionalDependencies)));
 
+if (!dryRun && process.env.SLICC_NPM_PUBLISH !== 'true') {
+  process.stdout.write('::warning::npm publishing is off; set the repository variable SLICC_NPM_PUBLISH to true once trusted publishing is set up\n');
+  process.exit(0);
+}
 if (!dryRun) minimumNpm();
 for (const { dir, pkg } of dirs) {
   if (!dryRun && published(pkg.name, pkg.version)) {
