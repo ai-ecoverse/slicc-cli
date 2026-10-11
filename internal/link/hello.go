@@ -65,6 +65,7 @@ type Hello struct {
 	Host       string    `json:"host,omitempty"`
 	Version    string    `json:"version,omitempty"`
 	Mode       string    `json:"mode,omitempty"`
+	Node       string    `json:"node,omitempty"`
 	Caps       []string  `json:"caps"`
 	Routes     *Routes   `json:"routes,omitempty"`
 	Policy     *Policy   `json:"policy,omitempty"`

@@ -29,6 +29,7 @@ var (
 )
 
 var commands = map[string]bool{
+	"abort":    true,
 	"attach":   true,
 	"browsers": true,
 	"follow":   true,

@@ -38,6 +38,7 @@ type Message struct {
 	SDP        string
 	Candidate  *Candidate
 	Reason     string
+	Node       string
 	ICEServers []ICEServer
 }
 
@@ -48,10 +49,11 @@ type wire struct {
 	SDP       string          `json:"sdp,omitempty"`
 	Candidate json.RawMessage `json:"candidate,omitempty"`
 	Reason    string          `json:"reason,omitempty"`
+	Node      string          `json:"node,omitempty"`
 }
 
 func (m Message) MarshalJSON() ([]byte, error) {
-	w := wire{T: m.T, V: m.V, Nonce: m.Nonce, SDP: m.SDP, Reason: m.Reason}
+	w := wire{T: m.T, V: m.V, Nonce: m.Nonce, SDP: m.SDP, Reason: m.Reason, Node: m.Node}
 	if m.T == TypeCandidate {
 		w.Candidate = json.RawMessage("null")
 		if m.Candidate != nil {
@@ -70,7 +72,7 @@ func (m *Message) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &w); err != nil {
 		return err
 	}
-	*m = Message{T: w.T, V: w.V, Nonce: w.Nonce, SDP: w.SDP, Reason: w.Reason}
+	*m = Message{T: w.T, V: w.V, Nonce: w.Nonce, SDP: w.SDP, Reason: w.Reason, Node: w.Node}
 	if len(w.Candidate) > 0 && string(w.Candidate) != "null" {
 		var c Candidate
 		if err := json.Unmarshal(w.Candidate, &c); err != nil {
@@ -106,6 +108,10 @@ func NewNonce() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+var nodeID = NewNonce()
+
+func NodeID() string { return nodeID }
+
 func Hello(nonce string) Message {
-	return Message{T: TypeHello, V: Version, Nonce: nonce}
+	return Message{T: TypeHello, V: Version, Nonce: nonce, Node: nodeID}
 }

@@ -2,10 +2,11 @@ import { kernel, onKernel } from './kernel.js';
 import { Frame, Link, ResetError, fetchRaw, resolve } from './link.js';
 import { cdpTest } from './cdp.js';
 import { fsTest } from './fs-test.js';
+import { agentTest, onAgent } from './agent.js';
 
 const kernelIn = new URLSearchParams(location.search).has('kernel');
 
-const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null, browserUpdates: [], mountUpdates: [] };
+const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null, browserUpdates: [], mountUpdates: [], entries: new Map(), current: null };
 
 function onBrowsers(stream) {
   state.browserUpdates.push(stream.open.browsers);
@@ -19,57 +20,121 @@ function onMounts(stream) {
   stream.end();
 }
 
-function freshReady() {
-  state.ready = new Promise((resolve) => {
-    state.resolveReady = resolve;
+function freshReady(entry) {
+  entry.ready = new Promise((resolve) => {
+    entry.resolveReady = resolve;
   });
 }
 
-freshReady();
+function select(entry) {
+  state.current = entry;
+  state.nonce = entry?.nonce ?? null;
+  state.pc = entry?.pc ?? null;
+  state.link = entry?.link ?? null;
+  if (entry) state.ready = entry.ready;
+}
+
+select(null);
+
+function sendFor(entry, msg) {
+  globalThis.sliccLinkSend(JSON.stringify({ ...msg, nonce: entry.nonce }));
+}
 
 function send(msg) {
-  globalThis.sliccLinkSend(JSON.stringify({ ...msg, nonce: state.nonce }));
+  if (state.current) sendFor(state.current, msg);
+}
+
+function live() {
+  return [...state.entries.values()].filter((e) => !e.link?.error);
+}
+
+function remove(entry) {
+  if (!entry) return;
+  entry.link?.close('replaced');
+  if (state.entries.get(entry.key) === entry) state.entries.delete(entry.key);
+  if (state.current === entry) select(live().pop() ?? null);
+}
+
+function closed(entry) {
+  const fallback = live().filter((e) => e !== entry).pop();
+  if (state.current === entry && !fallback) return;
+  if (state.entries.get(entry.key) === entry) state.entries.delete(entry.key);
+  if (state.current === entry) select(fallback);
 }
 
 function teardown() {
-  state.link?.close('replaced');
-  state.link = null;
-  state.pc = null;
+  remove(state.current);
 }
 
-async function setup(nonce) {
-  teardown();
-  freshReady();
-  state.nonce = nonce;
+function pageCaps() {
+  const caps = ['browsers', 'mounts', 'agent'];
+  if (kernelIn) caps.push('kernel-in');
+  return caps;
+}
+
+function pageHandlers() {
+  const handlers = { browsers: onBrowsers, mounts: onMounts, agent: onAgent };
+  if (kernelIn) handlers.kernel = onKernel;
+  return handlers;
+}
+
+async function setup(nonce, node) {
+  const key = node ?? `nonce:${nonce}`;
+  remove(state.entries.get(key));
+  const entry = { key, node: node ?? null, nonce, pc: null, link: null };
+  freshReady(entry);
   state.hellos += 1;
   const pc = new RTCPeerConnection();
-  const link = new Link(pc, {
-    hello: { name: 'link test page', caps: kernelIn ? ['browsers', 'mounts', 'kernel-in'] : ['browsers', 'mounts'] },
-    handlers: kernelIn ? { browsers: onBrowsers, mounts: onMounts, kernel: onKernel } : { browsers: onBrowsers, mounts: onMounts },
-  });
-  state.pc = pc;
-  state.link = link;
+  const caps = pageCaps().filter((c) => c !== 'agent' || agentTest.state().allow);
+  const link = new Link(pc, { hello: { name: 'link test page', caps }, handlers: pageHandlers() });
+  entry.pc = pc;
+  entry.link = link;
+  state.entries.set(key, entry);
+  select(entry);
   const early = [];
   let offered = false;
   pc.addEventListener('icecandidate', (event) => {
     const msg = { t: 'candidate', candidate: event.candidate ? event.candidate.toJSON() : null };
-    if (offered) send(msg);
+    if (offered) sendFor(entry, msg);
     else early.push(msg);
   });
   await pc.setLocalDescription(await pc.createOffer());
-  send({ t: 'offer', sdp: pc.localDescription.sdp });
+  sendFor(entry, { t: 'offer', sdp: pc.localDescription.sdp });
   offered = true;
-  for (const msg of early) send(msg);
-  link.peerHello.then((hello) => state.resolveReady(hello), () => {});
+  for (const msg of early) sendFor(entry, msg);
+  link.closed.then(() => closed(entry), () => closed(entry));
+  link.peerHello.then((hello) => {
+    entry.hello = hello;
+    if (!entry.node) replaceSameDevice(entry);
+    entry.resolveReady(hello);
+  }, () => {});
+}
+
+function remoteFingerprint(entry) {
+  return (entry.pc?.remoteDescription?.sdp ?? '').match(/a=fingerprint:\S+ (\S+)/)?.[1] ?? null;
+}
+
+function replaceSameDevice(entry) {
+  const fp = remoteFingerprint(entry);
+  for (const other of [...state.entries.values()]) {
+    if (other === entry || other.node || !other.hello) continue;
+    if (remoteFingerprint(other) === fp && (other.hello.node ?? null) === (entry.hello.node ?? null)) remove(other);
+  }
+}
+
+function byNonce(nonce) {
+  for (const entry of state.entries.values()) if (entry.nonce === nonce) return entry;
+  return null;
 }
 
 globalThis.sliccLinkReceive = (raw) => {
   const msg = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  if (msg.t === 'hello') return void setup(msg.nonce);
-  if (msg.nonce !== state.nonce || !state.pc) return;
-  if (msg.t === 'answer') state.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
-  if (msg.t === 'candidate' && msg.candidate) state.pc.addIceCandidate(msg.candidate);
-  if (msg.t === 'bye') teardown();
+  if (msg.t === 'hello') return void setup(msg.nonce, msg.node);
+  const entry = byNonce(msg.nonce);
+  if (!entry?.pc) return;
+  if (msg.t === 'answer') entry.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+  if (msg.t === 'candidate' && msg.candidate) entry.pc.addIceCandidate(msg.candidate);
+  if (msg.t === 'bye') remove(entry);
 };
 
 function randomBytes(n) {
@@ -145,7 +210,8 @@ globalThis.linkTest = {
     };
   },
   async ready() {
-    return state.ready;
+    while (!state.current) await sleep(50);
+    return state.current.ready;
   },
   fingerprint() {
     const match = (state.pc?.remoteDescription?.sdp ?? '').match(/a=fingerprint:(\S+) (\S+)/);
@@ -178,7 +244,7 @@ globalThis.linkTest = {
     }
   },
   async hello() {
-    return state.ready;
+    return this.ready();
   },
   async bridge(payload, url) {
     let stream;
@@ -309,6 +375,16 @@ globalThis.linkTest = {
   mountUpdates() {
     return state.mountUpdates;
   },
+  links() {
+    return [...state.entries.values()].map((e) => ({
+      node: e.node,
+      helloNode: e.hello?.node ?? null,
+      up: Boolean(e.link?.helloReceived && !e.link?.error),
+      caps: e.hello?.caps ?? null,
+      current: e === state.current,
+    }));
+  },
+  agent: agentTest,
   cdp: cdpTest(() => state.link, describe),
   fs: fsTest(() => state.link, describe, { sha256, toBase64, fromBase64, prng }),
   kernel() {

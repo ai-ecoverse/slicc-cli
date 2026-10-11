@@ -83,11 +83,16 @@ func joinCommand(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "slicc: %v\n", err)
 		return 2
 	}
-	if len(args) < 2 || args[1] != "follow" {
-		fmt.Fprint(stderr, "slicc: a join URL must be followed by a command, like follow\n")
-		return 2
+	if len(args) >= 2 {
+		switch args[1] {
+		case "follow":
+			return follow(args[0], args[2:], stdout, stderr)
+		case "prompt", "watch", "abort":
+			return runAgent(args[1], args[0], args[2:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
+		}
 	}
-	return follow(args[0], args[2:], stdout, stderr)
+	fmt.Fprint(stderr, "slicc: a join URL must be followed by a command: follow, prompt, watch or abort\n")
+	return 2
 }
 
 func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {

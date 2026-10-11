@@ -105,6 +105,7 @@ func (n *Node) Hello() link.Hello {
 		Host:       n.cfg.Host,
 		Version:    n.cfg.Version,
 		Mode:       n.cfg.Mode,
+		Node:       signal.NodeID(),
 		Caps:       slices.Clone(n.caps),
 		Routes:     &link.Routes{Prefixes: slices.Clone(n.cfg.Prefixes), Exit: n.cfg.Exit},
 		SSHHostKey: n.sshHostKey,

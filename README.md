@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift.
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
 ## Commands (planned)
 
@@ -12,6 +12,7 @@
 | `slicc attach --cdp <url>` | link a seven that is open in an already-running CDP browser (works now; see [Local setup](#local-setup-slicc-attach)) |
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)) |
+| `slicc <join-url> prompt <text>`, `watch`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-and-abort)) |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
 | `slicc update [--check]` | replace this binary with the latest release (works now; see [Updates](#updates)) |
 
@@ -39,7 +40,7 @@ Release builds outside npm and app bundles print a notice on stderr when a newer
 ## Telemetry
 
 Release builds send operational telemetry through [go-optel](https://github.com/ai-ecoverse/go-optel) with the app id `slicc-cli`, sampled once per process (1 in 100 by default):
-- `enter`, with the subcommand as `source`, from a fixed list (`attach`, `browsers`, `follow`, `launch`, `prompt`, `update`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
+- `enter`, with the subcommand as `source`, from a fixed list (`abort`, `attach`, `browsers`, `follow`, `launch`, `prompt`, `update`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
 - `error`, for operational failures, from a fixed set of sources (`update`, `signal`, `link`, `browser`, `ssh`, `cdp`). Messages pass through go-optel's sanitizer, which strips URLs and paths.
 
 `--version` and `--help` send nothing, and development builds never configure a client.
@@ -247,7 +248,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 **Setup over CDP.**
 1. slicc picks the first page tab whose URL has an allowed origin. Until there is one it says `waiting for a seven tab` and watches for new tabs.
 2. It attaches, grants the tab's origin `local-network-access`, `local-network` and `loopback-network` with `Browser.setPermission` (best effort), calls `Runtime.addBinding { name: "sliccLinkSend" }`, then `Runtime.enable`.
-3. For each new default execution context of the main frame whose origin is allowed, slicc mints a nonce (16 random bytes, base64url). It then calls `globalThis.sliccLinkReceive({ "t": "hello", "v": 1, "nonce" })` in that context. The call is retried every 100 ms to 1 s until `sliccLinkReceive` is a function.
+3. For each new default execution context of the main frame whose origin is allowed, slicc mints a nonce (16 random bytes, base64url). It then calls `globalThis.sliccLinkReceive({ "t": "hello", "v": 1, "nonce", "node" })` in that context. `node` is a random id per `slicc` process (16 random bytes, base64url), the same in every hello and HELLO of that process, so seven can tell a second `slicc` on the same browser (a `slicc prompt --cdp …` next to the bridge) from a restart of the same one. The call is retried every 100 ms to 1 s until `sliccLinkReceive` is a function.
 4. seven answers through `sliccLinkSend(JSON.stringify(message))`:
    - `{ "t": "offer", "nonce", "sdp" }`;
    - `{ "t": "candidate", "nonce", "candidate" }`, where `candidate` is `RTCIceCandidate.toJSON()`, or `null` at the end of gathering;
@@ -283,7 +284,7 @@ One WebRTC peer connection. seven offers and the node answers. The node:
 - **Resets with `EOPNOTSUPP`:** an OPEN for a kind it doesn't serve.
 - **Closes the link:** an unknown frame type, a short or malformed frame (END with a payload, CREDIT that isn't 4 bytes), stream id 0, a reused id, an id with the wrong parity (page streams are odd, node streams even), or a second OPEN on a stream channel.
 
-HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "caps": ["net", "http", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`. With `--mount`, `caps` adds `"fs"` and HELLO adds `"mounts"` (see [Host folders](#host-folders)).
+HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "node", "caps": ["net", "http", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`. With `--mount`, `caps` adds `"fs"` and HELLO adds `"mounts"` (see [Host folders](#host-folders)).
 
 **`ssh`** (cap `ssh`), page → node, with `--runner` only:
 - OPEN `{ "kind": "ssh" }`, OPENED `{}` at once. The stream's bytes are one SSH connection to the node's SSH server.
@@ -347,7 +348,7 @@ HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode
 
 **`browsers` updates** (page cap `browsers`), node → page. When the list changes while a link is up and the page's HELLO has `browsers` in `caps`, the node opens `OPEN { "kind": "browsers", "browsers": [ … ] }` on the control channel with the full current list in HELLO's shape. It replaces the previous list; there are no deltas. The page answers OPENED `{}` and END, and the node sends END. Updates are sent one at a time per link, a change that comes while one is in flight is sent after it, with the list as it is then, and an update the page doesn't finish within 10 s is reset with `ETIMEDOUT`. A change between the HELLO and the link coming up is sent as an update right away.
 
-`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`. `cdp.js` next to it is a CDP client over `cdp` streams, `fs.js` an op-shaped client for `fs` streams (`call`, `list`, `read`, `write`, `watch`), and `page.js` answers `browsers` and `mounts` updates. Loaded with `?kernel`, the test page lists `kernel-in` and answers `kernel` OPENs with `kernel.js`, a small HTTP and WebSocket echo server in the page.
+`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`. `cdp.js` next to it is a CDP client over `cdp` streams, `fs.js` an op-shaped client for `fs` streams (`call`, `list`, `read`, `write`, `watch`), and `page.js` answers `browsers` and `mounts` updates. `page.js` keeps one link per `node` id from the hello. For tray links (no hello `node`) it replaces an older link with the same fingerprint only when HELLO's `node` matches, as seven does. `agent.js` is a fake agent behind the page's `agent` cap: the tests queue scripted runs, emit transcript events, hold and release a run, reset watch streams, and turn the cap off. Loaded with `?kernel`, the test page lists `kernel-in` and answers `kernel` OPENs with `kernel.js`, a small HTTP and WebSocket echo server in the page.
 
 ### Kernel services
 
@@ -586,7 +587,7 @@ slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name 
 - `--cdp <url>`: let seven drive this browser over the link (repeatable, in any form `slicc browsers --cdp` takes; each must answer when `follow` starts). See [`cdp`](#cdp-browser-control), and its warning: the seven on the other machine gets full control of every browser listed. No browser is `seven: true`. Without `--cdp`, `follow` doesn't offer `cdp`, and a `cdp` OPEN is refused with `EOPNOTSUPP`. Each browser's debugging port and its own endpoint addresses are [denied](#network-policy) to `tcp`, `http` and `ssh` forwarding.
 - `--mount <path>[:<name>][:ro]`: share this folder with the seven on the other machine (cap `fs`, repeatable); see [Host folders](#host-folders). It can read the folder, and change it unless `:ro`.
 
-HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` and `http` with `--exit`, `ssh` with `--runner` (plus `sshHostKey`), `cdp` (and HELLO `browsers`) with `--cdp`, `fs` (and HELLO `mounts`) with `--mount`, and always `join`.
+HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "node", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` and `http` with `--exit`, `ssh` with `--runner` (plus `sshHostKey`), `cdp` (and HELLO `browsers`) with `--cdp`, `fs` (and HELLO `mounts`) with `--mount`, and always `join`.
 
 **Identity.** The device is its DTLS certificate. `follow` keeps one ECDSA P-256 certificate per hub origin (`scheme://host:port`), valid for 20 years, in `<config>/slicc/tray-certs.json` (mode `0600`). Every link to that hub uses it, so the fingerprint stays the same across reconnects, restarts and updates. The first run on a hub mints it and says `new device, fingerprint sha-256 …`; later runs say `device, fingerprint …`. Every dial attaches with a fresh `controllerId`, which is only a routing handle.
 
@@ -597,6 +598,105 @@ HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode
 **Reconnects.** A link that drops, a link not up within 45 s of the offer, a failed bootstrap and any other signaling error lead to a new dial. Dials are spaced 1 s apart at first, doubling up to 30 s, each wait randomized by ±25 %, and back to 1 s after a link was up. A bootstrap the hub restarts (a retryable `bootstrap.failed`) starts a new peer connection without a new dial. The node keeps polling the bootstrap after its answer until seven's HELLO arrives, then stops. A link that closes before HELLO waits up to 3 s for a failure code from the hub, and without one it is an ordinary reconnect.
 
 **Stops** with exit 1 and says why on `INVALID_JOIN_CAPABILITY`, `TRAY_EXPIRED` or `TRAY_SUPERSEDED_MISSING_JOIN_URL` from the hub, and on `UNTRUSTED`, `UNSUPPORTED_RUNTIME` or `NO_FINGERPRINT` (an internal error: the answer had no SHA-256 fingerprint) from seven. The device's fingerprint is always SHA-256.
+
+## Remote control: `slicc prompt`, `watch` and `abort`
+
+```
+slicc <join-url> prompt [--steer | --reject] [--thinking] [--json] [--plain] [--abort-on-interrupt] <text>|@file|-
+slicc <join-url> watch [--thinking] [--json] [--plain]
+slicc <join-url> abort
+slicc prompt --cdp <url> [--origin <origin>]... [flags] <text>|@file|-
+slicc watch --cdp <url> [--origin <origin>]... [flags]
+slicc abort --cdp <url> [--origin <origin>]...
+```
+
+These commands talk to seven's agent over a link that offers nothing to seven (`caps: []`).
+- **With a join URL:** slicc dials the tray as `follow` does (see [Remote setup](#remote-setup-slicc-join-url-follow)), with the same device certificate, so seven sees the same device. A `follow` already running on this machine keeps its link, because the two processes have different `node` ids. These commands never handle `join` or `unlink`. When seven has unlinked the device they say `seven unlinked this device` and exit 1, and they leave the join state and the certificate alone.
+- **With `--cdp`:** slicc links to the seven tab in that browser as `attach` does (see [Local setup](#local-setup-slicc-attach)), with `--origin` as there. A running `slicc` or `attach` on that browser keeps its link.
+- **Setup:** slicc waits up to 1 minute for seven's HELLO, then gives up with exit 1.
+- **No permission:** without `agent` in seven's HELLO, slicc says `this seven doesn't allow remote control from this device; turn it on in seven's Linked devices` and exits 3. A local link gets `agent` by default. A remote one gets it once *Allow remote control* is on for this device.
+- **Privacy:** prompt text and event contents never go to telemetry or logs, and the join URL is never printed.
+
+**`prompt`** sends one prompt and streams the run it belongs to.
+- **Prompt text:** the words after the flags, joined with spaces. `@file` reads a file, and `-` or `@-` reads stdin. Trailing newlines are dropped.
+  - An empty prompt, text that isn't UTF-8, or a prompt over 16 MiB exits 2.
+  - A prompt up to 60 KiB goes in the OPEN as `text`. A longer one goes as DATA after it (see `agent` below).
+- **When seven is busy:** by default the prompt is queued as a follow-up (`whenBusy: "followUp"`). `--steer` steers the running turn, and `--reject` doesn't send it at all: slicc says `seven is busy` and exits 1. `--steer` and `--reject` can't be combined.
+- **Output:** the assistant's text goes to stdout as it streams. Separate text entries are separated by a blank line, and stdout ends with a newline.
+  - Tool calls, tool results, notices and errors go to stderr, and so does thinking with `--thinking`.
+  - The prompt's own `user` event isn't shown.
+- **`--json`:** the events are printed on stdout instead, one NDJSON line each, exactly as seven sent them, including `delivered` and the final `end`. Nothing is rendered.
+- **Exit status:**
+  - `0` when the run ends with `end` `stop`;
+  - `1` for `end` `error` (`the run failed: <message>`), for `end` `aborted` (`the run was aborted`), and for a stream or link that ends before `end` (`lost the link to seven; the run goes on there`);
+  - `2` for bad usage;
+  - `3` without permission;
+  - `130` on Ctrl-C or `SIGTERM`.
+- **Ctrl-C** leaves the run going in seven. With `--abort-on-interrupt`, slicc first opens `abort`.
+
+**`watch`** follows the agent until Ctrl-C or `SIGTERM`, then exits 0.
+- **Output:** `user` events go to stdout as `> <text>`, on one line. Assistant text goes to stdout as for `prompt`, and a line ends at each run's end. Everything else goes to stderr, as for `prompt`, plus `run ended: <reason>` for a run that didn't end with `stop`. `--json` prints the events instead.
+- **Status lines** on stderr: `slicc: watching <name>`, `slicc: lost the link to <name>; reconnecting`, and for the tray `<reason>; trying again in <wait>`.
+- **Reconnects:** when the stream ends or is reset, slicc opens a new `watch` on the same link. When the link goes, it sets up a new one, through the tray again or by waiting for seven over CDP. Waits start at 1 s, double up to 30 s with ±25 % jitter, and go back to 1 s once a stream opens.
+- **Resuming:** each new stream asks for `since`, the id of the last event slicc saw, so nothing still in the transcript is lost. Nothing is shown twice either. For `text` and `thinking`, slicc counts the bytes it has shown per entry and skips that many from the entry's replay. Any other entry is skipped when its id was already seen. `run` events have no id and aren't replayed. When seven answers `gap: true`, slicc prints `some events were missed`.
+- **Exit status:** `1` when the link can't be set up for good (a terminal tray failure, or the CDP connection closing), `2` for bad usage, `3` without permission.
+
+**`abort`** aborts the agent's current run. It prints `slicc: aborted the run`, or `slicc: nothing was running`, and exits 0. Otherwise it exits 1 on errors, 3 without permission and 130 on Ctrl-C.
+
+**Styling.** When a stream is a terminal (and `TERM` isn't `dumb`), its lines are styled:
+- tool calls `⚙ <name> <summary>`;
+- results `  ↳ <summary>`, or `  ✗ <summary>` for a failure;
+- notices `• <text>`, and errors `✗ <message> <detail>`;
+- thinking dim and italic, and prompts in `watch` bold.
+
+`NO_COLOR` keeps the layout without colors. When stdout and stderr are the same terminal, a line on one first ends an unfinished line on the other.
+
+Otherwise, or with `--plain`, there are no escape codes:
+- `tool <name>: <summary>`, `tool <name> ok: <summary>`, `tool <name> failed: <summary>`;
+- `notice: <text>`, `error: <message> (<detail>)`;
+- `thinking: <text>`.
+
+Summaries are one line of at most 200 characters. Escape sequences and control characters other than newline and tab are removed from everything seven sends before it's shown.
+
+### `agent` (page cap `agent`), node → page
+
+- **Who may:** the node opens `agent` streams only to a page whose HELLO lists `agent`, and the page refuses them with `EACCES` otherwise.
+- **Several processes, one device:** the hello and HELLO carry the process's `node` id. seven replaces an older link of the same device (any local link, or the same fingerprint over the tray) only when `node` matches. Over the tray it decides once HELLO arrives.
+
+**`prompt`:** `OPEN { "kind": "agent", "op": "prompt", "text", "whenBusy": "followUp" | "steer" | "reject", "thinking"?: true }` on its own channel.
+- **Answer:** OPENED `{ "delivered": "run" | "steer" | "follow-up" }` once the agent took it. A `reject` while busy is `RESET EBUSY`.
+- **Then DATA:** NDJSON events, starting at this prompt's own `user` event, until the run that includes it ends. The last line is `{"t":"end","reason":"stop"|"aborted"|"error","message"?}`, then END. The node sends END right after OPENED.
+- **Long prompts:** a prompt over 60 KiB goes as `"length": <bytes>` instead of `text`.
+  - The page answers OPENED `{}` at once.
+  - The node sends exactly that many bytes of UTF-8 as DATA, then END. A different count is `RESET EPROTO`.
+  - The page then delivers it. Its first line is `{"t":"delivered","delivered"}`, or it resets with `EBUSY` instead.
+- **Aborting:** a RESET from the node, or a closed link, doesn't abort the run. Only `abort` does.
+
+**`watch`:** `OPEN { "kind": "agent", "op": "watch", "since"?: "<entry id>", "thinking"?: true }` on its own channel.
+- **Answer:** OPENED `{ "head": "<entry id>", "gap"?: true }`, then NDJSON events until either side resets.
+- **Without `since`:** the events start at the next one.
+- **With `since`:** the page first replays `since`'s own entry when it's `text` or `thinking` (its whole text so far, as one `delta`), then every entry after it. `gap: true` means the transcript no longer holds `since`, and the events start at the next one.
+
+**`abort`:** `OPEN { "kind": "agent", "op": "abort" }`, answered OPENED `{ "aborted": true | false }` (`false` when nothing was running), then END.
+
+**Events,** one JSON object per line:
+
+| event | meaning |
+| --- | --- |
+| `{"t":"user","id","text","delivered"}` | a prompt |
+| `{"t":"text","id","delta"}` | assistant text as it streams |
+| `{"t":"thinking","id","delta"}` | thinking, only on streams opened with `thinking` |
+| `{"t":"tool","id","call","name","summary"}` | a tool call, with a one-line summary such as the bash command |
+| `{"t":"tool-result","id","call","ok","summary"}` | its result |
+| `{"t":"run","state":"start"\|"end","reason"?}` | a run starts or ends |
+| `{"t":"notice","id","text"}` | retries, compactions, rewinds |
+| `{"t":"error","id","message","detail"?}` | an error |
+| `{"t":"delivered","delivered"}` | a long prompt was taken (`prompt` only) |
+| `{"t":"end","reason","message"?}` | the last line of a `prompt` stream |
+
+- **Ids:** `id` is the transcript entry id, and `delta` lines for one `id` arrive in order.
+- **Limits:** `summary` is at most 200 characters. Credentials and tool output beyond the summary are never sent.
+- **Unknown events:** the node ignores events and fields it doesn't know.
 
 ## Tray hub signaling (remote setup)
 
