@@ -239,11 +239,11 @@ func setupFS(t *testing.T) *fsEnv {
 
 func TestFS(t *testing.T) {
 	e := setupFS(t)
-	t.Run("swap between check and use", e.testFSSwap)
 	ping := e.c.js(t, "watch", []string{"project"})
 	started := time.Now()
 	t.Run("hello and mounts", e.testFSHello)
 	t.Run("confinement", e.testFSConfinement)
+	t.Run("swap between check and use", e.testFSSwap)
 	t.Run("read-only", e.testFSReadOnly)
 	t.Run("setattr", e.testFSSetattr)
 	t.Run("metadata errnos", e.testFSErrnos)
@@ -413,9 +413,14 @@ func (e *fsEnv) testFSSwap(t *testing.T) {
 	writeFile(t, filepath.Join(e.folder, "swap", "key.txt"), "inside")
 	r := e.c.js(t, "race", "project", e.outside, 200)
 	t.Logf("race: %v", r)
-	if r.num("leaks") != 0 || r.num("reads") == 0 {
+	if r.num("leaks") != 0 || r.num("swaps") != 200 {
 		t.Fatalf("race: %v", r)
 	}
+	fh, _ := e.c.open(t, map[string]any{"path": "swap/key.txt"})
+	if got := e.c.read(t, fh, 0, 100, nil); got.body(t) != "inside" {
+		t.Fatalf("after the race: %v", got)
+	}
+	e.c.ok(t, "release", map[string]any{"fh": fh})
 	if readFile(t, filepath.Join(e.outside, "key.txt")) != "top secret" {
 		t.Fatal("the outside file changed")
 	}
