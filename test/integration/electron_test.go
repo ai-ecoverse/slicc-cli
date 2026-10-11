@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -108,8 +109,13 @@ func TestElectronLaunchKillRestartsRunningApp(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("the running app was not stopped")
 	}
-	if b.PID <= 0 || b.PID == old.PID || b.CDP == old.CDP {
+	if b.PID <= 0 || b.PID == old.PID {
 		t.Errorf("restarted %+v, old %+v", b, old)
+	}
+	for _, ep := range []*browser.Browser{old, b} {
+		if port, _ := strconv.Atoi(portOf(t, ep.CDP)); port < 9333 {
+			t.Errorf("Electron got port %d, want the first free one from 9333", port)
+		}
 	}
 	if _, err := getVersion(b.CDP); err != nil {
 		t.Errorf("restarted app: %v", err)
