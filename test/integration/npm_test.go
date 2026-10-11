@@ -144,7 +144,7 @@ func TestNPMLauncherCanBeAliased(t *testing.T) {
 	if err := json.Unmarshal(data, &pkg); err != nil {
 		t.Fatal(err)
 	}
-	if pkg.Name != "sliccy" || pkg.Bin["sliccy"] != "bin/slicc.js" || len(pkg.Bin) != 1 {
+	if pkg.Name != "sliccy" || pkg.Bin["sliccy"] != "bin/slicc.js" || pkg.Bin["slicc"] != "bin/slicc.js" || len(pkg.Bin) != 2 {
 		t.Fatalf("%+v", pkg)
 	}
 	modules := filepath.Join(t.TempDir(), "node_modules")

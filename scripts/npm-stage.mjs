@@ -29,7 +29,7 @@ const { values } = parseArgs({
     from: { type: 'string', default: join(root, 'artifacts', 'release') },
     out: { type: 'string', default: join(root, 'dist', 'npm') },
     name: { type: 'string', default: `${SCOPE}/slicc` },
-    bin: { type: 'string' },
+    bin: { type: 'string', multiple: true },
     only: { type: 'string', multiple: true },
     'deps-version': { type: 'string' },
     'launcher-only': { type: 'boolean', default: false },
@@ -38,19 +38,23 @@ const { values } = parseArgs({
 });
 
 if (!values.version) {
-  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name] [--only os-arch] [--deps-version semver] [--launcher-only] [--launcher file]\n');
+  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name]... [--only os-arch] [--deps-version semver] [--launcher-only] [--launcher file]\n');
   process.exit(2);
 }
 const version = values.version.replace(/^v/, '');
 const depsVersion = (values['deps-version'] || version).replace(/^v/, '');
-const binName = values.bin || values.name.split('/').pop();
+const binNames = values.bin?.length
+  ? values.bin
+  : values.name === 'sliccy'
+    ? ['sliccy', 'slicc']
+    : [values.name.split('/').pop()];
 const selected = values.only?.length
   ? TARGETS.filter((t) => values.only.includes(`${t.goos}-${t.goarch}`))
   : TARGETS;
 
 const sliccyReadme = `# sliccy@next
 
-This is the preview of the new SLICC, seven, the SLICC on \`*.sliccy.ai\`. \`npx sliccy@next\` runs \`slicc\`, seven's command line: it launches and links browsers, and shares a machine's network, compute and browsers with seven over WebRTC. It is the same launcher as [@ai-ecoverse/slicc](https://www.npmjs.com/package/@ai-ecoverse/slicc), built from [ai-ecoverse/slicc-cli](https://github.com/ai-ecoverse/slicc-cli).
+This is the preview of the new SLICC, seven, the SLICC on \`*.sliccy.ai\`. \`npx sliccy@next\` runs \`slicc\`, seven's command line: it launches and links browsers, and shares a machine's network, compute and browsers with seven over WebRTC. It installs two commands, \`sliccy\` and \`slicc\`, which run the same launcher. It is the same launcher as [@ai-ecoverse/slicc](https://www.npmjs.com/package/@ai-ecoverse/slicc), built from [ai-ecoverse/slicc-cli](https://github.com/ai-ecoverse/slicc-cli).
 
 For SLICC six, run \`npx sliccy@6\`.
 `;
@@ -98,7 +102,7 @@ function stageLauncher(platforms) {
     version,
     description: "SLICC's command line for seven: links a machine's network, compute and browsers to seven over WebRTC",
     ...common,
-    bin: { [binName]: 'bin/slicc.js' },
+    bin: Object.fromEntries(binNames.map((name) => [name, 'bin/slicc.js'])),
     files: ['bin/slicc.js'],
     engines: { node: '>=18' },
     optionalDependencies: Object.fromEntries(platforms.map((name) => [name, depsVersion])),
