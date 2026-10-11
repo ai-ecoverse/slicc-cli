@@ -15,6 +15,12 @@ usage:
                             it; flags below
   slicc attach --cdp <url>  link a seven open in a running CDP browser
   slicc <join-url> follow   follow a seven's tray from this machine
+  slicc <join-url> prompt <text>
+                            send a prompt to seven's agent and stream the answer
+  slicc <join-url> watch    follow seven's agent as it works
+  slicc <join-url> abort    abort the agent's run
+                            (prompt, watch and abort also take --cdp <url>
+                            instead of a join URL)
   slicc browsers            list CDP endpoints and installed browsers, ranked
   slicc launch              launch a browser with CDP in a separate SLICC profile
   slicc update [--check]    replace this binary with the latest release
@@ -42,6 +48,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return attach(args[1:], os.Stdin, stdout, stderr)
 	case "update":
 		return runUpdate(args[1:], stdout, stderr)
+	case "prompt", "watch", "abort":
+		return runAgent(args[0], "", args[1:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
 	default:
 		if looksLikeURL(args[0]) {
 			return joinCommand(args, stdout, stderr)
