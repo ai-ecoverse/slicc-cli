@@ -11,9 +11,6 @@ import (
 
 func TestSixFlagsPointBackToSix(t *testing.T) {
 	quoted := "'hi there'"
-	if runtime.GOOS == "windows" {
-		quoted = `"hi there"`
-	}
 	secret := "trayx.5e5e5e5e5e5e5e5e5e5e5e5e"
 	cases := []struct {
 		args []string
@@ -32,6 +29,8 @@ func TestSixFlagsPointBackToSix(t *testing.T) {
 		{[]string{"--log-dir=/tmp/logs"}, "--log-dir", "--log-dir=/tmp/logs"},
 		{[]string{"--prompt", "hi there"}, "--prompt", "--prompt " + quoted},
 		{[]string{"--prompt=hi"}, "--prompt", "--prompt=hi"},
+		{[]string{"--prompt", "$HOME"}, "--prompt", "--prompt '$HOME'"},
+		{[]string{"--prompt", "it's"}, "--prompt", "--prompt " + map[bool]string{true: `'it''s'`, false: `'it'\''s'`}[runtime.GOOS == "windows"]},
 		{[]string{"--env-file", "secrets.env"}, "--env-file", "--env-file secrets.env"},
 		{[]string{"--lead", "https://www.sliccy.ai"}, "--lead", "--lead https://www.sliccy.ai"},
 		{[]string{"--lead=https://www.sliccy.ai"}, "--lead", "--lead=https://www.sliccy.ai"},
@@ -83,11 +82,8 @@ func TestSixMountFormFails(t *testing.T) {
 		start := time.Now()
 		out, errOut, code := slicc(t, c.args...)
 		hint := c.hint
-		if strings.ContainsAny(hint, ` \`) {
+		if strings.Contains(hint, " ") {
 			hint = "'" + hint + "'"
-			if runtime.GOOS == "windows" {
-				hint = `"` + c.hint + `"`
-			}
 		}
 		want := c.prog + ": --mount " + c.spec + " is SLICC six's form, <os-path>:<vfs-path>. This is the new SLICC (seven): use --mount <path>[:<name>][:ro], such as --mount " + hint + ", then mount the folder in seven.\n"
 		if code != 2 || out != "" || errOut != want {

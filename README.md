@@ -40,7 +40,7 @@ A go-installed `slicc` reports its module version (`slicc 1.25.2` for `@v1.25.2`
 slicc: <flag> is a SLICC six option. This is the new SLICC (seven). For SLICC six, run: npx sliccy@6 <your args>
 ```
 
-- `<your args>` is the command line as given, with arguments quoted for the shell where needed. A join URL is shown as `<join-url>`, since it is never printed.
+- `<your args>` is the command line as given, with arguments quoted where needed, for a POSIX shell or, on Windows, for PowerShell. A join URL is shown as `<join-url>`, since it is never printed.
 - `--flag value` and `--flag=value` both count.
 - With no command, Go's flag syntax applies, so `-electron` counts as well.
 - The first six flag is the one named.

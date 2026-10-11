@@ -74,14 +74,20 @@ func registerSix(fs *flag.FlagSet, seen *string) {
 	}
 }
 
-var safeArg = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+var (
+	safeArg           = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-][A-Za-z0-9_@%+=:,./~-]*$`)
+	safePowerShellArg = regexp.MustCompile(`^[A-Za-z0-9_%+=:./\\-][A-Za-z0-9_%+=:./\\~-]*$`)
+)
 
 func shellQuote(arg string) string {
+	if runtime.GOOS == "windows" {
+		if safePowerShellArg.MatchString(arg) && !strings.HasPrefix(arg, "--%") {
+			return arg
+		}
+		return "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+	}
 	if safeArg.MatchString(arg) {
 		return arg
-	}
-	if runtime.GOOS == "windows" {
-		return `"` + strings.ReplaceAll(arg, `"`, `\"`) + `"`
 	}
 	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 }
