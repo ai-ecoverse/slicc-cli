@@ -31,18 +31,28 @@ const { values } = parseArgs({
     name: { type: 'string', default: `${SCOPE}/slicc` },
     bin: { type: 'string' },
     only: { type: 'string', multiple: true },
+    'deps-version': { type: 'string' },
+    'launcher-only': { type: 'boolean', default: false },
   },
 });
 
 if (!values.version) {
-  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name] [--only os-arch]\n');
+  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name] [--only os-arch] [--deps-version semver] [--launcher-only]\n');
   process.exit(2);
 }
 const version = values.version.replace(/^v/, '');
+const depsVersion = (values['deps-version'] || version).replace(/^v/, '');
 const binName = values.bin || values.name.split('/').pop();
 const selected = values.only?.length
   ? TARGETS.filter((t) => values.only.includes(`${t.goos}-${t.goarch}`))
   : TARGETS;
+
+const sliccyReadme = `# sliccy@next
+
+This is the preview of the new SLICC, seven, the SLICC on \`*.sliccy.ai\`. \`npx sliccy@next\` runs \`slicc\`, seven's command line: it launches and links browsers, and shares a machine's network, compute and browsers with seven over WebRTC. It is the same launcher as [@ai-ecoverse/slicc](https://www.npmjs.com/package/@ai-ecoverse/slicc), built from [ai-ecoverse/slicc-cli](https://github.com/ai-ecoverse/slicc-cli).
+
+For SLICC six, run \`npx sliccy@6\`.
+`;
 
 function write(dir, file, content) {
   mkdirSync(dir, { recursive: true });
@@ -53,7 +63,7 @@ function stagePlatform(target) {
   const asset = `slicc-${target.goos}-${target.goarch}${target.goos === 'windows' ? '.exe' : ''}`;
   const source = join(values.from, asset);
   if (!existsSync(source)) throw new Error(`missing ${source}`);
-  const name = `${SCOPE}/slicc-${target.goos}-${target.goarch}`;
+  const name = platformName(target);
   const dir = join(values.out, `slicc-${target.goos}-${target.goarch}`);
   const file = target.goos === 'windows' ? 'slicc.exe' : 'slicc';
   mkdirSync(join(dir, 'bin'), { recursive: true });
@@ -80,7 +90,8 @@ function stageLauncher(platforms) {
   copyFileSync(join(root, 'npm', 'slicc.js'), join(dir, 'bin', 'slicc.js'));
   chmodSync(join(dir, 'bin', 'slicc.js'), 0o755);
   copyFileSync(join(root, 'LICENSE'), join(dir, 'LICENSE'));
-  copyFileSync(join(root, 'README.md'), join(dir, 'README.md'));
+  if (values.name === 'sliccy') write(dir, 'README.md', sliccyReadme);
+  else copyFileSync(join(root, 'README.md'), join(dir, 'README.md'));
   write(dir, 'package.json', {
     name: values.name,
     version,
@@ -89,11 +100,13 @@ function stageLauncher(platforms) {
     bin: { [binName]: 'bin/slicc.js' },
     files: ['bin/slicc.js'],
     engines: { node: '>=18' },
-    optionalDependencies: Object.fromEntries(platforms.map((name) => [name, version])),
+    optionalDependencies: Object.fromEntries(platforms.map((name) => [name, depsVersion])),
   });
 }
 
 rmSync(values.out, { recursive: true, force: true });
-const platforms = selected.map(stagePlatform);
+const platformName = (t) => `${SCOPE}/slicc-${t.goos}-${t.goarch}`;
+const platforms = values['launcher-only'] ? selected.map(platformName) : selected.map(stagePlatform);
 stageLauncher(platforms);
-process.stdout.write(`staged ${values.name}@${version} and ${platforms.length} platform packages in ${values.out}\n`);
+const staged = values['launcher-only'] ? 'no platform packages' : `${platforms.length} platform packages`;
+process.stdout.write(`staged ${values.name}@${version} (platform packages at ${depsVersion}) and ${staged} in ${values.out}\n`);

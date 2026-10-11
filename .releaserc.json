@@ -21,7 +21,7 @@
     [
       "@semantic-release/exec",
       {
-        "publishCmd": "node scripts/npm-publish.mjs"
+        "publishCmd": "node scripts/npm-publish.mjs && node scripts/npm-publish.mjs --dir dist/npm-next --tag next"
       }
     ]
   ]
