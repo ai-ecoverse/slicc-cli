@@ -39,8 +39,11 @@ func MigrateProfiles(o Options) []string {
 	return notices
 }
 
+const MigratedMarker = ".migrated-from-profiles"
+
 func migrateProfiles(from, to string) []string {
-	if _, err := os.Lstat(to); !errors.Is(err, os.ErrNotExist) {
+	marker := filepath.Join(to, MigratedMarker)
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	entries, err := os.ReadDir(from)
@@ -52,18 +55,28 @@ func migrateProfiles(from, to string) []string {
 	}
 	var notices []string
 	for _, e := range entries {
-		name := e.Name()
-		if !e.IsDir() || strings.HasPrefix(name, ".") || sixProfileRE.MatchString(name) || !ValidProfileName(name) {
-			continue
-		}
-		src, dst := filepath.Join(from, name), filepath.Join(to, name)
-		if pid := profileOwner(src); pid > 0 {
-			notices = append(notices, fmt.Sprintf("profile %s is in use by process %d, so it stays in %s; quit that browser, then move it to %s", name, pid, from, to))
-			continue
-		}
-		if err := os.Rename(src, dst); err != nil && !errors.Is(err, os.ErrNotExist) {
-			notices = append(notices, fmt.Sprintf("profile %s stays in %s: %v", name, from, err))
+		if n := migrateProfile(e, from, to); n != "" {
+			notices = append(notices, n)
 		}
 	}
+	_ = os.WriteFile(marker, nil, 0o600)
 	return notices
+}
+
+func migrateProfile(e os.DirEntry, from, to string) string {
+	name := e.Name()
+	if !e.IsDir() || strings.HasPrefix(name, ".") || sixProfileRE.MatchString(name) || !ValidProfileName(name) {
+		return ""
+	}
+	src, dst := filepath.Join(from, name), filepath.Join(to, name)
+	if pid := profileOwner(src); pid > 0 {
+		return fmt.Sprintf("profile %s is in use by process %d, so it stays in %s; quit that browser, then move it to %s", name, pid, from, to)
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Sprintf("profile %s stays in %s, since %s already exists", name, from, dst)
+	}
+	if err := os.Rename(src, dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Sprintf("profile %s stays in %s: %v", name, from, err)
+	}
+	return ""
 }

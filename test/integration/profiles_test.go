@@ -125,6 +125,31 @@ func TestProfilesMoveOutOfSixsFolderOnce(t *testing.T) {
 	}
 }
 
+func TestProfilesMoveIntoAnExistingSevenProfiles(t *testing.T) {
+	h := newFakeHome(t)
+	h.env = append(h.env, "SLICC_NO_UPDATE_CHECK=1", "SLICC_NO_TELEMETRY=1")
+	legacy, root := h.legacyProfilesDir(t), h.profilesDir()
+	writeFile(t, filepath.Join(legacy, "chrome", "Default", "Preferences"), `{"old":true}`)
+	writeFile(t, filepath.Join(legacy, "work", "Default", "Preferences"), `{"work":true}`)
+	writeFile(t, filepath.Join(root, "chrome", "Default", "Preferences"), `{"new":true}`)
+	_, errOut := browsersJSON(t, h.env)
+	want := "slicc: profile chrome stays in " + legacy + ", since " + filepath.Join(root, "chrome") + " already exists\n"
+	if !strings.Contains(errOut, want) {
+		t.Fatalf("stderr %q, want %q", errOut, want)
+	}
+	if s := readText(t, filepath.Join(root, "work", "Default", "Preferences")); s != `{"work":true}` {
+		t.Fatalf("work: %q", s)
+	}
+	if s := readText(t, filepath.Join(root, "chrome", "Default", "Preferences")); s != `{"new":true}` {
+		t.Fatalf("the existing profile was replaced: %q", s)
+	}
+	readText(t, filepath.Join(legacy, "chrome", "Default", "Preferences"))
+	readText(t, filepath.Join(root, browser.MigratedMarker))
+	if _, errOut = browsersJSON(t, h.env); strings.Contains(errOut, "stays in") {
+		t.Fatalf("the migration ran twice: %q", errOut)
+	}
+}
+
 func TestProfilesStartInSevenProfiles(t *testing.T) {
 	h := newFakeHome(t)
 	if notices := browser.MigrateProfiles(browser.Options{Home: h.root, Getenv: h.getenv}); len(notices) != 0 {
