@@ -121,6 +121,9 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 		fmt.Fprintf(stderr, "slicc attach: %v\n\n%s", err, attachUsage)
 		return f, 2
 	}
+	if code := checkMounts(f.mounts, "slicc attach", stderr); code >= 0 {
+		return f, code
+	}
 	switch {
 	case f.signal != "cdp" && f.signal != "stdio":
 		fmt.Fprintf(stderr, "slicc attach: --signal must be cdp or stdio\n")

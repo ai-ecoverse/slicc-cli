@@ -54,6 +54,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if looksLikeURL(args[0]) {
 			return joinCommand(args, stdout, stderr)
 		}
+		if six := sixFlagIn(args); six != "" {
+			return sixPointer(stderr, six, args)
+		}
 		fmt.Fprintf(stderr, "slicc: unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}

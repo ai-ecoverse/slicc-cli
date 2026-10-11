@@ -57,7 +57,10 @@ flags for slicc with no command:
   --yes               no picker: take the best match
   --plain             no picker and no dashboard: plain status lines
   --json              NDJSON events on stdout (see README.md)
-` + computeUsage
+` + computeUsage + `
+SLICC six's flags (such as --electron, --lead, --serve-only or -v) print
+how to run six with npx sliccy@6, and exit 2.
+`
 
 type defaultFlags struct {
 	browsers []string
@@ -84,6 +87,7 @@ func isDefault(args []string) bool {
 
 func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	var f defaultFlags
+	given := args
 	args, compute, err := extractCompute(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "slicc: %v\n\n%s", err, defaultUsage)
@@ -108,7 +112,13 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	fs.BoolVar(&f.plain, "plain", false, "")
 	fs.BoolVar(&f.json, "json", false, "")
 	fs.Var(&f.mounts, "mount", "")
-	if err := fs.Parse(args); err != nil {
+	var six string
+	registerSix(fs, &six)
+	err = fs.Parse(args)
+	if six != "" {
+		return f, sixPointer(stderr, six, given)
+	}
+	if err != nil {
 		fmt.Fprintf(stderr, "slicc: %v\n\n%s", err, defaultUsage)
 		return f, 2
 	}
@@ -119,6 +129,9 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	if err := f.compute.validate(); err != nil {
 		fmt.Fprintf(stderr, "slicc: %v\n\n%s", err, defaultUsage)
 		return f, 2
+	}
+	if code := checkMounts(f.mounts, "slicc", stderr); code >= 0 {
+		return f, code
 	}
 	if f.kernel < 1 || f.kernel > 65535 {
 		fmt.Fprintf(stderr, "slicc: --kernel-port must be 1-65535\n")
