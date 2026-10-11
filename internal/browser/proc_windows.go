@@ -74,3 +74,12 @@ func matchTasklist(out, image string) int {
 	}
 	return 0
 }
+
+func processTable(ctx context.Context) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	argv := catalog.Discovery.Process.Windows
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	return cmd.Output()
+}

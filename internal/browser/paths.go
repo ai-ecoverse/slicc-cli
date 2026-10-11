@@ -39,19 +39,17 @@ func (p platform) join(parts ...string) string {
 }
 
 func (p platform) winRoot(name string) string {
-	if v := p.getenv(name); v != "" {
+	loc, ok := catalog.Platforms.Windows.Roots[name]
+	if !ok {
+		loc = catalog.Platforms.Windows.Roots[rootLAD]
+	}
+	if v := p.getenv(loc.Env); loc.Env != "" && v != "" {
 		return v
 	}
-	switch name {
-	case rootPF:
-		return `C:\Program Files`
-	case rootPF86:
-		return `C:\Program Files (x86)`
-	case rootAD:
-		return p.join(p.home, "AppData", "Roaming")
-	default:
-		return p.join(p.home, "AppData", "Local")
+	if loc.Absolute != "" {
+		return loc.Absolute
 	}
+	return p.join(append([]string{p.home}, loc.Home...)...)
 }
 
 func (p platform) xdg(name, fallback string) string {
@@ -62,27 +60,35 @@ func (p platform) xdg(name, fallback string) string {
 }
 
 func (p platform) configDir() string {
+	pl := catalog.Platforms
 	switch p.goos {
 	case "darwin":
-		return p.join(p.home, "Library", "Application Support")
+		return p.join(append([]string{p.home}, pl.MacOS.Config.Home...)...)
 	case "windows":
 		return p.winRoot(rootAD)
 	default:
-		return p.xdg("XDG_CONFIG_HOME", ".config")
+		return p.xdg(pl.Linux.Config.Env, path.Join(pl.Linux.Config.Home...))
 	}
 }
 
-const (
-	ProfilesRoot       = "seven-profiles"
-	legacyProfilesRoot = "profiles"
-)
-
 func (p platform) profilesDir() string {
-	return p.join(p.configDir(), "slicc", ProfilesRoot)
+	return p.join(append([]string{p.configDir()}, catalog.Profiles.Root...)...)
+}
+
+func (p platform) legacyProfilesDir() string {
+	return p.join(append([]string{p.configDir()}, catalog.Profiles.LegacyRoot...)...)
+}
+
+func (p platform) snapCommon(snap string) string {
+	return p.join(p.home, "snap", snap, "common")
 }
 
 func (p platform) snapProfilesDir(snap string) string {
-	return p.join(p.home, "snap", snap, "common", "slicc", ProfilesRoot)
+	return p.join(append([]string{p.snapCommon(snap)}, catalog.Profiles.SnapRoot...)...)
+}
+
+func (p platform) snapLegacyProfilesDir(snap string) string {
+	return p.join(append([]string{p.snapCommon(snap)}, catalog.Profiles.LegacyRoot...)...)
 }
 
 func (p platform) userDataDirs(k known) []string {
@@ -122,10 +128,7 @@ func (p platform) windowsInstallPaths(k known) []string {
 }
 
 func (w winInfo) exes() []string {
-	if w.exe == "" {
-		return nil
-	}
-	return strings.Split(w.exe, "|")
+	return w.exe
 }
 
 func classifyWindowsExe(exePath string) (known, bool) {

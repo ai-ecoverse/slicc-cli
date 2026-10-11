@@ -1,12 +1,18 @@
 package browser
 
-import "time"
+import (
+	"context"
+	"net"
+	"net/http"
+	"slices"
+	"time"
+)
 
-const MinChromiumMajor = 116
+var MinChromiumMajor = catalog.MinChromiumMajor
 
 const SchemaVersion = 1
 
-var DefaultProbePorts = []int{9222, 9223, 9224, 9225, 9226, 9227, 9228, 9229}
+var DefaultProbePorts = slices.Clone(catalog.Discovery.ProbePorts)
 
 type Engine string
 
@@ -29,6 +35,7 @@ const (
 	SourceActivePort Source = "devtools-active-port"
 	SourceProbe      Source = "probe"
 	SourceFlag       Source = "flag"
+	SourceProcess    Source = "process"
 )
 
 type Installed struct {
@@ -96,6 +103,9 @@ type Options struct {
 	NoBundleScan bool
 	NoProbe      bool
 	Timeout      time.Duration
+	Processes    func(context.Context) ([]byte, error)
+	Transport    http.RoundTripper
+	Dial         func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 type Report struct {

@@ -3,10 +3,11 @@ package browser
 import (
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 )
 
-var sevenHost = regexp.MustCompile(`^https://([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.sliccy\.ai$`)
+var sevenHost = regexp.MustCompile("^" + regexp.QuoteMeta(catalog.Seven.OriginScheme+"://") + strings.TrimPrefix(catalog.Seven.OriginHostPattern, "^"))
 
 func NormalizeOrigin(raw string) string {
 	trimmed := strings.TrimRight(strings.ToLower(strings.TrimSpace(raw)), "/")
@@ -18,7 +19,7 @@ func NormalizeOrigin(raw string) string {
 }
 
 func IsSevenOrigin(origin string, extra []string) bool {
-	if m := sevenHost.FindStringSubmatch(origin); m != nil && m[1] != "www" {
+	if m := sevenHost.FindStringSubmatch(origin); m != nil && !slices.Contains(catalog.Seven.ExcludedLabels, m[1]) {
 		return true
 	}
 	n := NormalizeOrigin(origin)

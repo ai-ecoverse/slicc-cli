@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,40 +61,23 @@ func (b *Browser) Err() error {
 	}
 }
 
-var SevenSwitches = []string{
-	"--disable-background-timer-throttling",
-	"--disable-backgrounding-occluded-windows",
-	"--disable-renderer-backgrounding",
-	"--disable-background-tracing",
-}
+var SevenSwitches = slices.Clone(catalog.Seven.Switches)
 
-var SevenDisabledFeatures = []string{
-	"LocalNetworkAccessChecks",
-	"LocalNetworkAccessChecksWebSockets",
-	"IntensiveWakeUpThrottling",
-	"HighEfficiencyModeAvailable",
-	"InfiniteTabsFreezing",
-	"InfiniteTabsFreezingOnMemoryPressure",
-	"CPUMeasurementInFreezingPolicy",
-	"MemoryMeasurementInFreezingPolicy",
-	"AllowDevtoolsConnectedDiscard",
-}
+var SevenDisabledFeatures = slices.Clone(catalog.Seven.DisabledFeatures)
 
-const disableFeatures = "--disable-features="
+var disableFeatures = catalog.Launch.DisableFeaturesFlag
 
 func ChromiumArgs(profileDir, startURL string, headless, sevenFlags bool, extra []string) []string {
-	args := []string{
-		"--remote-debugging-port=0",
-		"--user-data-dir=" + profileDir,
-		"--no-first-run",
-		"--no-default-browser-check",
+	args := make([]string, 0, len(catalog.Launch.ChromiumArgs)+len(SevenSwitches)+len(extra)+3)
+	for _, a := range catalog.Launch.ChromiumArgs {
+		args = append(args, strings.ReplaceAll(a, "{profile}", profileDir))
 	}
 	if sevenFlags {
 		args = append(args, SevenSwitches...)
 		args = append(args, disableFeatures+strings.Join(SevenDisabledFeatures, ","))
 	}
 	if headless {
-		args = append(args, "--headless=new")
+		args = append(args, catalog.Launch.Headless)
 	}
 	args = mergeDisableFeatures(append(args, extra...))
 	if startURL != "" {
@@ -136,7 +119,7 @@ func mergeDisableFeatures(args []string) []string {
 }
 
 func ElectronArgs(port int, extra []string) []string {
-	return append([]string{"--remote-debugging-port=" + strconv.Itoa(port)}, extra...)
+	return append([]string{strings.ReplaceAll(catalog.Launch.Electron.PortFlag, "{port}", strconv.Itoa(port))}, extra...)
 }
 
 func spawnCommand(in Installed, args []string, profileDir string, headless bool) (string, []string) {
@@ -205,7 +188,7 @@ func launchElectron(ctx context.Context, in Installed, lo LaunchOptions) (*Brows
 			return nil, err
 		}
 	}
-	port, err := freePort()
+	port, err := electronPort()
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +240,7 @@ func (b *Browser) exitError(what string) error {
 
 func (b *Browser) waitActivePort(ctx context.Context, o Options) error {
 	o = o.withDefaults()
-	client := &http.Client{Timeout: o.Timeout}
+	client := o.httpClient()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -280,7 +263,7 @@ func (b *Browser) waitActivePort(ctx context.Context, o Options) error {
 
 func (b *Browser) waitVersion(ctx context.Context, o Options, c candidate) error {
 	o = o.withDefaults()
-	client := &http.Client{Timeout: o.Timeout}
+	client := o.httpClient()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -372,13 +355,19 @@ func (b *Browser) waitExit(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func freePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
+func electronPort() (int, error) {
+	for port := catalog.Launch.Electron.MinPort; port <= 65535; port++ {
+		if slices.Contains(catalog.Launch.Electron.ReservedPorts, port) {
+			continue
+		}
+		l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			continue
+		}
+		_ = l.Close()
+		return port, nil
 	}
-	defer func() { _ = l.Close() }()
-	return l.Addr().(*net.TCPAddr).Port, nil
+	return 0, errors.New("no free local port for remote debugging")
 }
 
 type tailBuffer struct {
