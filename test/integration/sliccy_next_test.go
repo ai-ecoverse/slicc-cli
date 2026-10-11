@@ -91,7 +91,7 @@ func TestSliccyNextStagesTheLatestRelease(t *testing.T) {
 	if err := json.Unmarshal(data, &pkg); err != nil {
 		t.Fatal(err)
 	}
-	if pkg.Name != "sliccy" || pkg.Version != "7.0.0-next.1.2.4" || pkg.Bin["sliccy"] != "bin/slicc.js" || len(pkg.Optional) != 6 {
+	if pkg.Name != "sliccy" || pkg.Version != "7.0.0-next.1.2.4" || pkg.Bin["sliccy"] != "bin/slicc.js" || pkg.Bin["slicc"] != "bin/slicc.js" || len(pkg.Bin) != 2 || len(pkg.Optional) != 6 {
 		t.Fatalf("%+v", pkg)
 	}
 	for _, v := range pkg.Optional {

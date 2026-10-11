@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,7 +54,7 @@ func TestSliccyNextIsStagedAgainstTheReleasePackages(t *testing.T) {
 	if err := json.Unmarshal(data, &pkg); err != nil {
 		t.Fatal(err)
 	}
-	if pkg.Name != "sliccy" || pkg.Version != "7.0.0-next.1.2.3-test" || pkg.Bin["sliccy"] != "bin/slicc.js" || len(pkg.Bin) != 1 {
+	if pkg.Name != "sliccy" || pkg.Version != "7.0.0-next.1.2.3-test" || pkg.Bin["sliccy"] != "bin/slicc.js" || pkg.Bin["slicc"] != "bin/slicc.js" || len(pkg.Bin) != 2 {
 		t.Fatalf("%+v", pkg)
 	}
 	if pkg.Optional["@ai-ecoverse/slicc-"+target()] != "1.2.3-test" || len(pkg.Optional) != 1 {
@@ -63,7 +64,7 @@ func TestSliccyNextIsStagedAgainstTheReleasePackages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"preview of the new SLICC, seven", "npx sliccy@next", "npx sliccy@6"} {
+	for _, want := range []string{"preview of the new SLICC, seven", "npx sliccy@next", "npx sliccy@6", "two commands, `sliccy` and `slicc`"} {
 		if !strings.Contains(string(readme), want) {
 			t.Fatalf("README lacks %q:\n%s", want, readme)
 		}
@@ -158,5 +159,52 @@ func TestSliccyNeedsItsPlatformPackagesOnTheRegistry(t *testing.T) {
 	r = publish(t, node, staged, registryEnv(t, newFakeRegistry(t, dep)), "--tag", "next")
 	if !strings.Contains(r.stdout, "every optional dependency of sliccy@7.0.0-next.1.2.3-test is on the registry") || strings.Contains(r.stderr, "not on the registry") {
 		t.Fatalf("dependency present: %+v", r)
+	}
+}
+
+func requireNPM(t *testing.T) string {
+	t.Helper()
+	npm, err := exec.LookPath("npm")
+	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("npm is required for the npx tests")
+		}
+		t.Skip("npm is not installed")
+	}
+	return npm
+}
+
+func npmPack(t *testing.T, npm, dir string, env []string) string {
+	t.Helper()
+	dest := t.TempDir()
+	cmd := exec.Command(npm, "pack", dir, "--pack-destination", dest)
+	cmd.Env, cmd.Dir = env, dest
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("npm pack %s: %v\n%s", dir, err, out)
+	}
+	tarballs, _ := filepath.Glob(filepath.Join(dest, "*.tgz"))
+	if len(tarballs) != 1 {
+		t.Fatalf("npm pack %s gave %v", dir, tarballs)
+	}
+	return "file:" + filepath.ToSlash(tarballs[0])
+}
+
+func TestSliccyNextRunsThroughNpxUnderBothBins(t *testing.T) {
+	node, npm := requireNode(t), requireNPM(t)
+	env := append(isolatedEnv(t), "npm_config_cache="+t.TempDir(), "npm_config_registry=http://127.0.0.1:1/",
+		"npm_config_fetch_retries=0", "npm_config_audit=false", "npm_config_fund=false", "npm_config_update_notifier=false")
+	platform := npmPack(t, npm, filepath.Join(stage(t, node, binary), "slicc-"+target()), env)
+	sliccy := npmPack(t, npm, filepath.Join(stage(t, node, binary, "--name", "sliccy", "--launcher-only", "--version", "7.0.0-next.1.2.3-test", "--deps-version", platform), "slicc"), env)
+	for name, args := range map[string][]string{
+		"npx sliccy":         {"exec", "--yes", "--", sliccy, "--version"},
+		"the sliccy command": {"exec", "--yes", "--package", sliccy, "--", "sliccy", "--version"},
+		"the slicc command":  {"exec", "--yes", "--package", sliccy, "--", "slicc", "--version"},
+	} {
+		cmd := exec.Command(npm, args...)
+		cmd.Env, cmd.Dir = env, t.TempDir()
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "slicc 1.2.3-test") {
+			t.Fatalf("%s: %v\n%s", name, err, out)
+		}
 	}
 }
