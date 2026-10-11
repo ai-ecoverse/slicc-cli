@@ -41,7 +41,7 @@ Signing:
 - an npm install (`SLICC_LAUNCHER=npm`, or a path through `node_modules`), which updates through npm;
 - a binary inside an app bundle (`*.app/Contents/…`), which the app updates.
 
-Release builds outside npm and app bundles print a notice on stderr when a newer release exists: ``slicc X is available (you have Y); run `slicc update` ``. The notice comes from a cache (`<user cache dir>/slicc/update-check.json`), and a background check refreshes it at most once every 24 hours, so no run waits on the check for more than 2 seconds. `--version`, `--help` and `update` print no notice.
+Release builds outside npm and app bundles print a notice on stderr when a newer release exists: ``slicc X is available (you have Y); run `slicc update` ``. The notice comes from a cache (`<user cache dir>/slicc/update-check.json`), and a background check refreshes it at most once every 24 hours, so no run waits on the check for more than 2 seconds. `--version`, `update`, and any command line with `--help`, `-h` or `-help` print no notice.
 
 ## Telemetry
 
@@ -49,7 +49,7 @@ Release builds send operational telemetry through [go-optel](https://github.com/
 - `enter`, with the subcommand as `source`, from a fixed list (`abort`, `attach`, `browsers`, `follow`, `launch`, `prompt`, `update`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
 - `error`, for operational failures, from a fixed set of sources (`update`, `signal`, `link`, `browser`, `ssh`, `cdp`). Messages pass through go-optel's sanitizer, which strips URLs and paths.
 
-`--version` and `--help` send nothing, and development builds never configure a client.
+`--version`, and any command line with `--help`, `-h` or `-help` (such as `slicc update --help`), send nothing, and development builds never configure a client.
 
 ## Environment
 
@@ -752,7 +752,7 @@ semantic-release cuts releases from `main` in `.github/workflows/release.yml`, o
 2. `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath` and `-X main.version=<version>`. It signs and notarizes the darwin binaries and writes `SHA256SUMS`. It would sign the windows binaries with jsign against Azure Trusted Signing, but that configuration isn't complete yet, so releases ship them unsigned for now. Without a group's signing secrets (forks, pull requests, Windows today) it warns and leaves those binaries unsigned.
 3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`. It also stages the same launcher as `sliccy` (with a `sliccy` bin and a short preview README) into `dist/npm-next/`, as version `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages.
 4. `actions/attest-build-provenance` attests every binary.
-5. semantic-release checks the version again, tags, creates the GitHub release with every binary and `SHA256SUMS`, then `scripts/npm-publish.mjs` publishes the platform packages and the launcher through npm trusted publishing (OIDC, with provenance), and then `sliccy` with `--tag next`. Versions already on npm are skipped.
+5. semantic-release checks the version again, tags, creates the GitHub release with every binary and `SHA256SUMS`, then `scripts/npm-publish.mjs` publishes the platform packages and the launcher through npm trusted publishing (OIDC, with provenance), and then `sliccy` with `--tag next`. Versions already on npm are skipped. Before publishing `sliccy`, the script checks that every exact-pinned `optionalDependencies` version is on the registry, waits up to `SLICC_REGISTRY_WAIT_SECONDS` (default 300) for freshly published ones to appear, and fails otherwise, so a `sliccy` version never points at missing platform packages.
 
 On pull requests the same workflow runs as a dry run: an unsigned build of all six targets, the npm packages and `sliccy` (with `--tag next`) packed with `--dry-run`, and each binary run with `--version` on its own OS and CPU.
 

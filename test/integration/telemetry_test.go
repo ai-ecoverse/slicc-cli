@@ -132,3 +132,31 @@ func TestTelemetryOptOutAndDevBuildsSendNothing(t *testing.T) {
 		}
 	}
 }
+
+func TestHelpAnywhereSendsNothingAndChecksNothing(t *testing.T) {
+	gh := newFakeGitHub(t, "v1.1.0", nil)
+	col := newCollector(t)
+	release := buildVersion(t, "1.0.0", t.TempDir())
+	control := runBin(t, gh.env(t, col.env()...), release, "frobnicate")
+	if col.find("enter") == nil || gh.requests.Load() == 0 {
+		t.Fatalf("the control run sent no beacon or no update check: %+v, %d requests", control, gh.requests.Load())
+	}
+	before, beacons := gh.requests.Load(), len(col.got())
+	for _, args := range [][]string{
+		{"update", "--help"},
+		{"update", "-h"},
+		{"frobnicate", "x", "--help"},
+		{"frobnicate", "-help"},
+	} {
+		r := runBin(t, gh.env(t, col.env()...), release, args...)
+		if got := col.got(); len(got) != beacons {
+			t.Fatalf("%v sent beacons: %+v", args, got[beacons:])
+		}
+		if n := gh.requests.Load(); n != before {
+			t.Fatalf("%v checked for updates (%d requests)", args, n-before)
+		}
+		if strings.Contains(r.stderr, "is available") {
+			t.Fatalf("%v printed the update notice: %+v", args, r)
+		}
+	}
+}

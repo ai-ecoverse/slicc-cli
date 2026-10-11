@@ -14,8 +14,20 @@ var quietCommands = map[string]bool{
 	"--help": true, "-h": true, "help": true,
 }
 
-func startup(args []string, stderr io.Writer) func() {
+func quiet(args []string) bool {
 	if len(args) > 0 && quietCommands[args[0]] {
+		return true
+	}
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" || arg == "-help" {
+			return true
+		}
+	}
+	return false
+}
+
+func startup(args []string, stderr io.Writer) func() {
+	if quiet(args) {
 		return func() {}
 	}
 	targs := args
