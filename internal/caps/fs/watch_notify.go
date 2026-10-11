@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package fs
 
@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/fsnotify/fsnotify"
@@ -89,12 +88,4 @@ func notifyEvent(w *fsnotify.Watcher, root string, ev fsnotify.Event, note func(
 	}
 	note(relName(root, ev.Name))
 	return true
-}
-
-func relName(root, name string) (string, bool) {
-	rel, err := filepath.Rel(root, name)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", false
-	}
-	return filepath.ToSlash(rel), true
 }

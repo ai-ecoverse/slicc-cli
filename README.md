@@ -482,7 +482,7 @@ The browser's connection waits unread for `OPENED`.
 
 The watcher per OS:
 - **Linux:** inotify through fsnotify, one watch per directory, so the node walks the folder at start and adds every new directory. Symlinks aren't followed. A tree past `fs.inotify.max_user_watches` makes the watcher fail, which is then retried every second.
-- **macOS:** kqueue through fsnotify, which holds one descriptor per watched directory and file. A very large tree can run out of descriptors in the same way.
+- **macOS:** one FSEvents stream on the folder (`FSEventStreamCreate` with file events, through purego, so the binary stays free of cgo). It holds no descriptor on anything in the tree and never follows symlinks, so tree size doesn't matter. A dropped or coalesced batch (`MustScanSubDirs`) is an `all`, and a folder that is moved or removed (`RootChanged`) is lost until it comes back.
 - **Windows:** one `ReadDirectoryChangesW` on the folder with `bWatchSubtree`, which is what libuv does. A handle on every directory would stop Windows from renaming any of their parents.
 
 **Mount updates** (page cap `mounts`). When folders are added or removed while a link is up (`fs.Server.Add` and `Remove`, for the TUI), the node opens `OPEN { "kind": "mounts", "mounts": [ … ] }` on the control channel, with the full list in HELLO's shape. It replaces the previous list, and there are no deltas. The page answers OPENED `{}` and END, and the node sends END. Updates go one at a time per link, and one the page doesn't finish within 10 s is reset with `ETIMEDOUT`. A removed folder's handles close (`EBADF` if the name comes back), its operations are `ENOENT`, and a watch stream covering it ends with `RESET ENOENT: no such folder`. `--mount` alone never changes the set.
