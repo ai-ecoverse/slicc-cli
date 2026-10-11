@@ -139,17 +139,18 @@ func TestSliccyNextIsGuardedLikeTheRelease(t *testing.T) {
 }
 
 func TestReleaseWorkflowOffersTheSliccyNextRecovery(t *testing.T) {
-	data, err := os.ReadFile("../../.github/workflows/release.yml")
+	raw, err := os.ReadFile("../../.github/workflows/release.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
+	data := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	for _, want := range []string{
 		"sliccy_next_only:",
 		"node scripts/sliccy-next.mjs --dry-run",
 		"inputs.sliccy_next_only && github.ref == 'refs/heads/main'",
 		"run: node scripts/sliccy-next.mjs\n",
 	} {
-		if !strings.Contains(string(data), want) {
+		if !strings.Contains(data, want) {
 			t.Fatalf("release.yml lacks %q", want)
 		}
 	}
