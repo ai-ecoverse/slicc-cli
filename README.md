@@ -30,6 +30,77 @@ The binary is built from source on your machine. It has no Developer ID signatur
 
 A go-installed `slicc` reports its module version (`slicc 1.25.2` for `@v1.25.2`). It counts as a release build for [telemetry](#telemetry) and the update notice, but `slicc update` doesn't replace it; see [Updates](#updates).
 
+## Coming from SLICC six
+
+`npx sliccy` (`sliccy@latest`) is still SLICC six: its node-server, with six's UI on `www.sliccy.ai`. `npx sliccy@next` runs this binary, which links browsers to seven on `seven.sliccy.ai`. Six stays available as `npx sliccy@6`.
+
+**Six's flags.** `slicc` with no command stops at a flag of six's node-server before it discovers or launches anything. So does an unknown command followed by one. It prints this line on stderr and exits 2:
+
+```
+slicc: <flag> is a SLICC six option. This is the new SLICC (seven). For SLICC six, run: npx sliccy@6 <your args>
+```
+
+- `<your args>` is the command line as given, with arguments quoted for the shell where needed. A join URL is shown as `<join-url>`, since it is never printed.
+- `--flag value` and `--flag=value` both count.
+- With no command, Go's flag syntax applies, so `-electron` counts as well.
+- The first six flag is the one named.
+
+The flags come from six's `packages/node-server/src/runtime-flags.ts`, at slicc `e44ee9d2c` (6.247.17):
+
+| six flag | six's parser |
+| --- | --- |
+| `-v` | `runtime-flags.ts:159` |
+| `--serve-only` | `runtime-flags.ts:163` |
+| `--hosted` | `runtime-flags.ts:167` |
+| `--kill` | `runtime-flags.ts:171` |
+| `--install-cli` | `runtime-flags.ts:175` |
+| `--computer-demo` | `runtime-flags.ts:179` |
+| `--cdp-port` | `runtime-flags.ts:188` |
+| `--log-level` | `runtime-flags.ts:196` |
+| `--log-dir` | `runtime-flags.ts:203` |
+| `--prompt` | `runtime-flags.ts:207`, `:256` |
+| `--env-file` | `runtime-flags.ts:211`, `:258` |
+| `--install-dir` | `runtime-flags.ts:219`, `:260` |
+| `--lead` | `runtime-flags.ts:223`, `:333` |
+| `--join` | `runtime-flags.ts:228`, `:333` |
+| `--electron-app` | `runtime-flags.ts:237`, `:336` |
+| `--electron` | `runtime-flags.ts:336` |
+| `--cloud` | `cloud/dispatch.ts:108` (next to `runtime-flags.ts`) |
+
+Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and keep their seven meaning. Six's `--mount <os-path>:<vfs-path>` is refused with a hint; see [Host folders](#host-folders).
+
+**What changed:**
+
+| six | seven's `slicc` |
+| --- | --- |
+| `npx sliccy` (six's UI on `www.sliccy.ai`) | `npx sliccy@next` (seven on `seven.sliccy.ai`); six stays at `npx sliccy@6` |
+| a global `slicc` from `npm i -g sliccy` | `npm i -g sliccy@next` installs `sliccy` and `slicc`, and `@ai-ecoverse/slicc` installs `slicc`. Install only one of them globally, since both provide `slicc` |
+| six's Go follower, also called `slicc` (`--install-cli`, `install-cli \| sh`) | whichever `slicc` comes first on `PATH` runs; `slicc --version` prints 6.x for six's |
+| `--serve-only --cdp-port=9222` | `slicc --cdp http://127.0.0.1:9222`, or `slicc attach --cdp …` |
+| `--mount=~/proj:/workspace/proj` | `--mount ~/proj[:proj][:ro]`, a name rather than a path; the folder is then mounted in seven |
+| `--profile leader` (QA), `SLICC_USER_DATA_DIR` | `--profile <name>`, a SLICC profile (see [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)) |
+| `--prompt "…"` | `slicc prompt --cdp <url> "…"` once the link is up |
+| `--lead [url]`, `WORKER_BASE_URL` | `--page <url>` and `--origin <origin>` |
+| `--electron <app>`, `--kill` | `slicc --browser chrome --browser electron:<slug>`; quit the app first |
+| `--log-level`, `--log-dir` | `SLICC_DEBUG=1`, on stderr |
+| `-v` | `-V` or `--version` |
+| `slicc <url> follow bash -c` | `slicc <url> follow --runner bash -c` |
+| `slicc <url> follow --eval python -i` | `slicc <url> follow --runner sh -c --eval python3 -i` |
+| `follow --no-banner`, `--plain` | no banner; `--plain` exists on `slicc`, `prompt` and `watch` |
+| `watch <scoop>`, `exec`, `wait`, `model`, `thinking`, `new-session`, `*-cloud`, `list-sessions`, `--cloud`, `--hosted`, `--install-cli`, `--computer-demo` | not available |
+| `slicc update` (six's follower) | six's follower updates from `ai-ecoverse/slicc`, and this one from `ai-ecoverse/slicc-cli`; moving over means reinstalling |
+
+**Environment variables.**
+- **Gone:** `PORT`, `CHROME_PATH`, `SLICC_USER_DATA_DIR`, `SLICC_CDP_LAUNCH_TIMEOUT_MS`, `WORKER_BASE_URL`, `SLICC_TRAY_WORKER_BASE_URL`, `SLICC_SECRETS_FILE`, `E2B_API_KEY`, `SLICC_JOIN_FILE`, `CHROME_USER_DATA_DIR`, `SLICC_CHROME_GPU`, `SLICC_CHROME_MOCK_KEYCHAIN`, `SLICC_BRIDGE_TOKEN`, `SLICC_PROMPT_SETTLE`, `SLICC_ABORT_CONFIRM`, `SLICC_NO_TUI` (use `--plain`), `SLICC_LOG_LEVEL`, `SLICC_LOG_FORMAT`, `COLUMNS`, `SLICC_INSTALL_DIR`.
+- **Kept:** `SLICC_DEBUG`, `SLICC_NO_TELEMETRY`, `SLICC_NO_UPDATE_CHECK`, `SLICC_UPDATE_API_BASE`, `OPTEL_RATE`, `OPTEL_DEBUG`, `NO_COLOR`.
+- **New:** `SLICC_TELEMETRY_URL`, `SLICC_LAUNCHER` (set by npm), `SLICC_DISCOVERY` (tests).
+
+**Files.**
+- **Not read:** `~/.slicc/secrets.env`, `~/.slicc/session-id`, `~/.slicc/logs/` and `~/.slicc/cloud-sessions.json`.
+- **Moved into seven:** `~/.slicc/crontab` and `~/.slicc/webhooks/` now live inside seven's kernel, not on the host.
+- **Update cache:** six's Go follower caches its update check in `<user cache dir>/slicc/update-check.json`, and this binary uses `update-check-seven.json` next to it. Both files have the same shape, so with one shared file, each binary would show the other's version and hold back the other's check.
+- **Kept by this binary:** `<config>/slicc/` holds `ssh_host_ed25519_key`, `tray-certs.json`, `tray-join.json` and the SLICC profiles.
+
 ## Verifying a download
 
 Put the binary and the release's `SHA256SUMS` in one folder, then check:
@@ -55,7 +126,7 @@ Signing:
 
 These checks come first, so `--check` refuses the same way and nothing asks GitHub.
 
-Release builds outside npm and app bundles print a notice on stderr when a newer release exists: ``slicc X is available (you have Y); run `slicc update` ``. A go-installed release says ``run `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest` `` instead. The notice comes from a cache (`<user cache dir>/slicc/update-check.json`), and a background check refreshes it at most once every 24 hours, so no run waits on the check for more than 2 seconds. `--version`, `update`, and any command line with `--help`, `-h` or `-help` print no notice.
+Release builds outside npm and app bundles print a notice on stderr when a newer release exists: ``slicc X is available (you have Y); run `slicc update` ``. A go-installed release says ``run `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest` `` instead. The notice comes from a cache (`<user cache dir>/slicc/update-check-seven.json`; six's Go follower uses `update-check.json`, see [Coming from SLICC six](#coming-from-slicc-six)), and a background check refreshes it at most once every 24 hours, so no run waits on the check for more than 2 seconds. `--version`, `update`, and any command line with `--help`, `-h` or `-help` print no notice.
 
 ## Telemetry
 
@@ -109,7 +180,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven.
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
-- Any other flag, or an argument, is an error.
+- A flag of SLICC six's points back to six and exits 2 (see [Coming from SLICC six](#coming-from-slicc-six)). Any other flag, or an argument, is an error.
 
 **The picker** comes up when stdin and stdout are both terminals and none of `--yes`, `--browser`, `--plain` or `--json` is given. It lists the ranking best first, one row each, with its state: `CDP :<port>` and `seven open` for a running endpoint, `installed · profile <name>` (or `new SLICC profile <name>` when the profile doesn't exist yet) for a browser slicc would launch, and `installed · Electron` for an Electron app. The first row is marked `best match`. A list longer than the terminal scrolls with the cursor.
 
@@ -410,6 +481,7 @@ The browser's connection waits unread for `OPENED`.
 
 **Export.**
 - A trailing `:ro` makes the folder read-only. After that, the text after the last `:` is the name if it isn't empty and has no `/` or `\`, so `C:\work` is a path and `C:\work:proj` is named `proj`. The default name is the folder's own.
+- SLICC six's form, `<os-path>:<vfs-path>`, is refused with exit 2 before anything starts: `--mount <spec> is SLICC six's form, <os-path>:<vfs-path>. This is the new SLICC (seven): use --mount <path>[:<name>][:ro], such as --mount <path>:<name>, then mount the folder in seven.`, with the last component of the VFS path as the name. A spec counts as six's when, without `:ro`, it has no name and the text after its last `:` starts with `/`, unless the text before it is a drive letter (`C:/work`) or the whole spec is an existing folder.
 - The folder is resolved with `realpath` at start. A missing path or a file is skipped with `--mount <spec>: not an existing folder, skipping`, a name of `.` or `..` with `invalid name, skipping`, and a second folder under a name already used with `the name <name> is taken, skipping`.
 - Names never reveal host paths, and neither does anything else on the link.
 - Without a folder, the node doesn't advertise `fs`, and an `fs` OPEN gets `EOPNOTSUPP`.
@@ -764,7 +836,7 @@ The real-Chrome tests in `test/integration/` launch headless, so they run the ex
 semantic-release cuts releases from `main` in `.github/workflows/release.yml`, on a macOS runner:
 1. `scripts/release-plan.mjs` asks semantic-release (dry run) for the next version, and stops when there is none.
 2. `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath` and `-X main.version=<version>`. It signs and notarizes the darwin binaries and writes `SHA256SUMS`. It would sign the windows binaries with jsign against Azure Trusted Signing, but that configuration isn't complete yet, so releases ship them unsigned for now. Without a group's signing secrets (forks, pull requests, Windows today) it warns and leaves those binaries unsigned.
-3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`. It also stages the same launcher as `sliccy` (with a `sliccy` bin and a short preview README) into `dist/npm-next/`, as version `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages.
+3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`. It also stages the same launcher as `sliccy` (with two bins, `sliccy` and `slicc`, and a short preview README) into `dist/npm-next/`, as version `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages. `npx sliccy@next` runs the bin named after the package, `sliccy`, and both bins run the same launcher. `--bin <name>` (repeatable) overrides the bins of any staged launcher.
 4. `actions/attest-build-provenance` attests every binary.
 5. semantic-release checks the version again (`dist/VERSION`, and `scripts/go-major.mjs`, see below), tags, creates the GitHub release with every binary and `SHA256SUMS`, then `scripts/npm-publish.mjs` publishes the platform packages and the launcher through npm trusted publishing (OIDC, with provenance), and then `sliccy` with `--tag next`. Versions already on npm are skipped. Before publishing `sliccy`, the script checks that every exact-pinned `optionalDependencies` version is on the registry, waits up to `SLICC_REGISTRY_WAIT_SECONDS` (default 900) for freshly published ones to appear, and fails otherwise, so a `sliccy` version never points at missing platform packages.
 6. `scripts/go-warm.sh <version>`, once the tag is on `origin`, asks `proxy.golang.org` for the module at `v<version>` (`go list -m` with a scratch module cache) and asks `pkg.go.dev` to fetch it. The proxy fetch is retried briefly; the `pkg.go.dev` fetch is one attempt of at most 10 s, since the proxy fetch already gets the version indexed. Both only warn, and the step can't fail the release.
