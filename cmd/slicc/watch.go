@@ -12,6 +12,7 @@ import (
 
 const watchUsage = `usage: slicc <join-url> watch [--plain] [--json] [--thinking]
        slicc watch --cdp <url> [--origin <origin>]... [--plain] [--json] [--thinking]
+       slicc watch --signal stdio [--thinking]
 
 Follow seven's agent as it works, until Ctrl-C. Prompts and the assistant's
 text go to stdout; tool calls, results, notices and errors go to stderr,
@@ -25,6 +26,9 @@ flags:
   --plain            no styling, even on a terminal
   --cdp <url>        link over CDP instead of a join URL
   --origin <origin>  with --cdp, also accept seven on this origin
+  --signal stdio     carry the local setup messages as NDJSON on stdin
+                     and stdout instead of CDP (for a test harness);
+                     stdout also carries the events, as with --json
 
 Exit status: 0 on Ctrl-C, 1 when the link can't be set up for good, 2 for bad
 usage, 3 when seven doesn't allow remote control from this device.

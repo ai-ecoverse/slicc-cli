@@ -9,6 +9,7 @@ import (
 	"os"
 	ossignal "os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -27,6 +28,7 @@ type agentFlags struct {
 	verb             string
 	joinURL          string
 	cdp              string
+	signal           string
 	origins          []string
 	plain            bool
 	json             bool
@@ -55,13 +57,14 @@ func agentUsage(verb string) string {
 }
 
 func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, int) {
-	f := agentFlags{verb: verb, joinURL: joinURL}
+	f := agentFlags{verb: verb, joinURL: joinURL, signal: "cdp"}
 	usage := agentUsage(verb)
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	if joinURL == "" {
 		fs.StringVar(&f.cdp, "cdp", "", "")
 		fs.Var((*multi)(&f.origins), "origin", "")
+		fs.StringVar(&f.signal, "signal", "cdp", "")
 	}
 	if verb != "abort" {
 		fs.BoolVar(&f.plain, "plain", false, "")
@@ -82,6 +85,9 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 		return f, 2
 	}
 	f.args = fs.Args()
+	if code := f.checkSignal(aio); code >= 0 {
+		return f, code
+	}
 	switch {
 	case verb != "prompt" && len(f.args) > 0:
 		fmt.Fprintf(aio.stderr, "slicc %s: unexpected arguments\n\n%s", verb, usage)
@@ -92,11 +98,26 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 	case f.steer && f.reject:
 		fmt.Fprintf(aio.stderr, "slicc prompt: --steer and --reject don't go together\n")
 		return f, 2
-	case joinURL == "" && f.cdp == "":
+	case joinURL == "" && f.cdp == "" && f.signal != "stdio":
 		fmt.Fprintf(aio.stderr, "slicc %s: give a join URL (slicc <join-url> %s) or --cdp <url>\n\n%s", verb, verb, usage)
 		return f, 2
 	}
 	return f, -1
+}
+
+func (f *agentFlags) checkSignal(aio agentIO) int {
+	switch {
+	case f.signal != "cdp" && f.signal != "stdio":
+		fmt.Fprintf(aio.stderr, "slicc %s: --signal must be cdp or stdio\n", f.verb)
+		return 2
+	case f.signal != "stdio":
+		return -1
+	case len(f.args) == 1 && (f.args[0] == "-" || f.args[0] == "@-"):
+		fmt.Fprintf(aio.stderr, "slicc %s: with --signal stdio, stdin carries the setup, so the prompt can't come from it\n", f.verb)
+		return 2
+	}
+	f.json = true
+	return -1
 }
 
 func readTextArg(args []string, stdin io.Reader) (string, error) {
@@ -160,13 +181,30 @@ func (f agentFlags) links(ctx context.Context, aio agentIO, status func(string, 
 	if err != nil {
 		return nil, err
 	}
+	if f.signal == "stdio" {
+		return newStdioLinks(aio.stdin, aio.stdout, logf)
+	}
 	return newLocalLinks(ctx, f.cdp, origins, logf)
+}
+
+type lineWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lineWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 func runAgent(verb, joinURL string, args []string, aio agentIO) int {
 	f, code := parseAgent(verb, joinURL, args, aio)
 	if code >= 0 {
 		return code
+	}
+	if f.signal == "stdio" {
+		aio.stdout = &lineWriter{w: aio.stdout}
 	}
 	ctx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

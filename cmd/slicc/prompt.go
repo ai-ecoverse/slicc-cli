@@ -13,6 +13,7 @@ import (
 
 const promptUsage = `usage: slicc <join-url> prompt [flags] <text>|@file|-
        slicc prompt --cdp <url> [--origin <origin>]... [flags] <text>|@file|-
+       slicc prompt --signal stdio [flags] <text>|@file
 
 Send a prompt to seven's agent and stream its answer. The assistant's text
 goes to stdout as it streams; tool calls, results, notices and errors go to
@@ -35,6 +36,9 @@ flags:
   --abort-on-interrupt  abort the run on Ctrl-C (by default it goes on)
   --cdp <url>           link over CDP instead of a join URL
   --origin <origin>     with --cdp, also accept seven on this origin
+  --signal stdio        carry the local setup messages as NDJSON on stdin
+                        and stdout instead of CDP (for a test harness);
+                        stdout also carries the events, as with --json
 
 Exit status: 0 when the run ends normally, 1 on an error, an aborted run or a
 lost link, 2 for bad usage, 3 when seven doesn't allow remote control from
