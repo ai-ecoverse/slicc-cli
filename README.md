@@ -640,15 +640,17 @@ The real-Chrome tests in `test/integration/` launch headless, so they run the ex
 semantic-release cuts releases from `main` in `.github/workflows/release.yml`, on a macOS runner:
 1. `scripts/release-plan.mjs` asks semantic-release (dry run) for the next version, and stops when there is none.
 2. `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath` and `-X main.version=<version>`. It signs and notarizes the darwin binaries, signs the windows binaries with jsign against Azure Trusted Signing, and writes `SHA256SUMS`. Without the signing secrets (forks, pull requests) it warns and leaves those binaries unsigned.
-3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages. `--name sliccy` stages the same launcher as `sliccy`, with a `sliccy` bin.
+3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`. It also stages the same launcher as `sliccy` (with a `sliccy` bin and a short preview README) into `dist/npm-next/`, as version `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages.
 4. `actions/attest-build-provenance` attests every binary.
-5. semantic-release checks the version again, tags, creates the GitHub release with every binary and `SHA256SUMS`, then `scripts/npm-publish.mjs` publishes the platform packages and the launcher through npm trusted publishing (OIDC, with provenance). Versions already on npm are skipped.
+5. semantic-release checks the version again, tags, creates the GitHub release with every binary and `SHA256SUMS`, then `scripts/npm-publish.mjs` publishes the platform packages and the launcher through npm trusted publishing (OIDC, with provenance), and then `sliccy` with `--tag next`. Versions already on npm are skipped.
 
-On pull requests the same workflow runs as a dry run: an unsigned build of all six targets, the npm packages packed with `--dry-run`, and each binary run with `--version` on its own OS and CPU.
+On pull requests the same workflow runs as a dry run: an unsigned build of all six targets, the npm packages and `sliccy` (with `--tag next`) packed with `--dry-run`, and each binary run with `--version` on its own OS and CPU.
 
 The workflow reads these repository secrets. Each group is optional, and a missing group leaves its binaries unsigned:
 - macOS signing: `APPLE_CERTIFICATE_BASE64`, `APPLE_DEVELOPER_CERTIFICATE_PASSWORD`;
 - notarization: `APPLE_API_KEY_ID`, `APPLE_API_KEY_ISSUER_ID`, `APPLE_API_KEY_P8_BASE64`;
 - Windows signing: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_TRUSTED_SIGNING_ENDPOINT`, `AZURE_TRUSTED_SIGNING_ACCOUNT`, `AZURE_TRUSTED_SIGNING_PROFILE`, and `AZURE_CLIENT_SECRET` unless the app registration trusts this workflow through a federated credential (OIDC).
 
-npm needs no token. `npm run trust` (fledgling) configures trusted publishing for the seven packages listed under `fledgling.include` in `package.json`. Publishing to npm is off until the repository variable `SLICC_NPM_PUBLISH` is `true`; until then a release only warns.
+npm needs no token. `npm run trust` (fledgling) configures trusted publishing for the seven packages listed under `fledgling.include` in `package.json`. Publishing to npm is off until the repository variable `SLICC_NPM_PUBLISH` is `true`, and `sliccy` stays off until `SLICCY_NEXT_PUBLISH` is `true`; until then a release skips them with a notice.
+
+`sliccy` only ever goes to the `next` dist-tag, so `npx sliccy` keeps running SLICC six and `npx sliccy@next` runs this binary. `npm-publish.mjs` refuses, even in a dry run, to publish `sliccy` with any tag but `next` or with a version that doesn't match `^7\.0\.0-next\.`. Nothing here changes `sliccy`'s other dist-tags.
