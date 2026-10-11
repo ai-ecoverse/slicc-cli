@@ -19,12 +19,18 @@
 ## Install
 
 - **npm:** `npm install -g @ai-ecoverse/slicc`, or `npx @ai-ecoverse/slicc`. The package is a small Node launcher; npm picks one of the platform packages `@ai-ecoverse/slicc-<os>-<arch>` (`darwin`, `linux`, `windows` × `amd64`, `arm64`) through `optionalDependencies` and their `os` and `cpu` fields. The launcher runs that binary with the same arguments, stdio and environment plus `SLICC_LAUNCHER=npm`, forwards `SIGTERM`, `SIGHUP`, `SIGQUIT` and `SIGUSR2` to it, and `SIGINT` too when stdin is not a terminal (a terminal's Ctrl-C already reaches the binary; on Windows the console delivers Ctrl-C and Ctrl-Break to both). It exits with the binary's exit code, or dies of the same signal. An install with `--omit=optional` has no binary, and the launcher says so.
-- **GitHub releases:** every release of `ai-ecoverse/slicc-cli` carries `slicc-<os>-<arch>` (`.exe` on Windows) for all six targets, plus `SHA256SUMS`. Check a download with `shasum -a 256 -c SHA256SUMS --ignore-missing` and `gh attestation verify slicc-linux-amd64 --repo ai-ecoverse/slicc-cli`.
+- **GitHub releases:** every release of `ai-ecoverse/slicc-cli` carries `slicc-<os>-<arch>` (`.exe` on Windows) for all six targets, plus `SHA256SUMS`. See [Verifying a download](#verifying-a-download).
+
+## Verifying a download
+
+Put the binary and the release's `SHA256SUMS` in one folder, then check:
+- **Checksum on macOS and Linux:** `shasum -a 256 -c SHA256SUMS --ignore-missing`. On Linux `sha256sum -c SHA256SUMS --ignore-missing` does the same.
+- **Checksum on Windows (PowerShell):** `(Get-FileHash slicc-windows-amd64.exe -Algorithm SHA256).Hash.ToLower()` must equal the hash on that file's line in `SHA256SUMS` (`Select-String slicc-windows-amd64.exe SHA256SUMS`).
+- **Provenance:** `gh attestation verify <file> --repo ai-ecoverse/slicc-cli` checks the GitHub build-provenance attestation (Sigstore) that the release workflow made for that exact file.
 
 Signing:
 - **macOS:** the binaries are signed with a Developer ID, with the hardened runtime, and notarized. A bare binary can't carry a stapled ticket (only apps, disk images and installer packages can), so Gatekeeper checks the notarization online the first time it runs. Inside Sliccstart.app the binary is stapled with the app.
-- **Windows:** both binaries are Authenticode-signed through Azure Trusted Signing.
-- **Every binary:** a GitHub build-provenance attestation (Sigstore) and an entry in `SHA256SUMS`.
+- **Windows:** the binaries are unsigned for now. Authenticode signing through Azure Trusted Signing comes before general availability. Until then a browser download gets a SmartScreen warning, and AppLocker, WDAC or Intune policies can block the binary.
 
 ## Updates
 
