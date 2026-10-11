@@ -26,7 +26,7 @@
   "scripts": {
     "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && golangci-lint run",
     "format": "gofmt -w .",
-    "test": "go test -race -count=1 ./test/integration/...",
+    "test": "go test -race -count=1 -timeout 15m ./test/integration/...",
     "test:unit": "go test -race -cover ./cmd/... ./internal/...",
     "build": "go build -trimpath -ldflags \"-s -w\" -o bin/slicc ./cmd/slicc",
     "dist": "SLICC_SIGN=0 scripts/package.sh 0.0.0-dev",

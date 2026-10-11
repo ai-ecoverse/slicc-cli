@@ -93,8 +93,7 @@ func launchBrowserOn(t *testing.T, debugPort int) *chromeProc {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		reap(t, cmd, "Chrome")
 		_ = os.RemoveAll(dir)
 	})
 	port := 0
@@ -238,8 +237,7 @@ func startAttachEnv(t *testing.T, stdio bool, env []string, args ...string) *att
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		reap(t, cmd, "slicc attach")
 		if t.Failed() {
 			t.Logf("slicc attach stderr:\n%s", a.stderr.String())
 		}

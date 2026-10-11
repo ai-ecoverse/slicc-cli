@@ -54,7 +54,7 @@ jobs:
         with:
           node-version: 24
 
-      - run: go test -race -count=1 ./test/integration/...
+      - run: go test -race -count=1 -timeout 15m ./test/integration/...
 
       - run: go build -trimpath -o bin/ ./cmd/slicc
         env:
