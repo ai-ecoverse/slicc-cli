@@ -212,23 +212,32 @@ func flagValue(cmd, marker string) string {
 		rest := cmd[after:]
 		switch {
 		case strings.HasPrefix(rest, "="):
-			return takeToken(rest[1:])
+			return takeValue(rest[1:])
 		case rest != "" && unicode.IsSpace(rune(rest[0])):
-			return takeToken(rest)
+			return takeValue(strings.TrimLeftFunc(rest, unicode.IsSpace))
 		}
 		start = after
 	}
 }
 
-func takeToken(s string) string {
-	s = strings.TrimLeftFunc(s, unicode.IsSpace)
-	if strings.HasPrefix(s, `"`) || strings.HasPrefix(s, "'") {
-		return quotedToken(s)
+func takeValue(s string) string {
+	p := catalog.Discovery.Process
+	for _, q := range p.ValueQuotes {
+		if strings.HasPrefix(s, q) {
+			return quotedToken(s)
+		}
 	}
-	if f := strings.Fields(s); len(f) > 0 {
-		return f[0]
+	if strings.HasPrefix(s, p.ValueStop) {
+		return ""
 	}
-	return ""
+	end := len(s)
+	for i, r := range s {
+		if unicode.IsSpace(r) && strings.HasPrefix(strings.TrimLeftFunc(s[i:], unicode.IsSpace), p.ValueStop) {
+			end = i
+			break
+		}
+	}
+	return strings.TrimRightFunc(s[:end], unicode.IsSpace)
 }
 
 func underLegacyProfiles(dir string) bool {
