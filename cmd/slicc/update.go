@@ -15,7 +15,9 @@ import (
 const updateUsage = `usage: slicc update [--check]
 
 Replaces this binary with the latest release of ai-ecoverse/slicc-cli.
---check only reports whether a newer release exists.
+--check only reports whether a newer release exists. A copy installed
+with go install, npm or an app bundle is not replaced; slicc update
+prints how to update it instead.
 `
 
 var launcher = update.TakeLauncher()
@@ -39,8 +41,8 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "slicc update: locating this binary: %s\n", err)
 		return 1
 	}
-	if m := update.ManagedBy(exe, launcher); m != update.Unmanaged {
-		fmt.Fprintf(stderr, "slicc update: %s\n", m.Advice())
+	if m := update.ManagedBy(exe, launcher, goInstalled); m != update.Unmanaged {
+		fmt.Fprintf(stderr, "slicc update: %s\n", m.Advice(exe))
 		return 1
 	}
 	update.RemoveStale(exe)
@@ -70,7 +72,7 @@ func applyUpdate(ctx context.Context, checker *update.Checker, rel *update.Relea
 		return 0
 	}
 	if check {
-		fmt.Fprintln(stdout, update.Notice(rel.Version, version))
+		fmt.Fprintln(stdout, update.Notice(update.Unmanaged, rel.Version, version))
 		return 0
 	}
 	fmt.Fprintf(stdout, "updating slicc %s to %s\n", update.Normalize(version), rel.Version)
@@ -88,7 +90,7 @@ func startUpdateNotice(stderr io.Writer) func() {
 	if err != nil {
 		return func() {}
 	}
-	m := update.ManagedBy(exe, launcher)
+	m := update.ManagedBy(exe, launcher, goInstalled)
 	if m == update.Unmanaged {
 		update.RemoveStale(exe)
 	}
