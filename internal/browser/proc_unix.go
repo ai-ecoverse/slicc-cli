@@ -42,3 +42,10 @@ func findProcess(ctx context.Context, exe string) int {
 	}
 	return matchProcess(string(out), exe)
 }
+
+func processTable(ctx context.Context) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	argv := catalog.Discovery.Process.Unix
+	return exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
+}

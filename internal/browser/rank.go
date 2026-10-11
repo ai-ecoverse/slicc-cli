@@ -5,19 +5,19 @@ import (
 	"strings"
 )
 
-const (
-	TierSevenOpen = 1
-	TierEndpoint  = 2
-	TierChrome    = 3
-	TierChromium  = 4
-	TierElectron  = 5
+var (
+	TierSevenOpen = catalog.Rank.Tiers.SevenOpen
+	TierEndpoint  = catalog.Rank.Tiers.Endpoint
+	TierChrome    = catalog.Rank.Tiers.Chrome
+	TierChromium  = catalog.Rank.Tiers.Chromium
+	TierElectron  = catalog.Rank.Tiers.Electron
 )
 
 func installedTier(in Installed) int {
 	switch {
 	case in.Engine == EngineElectron:
 		return TierElectron
-	case in.ID == "chrome":
+	case in.ID == catalog.Rank.ChromeID:
 		return TierChrome
 	default:
 		return TierChromium

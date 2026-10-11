@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-var sixProfileRE = regexp.MustCompile(`^browser-coding-agent-chrome(-[0-9]+)?$`)
+var sixProfileRE = regexp.MustCompile(catalog.Profiles.SixProfilePattern)
 
 func MigrateProfiles(o Options) []string {
 	if o.ProfilesDir != "" {
@@ -18,12 +18,11 @@ func MigrateProfiles(o Options) []string {
 	}
 	o = o.withDefaults()
 	p := platform{goos: runtime.GOOS, home: o.Home, env: o.Getenv}
-	pairs := [][2]string{{p.join(p.configDir(), "slicc", legacyProfilesRoot), p.profilesDir()}}
+	pairs := [][2]string{{p.legacyProfilesDir(), p.profilesDir()}}
 	if p.goos == "linux" {
 		for _, k := range knownBrowsers {
 			if k.linux.snap != "" {
-				base := p.join(p.home, "snap", k.linux.snap, "common", "slicc")
-				pairs = append(pairs, [2]string{p.join(base, legacyProfilesRoot), p.snapProfilesDir(k.linux.snap)})
+				pairs = append(pairs, [2]string{p.snapLegacyProfilesDir(k.linux.snap), p.snapProfilesDir(k.linux.snap)})
 			}
 		}
 	}

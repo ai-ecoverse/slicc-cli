@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-const ActivePortFile = "DevToolsActivePort"
+var ActivePortFile = catalog.Discovery.ActivePortFile
 
 type candidate struct {
 	base    string
@@ -122,6 +122,10 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
+func (o Options) httpClient() *http.Client {
+	return &http.Client{Timeout: o.Timeout, Transport: o.Transport}
+}
+
 func (o Options) platform(goos string) platform {
 	return platform{goos: goos, home: o.Home, env: o.Getenv}
 }
@@ -193,6 +197,7 @@ func DiscoverEndpoints(ctx context.Context, o Options) ([]Endpoint, []error) {
 		}
 		cands = append(cands, candidate{base: base, wsPath: ws, source: SourceFlag})
 	}
+	cands = append(cands, processCandidates(ctx, o, d)...)
 	if !o.NoProbe && d.probe {
 		for _, port := range o.ProbePorts {
 			cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), source: SourceProbe})
@@ -201,7 +206,7 @@ func DiscoverEndpoints(ctx context.Context, o Options) ([]Endpoint, []error) {
 	results := make([]*Endpoint, len(cands))
 	resErrs := make([]error, len(cands))
 	var wg sync.WaitGroup
-	client := &http.Client{Timeout: o.Timeout}
+	client := o.httpClient()
 	for i, c := range cands {
 		wg.Add(1)
 		go func(i int, c candidate) {
@@ -224,7 +229,7 @@ func ProbeEndpoint(ctx context.Context, raw string, o Options) (Endpoint, error)
 	if err != nil {
 		return Endpoint{}, err
 	}
-	ep, err := probeCandidate(ctx, &http.Client{Timeout: o.Timeout}, candidate{base: base, wsPath: ws, source: SourceFlag}, o)
+	ep, err := probeCandidate(ctx, o.httpClient(), candidate{base: base, wsPath: ws, source: SourceFlag}, o)
 	if err != nil {
 		return Endpoint{}, err
 	}
@@ -238,7 +243,7 @@ func probeCandidate(ctx context.Context, client *http.Client, c candidate, o Opt
 		err = errors.New("no webSocketDebuggerUrl in /json/version")
 	}
 	if err != nil {
-		if c.wsPath != "" && tcpOpen(ctx, c.base, o.Timeout) {
+		if c.wsPath != "" && tcpOpen(ctx, c.base, o) {
 			return wsOnlyEndpoint(c), nil
 		}
 		return nil, err
@@ -271,7 +276,7 @@ func wsOnlyEndpoint(c candidate) *Endpoint {
 		WSOnly: true, SevenTabs: []Tab{},
 	}
 	ep.WebSocketURL = "ws" + strings.TrimPrefix(c.base, "http") + c.wsPath
-	ep.Name = "Chromium"
+	ep.Name = catalog.Discovery.Names.Fallback
 	if k, ok := knownByID(c.browser); ok {
 		ep.Name = k.name
 	}
@@ -280,7 +285,7 @@ func wsOnlyEndpoint(c candidate) *Endpoint {
 
 var productRE = regexp.MustCompile(`^([^/]+)/(\S+)`)
 
-var chromeMajorRE = regexp.MustCompile(`(?:Chrome|Chromium|HeadlessChrome)/(\d+)`)
+var chromeMajorRE = regexp.MustCompile(catalog.Discovery.ChromeMajorPattern)
 
 func endpointFromVersion(c candidate, vi versionInfo) Endpoint {
 	ep := Endpoint{
@@ -291,18 +296,17 @@ func endpointFromVersion(c candidate, vi versionInfo) Endpoint {
 	if m := productRE.FindStringSubmatch(vi.Browser); m != nil {
 		product, ep.Version = m[1], m[2]
 	}
+	names := catalog.Discovery.Names
 	switch {
 	case c.browser != "":
 		k, _ := knownByID(c.browser)
 		ep.Name = k.name
-	case strings.Contains(vi.UserAgent, " Electron/"):
-		ep.Name = "Electron"
-	case product == "Edg":
-		ep.Name = "Microsoft Edge"
-	case product == "HeadlessChrome":
-		ep.Name = "Chrome (headless)"
+	case strings.Contains(vi.UserAgent, names.ElectronUserAgent):
+		ep.Name = names.Electron
+	case names.Products[product] != "":
+		ep.Name = names.Products[product]
 	case product == "":
-		ep.Name = "Chromium"
+		ep.Name = names.Fallback
 	default:
 		ep.Name = product
 	}
@@ -335,13 +339,17 @@ func getJSON(ctx context.Context, client *http.Client, u string, v any) error {
 	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(v)
 }
 
-func tcpOpen(ctx context.Context, base string, timeout time.Duration) bool {
+func tcpOpen(ctx context.Context, base string, o Options) bool {
 	u, err := url.Parse(base)
 	if err != nil {
 		return false
 	}
-	d := net.Dialer{Timeout: timeout}
-	conn, err := d.DialContext(ctx, "tcp", u.Host)
+	dial := o.Dial
+	if dial == nil {
+		d := net.Dialer{Timeout: o.Timeout}
+		dial = d.DialContext
+	}
+	conn, err := dial(ctx, "tcp", u.Host)
 	if err != nil {
 		return false
 	}
@@ -362,14 +370,10 @@ func endpointKey(base string) string {
 }
 
 func sourceOrder(s Source) int {
-	switch s {
-	case SourceActivePort:
-		return 0
-	case SourceFlag:
-		return 1
-	default:
-		return 2
+	if n, ok := catalog.Discovery.SourceRank[string(s)]; ok {
+		return n
 	}
+	return len(catalog.Discovery.SourceRank)
 }
 
 func mergeEndpoints(cands []candidate, results []*Endpoint) []Endpoint {

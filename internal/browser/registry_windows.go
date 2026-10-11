@@ -8,16 +8,18 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-var appPathNames = []string{"chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe"}
+var hives = map[string]registry.Key{"HKCU": registry.CURRENT_USER, "HKLM": registry.LOCAL_MACHINE}
 
 func registryExePaths() []string {
+	reg := catalog.Platforms.Windows.Registry
 	var out []string
-	for _, root := range []registry.Key{registry.CURRENT_USER, registry.LOCAL_MACHINE} {
-		for _, base := range []string{`SOFTWARE\Clients\StartMenuInternet`, `SOFTWARE\WOW6432Node\Clients\StartMenuInternet`} {
-			out = append(out, startMenuInternet(root, base)...)
+	for _, hive := range reg.Hives {
+		root := hives[hive]
+		for _, base := range reg.StartMenuInternet {
+			out = append(out, startMenuInternet(root, base, reg.OpenCommand)...)
 		}
-		for _, name := range appPathNames {
-			if v := regDefault(root, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\`+name); v != "" {
+		for _, name := range reg.AppPathNames {
+			if v := regDefault(root, reg.AppPaths+`\`+name); v != "" {
 				out = append(out, v)
 			}
 		}
@@ -25,7 +27,7 @@ func registryExePaths() []string {
 	return out
 }
 
-func startMenuInternet(root registry.Key, base string) []string {
+func startMenuInternet(root registry.Key, base, command string) []string {
 	k, err := registry.OpenKey(root, base, registry.ENUMERATE_SUB_KEYS|registry.READ)
 	if err != nil {
 		return nil
@@ -37,7 +39,7 @@ func startMenuInternet(root registry.Key, base string) []string {
 	}
 	var out []string
 	for _, n := range names {
-		if v := regDefault(root, base+`\`+n+`\shell\open\command`); v != "" {
+		if v := regDefault(root, base+`\`+n+`\`+command); v != "" {
 			out = append(out, commandExe(v))
 		}
 	}

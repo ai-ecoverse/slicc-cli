@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-var profileNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+var profileNameRE = regexp.MustCompile(catalog.Profiles.NamePattern)
 
 var ErrProfileInUse = errors.New("profile is in use")
 
@@ -87,7 +87,7 @@ func prepareProfile(dir string, sites []string) error {
 	return nil
 }
 
-const SevenSitePattern = "[*.]sliccy.ai"
+var SevenSitePattern = catalog.Seven.SitePattern
 
 func SevenSites(extra []string) []string {
 	sites := []string{SevenSitePattern}
@@ -153,35 +153,60 @@ func setPref(m map[string]any, key string, v any, changed *bool) {
 
 func markCleanExit(prefs map[string]any) bool {
 	changed := false
-	profile := child(prefs, "profile", &changed)
-	setPref(profile, "exit_type", "Normal", &changed)
-	setPref(profile, "exited_cleanly", true, &changed)
+	for _, p := range catalog.Seven.CleanExit {
+		setPath(prefs, p.Path, prefValue(p.Value), &changed)
+	}
 	return changed
 }
 
 func applySevenPrefs(prefs map[string]any, sites []string, now time.Time) bool {
 	changed := false
-	setPref(prefs, "tab_freezing_enabled", false, &changed)
-	tuning := child(prefs, "performance_tuning", &changed)
-	setPref(child(tuning, "tab_freezing", &changed), "enabled", false, &changed)
-	setPref(child(tuning, "high_efficiency_mode", &changed), "state", json.Number("0"), &changed)
-	discard := child(tuning, "tab_discarding", &changed)
-	if mergeSiteList(discard, sites) {
-		changed = true
+	for _, p := range catalog.Seven.Prefs {
+		setPath(prefs, p.Path, prefValue(p.Value), &changed)
 	}
-	withTime := child(discard, "exceptions_with_time", &changed)
 	stamp := chromeTime(now)
-	for _, site := range sites {
-		if _, ok := withTime[site]; !ok {
-			withTime[site] = stamp
-			changed = true
+	for _, d := range catalog.Seven.DiscardExceptions {
+		parent := parentOf(prefs, d.Path, &changed)
+		key := d.Path[len(d.Path)-1]
+		switch d.Type {
+		case "list":
+			if mergeSiteList(parent, key, sites) {
+				changed = true
+			}
+		case "chrome-time-map":
+			withTime := child(parent, key, &changed)
+			for _, site := range sites {
+				if _, ok := withTime[site]; !ok {
+					withTime[site] = stamp
+					changed = true
+				}
+			}
 		}
 	}
 	return changed
 }
 
-func mergeSiteList(discard map[string]any, sites []string) bool {
-	list, ok := discard["exceptions"].([]any)
+func prefValue(raw json.RawMessage) any {
+	var v any
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	_ = d.Decode(&v)
+	return v
+}
+
+func parentOf(m map[string]any, path []string, changed *bool) map[string]any {
+	for _, k := range path[:len(path)-1] {
+		m = child(m, k, changed)
+	}
+	return m
+}
+
+func setPath(m map[string]any, path []string, v any, changed *bool) {
+	setPref(parentOf(m, path, changed), path[len(path)-1], v, changed)
+}
+
+func mergeSiteList(discard map[string]any, key string, sites []string) bool {
+	list, ok := discard[key].([]any)
 	changed := !ok
 	have := map[string]bool{}
 	exceptions := []any{}
@@ -199,7 +224,7 @@ func mergeSiteList(discard map[string]any, sites []string) bool {
 			changed = true
 		}
 	}
-	discard["exceptions"] = exceptions
+	discard[key] = exceptions
 	return changed
 }
 

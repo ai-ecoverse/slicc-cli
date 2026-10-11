@@ -9,17 +9,19 @@ type discovery struct {
 	userData  bool
 	profiles  bool
 	installed bool
+	process   bool
 }
 
 func discoveryFor(o Options) discovery {
 	mode := os.Getenv(DiscoveryEnv)
 	if mode == "" {
-		return discovery{probe: true, userData: true, profiles: true, installed: true}
+		return discovery{probe: true, userData: true, profiles: true, installed: true, process: true}
 	}
 	d := discovery{
 		probe:    o.ProbePorts != nil,
 		userData: o.Home != "",
 		profiles: o.Home != "" || o.ProfilesDir != "",
+		process:  o.Processes != nil,
 	}
 	switch mode {
 	case "home":
