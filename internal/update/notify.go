@@ -22,7 +22,7 @@ func DefaultStatePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "slicc", "update-check.json"), nil
+	return filepath.Join(dir, "slicc", "update-check-seven.json"), nil
 }
 
 type Notifier struct {
