@@ -33,11 +33,12 @@ const { values } = parseArgs({
     only: { type: 'string', multiple: true },
     'deps-version': { type: 'string' },
     'launcher-only': { type: 'boolean', default: false },
+    launcher: { type: 'string', default: join(root, 'npm', 'slicc.js') },
   },
 });
 
 if (!values.version) {
-  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name] [--only os-arch] [--deps-version semver] [--launcher-only]\n');
+  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name] [--only os-arch] [--deps-version semver] [--launcher-only] [--launcher file]\n');
   process.exit(2);
 }
 const version = values.version.replace(/^v/, '');
@@ -87,7 +88,7 @@ function stagePlatform(target) {
 function stageLauncher(platforms) {
   const dir = join(values.out, 'slicc');
   mkdirSync(join(dir, 'bin'), { recursive: true });
-  copyFileSync(join(root, 'npm', 'slicc.js'), join(dir, 'bin', 'slicc.js'));
+  copyFileSync(values.launcher, join(dir, 'bin', 'slicc.js'));
   chmodSync(join(dir, 'bin', 'slicc.js'), 0o755);
   copyFileSync(join(root, 'LICENSE'), join(dir, 'LICENSE'));
   if (values.name === 'sliccy') write(dir, 'README.md', sliccyReadme);

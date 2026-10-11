@@ -35,7 +35,7 @@ for i in $(seq 1 "$tries"); do
 done
 [ -n "$warmed" ] || warn "proxy.golang.org did not serve $module@$tag after $tries tries"
 
-if ! curl -fsS --retry 3 --retry-delay 5 --max-time 30 -X POST "https://pkg.go.dev/fetch/$module@$tag" -o /dev/null; then
+if ! curl -fsS --max-time 10 -X POST "https://pkg.go.dev/fetch/$module@$tag" -o /dev/null; then
   warn "pkg.go.dev did not accept a fetch of $module@$tag"
 fi
 exit 0
