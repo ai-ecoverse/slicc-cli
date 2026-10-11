@@ -10,12 +10,16 @@ import (
 
 const abortUsage = `usage: slicc <join-url> abort
        slicc abort --cdp <url> [--origin <origin>]...
+       slicc abort --signal stdio
 
 Abort the run seven's agent is working on, if any.
 
 flags:
   --cdp <url>        link over CDP instead of a join URL
   --origin <origin>  with --cdp, also accept seven on this origin
+  --signal stdio     carry the local setup messages as NDJSON on stdin
+                     and stdout instead of CDP (for a test harness);
+                     --cdp is then not needed
 
 Exit status: 0 when the run was aborted or nothing was running, 1 on an
 error, 2 for bad usage, 3 when seven doesn't allow remote control from this

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -58,6 +59,7 @@ func freshLink(ch <-chan *link.Link) (*link.Link, bool) {
 type localLinks struct {
 	conn   signal.Conn
 	client *cdp.Client
+	what   string
 	links  <-chan *link.Link
 	served chan error
 	cancel context.CancelFunc
@@ -71,11 +73,23 @@ func newLocalLinks(ctx context.Context, cdpURL string, origins *signal.Origins, 
 		return nil, err
 	}
 	conn := signal.NewCDP(signal.CDPOptions{Client: client, Origins: origins, Logf: logf, Status: logf})
+	return serveLocal(conn, client, "the CDP connection closed", logf), nil
+}
+
+func newStdioLinks(stdin io.Reader, stdout io.Writer, logf func(string, ...any)) (*localLinks, error) {
+	conn, err := signal.NewStdio(stdin, stdout)
+	if err != nil {
+		return nil, err
+	}
+	return serveLocal(conn, nil, "stdin closed", logf), nil
+}
+
+func serveLocal(conn signal.Conn, client *cdp.Client, what string, logf func(string, ...any)) *localLinks {
 	n := node.New(node.Config{Version: version, Mode: "local", Logf: logf, Status: logf})
 	sctx, scancel := context.WithCancel(context.Background())
-	ll := &localLinks{conn: conn, client: client, links: linkedEvents(n), served: make(chan error, 1), cancel: scancel}
+	ll := &localLinks{conn: conn, client: client, what: what, links: linkedEvents(n), served: make(chan error, 1), cancel: scancel}
 	go func() { ll.served <- n.Serve(sctx, conn) }()
-	return ll, nil
+	return ll
 }
 
 func (ll *localLinks) next(ctx context.Context) (*link.Link, error) {
@@ -88,7 +102,7 @@ func (ll *localLinks) next(ctx context.Context) (*link.Link, error) {
 	case err := <-ll.served:
 		ll.served <- err
 		if err == nil {
-			err = errors.New("the CDP connection closed")
+			err = errors.New(ll.what)
 		}
 		return nil, &fatalError{msg: err.Error()}
 	case <-ctx.Done():
@@ -103,7 +117,9 @@ func (ll *localLinks) close() {
 	case <-time.After(5 * time.Second):
 	}
 	_ = ll.conn.Close()
-	_ = ll.client.Close()
+	if ll.client != nil {
+		_ = ll.client.Close()
+	}
 }
 
 type remoteLinks struct {

@@ -608,11 +608,15 @@ slicc <join-url> abort
 slicc prompt --cdp <url> [--origin <origin>]... [flags] <text>|@file|-
 slicc watch --cdp <url> [--origin <origin>]... [flags]
 slicc abort --cdp <url> [--origin <origin>]...
+slicc prompt|watch|abort --signal stdio [flags] …
 ```
 
 These commands talk to seven's agent over a link that offers nothing to seven (`caps: []`).
 - **With a join URL:** slicc dials the tray as `follow` does (see [Remote setup](#remote-setup-slicc-join-url-follow)), with the same device certificate, so seven sees the same device. A `follow` already running on this machine keeps its link, because the two processes have different `node` ids. These commands never handle `join` or `unlink`. When seven has unlinked the device they say `seven unlinked this device` and exit 1, and they leave the join state and the certificate alone.
 - **With `--cdp`:** slicc links to the seven tab in that browser as `attach` does (see [Local setup](#local-setup-slicc-attach)), with `--origin` as there. A running `slicc` or `attach` on that browser keeps its link.
+- **With `--signal stdio`** (for a test harness that owns CDP itself): the local setup messages go as NDJSON on stdin and stdout, exactly as for `attach --signal stdio`, and `--cdp` isn't needed.
+  - stdout also carries the events, as with `--json`. A line with a `nonce` is a setup message, and every other line is an event.
+  - `prompt` can't read its text from stdin (`-` exits 2).
 - **Setup:** slicc waits up to 1 minute for seven's HELLO, then gives up with exit 1.
 - **No permission:** without `agent` in seven's HELLO, slicc says `this seven doesn't allow remote control from this device; turn it on in seven's Linked devices` and exits 3. A local link gets `agent` by default. A remote one gets it once *Allow remote control* is on for this device.
 - **Privacy:** prompt text and event contents never go to telemetry or logs, and the join URL is never printed.
