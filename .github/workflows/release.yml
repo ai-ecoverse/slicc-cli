@@ -48,8 +48,7 @@ jobs:
 
       - run: npm ci
 
-      - if: env.DRY_RUN != 'true'
-        run: npm test
+      - run: npm test -- -v
 
       - name: Plan
         id: plan
