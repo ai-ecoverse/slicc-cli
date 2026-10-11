@@ -41,6 +41,42 @@ function published(name, version) {
   return res.status === 0 && res.stdout.trim() === version;
 }
 
+function registry() {
+  const configured = process.env.npm_config_registry || npm(['config', 'get', 'registry']).stdout.trim();
+  return (configured || 'https://registry.npmjs.org/').replace(/\/+$/, '');
+}
+
+async function onRegistry(base, name, version) {
+  try {
+    const res = await fetch(`${base}/${name.replace('/', '%2f')}/${version}`, {
+      headers: { accept: 'application/json', 'cache-control': 'no-cache' },
+    });
+    if (!res.ok) return false;
+    return (await res.json()).version === version;
+  } catch {
+    return false;
+  }
+}
+
+async function requireDependencies(pkg) {
+  const deps = Object.entries(pkg.optionalDependencies || {});
+  if (!guarded[pkg.name] || !deps.length) return;
+  const base = registry();
+  const waitMs = Number(process.env.SLICC_REGISTRY_WAIT_SECONDS ?? 300) * 1000;
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const missing = [];
+    for (const [name, version] of deps) {
+      if (!(await onRegistry(base, name, version))) missing.push(`${name}@${version}`);
+    }
+    if (!missing.length) break;
+    if (Date.now() >= deadline) fail(`refusing to publish ${pkg.name}@${pkg.version}; not on the registry: ${missing.join(', ')}`);
+    process.stdout.write(`waiting for ${missing.join(', ')} to appear on the registry\n`);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(30000, Math.max(1000, deadline - Date.now()))));
+  }
+  process.stdout.write(`every optional dependency of ${pkg.name}@${pkg.version} is on the registry\n`);
+}
+
 function check(pkg) {
   const rule = guarded[pkg.name];
   if (!rule) return;
@@ -73,6 +109,7 @@ for (const { dir, pkg } of enabled) {
     process.stdout.write(`${pkg.name}@${pkg.version} is already published\n`);
     continue;
   }
+  if (!dryRun) await requireDependencies(pkg);
   const args = ['publish', dir, '--access', 'public', '--tag', npmTag(pkg)];
   args.push(dryRun ? '--dry-run' : '--provenance');
   const res = npm(args, { stdio: 'inherit' });
