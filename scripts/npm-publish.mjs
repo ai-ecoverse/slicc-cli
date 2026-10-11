@@ -46,10 +46,11 @@ function registry() {
   return (configured || 'https://registry.npmjs.org/').replace(/\/+$/, '');
 }
 
-async function onRegistry(base, name, version) {
+async function onRegistry(base, name, version, timeoutMs) {
   try {
     const res = await fetch(`${base}/${name.replace('/', '%2f')}/${version}`, {
       headers: { accept: 'application/json', 'cache-control': 'no-cache' },
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return false;
     return (await res.json()).version === version;
@@ -67,7 +68,8 @@ async function requireDependencies(pkg) {
   for (;;) {
     const missing = [];
     for (const [name, version] of deps) {
-      if (!(await onRegistry(base, name, version))) missing.push(`${name}@${version}`);
+      const timeoutMs = Math.min(30000, Math.max(5000, deadline - Date.now()));
+      if (!(await onRegistry(base, name, version, timeoutMs))) missing.push(`${name}@${version}`);
     }
     if (!missing.length) break;
     if (Date.now() >= deadline) fail(`refusing to publish ${pkg.name}@${pkg.version}; not on the registry: ${missing.join(', ')}`);

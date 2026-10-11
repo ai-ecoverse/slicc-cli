@@ -188,7 +188,7 @@ func TestUpdateReplacesTheBinary(t *testing.T) {
 	if _, err := os.Stat(bin + ".old"); (err == nil) != (runtime.GOOS == "windows") {
 		t.Fatalf("parked old binary: %v", err)
 	}
-	runBin(t, gh.env(t, "SLICC_NO_UPDATE_CHECK=1"), bin, "browsers", "--help")
+	runBin(t, gh.env(t, "SLICC_NO_UPDATE_CHECK=1"), bin, "no-such-command")
 	if _, err := os.Stat(bin + ".old"); err == nil {
 		t.Fatal("the parked binary survived the next run")
 	}
@@ -265,7 +265,7 @@ func TestUpdateIsDisabledForNPMAndAppBundles(t *testing.T) {
 				t.Fatalf("%v: %+v", args, r)
 			}
 		}
-		r := runBin(t, gh.env(t, "SLICC_LAUNCHER="+c.launcher), c.bin, "browsers", "--help")
+		r := runBin(t, gh.env(t, "SLICC_LAUNCHER="+c.launcher), c.bin, "no-such-command")
 		if strings.Contains(r.stderr, "is available") {
 			t.Fatalf("notice shown: %+v", r)
 		}
@@ -295,7 +295,7 @@ func TestUpdateNoticeChecksOncePerDay(t *testing.T) {
 	gh := newFakeGitHub(t, "v1.1.0", nil)
 	bin := buildVersion(t, "1.0.0", t.TempDir())
 	env := gh.env(t)
-	first := runBin(t, env, bin, "browsers", "--help")
+	first := runBin(t, env, bin, "no-such-command")
 	if strings.Contains(first.stderr, "is available") || gh.requests.Load() != 1 {
 		t.Fatalf("first run: %d requests, %+v", gh.requests.Load(), first)
 	}
@@ -306,7 +306,7 @@ func TestUpdateNoticeChecksOncePerDay(t *testing.T) {
 	if n := gh.requests.Load(); n != 1 {
 		t.Fatalf("checked GitHub %d times within a day", n)
 	}
-	quiet := runBin(t, append(env, "SLICC_NO_UPDATE_CHECK=1"), bin, "browsers", "--help")
+	quiet := runBin(t, append(env, "SLICC_NO_UPDATE_CHECK=1"), bin, "no-such-command")
 	if strings.Contains(quiet.stderr, "is available") {
 		t.Fatalf("SLICC_NO_UPDATE_CHECK: %+v", quiet)
 	}
