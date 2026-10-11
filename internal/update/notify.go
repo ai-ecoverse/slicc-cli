@@ -30,6 +30,7 @@ type Notifier struct {
 	StatePath      string
 	Out            io.Writer
 	Version        string
+	Manager        Manager
 	Now            func() time.Time
 	CheckInterval  time.Duration
 	RefreshWait    time.Duration
@@ -37,7 +38,7 @@ type Notifier struct {
 }
 
 func NewNotifier(version string, manager Manager, out io.Writer) *Notifier {
-	if !IsReleaseVersion(version) || manager != Unmanaged || os.Getenv(NoCheckEnv) != "" {
+	if !IsReleaseVersion(version) || (manager != Unmanaged && manager != Go) || os.Getenv(NoCheckEnv) != "" {
 		return nil
 	}
 	statePath, err := DefaultStatePath()
@@ -49,6 +50,7 @@ func NewNotifier(version string, manager Manager, out io.Writer) *Notifier {
 		StatePath:      statePath,
 		Out:            out,
 		Version:        version,
+		Manager:        manager,
 		Now:            time.Now,
 		CheckInterval:  24 * time.Hour,
 		RefreshWait:    2 * time.Second,
@@ -79,8 +81,8 @@ func (n *Notifier) writeState(state checkState) {
 	_ = os.Rename(tmp, n.StatePath)
 }
 
-func Notice(latest, current string) string {
-	return fmt.Sprintf("slicc %s is available (you have %s); run `slicc update`", Normalize(latest), Normalize(current))
+func Notice(m Manager, latest, current string) string {
+	return fmt.Sprintf("slicc %s is available (you have %s); run `%s`", Normalize(latest), Normalize(current), m.UpdateCommand())
 }
 
 func (n *Notifier) Start() func() {
@@ -90,7 +92,7 @@ func (n *Notifier) Start() func() {
 	}
 	state := n.readState()
 	if n.Out != nil && state.LatestVersion != "" && IsNewer(state.LatestVersion, n.Version) {
-		fmt.Fprintln(n.Out, Notice(state.LatestVersion, n.Version))
+		fmt.Fprintln(n.Out, Notice(n.Manager, state.LatestVersion, n.Version))
 	}
 	if n.Now().Sub(state.CheckedAt) < n.CheckInterval {
 		return noop

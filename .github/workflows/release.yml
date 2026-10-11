@@ -123,6 +123,14 @@ jobs:
           SLICCY_NEXT_PUBLISH: ${{ vars.SLICCY_NEXT_PUBLISH }}
         run: npx semantic-release
 
+      - name: Warm the Go module proxy
+        if: ${{ !cancelled() && steps.plan.outputs.version != '' && env.DRY_RUN != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: scripts/go-warm.sh "$VERSION"
+
   smoke:
     needs: release
     if: needs.release.outputs.version != ''

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import semanticRelease from 'semantic-release';
+import { checkMajor } from './go-major.mjs';
 
 function output(key, value) {
   const line = `${key}=${value}\n`;
@@ -12,4 +13,5 @@ const result = await semanticRelease(
   { dryRun: true, plugins: ['@semantic-release/commit-analyzer'] },
   { stdout: process.stderr, stderr: process.stderr },
 );
+if (result) checkMajor(result.nextRelease.version, readFileSync('go.mod', 'utf8'));
 output('version', result ? result.nextRelease.version : '');

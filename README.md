@@ -20,6 +20,15 @@
 
 - **npm:** `npm install -g @ai-ecoverse/slicc`, or `npx @ai-ecoverse/slicc`. The package is a small Node launcher; npm picks one of the platform packages `@ai-ecoverse/slicc-<os>-<arch>` (`darwin`, `linux`, `windows` × `amd64`, `arm64`) through `optionalDependencies` and their `os` and `cpu` fields. The launcher runs that binary with the same arguments, stdio and environment plus `SLICC_LAUNCHER=npm`, forwards `SIGTERM`, `SIGHUP`, `SIGQUIT` and `SIGUSR2` to it, and `SIGINT` too when stdin is not a terminal (a terminal's Ctrl-C already reaches the binary; on Windows the console delivers Ctrl-C and Ctrl-Break to both). It exits with the binary's exit code, or dies of the same signal. An install with `--omit=optional` has no binary, and the launcher says so.
 - **GitHub releases:** every release of `ai-ecoverse/slicc-cli` carries `slicc-<os>-<arch>` (`.exe` on Windows) for all six targets, plus `SHA256SUMS`. See [Verifying a download](#verifying-a-download).
+- **Go:** `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest`. See [Install with Go](#install-with-go).
+
+### Install with Go
+
+`go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest` puts `slicc` in `$GOBIN` (default `$(go env GOPATH)/bin`). It needs Go 1.26.5 or newer, the `go` line of `go.mod`. An older Go from 1.21 on fetches that toolchain itself unless `GOTOOLCHAIN=local` is set. `@v<version>` picks a release instead of the latest.
+
+The binary is built from source on your machine. It has no Developer ID signature, no notarization and no build attestation. Its integrity comes from the Go checksum database (`sum.golang.org`), which pins the hash of every release's source. On macOS a binary you build yourself isn't quarantined, so Gatekeeper doesn't stop it. Signed binaries come from the GitHub releases, from npm (`npx sliccy@next`, `npx @ai-ecoverse/slicc`), and from `slicc update`.
+
+A go-installed `slicc` reports its module version (`slicc 1.25.2` for `@v1.25.2`). It counts as a release build for [telemetry](#telemetry) and the update notice, but `slicc update` doesn't replace it; see [Updates](#updates).
 
 ## Verifying a download
 
@@ -36,16 +45,21 @@ Signing:
 
 `slicc update` replaces the running binary (symlinks resolved) with the latest GitHub release of `ai-ecoverse/slicc-cli`. It downloads the asset for this OS and CPU and checks it against the release's `SHA256SUMS`. The new binary has to answer `--version` with the release's version before anything is replaced. The swap is a rename next to the old binary; on Windows the running binary is first moved aside to `<name>.old`, which the next run deletes. `slicc update --check` only reports.
 
+**The version.** A release build has its version linked in (`-X main.version=<version>`). Without one, `slicc` reads its Go build info: a binary built by `go install …@<version>` (or `go run`) from a downloaded module, with a checksum in the build info, reports that module version without the leading `v`. Anything else built from a checkout reports `dev`.
+
 `update` refuses, with exit code 1:
+- a go-installed binary (no linked version, and a downloaded module with a checksum in its build info): it prints ``update it with `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest` ``;
 - a development build (any version that isn't plain `X.Y.Z`); `--check` still prints the latest release;
-- an npm install (`SLICC_LAUNCHER=npm`, or a path through `node_modules`), which updates through npm;
+- an npm install (`SLICC_LAUNCHER=npm`, or a path through `node_modules`), which updates through npm. The message names the commands: ``npm install -g @ai-ecoverse/slicc@latest`` and ``npx @ai-ecoverse/slicc@latest``, or `sliccy@next` for both when the binary came with `sliccy` (a `node_modules/sliccy` on its path, or next to its `node_modules`). Under npx (an `_npx` dir on the path) it names only the npx command;
 - a binary inside an app bundle (`*.app/Contents/…`), which the app updates.
 
-Release builds outside npm and app bundles print a notice on stderr when a newer release exists: ``slicc X is available (you have Y); run `slicc update` ``. The notice comes from a cache (`<user cache dir>/slicc/update-check.json`), and a background check refreshes it at most once every 24 hours, so no run waits on the check for more than 2 seconds. `--version`, `update`, and any command line with `--help`, `-h` or `-help` print no notice.
+These checks come first, so `--check` refuses the same way and nothing asks GitHub.
+
+Release builds outside npm and app bundles print a notice on stderr when a newer release exists: ``slicc X is available (you have Y); run `slicc update` ``. A go-installed release says ``run `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest` `` instead. The notice comes from a cache (`<user cache dir>/slicc/update-check.json`), and a background check refreshes it at most once every 24 hours, so no run waits on the check for more than 2 seconds. `--version`, `update`, and any command line with `--help`, `-h` or `-help` print no notice.
 
 ## Telemetry
 
-Release builds send operational telemetry through [go-optel](https://github.com/ai-ecoverse/go-optel) with the app id `slicc-cli`, sampled once per process (1 in 100 by default):
+Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from the module version) send operational telemetry through [go-optel](https://github.com/ai-ecoverse/go-optel) with the app id `slicc-cli`, sampled once per process (1 in 100 by default):
 - `enter`, with the subcommand as `source`, from a fixed list (`abort`, `attach`, `browsers`, `follow`, `launch`, `prompt`, `update`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
 - `error`, for operational failures, from a fixed set of sources (`update`, `signal`, `link`, `browser`, `ssh`, `cdp`). Messages pass through go-optel's sanitizer, which strips URLs and paths.
 
@@ -728,7 +742,7 @@ A node on another machine sets up its link through the tray hub, the `slicc-tray
 
 ## Development
 
-Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`. `npm run lint` runs the slicc lint tools, `gofmt`, `go mod tidy -diff`, `go vet` and golangci-lint. `npm test` runs the integration tests in `test/integration/`, which build the binary and drive it. Unit tests stay next to the code and out of git (`npm run test:unit`). `npm run dist` cross-builds all six targets into `artifacts/release/` with `SHA256SUMS`, unsigned. `npm run npm:stage` then stages the npm packages into `dist/npm/`, and `npm run npm:check` packs them with `npm publish --dry-run`.
+Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`. `npm run lint` runs the slicc lint tools, `gofmt`, `go mod tidy -diff`, `go vet` and golangci-lint. `npm test` runs the integration tests in `test/integration/`, which build the binary and drive it. Unit tests stay next to the code and out of git (`npm run test:unit`). `go build` and `npm run build` link no version, so these binaries report `dev`. `npm run dist` cross-builds all six targets into `artifacts/release/` with `SHA256SUMS`, unsigned. `npm run npm:stage` then stages the npm packages into `dist/npm/`, and `npm run npm:check` packs them with `npm publish --dry-run`.
 
 **Test names: `--hosts <file>`** (test-only, left out of `--help`). `slicc attach` and `slicc <join-url> follow` take a hosts file, so tests get deterministic names without public DNS. Each line is `<ip> <name> [<name>…]`, and `#` starts a comment. Names match case-insensitively, with or without a trailing dot, and a name on several lines gets every address, in file order. Wherever the node resolves a name (`resolve`, `tcp` by name, `http`, and the policy's [browser endpoints](#network-policy)), a name in the file gets the file's addresses of the requested family, possibly none, and never the system resolver's. Other names go to the system resolver. The policy applies afterwards as usual: `resolve` drops refused addresses, and a dial to a refused address is `EACCES`. `tcp` and `http` try the addresses in file order. A file that can't be read or parsed exits 2. A name mapped to a loopback address only helps the node's own dials, `http` and `tcp` by name: a seven kernel that gets a loopback address from `resolve` dials its own loopback, because loopback never goes out through an exit. For end-to-end exit tests, map test names to a non-loopback address of the machine.
 
@@ -752,7 +766,12 @@ semantic-release cuts releases from `main` in `.github/workflows/release.yml`, o
 2. `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath` and `-X main.version=<version>`. It signs and notarizes the darwin binaries and writes `SHA256SUMS`. It would sign the windows binaries with jsign against Azure Trusted Signing, but that configuration isn't complete yet, so releases ship them unsigned for now. Without a group's signing secrets (forks, pull requests, Windows today) it warns and leaves those binaries unsigned.
 3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`. It also stages the same launcher as `sliccy` (with a `sliccy` bin and a short preview README) into `dist/npm-next/`, as version `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages.
 4. `actions/attest-build-provenance` attests every binary.
-5. semantic-release checks the version again, tags, creates the GitHub release with every binary and `SHA256SUMS`, then `scripts/npm-publish.mjs` publishes the platform packages and the launcher through npm trusted publishing (OIDC, with provenance), and then `sliccy` with `--tag next`. Versions already on npm are skipped. Before publishing `sliccy`, the script checks that every exact-pinned `optionalDependencies` version is on the registry, waits up to `SLICC_REGISTRY_WAIT_SECONDS` (default 300) for freshly published ones to appear, and fails otherwise, so a `sliccy` version never points at missing platform packages.
+5. semantic-release checks the version again (`dist/VERSION`, and `scripts/go-major.mjs`, see below), tags, creates the GitHub release with every binary and `SHA256SUMS`, then `scripts/npm-publish.mjs` publishes the platform packages and the launcher through npm trusted publishing (OIDC, with provenance), and then `sliccy` with `--tag next`. Versions already on npm are skipped. Before publishing `sliccy`, the script checks that every exact-pinned `optionalDependencies` version is on the registry, waits up to `SLICC_REGISTRY_WAIT_SECONDS` (default 300) for freshly published ones to appear, and fails otherwise, so a `sliccy` version never points at missing platform packages.
+6. `scripts/go-warm.sh <version>`, once the tag is on `origin`, asks `proxy.golang.org` for the module at `v<version>` (`go list -m` with a scratch module cache) and asks `pkg.go.dev` to fetch it. Each is retried briefly and only warns, and the step can't fail the release.
+
+**Go module versions.** In Go a pushed tag is the release: `proxy.golang.org` caches it, `sum.golang.org` records its hash for good, and `pkg.go.dev` indexes it.
+- **Never move or delete a pushed tag.** The checksum database would then reject that version for every user. A bad version gets a `retract` directive in `go.mod`, and a new release.
+- **Major versions.** A module at v2 or above needs `/vN` at the end of its module path, or `go install …@latest` never sees it. `scripts/go-major.mjs <version>` fails the release when the version's major doesn't fit the module path in `go.mod` (no suffix allows v0 and v1, `/vN` allows only vN). `release-plan.mjs` runs the same check, so it fails before the build. A `BREAKING CHANGE` commit therefore needs a deliberate module-path change first.
 
 On pull requests the same workflow runs as a dry run: an unsigned build of all six targets, the npm packages and `sliccy` (with `--tag next`) packed with `--dry-run`, and each binary run with `--version` on its own OS and CPU.
 

@@ -6,7 +6,7 @@
     [
       "@semantic-release/exec",
       {
-        "verifyReleaseCmd": "test \"$(cat dist/VERSION)\" = '${nextRelease.version}'"
+        "verifyReleaseCmd": "test \"$(cat dist/VERSION)\" = '${nextRelease.version}' && node scripts/go-major.mjs '${nextRelease.version}'"
       }
     ],
     [
