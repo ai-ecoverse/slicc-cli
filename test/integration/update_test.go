@@ -315,3 +315,61 @@ func TestUpdateNoticeChecksOncePerDay(t *testing.T) {
 		t.Fatalf("--version printed a notice: %+v", version)
 	}
 }
+
+func userCacheDir(t *testing.T, env []string) string {
+	t.Helper()
+	get := func(key string) string {
+		for _, kv := range env {
+			if k, v, ok := strings.Cut(kv, "="); ok && strings.EqualFold(k, key) {
+				return v
+			}
+		}
+		return ""
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(get("HOME"), "Library", "Caches")
+	case "windows":
+		return get("LOCALAPPDATA")
+	}
+	return get("XDG_CACHE_HOME")
+}
+
+func TestUpdateNoticeKeepsItsOwnCacheApartFromSixs(t *testing.T) {
+	gh := newFakeGitHub(t, "v1.0.0", nil)
+	bin := buildVersion(t, "1.0.0", t.TempDir())
+	env := gh.env(t)
+	dir := filepath.Join(userCacheDir(t, env), "slicc")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	six := filepath.Join(dir, "update-check.json")
+	sixState := []byte(`{"checkedAt":"2999-01-01T00:00:00Z","latestVersion":"6.247.17"}`)
+	if err := os.WriteFile(six, sixState, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := runBin(t, env, bin, "no-such-command")
+	if strings.Contains(r.stderr, "is available") {
+		t.Fatalf("read six's cache: %+v", r)
+	}
+	if n := gh.requests.Load(); n != 1 {
+		t.Fatalf("%d requests to GitHub; six's checkedAt held the check back", n)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "update-check-seven.json"))
+	if err != nil || !strings.Contains(string(data), `"latestVersion":"1.0.0"`) {
+		t.Fatalf("own cache %q (%v)", data, err)
+	}
+	if got, _ := os.ReadFile(six); string(got) != string(sixState) {
+		t.Fatalf("six's cache changed: %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "update-check-seven.json"), []byte(`{"checkedAt":"2999-01-01T00:00:00Z","latestVersion":"1.1.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r = runBin(t, env, bin, "no-such-command")
+	if !strings.Contains(r.stderr, "slicc 1.1.0 is available (you have 1.0.0)") {
+		t.Fatalf("own cache not read: %+v", r)
+	}
+	if got, _ := os.ReadFile(six); string(got) != string(sixState) {
+		t.Fatalf("six's cache changed: %q", got)
+	}
+}
