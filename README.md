@@ -99,7 +99,8 @@ Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and
 - **Not read:** `~/.slicc/secrets.env`, `~/.slicc/session-id`, `~/.slicc/logs/` and `~/.slicc/cloud-sessions.json`.
 - **Moved into seven:** `~/.slicc/crontab` and `~/.slicc/webhooks/` now live inside seven's kernel, not on the host.
 - **Update cache:** six's Go follower caches its update check in `<user cache dir>/slicc/update-check.json`, and this binary uses `update-check-seven.json` next to it. Both files have the same shape, so with one shared file, each binary would show the other's version and hold back the other's check.
-- **Kept by this binary:** `<config>/slicc/` holds `ssh_host_ed25519_key`, `tray-certs.json`, `tray-join.json` and the SLICC profiles.
+- **Kept by this binary:** `<config>/slicc/` holds `ssh_host_ed25519_key`, `tray-certs.json`, `tray-join.json` and `seven-profiles/`.
+- **Profiles:** six's Chrome profiles are `~/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome[-<port>]` on macOS, `$XDG_STATE_HOME/slicc/profiles` on Linux and `%LOCALAPPDATA%\Slicc\profiles` on Windows (`chrome-launch.ts:119-148`). seven's live in `<config>/slicc/seven-profiles`, so a `--profile` never opens six's logins, and discovery never lists six's Chrome as a SLICC profile.
 
 ## Verifying a download
 
@@ -209,7 +210,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 
 ```
 {"schema":1,"event":"discovered","entries":[…]}
-{"schema":1,"event":"launched","browser":"chrome","name":"Google Chrome","version":"154.0.8037.98","role":"seven","pid":4242,"profile":"chrome","profileDir":"…/slicc/profiles/chrome","cdp":"http://127.0.0.1:53211","webSocketDebuggerUrl":"ws://127.0.0.1:53211/devtools/browser/…"}
+{"schema":1,"event":"launched","browser":"chrome","name":"Google Chrome","version":"154.0.8037.98","role":"seven","pid":4242,"profile":"chrome","profileDir":"…/slicc/seven-profiles/chrome","cdp":"http://127.0.0.1:53211","webSocketDebuggerUrl":"ws://127.0.0.1:53211/devtools/browser/…"}
 {"schema":1,"event":"attached","browser":"chrome","name":"Google Chrome","version":"154.0.8037.98","role":"seven","launched":true,"cdp":"http://127.0.0.1:53211","webSocketDebuggerUrl":"ws://127.0.0.1:53211/devtools/browser/…"}
 {"schema":1,"event":"linked","tab":"https://seven.sliccy.ai/","peer":"seven","caps":["net","http","cdp"],"policy":"every public address, this machine, and the local network"}
 {"schema":1,"event":"link-lost","reason":"slicc is exiting"}
@@ -297,7 +298,12 @@ Without `--json`, the same list is a table: id, name, version, state and where.
 Launches a browser with CDP and keeps running until interrupted (Ctrl-C, `SIGINT` or `SIGTERM`; on Windows Ctrl-C or Ctrl-Break). Then it closes the browser it started and exits 0. If the browser exits by itself, `slicc launch` exits 0 too.
 
 - `--browser` takes an installed id from `slicc browsers` (or its name, case-insensitively). The default is the best installed Chromium browser in the ranking above.
-- Chromium browsers always get a separate SLICC profile, `<config dir>/slicc/profiles/<name>`, because Chrome 136 and later ignore CDP flags on the default profile. The config dir is `~/Library/Application Support` on macOS, `%APPDATA%` on Windows and `$XDG_CONFIG_HOME` (or `~/.config`) on Linux. A snap's profiles live in `~/snap/<snap>/common/slicc/profiles`, the only place it can write. `--profile` is the name (letters, digits, `.`, `_`, `-`; default: the browser id). A profile another browser process still holds is refused.
+- Chromium browsers always get a separate SLICC profile, `<config dir>/slicc/seven-profiles/<name>`, because Chrome 136 and later ignore CDP flags on the default profile. The config dir is `~/Library/Application Support` on macOS, `%APPDATA%` on Windows and `$XDG_CONFIG_HOME` (or `~/.config`) on Linux. A snap's profiles live in `~/snap/<snap>/common/slicc/seven-profiles`, the only place it can write. The profiles dir is shared with slicc-cdp's `playwright-cli`, whose `open` launches into the same `<name>` dirs. Both tools reuse a browser that is still running there, through its `DevToolsActivePort`. `--profile` is the name (letters, digits, `.`, `_`, `-`; default: the browser id). A profile another browser process still holds is refused.
+- **Older profiles.** Earlier versions kept profiles in `<config dir>/slicc/profiles`. On macOS's default case-insensitive volume, that is the same folder as SLICC six's `~/Library/Application Support/Slicc/profiles`. `slicc`, `slicc browsers` and `slicc launch` move them once, when `seven-profiles` doesn't exist yet. They do the same for each snap's `slicc/profiles`.
+  - Each profile dir is renamed into `seven-profiles`.
+  - Left alone: six's profiles (`browser-coding-agent-chrome` and `browser-coding-agent-chrome-<port>`), dotfiles (six's `.profile-migration-complete`), and anything that isn't a valid profile name.
+  - A profile whose `SingletonLock` points at a live process stays where it is, with a one-line notice on stderr: `slicc: profile <name> is in use by process <pid>, so it stays in <old>; quit that browser, then move it to <new>`.
+  - `slicc/profiles` is never scanned or launched into afterwards.
 - Before the launch, a stale `DevToolsActivePort`, Chrome's `Singleton*` files and the session-restore snapshot are removed, and the last exit is marked clean, so only the start page opens.
 - Before each launch, the seven prefs are merged into the profile's `Default/Preferences`, which is created if missing: `tab_freezing_enabled: false`, `performance_tuning.tab_freezing.enabled: false`, Memory Saver off (`performance_tuning.high_efficiency_mode.state: 0`), and `[*.]sliccy.ai` plus each extra allowed origin's host as tab-discard exceptions. The exceptions go into the list `performance_tuning.tab_discarding.exceptions` (six's form) and into the map `performance_tuning.tab_discarding.exceptions_with_time`, which Chrome 154 reads and shows under "Always keep these sites active". Existing keys, exceptions and timestamps are kept, and a file that already has everything isn't rewritten. A Preferences file that isn't a JSON object is left alone. `--no-seven-flags` skips these prefs too.
 - Chromium flags: `--remote-debugging-port=0 --user-data-dir=<profile> --no-first-run --no-default-browser-check`, the seven flags below, `--headless=new` with `--headless`, then `--url`.

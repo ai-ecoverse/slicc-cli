@@ -110,11 +110,11 @@ func (h fakeHome) edgeDataDir() string {
 func (h fakeHome) profilesDir() string {
 	switch runtime.GOOS {
 	case "darwin":
-		return filepath.Join(h.root, "Library", "Application Support", "slicc", "profiles")
+		return filepath.Join(h.root, "Library", "Application Support", "slicc", "seven-profiles")
 	case "windows":
-		return filepath.Join(h.root, "Roaming", "slicc", "profiles")
+		return filepath.Join(h.root, "Roaming", "slicc", "seven-profiles")
 	default:
-		return filepath.Join(h.root, ".config", "slicc", "profiles")
+		return filepath.Join(h.root, ".config", "slicc", "seven-profiles")
 	}
 }
 

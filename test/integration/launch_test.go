@@ -457,10 +457,10 @@ func TestLaunchMergesSevenPrefsIntoExistingProfile(t *testing.T) {
 func launchProfilesDir(root string) string {
 	switch runtime.GOOS {
 	case "darwin":
-		return filepath.Join(root, "Library", "Application Support", "slicc", "profiles")
+		return filepath.Join(root, "Library", "Application Support", "slicc", "seven-profiles")
 	case "windows":
-		return filepath.Join(root, "Roaming", "slicc", "profiles")
+		return filepath.Join(root, "Roaming", "slicc", "seven-profiles")
 	default:
-		return filepath.Join(root, ".config", "slicc", "profiles")
+		return filepath.Join(root, ".config", "slicc", "seven-profiles")
 	}
 }
