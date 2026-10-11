@@ -205,7 +205,11 @@ func (r *Renderer) tool(e Event) {
 	summary := OneLine(e.Summary)
 	st := r.err.style
 	if !st.TTY {
-		r.errLine(strings.TrimSpace("tool " + name + ": " + summary))
+		line := "tool " + name
+		if summary != "" {
+			line += ": " + summary
+		}
+		r.errLine(line)
 		return
 	}
 	line := paint(st, "⚙ "+name, sgrBold, sgrCyan)
