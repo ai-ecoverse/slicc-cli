@@ -11,6 +11,7 @@ const { values } = parseArgs({
     dir: { type: 'string', default: join(root, 'dist', 'npm') },
     tag: { type: 'string', default: 'latest' },
     'dry-run': { type: 'boolean', default: false },
+    'require-registry': { type: 'boolean', default: false },
   },
 });
 const dryRun = values['dry-run'];
@@ -63,7 +64,7 @@ async function requireDependencies(pkg) {
   const deps = Object.entries(pkg.optionalDependencies || {});
   if (!guarded[pkg.name] || !deps.length) return;
   const base = registry();
-  const waitMs = Number(process.env.SLICC_REGISTRY_WAIT_SECONDS ?? 300) * 1000;
+  const waitMs = Number(process.env.SLICC_REGISTRY_WAIT_SECONDS ?? 900) * 1000;
   const deadline = Date.now() + waitMs;
   for (;;) {
     const missing = [];
@@ -111,7 +112,7 @@ for (const { dir, pkg } of enabled) {
     process.stdout.write(`${pkg.name}@${pkg.version} is already published\n`);
     continue;
   }
-  if (!dryRun) await requireDependencies(pkg);
+  if (!dryRun || values['require-registry']) await requireDependencies(pkg);
   const args = ['publish', dir, '--access', 'public', '--tag', npmTag(pkg)];
   args.push(dryRun ? '--dry-run' : '--provenance');
   const res = npm(args, { stdio: 'inherit' });
