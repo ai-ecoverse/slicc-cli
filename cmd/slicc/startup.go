@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"sync"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 	"github.com/ai-ecoverse/slicc-cli/internal/telemetry"
 	"github.com/ai-ecoverse/slicc-cli/internal/update"
 )
@@ -29,6 +31,11 @@ func quiet(args []string) bool {
 func startup(args []string, stderr io.Writer) func() {
 	if quiet(args) {
 		return func() {}
+	}
+	if isDefault(args) || args[0] == "browsers" || args[0] == "launch" {
+		for _, n := range browser.MigrateProfiles(browser.Options{}) {
+			fmt.Fprintf(stderr, "slicc: %s\n", n)
+		}
 	}
 	targs := args
 	noticeOut := stderr

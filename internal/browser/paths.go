@@ -72,12 +72,17 @@ func (p platform) configDir() string {
 	}
 }
 
+const (
+	ProfilesRoot       = "seven-profiles"
+	legacyProfilesRoot = "profiles"
+)
+
 func (p platform) profilesDir() string {
-	return p.join(p.configDir(), "slicc", "profiles")
+	return p.join(p.configDir(), "slicc", ProfilesRoot)
 }
 
 func (p platform) snapProfilesDir(snap string) string {
-	return p.join(p.home, "snap", snap, "common", "slicc", "profiles")
+	return p.join(p.home, "snap", snap, "common", "slicc", ProfilesRoot)
 }
 
 func (p platform) userDataDirs(k known) []string {
