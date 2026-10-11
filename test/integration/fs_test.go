@@ -239,11 +239,11 @@ func setupFS(t *testing.T) *fsEnv {
 
 func TestFS(t *testing.T) {
 	e := setupFS(t)
+	t.Run("swap between check and use", e.testFSSwap)
 	ping := e.c.js(t, "watch", []string{"project"})
 	started := time.Now()
 	t.Run("hello and mounts", e.testFSHello)
 	t.Run("confinement", e.testFSConfinement)
-	t.Run("swap between check and use", e.testFSSwap)
 	t.Run("read-only", e.testFSReadOnly)
 	t.Run("setattr", e.testFSSetattr)
 	t.Run("metadata errnos", e.testFSErrnos)

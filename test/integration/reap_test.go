@@ -42,8 +42,8 @@ func processReport(pid int) string {
 		defer cancel()
 		out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 		lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-		if len(lines) > 80 {
-			lines = append(lines[:80], fmt.Sprintf("… %d more lines", len(lines)-80))
+		if len(lines) > 400 {
+			lines = append(lines[:400], fmt.Sprintf("… %d more lines", len(lines)-400))
 		}
 		fmt.Fprintf(&b, "$ %s %s (%v)\n%s\n", name, strings.Join(args, " "), err, strings.Join(lines, "\n"))
 	}
@@ -56,6 +56,8 @@ func processReport(pid int) string {
 	probe("lsof", "-n", "-P", "-p", p)
 	if runtime.GOOS == "darwin" {
 		probe("sample", p, "1")
+		probe("sudo", "-n", "spindump", p, "2", "-stdout", "-noProcessingWhileSampling")
+		probe("sudo", "-n", "spindump", p, "2", "-stdout")
 	} else {
 		probe("cat", "/proc/"+p+"/stack")
 		probe("cat", "/proc/"+p+"/status")
