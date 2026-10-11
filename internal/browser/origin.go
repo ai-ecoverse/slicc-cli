@@ -15,7 +15,17 @@ func NormalizeOrigin(raw string) string {
 	if err != nil || u.Scheme == "" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return ""
 	}
-	return u.Scheme + "://" + u.Host
+	return u.Scheme + "://" + withoutDefaultPort(u)
+}
+
+var defaultPorts = map[string]string{"http": "80", "https": "443"}
+
+func withoutDefaultPort(u *url.URL) string {
+	host := strings.ToLower(u.Host)
+	if p := u.Port(); p != "" && p == defaultPorts[strings.ToLower(u.Scheme)] {
+		return strings.TrimSuffix(host, ":"+p)
+	}
+	return host
 }
 
 func IsSevenOrigin(origin string, extra []string) bool {
@@ -39,5 +49,5 @@ func OriginOf(rawURL string) string {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return ""
 	}
-	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+	return strings.ToLower(u.Scheme) + "://" + withoutDefaultPort(u)
 }

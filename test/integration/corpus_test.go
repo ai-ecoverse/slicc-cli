@@ -106,7 +106,7 @@ func canonicalJSON(t *testing.T, b []byte) string {
 }
 
 func writeCorpusExpected(t *testing.T, dir, name string, r browser.Report, l sliccbrowsers.Layout) {
-	tokens := []string{"sevenProfiles", "config", "home"}
+	tokens := []string{"sevenProfiles", "home"}
 	for _, b := range sliccbrowsers.Default().Browsers {
 		tokens = append(tokens, "userData:"+b.ID)
 	}

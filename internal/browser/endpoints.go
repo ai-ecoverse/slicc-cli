@@ -50,11 +50,12 @@ func ParseActivePort(contents string) (int, string, bool) {
 	if err != nil || port <= 0 || port > 65535 {
 		return 0, "", false
 	}
-	ws := ""
-	if len(lines) > 1 {
-		if l := strings.TrimSpace(lines[1]); strings.HasPrefix(l, "/") {
-			ws = l
-		}
+	if len(lines) < 2 {
+		return 0, "", false
+	}
+	ws := strings.TrimSpace(lines[1])
+	if !strings.HasPrefix(ws, "/") {
+		return 0, "", false
 	}
 	return port, ws, true
 }
@@ -369,6 +370,14 @@ func endpointKey(base string) string {
 	return net.JoinHostPort(host, u.Port())
 }
 
+func normalizedCDP(base string) string {
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme == "" {
+		return base
+	}
+	return strings.ToLower(u.Scheme) + "://" + endpointKey(base)
+}
+
 func sourceOrder(s Source) int {
 	if n, ok := catalog.Discovery.SourceRank[string(s)]; ok {
 		return n
@@ -393,7 +402,9 @@ func mergeEndpoints(cands []candidate, results []*Endpoint) []Endpoint {
 	}
 	out := make([]Endpoint, 0, len(best))
 	for _, ep := range best {
-		out = append(out, *ep)
+		e := *ep
+		e.CDP = normalizedCDP(e.CDP)
+		out = append(out, e)
 	}
 	sortEndpoints(out)
 	return out
