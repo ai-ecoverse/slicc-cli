@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -324,4 +326,26 @@ func TestAttachHelp(t *testing.T) {
 	if code != 2 || !strings.Contains(errOut, "--cdp is required") {
 		t.Fatalf("code %d, stderr %q", code, errOut)
 	}
+}
+
+func TestAttachSurvivesSevenTabsThatVanish(t *testing.T) {
+	b := launchBrowser(t)
+	srv := pageServer(t)
+	a := startAttach(t, "--cdp", b.endpoint, "--origin", srv.URL, "--name", "it-node")
+	a.waitStderr(t, "waiting for a seven tab", 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for i := range 40 {
+		var res struct {
+			TargetID string `json:"targetId"`
+		}
+		if err := b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": srv.URL + "/index.html?vanish=" + strconv.Itoa(i)}, &res); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Duration(i%5) * time.Millisecond)
+		_ = b.client.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": res.TargetID}, nil)
+	}
+	env := &linkEnv{t: t, b: b, a: a, origin: srv.URL}
+	env.p = b.openPage(t, srv.URL+"/index.html")
+	env.waitUp("")
 }
