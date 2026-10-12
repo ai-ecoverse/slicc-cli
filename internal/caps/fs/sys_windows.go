@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -44,6 +45,21 @@ func realpath(p string) (string, error) {
 		}
 		buf = make([]uint16, n+1)
 	}
+}
+
+func longLeaf(p string) string {
+	at := strings.LastIndexByte(p, '\\')
+	p16, err := windows.UTF16PtrFromString(p)
+	if at < 0 || err != nil {
+		return p
+	}
+	var fd windows.Win32finddata
+	h, err := windows.FindFirstFile(p16, &fd)
+	if err != nil {
+		return p
+	}
+	_ = windows.FindClose(h)
+	return p[:at+1] + windows.UTF16ToString(fd.FileName[:])
 }
 
 func isDirectory(p string) error {

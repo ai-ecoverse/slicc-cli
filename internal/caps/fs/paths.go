@@ -99,14 +99,14 @@ func (m *Mount) resolve(rel string) (target, error) {
 		}
 	}
 	t := target{path: filepath.Join(parent, parts[len(parts)-1])}
-	if fenced().covers(t.path) {
+	if f := fenced(); f.covers(t.path) || f.covers(longLeaf(t.path)) {
 		return target{}, fail("EACCES", fencedMessage)
 	}
 	return t, nil
 }
 
 func guard(t target) error {
-	if fenced().guards(t.path) {
+	if f := fenced(); f.guards(t.path) || f.guards(longLeaf(t.path)) {
 		return fail("EACCES", fencedMessage)
 	}
 	return nil
