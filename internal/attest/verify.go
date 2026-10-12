@@ -139,7 +139,11 @@ func Verify(bundleJSON []byte, digest string, id Identity, root *TrustedRoot) er
 		return fail("tlog", "no integrated time")
 	}
 	at := time.Unix(integrated, 0)
-	if err := checkChain(leaf, at, root); err != nil {
+	issuer, err := checkChain(leaf, at, root)
+	if err != nil {
+		return err
+	}
+	if err := checkSCT(leaf, issuer, root); err != nil {
 		return err
 	}
 	if err := checkIdentity(leaf, id); err != nil {
@@ -210,7 +214,7 @@ func verifySignature(pub crypto.PublicKey, msg, sig []byte) error {
 	return nil
 }
 
-func checkChain(leaf *x509.Certificate, at time.Time, root *TrustedRoot) error {
+func checkChain(leaf *x509.Certificate, at time.Time, root *TrustedRoot) (*x509.Certificate, error) {
 	for _, ca := range root.authorities {
 		if !ca.valid.covers(at) {
 			continue
@@ -220,12 +224,12 @@ func checkChain(leaf *x509.Certificate, at time.Time, root *TrustedRoot) error {
 		for _, c := range ca.intermediates {
 			inter.AddCert(c)
 		}
-		_, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, CurrentTime: at, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}})
-		if err == nil {
-			return nil
+		chains, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, CurrentTime: at, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}})
+		if err == nil && len(chains) > 0 && len(chains[0]) > 1 {
+			return chains[0][1], nil
 		}
 	}
-	return fail("certificate", "doesn't chain to a trusted Fulcio root at its integrated time %s", at.UTC().Format(time.RFC3339))
+	return nil, fail("certificate", "doesn't chain to a trusted Fulcio root at its integrated time %s", at.UTC().Format(time.RFC3339))
 }
 
 func checkIdentity(leaf *x509.Certificate, id Identity) error {
