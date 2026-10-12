@@ -324,7 +324,17 @@ func (b *Browser) shutdown(ctx context.Context) error {
 	if b.waitExit(ctx, 3*time.Second) {
 		return nil
 	}
-	return fmt.Errorf("%s (pid %d) did not exit", b.Installed.Name, b.mainPID)
+	waited := false
+	select {
+	case <-b.done:
+		waited = true
+	default:
+	}
+	cmdAlive := false
+	if b.cmd != nil && b.cmd.Process != nil {
+		cmdAlive = pidAlive(b.cmd.Process.Pid)
+	}
+	return fmt.Errorf("%s (pid %d) did not exit (EXPDIAG main alive=%v, cmd pid alive=%v, wait returned=%v)", b.Installed.Name, b.mainPID, pidAlive(b.mainPID), cmdAlive, waited)
 }
 
 func (b *Browser) exited() bool {
