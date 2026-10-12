@@ -57,6 +57,9 @@ func ResolveSix(o browser.Options, port int, entries []browser.Entry, ids []stri
 	}
 	sel := []browser.Entry{host}
 	seen := map[string]bool{host.ID: true}
+	if host.Installed != nil && first != "" {
+		seen[host.Installed.ID] = true
+	}
 	for _, id := range ids[min(1, len(ids)):] {
 		e, ok := Find(entries, id)
 		if !ok {

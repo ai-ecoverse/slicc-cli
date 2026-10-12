@@ -256,6 +256,22 @@ func SixProfileEntry(six Six, in *Installed) Entry {
 	return e
 }
 
+func (m sixMatcher) within(dir string) bool {
+	if !m.on || dir == "" {
+		return false
+	}
+	for d := filepath.Clean(dir); ; {
+		if m.is(d) {
+			return true
+		}
+		up := filepath.Dir(d)
+		if up == d {
+			return false
+		}
+		d = up
+	}
+}
+
 func IsSixDir(o Options, dir string) bool {
 	o = o.withDefaults()
 	return newSixMatcher(o.platform(runtime.GOOS), true).is(dir)
