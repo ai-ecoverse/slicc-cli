@@ -683,7 +683,7 @@ From step 4 on, answers carry `Access-Control-Allow-Origin: <origin>`, `Access-C
 - `{ "op": "drop", "provider", "lease_id" }` runs `FNOX_LEASE_ID=<lease_id> jerk <provider> drop --lease --via-link`.
 - The answer is `200` JSON `{ "lease"?: { "credentials", "expires_at", "lease_id" }, "result": { "exit", "provider", "user"?, "scopes"?, "expires_at"?, "env"?, "message" } }`. `lease` is there only for a `lease` that exited 0 with credentials and an `expires_at`, and then `env` lists the credential names.
 - jerk runs as the user, without a terminal, for at most 60 s (`exit` 1, `jerk timed out`). A provider that doesn't match `^[a-z0-9][a-z0-9-]{0,63}$`, a bad `duration` or `lease_id`, or another `op` is `400`.
-- Host jerk is the first `jerk` on `PATH`, else `jerk` in slicc's data folder's `bin`, when `jerk --version` names 1.0.0 or later. `--no-jerk` turns the route off. slicc never logs or keeps a lease.
+- Host jerk is the first `jerk` on `PATH`, else `jerk` in slicc's data folder's `bin`, when `jerk --version` names 0.3.0 or later. `--no-jerk` turns the route off. slicc never logs or keeps a lease.
 
 **Pairing over CDP.** slicc pairs with the vault frame in the seven tab it set up with (link spec §8.3):
 1. It grants `local-network-access`, `local-network` and `loopback-network` to each vault origin, best effort.
