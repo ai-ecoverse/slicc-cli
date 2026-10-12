@@ -685,8 +685,13 @@ func TestSixErrorsSendNoPaths(t *testing.T) {
 func TestSixLaunchesRealChromeWithoutSeedingTheProfile(t *testing.T) {
 	h := newFakeHome(t)
 	env := sixEnv(h, "installed")
-	requireChrome(t, env)
 	dir := filepath.Join(sixRootIn(h), "browser-coding-agent-chrome")
+	if runtime.GOOS == "windows" {
+		real, _ := launchEnv(t)
+		dir = filepath.Join(t.TempDir(), "six-user-data-dir")
+		env = overrideEnv(real, map[string]string{"SLICC_USER_DATA_DIR": dir, "SLICC_NO_UPDATE_CHECK": "1", "SLICC_NO_TELEMETRY": "1"})
+	}
+	requireChrome(t, env)
 	makeSixTree(t, dir, staleActivePort(t))
 	staleSixLock(t, dir)
 	l := startLaunch(t, env, "--profile", "six", "--headless")
