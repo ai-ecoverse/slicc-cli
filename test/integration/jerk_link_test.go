@@ -110,10 +110,10 @@ func TestJerkOverTheLink(t *testing.T) {
 	t.Run("hello", func(t *testing.T) {
 		var h jerkHello
 		e.p.eval("linkTest.ready()", &h)
-		if !slices.Contains(h.Caps, "jerk") || !slices.Contains(h.Caps, "jerk-seal") || h.Jerk == nil || h.Jerk.Version != "0.3.1" {
+		if !slices.Contains(h.Caps, "jerk") || !slices.Contains(h.Caps, "jerk-seal") || h.Jerk == nil || h.Jerk.Version != "0.6.0" {
 			t.Fatalf("HELLO %+v", h)
 		}
-		e.a.waitStderr(t, "slicc: jerk: offering slicc-jerk 0.3.1 (jerk, jerk-seal)", 5*time.Second)
+		e.a.waitStderr(t, "slicc: jerk: offering slicc-jerk 0.6.0 (jerk, jerk-seal)", 5*time.Second)
 	})
 	t.Run("list, status and accounts keep only status fields", func(t *testing.T) { testJerkStatus(t, e.p, log) })
 	t.Run("create", func(t *testing.T) { testJerkCreate(t, e, log) })
@@ -253,13 +253,17 @@ func TestJerkOffOrMissing(t *testing.T) {
 	for name, c := range map[string]struct {
 		env  []string
 		args []string
+		says string
 	}{
-		"--no-jerk":      {jerkEnv(dir, log), []string{"--no-jerk"}},
-		"an old jerk":    {jerkEnv(dir, log, "FAKEJERK_VERSION=0.2.9"), nil},
-		"no jerk at all": {nil, nil},
+		"--no-jerk":      {jerkEnv(dir, log), []string{"--no-jerk"}, ""},
+		"an old jerk":    {jerkEnv(dir, log, "FAKEJERK_VERSION=0.5.0"), nil, "slicc: jerk: host jerk 0.5.0 is older than 0.6.0; run slicc install jerk"},
+		"no jerk at all": {nil, nil, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := setupLinkEnv(t, false, c.env, c.args...)
+			if c.says != "" {
+				e.a.waitStderr(t, c.says, 10*time.Second)
+			}
 			var h jerkHello
 			e.p.eval("linkTest.ready()", &h)
 			if slices.Contains(h.Caps, "jerk") || slices.Contains(h.Caps, "jerk-seal") || h.Jerk != nil {
@@ -274,7 +278,7 @@ func TestJerkOffOrMissing(t *testing.T) {
 
 func TestJerkLimitsInProcess(t *testing.T) {
 	t.Setenv("PATH", fakeJerkDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	j := jerk.Find()
+	j, _ := jerk.Find()
 	if j == nil {
 		t.Fatal("no fake jerk")
 	}
@@ -341,10 +345,43 @@ func TestFollowJerkFlags(t *testing.T) {
 	}
 }
 
+func TestJerkFindSkipsAnOldJerk(t *testing.T) {
+	onPath, data := t.TempDir(), t.TempDir()
+	writeExe(t, filepath.Join(onPath, exeName("jerk")), buildCompanion(t, "jerk", "0.5.0"))
+	t.Setenv("PATH", onPath+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if j, old := jerk.Find(data); j != nil || old != "0.5.0" {
+		t.Fatalf("only an old jerk: %+v, %q", j, old)
+	}
+	writeExe(t, filepath.Join(data, exeName("jerk")), buildCompanion(t, "jerk", "0.6.0"))
+	if j, old := jerk.Find(data); j == nil || j.Version != "0.6.0" || j.Path != filepath.Join(data, exeName("jerk")) || old != "" {
+		t.Fatalf("an old jerk on PATH and a new one in the data folder: %+v, %q", j, old)
+	}
+}
+
+func writeExe(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFollowJerkWithOldJerk(t *testing.T) {
+	env, h, trays, p, _ := followSetup(t, 1)
+	fp := startFollow(t, append(env, jerkEnv(fakeJerkDir(t), filepath.Join(t.TempDir(), "jerk.log"), "FAKEJERK_VERSION=0.5.0")...), h.joinURL(trays[0]), "--jerk-seal")
+	fp.waitStderr(t, "slicc: jerk: host jerk 0.5.0 is older than 0.6.0; run slicc install jerk", 10*time.Second)
+	fp.waitStderr(t, "slicc: linked to link test page", 60*time.Second)
+	p.waitUp(t, "")
+	var hello jerkHello
+	p.eval("linkTest.ready()", &hello)
+	if slices.Contains(hello.Caps, "jerk") || slices.Contains(hello.Caps, "jerk-seal") || hello.Jerk != nil {
+		t.Fatalf("HELLO %+v", hello)
+	}
+}
+
 func TestFollowJerkWithoutJerk(t *testing.T) {
 	env, h, trays, p, _ := followSetup(t, 1)
 	fp := startFollow(t, env, h.joinURL(trays[0]), "--jerk")
-	fp.waitStderr(t, "slicc: jerk: no slicc-jerk 0.3.0 or later on PATH or in slicc's data folder; not offering it", 10*time.Second)
+	fp.waitStderr(t, "slicc: jerk: no slicc-jerk 0.6.0 or later on PATH or in slicc's data folder; not offering it", 10*time.Second)
 	fp.waitStderr(t, "slicc: linked to link test page", 60*time.Second)
 	p.waitUp(t, "")
 	var hello jerkHello
