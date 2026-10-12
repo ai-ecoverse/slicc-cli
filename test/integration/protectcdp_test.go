@@ -51,7 +51,7 @@ func setupProtect(t *testing.T) *protectEnv {
 		allowed: strings.Replace(plain.URL, "127.0.0.1", "localhost", 1),
 		seven:   srv.URL,
 	}
-	env.a = startAttach(t, false, "--cdp", b.endpoint, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
+	env.a = startAttach(t, "--cdp", b.endpoint, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	return env
