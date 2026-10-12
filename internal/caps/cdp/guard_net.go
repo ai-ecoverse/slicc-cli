@@ -10,6 +10,27 @@ func redactURL(raw string) string {
 	return protect.Redact(raw)
 }
 
+func (g *guard) siteProtected(site string) bool {
+	return site != "" && (g.o.URL(site) || g.o.CookieDomain(protect.Host(site)))
+}
+
+func (g *guard) cookieProtected(c map[string]any) bool {
+	if c == nil {
+		return false
+	}
+	if d, _ := c["domain"].(string); g.o.CookieDomain(d) {
+		return true
+	}
+	switch pk := c["partitionKey"].(type) {
+	case string:
+		return g.siteProtected(pk)
+	case map[string]any:
+		site, _ := pk["topLevelSite"].(string)
+		return g.siteProtected(site)
+	}
+	return false
+}
+
 func (g *guard) filterCookies(v any) any {
 	list, ok := v.([]any)
 	if !ok {
@@ -17,14 +38,39 @@ func (g *guard) filterCookies(v any) any {
 	}
 	kept := make([]any, 0, len(list))
 	for _, item := range list {
-		c, _ := item.(map[string]any)
-		d, _ := c["domain"].(string)
-		if c != nil && g.o.CookieDomain(d) {
+		if c, _ := item.(map[string]any); g.cookieProtected(c) {
 			continue
 		}
 		kept = append(kept, item)
 	}
 	return kept
+}
+
+func socketURL(raw string) string {
+	for from, to := range map[string]string{"ws:": "http:", "wss:": "https:"} {
+		if len(raw) >= len(from) && strings.EqualFold(raw[:len(from)], from) {
+			return to + raw[len(from):]
+		}
+	}
+	return raw
+}
+
+func (g *guard) socketCreatedEvent(m *message, data []byte) browserVerdict {
+	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		id, _ := p["requestId"].(string)
+		u, _ := p["url"].(string)
+		if g.o.URL(socketURL(strings.TrimSpace(u))) {
+			g.markRequestLocked(m.SessionID, id)
+		}
+		return true, false, nil
+	})
+}
+
+func (g *guard) markedDropEvent(m *message, data []byte) browserVerdict {
+	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		id, _ := p["requestId"].(string)
+		return !g.requestMarkedLocked(m.SessionID, id), false, nil
+	})
 }
 
 func stripHeaders(v any, names ...string) bool {
@@ -117,9 +163,7 @@ func (g *guard) filterAssociated(p map[string]any, field string) bool {
 	kept := make([]any, 0, len(list))
 	for _, item := range list {
 		e, _ := item.(map[string]any)
-		c, _ := e["cookie"].(map[string]any)
-		d, _ := c["domain"].(string)
-		if c != nil && g.o.CookieDomain(d) {
+		if c, _ := e["cookie"].(map[string]any); g.cookieProtected(c) {
 			continue
 		}
 		kept = append(kept, item)

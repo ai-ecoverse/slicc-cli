@@ -51,7 +51,7 @@ func setupProtect(t *testing.T) *protectEnv {
 		allowed: strings.Replace(plain.URL, "127.0.0.1", "localhost", 1),
 		seven:   srv.URL,
 	}
-	env.a = startAttach(t, false, "--cdp", b.endpoint, "--origin", srv.URL, "--name", "it-node")
+	env.a = startAttach(t, false, "--cdp", b.endpoint, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	return env
@@ -67,6 +67,7 @@ func TestCDPProtectsSevensOrigin(t *testing.T) {
 	t.Run("a blank popup from seven is seven's", env.testPopup)
 	t.Run("history entries on seven are refused", env.testHistory)
 	t.Run("cookies", env.testCookies)
+	t.Run("websockets and event streams to seven", env.testSockets)
 	t.Run("browser-wide commands", env.testBrowserWide)
 	t.Run("own browser contexts", env.testOwnContext)
 	t.Run("the relay forwards what it checked", env.testRawMessages)
@@ -293,7 +294,10 @@ type cookieNames struct {
 func (e *protectEnv) testCookies(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	seven := []map[string]any{{"name": "seven", "value": "secret", "domain": "127.0.0.1", "path": "/"}}
+	seven := []map[string]any{
+		{"name": "seven", "value": "secret", "domain": "127.0.0.1", "path": "/"},
+		{"name": "chips", "value": "secret", "domain": "localhost", "path": "/", "secure": true, "partitionKey": map[string]any{"topLevelSite": "https://sliccy.ai", "hasCrossSiteAncestor": false}},
+	}
 	if err := e.b.client.Call(ctx, "", "Storage.setCookies", map[string]any{"cookies": seven}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -303,6 +307,7 @@ func (e *protectEnv) testCookies(t *testing.T) {
 		SetSevenDomain cdpOutcome  `json:"setSevenDomain"`
 		SetOtherPort   cdpOutcome  `json:"setOtherPort"`
 		SetCookies     cdpOutcome  `json:"setCookies"`
+		SetPartitioned cdpOutcome  `json:"setPartitioned"`
 		StorageSet     cdpOutcome  `json:"storageSet"`
 		DeleteSeven    cdpOutcome  `json:"deleteSeven"`
 		ClearBrowser   cdpOutcome  `json:"clearBrowser"`
@@ -315,14 +320,14 @@ func (e *protectEnv) testCookies(t *testing.T) {
 	if !r.SetAllowed.OK {
 		t.Fatalf("setting a cookie on an allowed origin: %+v", r.SetAllowed)
 	}
-	for name, o := range map[string]cdpOutcome{"setCookie url": r.SetSevenURL, "setCookie domain": r.SetSevenDomain, "setCookie other port": r.SetOtherPort, "setCookies": r.SetCookies, "Storage.setCookies": r.StorageSet, "deleteCookies": r.DeleteSeven, "clearBrowserCookies": r.ClearBrowser, "Storage.clearCookies": r.StorageClear} {
+	for name, o := range map[string]cdpOutcome{"setCookie url": r.SetSevenURL, "setCookie domain": r.SetSevenDomain, "setCookie other port": r.SetOtherPort, "setCookies": r.SetCookies, "partitioned under seven": r.SetPartitioned, "Storage.setCookies": r.StorageSet, "deleteCookies": r.DeleteSeven, "clearBrowserCookies": r.ClearBrowser, "Storage.clearCookies": r.StorageClear} {
 		if !o.refused() {
 			t.Errorf("%s: %+v", name, o)
 		}
 	}
 	for name, n := range map[string]cookieNames{"Storage.getCookies": r.StorageGet, "Network.getAllCookies": r.All, "Network.getCookies": r.ByURL} {
 		joined := strings.Join(n.Names, " ")
-		if n.Error != nil || !strings.Contains(joined, "allowed@localhost") || strings.Contains(joined, "127.0.0.1") {
+		if n.Error != nil || !strings.Contains(joined, "allowed@localhost") || strings.Contains(joined, "127.0.0.1") || strings.Contains(joined, "chips") {
 			t.Errorf("%s: %+v", name, n)
 		}
 	}
@@ -335,15 +340,15 @@ func (e *protectEnv) testCookies(t *testing.T) {
 	if err := e.b.client.Call(ctx, "", "Storage.getCookies", map[string]any{}, &direct); err != nil {
 		t.Fatal(err)
 	}
-	kept := false
+	kept := map[string]bool{}
 	for _, c := range direct.Cookies {
 		if c.Domain == "127.0.0.1" && c.Name != "seven" {
 			t.Errorf("a cookie for seven's host got through: %+v", c)
 		}
-		kept = kept || c.Name == "seven"
+		kept[c.Name] = true
 	}
-	if !kept {
-		t.Error("seven's own cookie is gone")
+	if !kept["seven"] || !kept["chips"] {
+		t.Errorf("seven's own cookies are gone: %v", kept)
 	}
 }
 
@@ -422,5 +427,31 @@ func (e *protectEnv) testRawMessages(t *testing.T) {
 	e.evalJSON(t, "linkTest.protect.raw("+jsArgs("chrome", msgs[4:])+")", &r)
 	if len(r.Out) != 1 || !r.Out[0].OK || !strings.HasPrefix(r.Out[0].URL, e.allowed) {
 		t.Fatalf("a differently cased key: %+v", r.Out)
+	}
+}
+
+func (e *protectEnv) testSockets(t *testing.T) {
+	sevenBase := e.plain.URL
+	var r struct {
+		Opened [][]bool                  `json:"opened"`
+		Counts map[string]map[string]int `json:"counts"`
+		Leaked string                    `json:"leaked"`
+	}
+	e.evalJSON(t, "linkTest.protect.sockets("+jsArgs("chrome", e.allowed+"/?n=sockets", []string{sevenBase, e.allowed})+")", &r)
+	b, _ := json.Marshal(r)
+	if len(r.Opened) != 2 || !r.Opened[1][0] || !r.Opened[1][1] {
+		t.Fatalf("the sockets didn't work: %s", b)
+	}
+	allowed, seven := r.Counts[e.allowed], r.Counts[sevenBase]
+	for _, m := range []string{"Network.webSocketWillSendHandshakeRequest", "Network.webSocketHandshakeResponseReceived", "Network.eventSourceMessageReceived"} {
+		if allowed[m] == 0 {
+			t.Fatalf("no %s for the allowed origin, so the filter went untested: %s", m, b)
+		}
+		if seven[m] != 0 {
+			t.Errorf("%s reached the page for seven: %s", m, b)
+		}
+	}
+	if r.Leaked != "" {
+		t.Errorf("%s carried seven's secret: %s", r.Leaked, b)
 	}
 }

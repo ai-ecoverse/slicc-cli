@@ -265,8 +265,11 @@ func (g *guard) cookiesRule(c *command) string {
 }
 
 func (g *guard) cookieParamProtectedLocked(p map[string]any) bool {
+	if g.cookieProtected(p) {
+		return true
+	}
 	if d, _ := p["domain"].(string); d != "" {
-		return g.o.CookieDomain(d)
+		return false
 	}
 	raw, _ := p["url"].(string)
 	if raw == "" {
@@ -344,6 +347,8 @@ func (g *guard) scanKey(k string, val any, c *command) string {
 
 func (g *guard) scanString(k, s string, c *command) string {
 	switch {
+	case k == "topLevelSite" && g.siteProtected(s):
+		return refusedTarget
 	case urlKeys[k] && g.o.URL(s):
 		return refusedTarget
 	case k == "storageKey" && g.o.StorageKey(s):

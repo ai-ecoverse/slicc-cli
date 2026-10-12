@@ -117,6 +117,7 @@ export function protectTest(getLink, describe) {
           setSevenURL: await outcome(c.send('Network.setCookie', { name: 'x', value: '1', url: sevenURL }, sessionId)),
           setSevenDomain: await outcome(c.send('Network.setCookie', { name: 'x', value: '1', domain: sevenHost, path: '/' }, sessionId)),
           setOtherPort: await outcome(c.send('Network.setCookie', { name: 'x', value: '1', url: `http://${sevenHost}:1/` }, sessionId)),
+          setPartitioned: await outcome(c.send('Network.setCookie', { name: 'x', value: '1', url: allowedURL, secure: true, partitionKey: { topLevelSite: `http://${sevenHost}`, hasCrossSiteAncestor: false } }, sessionId)),
           setCookies: await outcome(c.send('Network.setCookies', { cookies: [{ name: 'y', value: '1', url: allowedURL }, { name: 'x', value: '1', domain: sevenHost }] }, sessionId)),
           storageSet: await outcome(c.send('Storage.setCookies', { cookies: [{ name: 'x', value: '1', domain: sevenHost, path: '/' }] })),
           deleteSeven: await outcome(c.send('Network.deleteCookies', { name: 'seven', url: sevenURL }, sessionId)),
@@ -142,6 +143,35 @@ export function protectTest(getLink, describe) {
           out.push(r);
         }
         return { out };
+      }),
+    sockets: (browser, pageURL, targets) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(pageURL);
+        await c.send('Network.enable', {}, sessionId);
+        const expression = `Promise.all(${JSON.stringify(targets)}.map((base) => Promise.all([
+          new Promise((resolve) => { const ws = new WebSocket(base.replace(/^http/, 'ws') + '/ws'); ws.onopen = () => ws.send('hi'); ws.onmessage = () => { ws.close(); resolve(true); }; ws.onerror = () => resolve(false); }),
+          new Promise((resolve) => { const es = new EventSource(base + '/sse'); es.onmessage = () => { es.close(); resolve(true); }; es.onerror = () => { es.close(); resolve(false); }; }),
+        ])))`;
+        const opened = await c.evaluate(expression, sessionId);
+        await sleep(500);
+        const owner = new Map();
+        for (const e of c.events) {
+          const url = e.params?.url ?? e.params?.request?.url;
+          if (e.sessionId === sessionId && e.params?.requestId && url) {
+            const base = targets.find((t) => url.replace(/^ws/, 'http').startsWith(t));
+            if (base && !owner.has(e.params.requestId)) owner.set(e.params.requestId, base);
+          }
+        }
+        const counts = Object.fromEntries(targets.map((t) => [t, {}]));
+        let leaked = '';
+        for (const e of c.events) {
+          const base = owner.get(e.params?.requestId);
+          if (!base) continue;
+          counts[base][e.method] = (counts[base][e.method] ?? 0) + 1;
+          if (base === targets[0] && /secret/.test(JSON.stringify(e))) leaked = e.method;
+        }
+        await c.send('Target.closeTarget', { targetId });
+        return { opened, counts, leaked };
       }),
     ownContext: (browser) =>
       run(browser, async (c) => {

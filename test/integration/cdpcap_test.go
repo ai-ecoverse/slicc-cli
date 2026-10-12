@@ -55,6 +55,12 @@ func plainServer(t *testing.T) *httptest.Server {
 			}
 		}
 	})
+	mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Set-Cookie", "sse=secret-set; Path=/")
+		_, _ = w.Write([]byte("data: secret-sse\n\n"))
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<!doctype html><title>cdp nav " + r.URL.Query().Get("n") + "</title><p>plain"))
