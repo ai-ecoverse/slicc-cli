@@ -6,19 +6,39 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/coder/websocket"
 )
 
+type fakeScript func(method string, params json.RawMessage) (result string, after []string)
+
 type fakeCDPBrowser struct {
 	srv    *httptest.Server
-	events []string
+	script fakeScript
+	mu     sync.Mutex
+	got    []string
 }
 
-func newFakeCDPBrowser(t *testing.T, events []string) *fakeCDPBrowser {
+func afterEnable(events []string) fakeScript {
+	return func(method string, _ json.RawMessage) (string, []string) {
+		if method == "Network.enable" {
+			return "{}", events
+		}
+		return "{}", nil
+	}
+}
+
+func (f *fakeCDPBrowser) received() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.got...)
+}
+
+func newFakeCDPBrowser(t *testing.T, script fakeScript) *fakeCDPBrowser {
 	t.Helper()
-	f := &fakeCDPBrowser{events: events}
+	f := &fakeCDPBrowser{script: script}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -51,19 +71,26 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var m struct {
-			ID        int64  `json:"id"`
-			Method    string `json:"method"`
-			SessionID string `json:"sessionId"`
+			ID        int64           `json:"id"`
+			Method    string          `json:"method"`
+			SessionID string          `json:"sessionId"`
+			Params    json.RawMessage `json:"params"`
 		}
 		if json.Unmarshal(data, &m) != nil {
 			return
 		}
-		result := "{}"
+		f.mu.Lock()
+		f.got = append(f.got, string(data))
+		f.mu.Unlock()
+		var result string
+		var after []string
 		switch m.Method {
 		case "Target.attachToBrowserTarget":
 			result = `{"sessionId":"RELAY"}`
 		case "Target.getTargets":
 			result = `{"targetInfos":[]}`
+		default:
+			result, after = f.script(m.Method, m.Params)
 		}
 		reply := fmt.Sprintf(`{"id":%d,"result":%s}`, m.ID, result)
 		if m.SessionID != "" {
@@ -72,10 +99,7 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		if c.Write(ctx, websocket.MessageText, []byte(reply)) != nil {
 			return
 		}
-		if m.Method != "Network.enable" {
-			continue
-		}
-		for _, e := range f.events {
+		for _, e := range after {
 			if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
 				return
 			}
@@ -120,16 +144,24 @@ func extraInfoScript(seven, allowed string) []string {
 	}
 }
 
-func TestCDPHoldsExtraInfoUntilItsRequestIsKnown(t *testing.T) {
+func setupFakeProtect(t *testing.T, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
+	t.Helper()
 	b := launchBrowser(t)
 	srv := pageServer(t)
 	plain := plainServer(t)
 	allowed := strings.Replace(plain.URL, "127.0.0.1", "localhost", 1)
-	fake := newFakeCDPBrowser(t, extraInfoScript(plain.URL, allowed))
+	fake := newFakeCDPBrowser(t, script(plain.URL, allowed))
 	env := &protectEnv{linkEnv: &linkEnv{t: t, b: b, origin: srv.URL}, plain: plain, allowed: allowed, seven: srv.URL}
 	env.a = startAttach(t, "--cdp", b.endpoint, "--cdp-extra", fake.srv.URL, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
+	return env, fake
+}
+
+func TestCDPHoldsExtraInfoUntilItsRequestIsKnown(t *testing.T) {
+	env, _ := setupFakeProtect(t, func(seven, allowed string) fakeScript {
+		return afterEnable(extraInfoScript(seven, allowed))
+	})
 	var r struct {
 		Events []extraEvent `json:"events"`
 	}

@@ -37,6 +37,7 @@ const (
 	kindContext
 	kindCreate
 	kindAttach
+	kindStreams
 )
 
 type relayCall struct {
@@ -93,8 +94,12 @@ type guard struct {
 	patterns        []any
 	heldExtras      map[requestKey][]heldExtra
 	heldExtraCount  int
-	settled         map[requestKey]bool
-	settledOrder    []requestKey
+	seen            map[requestKey]reqLevel
+	seenOrder       []requestKey
+	bodyCalls       map[callKey]bodyCall
+	heldAnswers     map[callKey]*heldAnswer
+	streams         map[string]bool
+	streamOrder     []string
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -122,7 +127,10 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		explicit:        map[string]int{},
 		attachCalls:     map[callKey]string{},
 		heldExtras:      map[requestKey][]heldExtra{},
-		settled:         map[requestKey]bool{},
+		seen:            map[requestKey]reqLevel{},
+		bodyCalls:       map[callKey]bodyCall{},
+		heldAnswers:     map[callKey]*heldAnswer{},
+		streams:         map[string]bool{},
 	}
 	g.patterns = g.documentPatterns()
 	return g
@@ -351,6 +359,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	for k := range g.pending {
 		if k.session == id {
 			delete(g.pending, k)
+			delete(g.bodyCalls, k)
 			g.attachDoneLocked(k)
 		}
 	}
