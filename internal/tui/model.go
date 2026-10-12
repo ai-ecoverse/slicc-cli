@@ -57,6 +57,7 @@ type Model struct {
 	mode     Mode
 	entries  []browser.Entry
 	cursor   int
+	moved    bool
 	selected []string
 	profiles map[string]string
 	known    map[string][]string
@@ -104,6 +105,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case EntriesMsg:
 		m.entries = []browser.Entry(msg)
 		m.cursor = 0
+		m.moved = false
 		m.loadProfiles()
 		if m.mode == ModeDiscover {
 			m.mode = ModePick
@@ -186,10 +188,12 @@ func (m Model) pickKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
+			m.moved = true
 		}
 	case "down", "j":
 		if m.cursor < len(m.entries)-1 {
 			m.cursor++
+			m.moved = true
 		}
 	case "space":
 		m.toggle()
@@ -237,8 +241,14 @@ func (m Model) choice() []browser.Entry {
 	return out
 }
 
+const sixUnpicked = "SLICC six's profile is never picked for you; move to it, or select it with space"
+
 func (m Model) goChoice() (tea.Model, tea.Cmd) {
 	sel := m.choice()
+	if len(m.selected) == 0 && !m.moved && len(sel) == 1 && flow.IsSix(sel[0]) {
+		m.message = sixUnpicked
+		return m, nil
+	}
 	if err := flow.Check(sel); err != nil {
 		m.message = err.Error()
 		return m, nil
@@ -321,7 +331,7 @@ func (m Model) row(i int, e browser.Entry) string {
 		if at > 0 {
 			tag = fmt.Sprintf("extra cdp #%d", at)
 		}
-	} else if i == 0 && len(m.selected) == 0 {
+	} else if i == 0 && len(m.selected) == 0 && !flow.IsSix(e) {
 		tag = "best match"
 	}
 	name := e.Name
@@ -344,8 +354,14 @@ func shortVersion(v string) string {
 }
 
 func (m Model) state(e browser.Entry) string {
+	if e.Kind == browser.KindSix {
+		return "SLICC six's own profile, used in place"
+	}
 	if e.Kind == browser.KindEndpoint {
 		s := "CDP " + hostPort(e.Endpoint.CDP)
+		if e.Endpoint.Six {
+			s += " · SLICC six's profile"
+		}
 		if e.Endpoint.SevenOpen {
 			s += " · " + m.st.good.Render("seven open")
 		}

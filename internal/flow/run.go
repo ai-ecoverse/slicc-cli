@@ -131,12 +131,12 @@ func (r *run) start(ctx context.Context, sel []browser.Entry) error {
 	r.origins = origins
 	r.allowed, _ = signal.NewOrigins(origins)
 	if err := r.setupHost(ctx, sel[0]); err != nil {
-		telemetry.ReportError(telemetry.Browser, err)
+		telemetry.ReportError(telemetry.Browser, reportable(sel[0], err))
 		return err
 	}
 	for _, e := range sel[1:] {
 		if err := r.setupExtra(ctx, e); err != nil {
-			telemetry.ReportError(telemetry.Browser, err)
+			telemetry.ReportError(telemetry.Browser, reportable(e, err))
 			return err
 		}
 	}
@@ -156,7 +156,13 @@ func (r *run) profileFor(e browser.Entry, host bool) string {
 func (r *run) launch(ctx context.Context, e browser.Entry, role, page string) (*browser.Browser, error) {
 	opts := r.cfg.Browser
 	opts.Origins = r.origins
-	b, err := browser.Launch(ctx, *e.Installed, browser.LaunchOptions{Options: opts, Profile: r.profileFor(e, role == RoleSeven), URL: page, Headless: r.cfg.Headless})
+	var b *browser.Browser
+	var err error
+	if e.Six != nil {
+		b, err = browser.LaunchSix(ctx, *e.Installed, *e.Six, browser.LaunchOptions{Options: opts, URL: page, Headless: r.cfg.Headless})
+	} else {
+		b, err = browser.Launch(ctx, *e.Installed, browser.LaunchOptions{Options: opts, Profile: r.profileFor(e, role == RoleSeven), URL: page, Headless: r.cfg.Headless})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("launch %s: %w", e.Name, err)
 	}
@@ -171,6 +177,10 @@ func (r *run) launch(ctx context.Context, e browser.Entry, role, page string) (*
 }
 
 func (r *run) setupHost(ctx context.Context, e browser.Entry) error {
+	e, err := r.resolveSix(ctx, e)
+	if err != nil {
+		return err
+	}
 	br := Browser{ID: e.ID, Name: e.Name, Version: e.Version, Seven: true}
 	if e.Kind == browser.KindInstalled {
 		b, err := r.launch(ctx, e, RoleSeven, r.cfg.Page)
@@ -201,7 +211,10 @@ func (r *run) setupHost(ctx context.Context, e browser.Entry) error {
 	if err != nil {
 		return err
 	}
-	if r.foreign(e) {
+	switch {
+	case IsSix(e):
+		r.emit(Event{Event: ForeignBrowser, Browser: e.ID, Name: e.Name, Profile: SixLabel(e), CDP: br.CDP, OpenedTab: &opened})
+	case r.foreign(e):
 		r.emit(Event{Event: ForeignBrowser, Browser: e.ID, Name: e.Name, Profile: ProfileLabel(*e.Endpoint), CDP: br.CDP, OpenedTab: &opened})
 	}
 	return nil
@@ -257,6 +270,10 @@ func (r *run) sevenTab(ctx context.Context) string {
 }
 
 func (r *run) setupExtra(ctx context.Context, e browser.Entry) error {
+	e, err := r.resolveSix(ctx, e)
+	if err != nil {
+		return err
+	}
 	br := Browser{ID: e.ID, Name: e.Name, Version: e.Version}
 	if e.Kind == browser.KindInstalled {
 		b, err := r.launch(ctx, e, RoleExtra, "")

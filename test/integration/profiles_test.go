@@ -59,6 +59,7 @@ func TestProfilesMoveOutOfSixsFolderOnce(t *testing.T) {
 	writeFile(t, filepath.Join(legacy, "browser-coding-agent-chrome", "DevToolsActivePort"), six.activePort())
 	writeFile(t, filepath.Join(legacy, "browser-coding-agent-chrome", "Default", "Preferences"), `{"six":true}`)
 	writeFile(t, filepath.Join(legacy, "browser-coding-agent-chrome-5711", "Default", "Preferences"), `{"six":5711}`)
+	writeFile(t, filepath.Join(legacy, "Browser-Coding-Agent-Chrome-5712", "Default", "Preferences"), `{"six":5712}`)
 	writeFile(t, filepath.Join(legacy, ".profile-migration-complete"), "")
 	writeFile(t, filepath.Join(legacy, "chrome", "DevToolsActivePort"), ours.activePort())
 	writeFile(t, filepath.Join(legacy, "chrome", "Default", "Preferences"), `{"ours":true}`)
@@ -77,8 +78,12 @@ func TestProfilesMoveOutOfSixsFolderOnce(t *testing.T) {
 	if held && !strings.Contains(errOut, notice) {
 		t.Fatalf("no notice for the held profile, stderr %q", errOut)
 	}
-	if entryByCDP(r, six.URL) != nil {
-		t.Fatalf("six's DevToolsActivePort was listed: %+v", r.Entries)
+	sixEntry := entryByCDP(r, six.URL)
+	switch {
+	case runtime.GOOS != "darwin" && sixEntry != nil:
+		t.Fatalf("a DevToolsActivePort outside six's root was listed: %+v", r.Entries)
+	case runtime.GOOS == "darwin" && (sixEntry == nil || !sixEntry.Endpoint.Six || sixEntry.Tier != browser.TierSix || r.Entries[len(r.Entries)-1].ID != sixEntry.ID):
+		t.Fatalf("six's DevToolsActivePort, in six's root on macOS, is not listed last as six's: %+v", r.Entries)
 	}
 	got := entryByCDP(r, ours.URL)
 	if got == nil || got.Endpoint.Profile != "chrome" || got.Endpoint.Source != browser.SourceActivePort {
@@ -99,7 +104,7 @@ func TestProfilesMoveOutOfSixsFolderOnce(t *testing.T) {
 	}
 	readText(t, filepath.Join(legacy, "browser-coding-agent-chrome-5711", "Default", "Preferences"))
 	readText(t, filepath.Join(legacy, ".profile-migration-complete"))
-	for _, name := range []string{"browser-coding-agent-chrome", "browser-coding-agent-chrome-5711", ".profile-migration-complete"} {
+	for _, name := range []string{"browser-coding-agent-chrome", "browser-coding-agent-chrome-5711", "Browser-Coding-Agent-Chrome-5712", ".profile-migration-complete"} {
 		if _, err := os.Lstat(filepath.Join(root, name)); err == nil {
 			t.Fatalf("%s was moved", name)
 		}

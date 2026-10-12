@@ -31,6 +31,7 @@ type candidate struct {
 	browser string
 	dir     string
 	profile string
+	six     bool
 }
 
 type versionInfo struct {
@@ -152,6 +153,9 @@ func activePortCandidates(o Options, p platform, d discovery) []candidate {
 	if !d.profiles {
 		return out
 	}
+	for _, dir := range p.sixDirs() {
+		out = appendActivePort(out, dir, "", "")
+	}
 	roots := []string{o.profilesDir(p)}
 	if p.goos == "linux" {
 		for _, k := range knownBrowsers {
@@ -200,12 +204,14 @@ func DiscoverEndpoints(ctx context.Context, o Options) ([]Endpoint, []error) {
 		}
 		cands = append(cands, candidate{base: base, wsPath: ws, source: SourceFlag})
 	}
-	cands = append(cands, processCandidates(ctx, o, d)...)
+	six := newSixMatcher(p, d.profiles)
+	cands = append(cands, processCandidates(ctx, o, d, six)...)
 	if !o.NoProbe && d.probe {
 		for _, port := range o.ProbePorts {
 			cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), source: SourceProbe})
 		}
 	}
+	markSix(cands, six)
 	results := make([]*Endpoint, len(cands))
 	resErrs := make([]error, len(cands))
 	var wg sync.WaitGroup
@@ -276,7 +282,7 @@ func (t listTarget) tab() Tab {
 func wsOnlyEndpoint(c candidate) *Endpoint {
 	ep := Endpoint{
 		CDP: c.base, Source: c.source, Browser: c.browser, UserDataDir: c.dir, Profile: c.profile,
-		WSOnly: true, SevenTabs: []Tab{},
+		WSOnly: true, Six: c.six, SevenTabs: []Tab{},
 	}
 	ep.WebSocketURL = "ws" + strings.TrimPrefix(c.base, "http") + c.wsPath
 	ep.Name = catalog.Discovery.Names.Fallback
@@ -293,7 +299,7 @@ var chromeMajorRE = regexp.MustCompile(catalog.Discovery.ChromeMajorPattern)
 func endpointFromVersion(c candidate, vi versionInfo) Endpoint {
 	ep := Endpoint{
 		CDP: c.base, WebSocketURL: vi.WebSocketURL, Product: vi.Browser, UserAgent: vi.UserAgent,
-		Source: c.source, Browser: c.browser, UserDataDir: c.dir, Profile: c.profile, SevenTabs: []Tab{},
+		Source: c.source, Browser: c.browser, UserDataDir: c.dir, Profile: c.profile, Six: c.six, SevenTabs: []Tab{},
 	}
 	product := vi.Browser
 	if m := productRE.FindStringSubmatch(vi.Browser); m != nil {
@@ -395,6 +401,12 @@ func sourceOrder(s Source) int {
 	return len(catalog.Discovery.SourceRank)
 }
 
+func markSix(cands []candidate, six sixMatcher) {
+	for i := range cands {
+		cands[i].six = cands[i].six || six.is(cands[i].dir)
+	}
+}
+
 func mergeEndpoints(cands []candidate, results []*Endpoint) []Endpoint {
 	best := map[string]*Endpoint{}
 	for i, ep := range results {
@@ -410,9 +422,23 @@ func mergeEndpoints(cands []candidate, results []*Endpoint) []Endpoint {
 		}
 		best[key] = ep
 	}
+	sixDirs := map[string]string{}
+	for i, ep := range results {
+		if ep != nil && ep.Six {
+			if key := endpointKey(cands[i].base); sixDirs[key] == "" {
+				sixDirs[key] = ep.UserDataDir
+			}
+		}
+	}
 	out := make([]Endpoint, 0, len(best))
-	for _, ep := range best {
+	for key, ep := range best {
 		e := *ep
+		if dir, ok := sixDirs[key]; ok {
+			e.Six = true
+			if e.UserDataDir == "" {
+				e.UserDataDir = dir
+			}
+		}
 		e.CDP = normalizedCDP(e.CDP)
 		out = append(out, e)
 	}

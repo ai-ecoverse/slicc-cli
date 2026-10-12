@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,11 +16,12 @@ import (
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 )
 
 var corpusNeeds = []string{
 	sliccbrowsers.NeedUserDataDirs, sliccbrowsers.NeedProfiles, sliccbrowsers.NeedFlag, sliccbrowsers.NeedProcess,
-	sliccbrowsers.NeedProbe, sliccbrowsers.NeedOrigins, sliccbrowsers.NeedInstalled,
+	sliccbrowsers.NeedProbe, sliccbrowsers.NeedOrigins, sliccbrowsers.NeedInstalled, sliccbrowsers.NeedSix,
 }
 
 func TestCorpus(t *testing.T) {
@@ -78,6 +80,9 @@ func runCorpusCase(t *testing.T, c sliccbrowsers.Case) {
 		}
 	}
 	report := browser.NewReport(browser.Rank(eps, installed))
+	if slices.Contains(c.Input.Needs, sliccbrowsers.NeedSix) {
+		checkAuto(t, c, report.Entries)
+	}
 	if out := os.Getenv("SLICC_CORPUS_WRITE"); out != "" {
 		writeCorpusExpected(t, out, c.Name, report, l)
 		return
@@ -95,6 +100,23 @@ func runCorpusCase(t *testing.T, c sliccbrowsers.Case) {
 	}
 }
 
+func checkAuto(t *testing.T, c sliccbrowsers.Case, entries []browser.Entry) {
+	t.Helper()
+	e, err := flow.Default(entries)
+	switch {
+	case c.Input.Auto == nil && err == nil:
+		t.Errorf("auto is null, but the default chose %s", e.ID)
+	case c.Input.Auto != nil && (err != nil || e.ID != *c.Input.Auto):
+		t.Errorf("auto is %s, but the default chose %q (%v)", *c.Input.Auto, e.ID, err)
+	}
+	if err == nil && e.Endpoint != nil && e.Endpoint.Six {
+		t.Errorf("the default chose six's %s", e.ID)
+	}
+	if _, err := flow.Resolve(entries, nil); err == nil && c.Input.Auto == nil {
+		t.Error("the non-interactive rule chose an entry when every entry is six's")
+	}
+}
+
 func canonicalJSON(t *testing.T, b []byte) string {
 	t.Helper()
 	var v any
@@ -106,7 +128,7 @@ func canonicalJSON(t *testing.T, b []byte) string {
 }
 
 func writeCorpusExpected(t *testing.T, dir, name string, r browser.Report, l sliccbrowsers.Layout) {
-	tokens := []string{"sevenProfiles", "home"}
+	tokens := []string{"sevenProfiles", "sixProfiles", "home"}
 	for _, b := range sliccbrowsers.Default().Browsers {
 		tokens = append(tokens, "userData:"+b.ID)
 	}

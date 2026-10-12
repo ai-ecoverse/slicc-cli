@@ -72,6 +72,7 @@ type Endpoint struct {
 	UserDataDir  string `json:"userDataDir,omitempty"`
 	Profile      string `json:"profile,omitempty"`
 	WSOnly       bool   `json:"wsOnly,omitempty"`
+	Six          bool   `json:"six,omitempty"`
 	SevenOpen    bool   `json:"sevenOpen"`
 	SevenTabs    []Tab  `json:"sevenTabs"`
 }
@@ -81,6 +82,7 @@ type Kind string
 const (
 	KindEndpoint  Kind = "endpoint"
 	KindInstalled Kind = "installed"
+	KindSix       Kind = "six"
 )
 
 type Entry struct {
@@ -91,6 +93,7 @@ type Entry struct {
 	Version   string     `json:"version,omitempty"`
 	Endpoint  *Endpoint  `json:"endpoint,omitempty"`
 	Installed *Installed `json:"installed,omitempty"`
+	Six       *Six       `json:"-"`
 }
 
 type Options struct {

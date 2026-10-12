@@ -1,10 +1,12 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -46,6 +48,8 @@ type Browser struct {
 	closeMu  sync.Mutex
 	closeErr error
 	closed   bool
+	six      bool
+	stale    []byte
 }
 
 func (b *Browser) Done() <-chan struct{} {
@@ -149,6 +153,9 @@ func Launch(ctx context.Context, in Installed, lo LaunchOptions) (*Browser, erro
 	if err != nil {
 		return nil, err
 	}
+	if o := lo.withDefaults(); newSixMatcher(o.platform(runtime.GOOS), true).is(dir) {
+		return nil, ErrSixDir
+	}
 	var sites []string
 	if !lo.NoSevenFlags {
 		sites = SevenSites(lo.Origins)
@@ -244,8 +251,8 @@ func (b *Browser) waitActivePort(ctx context.Context, o Options) error {
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if port, ws, err := ReadActivePort(b.ProfileDir); err == nil {
-			c := candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), wsPath: ws, source: SourceActivePort, dir: b.ProfileDir}
+		if port, ws, err := b.freshActivePort(); err == nil {
+			c := candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), wsPath: ws, source: SourceActivePort, dir: b.ProfileDir, six: b.six}
 			if ep, err := probeCandidate(ctx, client, c, o); err == nil && !ep.WSOnly {
 				b.CDP, b.WebSocketURL = ep.CDP, ep.WebSocketURL
 				return nil
@@ -255,10 +262,28 @@ func (b *Browser) waitActivePort(ctx context.Context, o Options) error {
 		case <-b.done:
 			return b.exitError("writing " + ActivePortFile)
 		case <-ctx.Done():
+			if b.six {
+				return fmt.Errorf("%s did not write %s in SLICC six's profile: %w", b.Installed.Name, ActivePortFile, ctx.Err())
+			}
 			return fmt.Errorf("%s did not write %s in %s: %w", b.Installed.Name, filepath.Join(b.ProfileDir, ActivePortFile), b.ProfileDir, ctx.Err())
 		case <-tick.C:
 		}
 	}
+}
+
+func (b *Browser) freshActivePort() (int, string, error) {
+	data, err := os.ReadFile(filepath.Join(b.ProfileDir, ActivePortFile))
+	if err != nil {
+		return 0, "", err
+	}
+	if b.stale != nil && bytes.Equal(data, b.stale) {
+		return 0, "", errors.New("stale")
+	}
+	port, ws, ok := ParseActivePort(string(data))
+	if !ok {
+		return 0, "", errors.New("malformed")
+	}
+	return port, ws, nil
 }
 
 func (b *Browser) waitVersion(ctx context.Context, o Options, c candidate) error {

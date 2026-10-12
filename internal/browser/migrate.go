@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 )
-
-var sixProfileRE = regexp.MustCompile(catalog.Profiles.SixProfilePattern)
 
 func MigrateProfiles(o Options) []string {
 	if o.ProfilesDir != "" {
@@ -27,20 +24,21 @@ func MigrateProfiles(o Options) []string {
 		}
 	}
 	var notices []string
+	six := newSixMatcher(p, true)
 	seen := map[string]bool{}
 	for _, pair := range pairs {
 		if seen[pair[1]] {
 			continue
 		}
 		seen[pair[1]] = true
-		notices = append(notices, migrateProfiles(pair[0], pair[1])...)
+		notices = append(notices, migrateProfiles(pair[0], pair[1], six)...)
 	}
 	return notices
 }
 
 const MigratedMarker = ".migrated-from-profiles"
 
-func migrateProfiles(from, to string) []string {
+func migrateProfiles(from, to string, six sixMatcher) []string {
 	marker := filepath.Join(to, MigratedMarker)
 	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -54,7 +52,7 @@ func migrateProfiles(from, to string) []string {
 	}
 	var notices []string
 	for _, e := range entries {
-		if n := migrateProfile(e, from, to); n != "" {
+		if n := migrateProfile(e, from, to, six); n != "" {
 			notices = append(notices, n)
 		}
 	}
@@ -62,12 +60,15 @@ func migrateProfiles(from, to string) []string {
 	return notices
 }
 
-func migrateProfile(e os.DirEntry, from, to string) string {
+func migrateProfile(e os.DirEntry, from, to string, six sixMatcher) string {
 	name := e.Name()
-	if !e.IsDir() || strings.HasPrefix(name, ".") || sixProfileRE.MatchString(name) || !ValidProfileName(name) {
+	if !e.IsDir() || strings.HasPrefix(name, ".") || sixNameRE.MatchString(name) || !ValidProfileName(name) {
 		return ""
 	}
 	src, dst := filepath.Join(from, name), filepath.Join(to, name)
+	if six.is(src) {
+		return ""
+	}
 	if pid := profileOwner(src); pid > 0 {
 		return fmt.Sprintf("profile %s is in use by process %d, so it stays in %s; quit that browser, then move it to %s", name, pid, from, to)
 	}
