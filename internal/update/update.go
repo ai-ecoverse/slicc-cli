@@ -219,7 +219,8 @@ func (c *Checker) download(ctx context.Context, rel *Release, dest string) error
 		return fmt.Errorf("%s does not match its SHA-256 in %s", rel.AssetName, ChecksumsName)
 	}
 	if !c.ChecksumOnly {
-		if err := c.attested(ctx, rel.AssetName, got); err != nil {
+		sumsDigest := sha256.Sum256(sums)
+		if err := c.attested(ctx, rel.AssetName, got, hex.EncodeToString(sumsDigest[:])); err != nil {
 			return err
 		}
 	}
@@ -230,7 +231,7 @@ func (c *Checker) Identity() attest.Identity {
 	return attest.Identity{Repo: c.Repo, Ref: c.Ref}
 }
 
-func (c *Checker) attested(ctx context.Context, asset, digest string) error {
+func (c *Checker) attested(ctx context.Context, asset, digest, sumsDigest string) error {
 	root := c.Root
 	if root == nil {
 		var err error
@@ -238,9 +239,26 @@ func (c *Checker) attested(ctx context.Context, asset, digest string) error {
 			return err
 		}
 	}
+	err := c.attestedBy(ctx, root, asset, digest)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errNoAttestation) {
+		if sumsErr := c.attestedBy(ctx, root, ChecksumsName, sumsDigest); sumsErr == nil {
+			return nil
+		} else if !errors.Is(sumsErr, errNoAttestation) {
+			err = sumsErr
+		}
+	}
+	return err
+}
+
+var errNoAttestation = errors.New("no attestation")
+
+func (c *Checker) attestedBy(ctx context.Context, root *attest.TrustedRoot, name, digest string) error {
 	body, err := c.get(ctx, c.APIBase+"/repos/"+c.Repo+"/attestations/sha256:"+digest, maxAttestBytes, "application/vnd.github+json")
 	if err != nil {
-		return fmt.Errorf("fetching the attestation of %s: %w", asset, err)
+		return fmt.Errorf("fetching the attestation of %s: %w (%w)", name, err, errNoAttestation)
 	}
 	var list struct {
 		Attestations []struct {
@@ -248,7 +266,7 @@ func (c *Checker) attested(ctx context.Context, asset, digest string) error {
 		} `json:"attestations"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil || len(list.Attestations) == 0 {
-		return fmt.Errorf("%s has no attestation", asset)
+		return fmt.Errorf("%s has no attestation (%w)", name, errNoAttestation)
 	}
 	var last error
 	for _, a := range list.Attestations {
@@ -256,7 +274,7 @@ func (c *Checker) attested(ctx context.Context, asset, digest string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("no attestation of %s by %s verifies: %w", asset, c.Identity().SAN(), last)
+	return fmt.Errorf("no attestation of %s by %s verifies: %w", name, c.Identity().SAN(), last)
 }
 
 var rename = os.Rename

@@ -39,15 +39,26 @@ type fakeReleases struct {
 	payload          []byte
 	sums             string
 	attestations     []byte
+	attested         string
 	asked            atomic.Int32
 	sig              *fakeSigstore
 }
 
 func (f *fakeReleases) attest(t *testing.T, o bundleOptions) {
 	t.Helper()
+	f.attestOver(t, o, false)
+}
+
+func (f *fakeReleases) attestOver(t *testing.T, o bundleOptions, sums bool) {
+	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	sum := sha256.Sum256(f.payload)
+	f.attested = hex.EncodeToString(sum[:])
+	if sums {
+		sum = sha256.Sum256([]byte(f.sums))
+		f.attested = hex.EncodeToString(sum[:])
+	}
 	if o.san == "" {
 		o.san = releaseSAN(f.repo)
 	}
@@ -74,9 +85,8 @@ func newFakeReleases(t *testing.T, repo, name, tag string, payload []byte) *fake
 	f.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.asked.Add(1)
 		f.mu.Lock()
-		payload, sums, attestations := f.payload, f.sums, f.attestations
+		payload, sums, attestations, attested := f.payload, f.sums, f.attestations, f.attested
 		f.mu.Unlock()
-		digest := sha256.Sum256(payload)
 		switch r.URL.Path {
 		case "/repos/" + f.repo + "/releases/latest":
 			_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": f.tag, "assets": []map[string]string{
@@ -87,7 +97,7 @@ func newFakeReleases(t *testing.T, repo, name, tag string, payload []byte) *fake
 			_, _ = w.Write(payload)
 		case "/dl/sums":
 			_, _ = w.Write([]byte(sums))
-		case "/repos/" + f.repo + "/attestations/sha256:" + hex.EncodeToString(digest[:]):
+		case "/repos/" + f.repo + "/attestations/sha256:" + attested:
 			if attestations == nil {
 				http.NotFound(w, r)
 				return
@@ -222,5 +232,35 @@ func TestInstallRequiresTheAttestation(t *testing.T) {
 	r := runBin(t, env, binary, "install", "fnox", "--checksum-only")
 	if r.code != 0 || !strings.Contains(r.stderr, "warning: --checksum-only skips the attestation") || !strings.Contains(r.stdout, "SHA256SUMS only; the attestation wasn't checked") {
 		t.Fatalf("--checksum-only: %+v", r)
+	}
+}
+
+func TestInstallTakesAnAttestationOverSHA256SUMS(t *testing.T) {
+	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v0.3.0", buildCompanion(t, "jerk", "0.3.0"))
+	f.attestOver(t, bundleOptions{}, true)
+	env, dest := installEnv(t, f)
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 0 || !strings.Contains(r.stdout, "installed jerk 0.3.0 at "+dest) {
+		t.Fatalf("%+v", r)
+	}
+	f.attestOver(t, bundleOptions{san: releaseSAN("ai-ecoverse/slicc-cli")}, true)
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 0 {
+		t.Fatalf("already installed: %+v", r)
+	}
+	if err := os.Remove(dest); err != nil {
+		t.Fatal(err)
+	}
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "no attestation of SHA256SUMS by "+releaseSAN("ai-ecoverse/slicc-jerk")+" verifies") {
+		t.Fatalf("SHA256SUMS attested by another repo: %+v", r)
+	}
+}
+
+func TestInstallRefusesJerkBeforeTheReleaseLayout(t *testing.T) {
+	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v0.2.9", buildCompanion(t, "jerk", "0.2.9"))
+	env, dest := installEnv(t, f)
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "ai-ecoverse/slicc-jerk 0.2.9 predates the release layout slicc installs from (ai-ecoverse/slicc-jerk 0.3.0 and later)") {
+		t.Fatalf("%+v", r)
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("an old jerk was installed")
 	}
 }
