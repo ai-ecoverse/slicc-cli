@@ -274,7 +274,11 @@ func (w *watch) handleBrowser(ev cdp.Event) error {
 
 func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 	if !ec.AuxData.IsDefault || ec.AuxData.FrameID != w.mainFrame {
-		w.c.opts.Logf("signal: ignoring context %d (%s, frame %s)", ec.ID, ec.Origin, ec.AuxData.FrameID)
+		if w.c.opts.Origins.Allowed(ec.Origin) {
+			w.c.opts.Logf("signal: ignoring context %d (%s, frame %s)", ec.ID, ec.Origin, ec.AuxData.FrameID)
+		} else {
+			w.c.opts.Logf("signal: ignored a context on another origin")
+		}
 		return
 	}
 	if BlankOrigin(ec.Origin) {
@@ -282,7 +286,7 @@ func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 		return
 	}
 	if !w.c.opts.Origins.Allowed(ec.Origin) {
-		w.c.opts.Status("seven tab is now on %s, which is not an allowed origin", ec.Origin)
+		w.c.opts.Status("the seven tab left seven")
 		return
 	}
 	w.drop(ctx, "page navigated")

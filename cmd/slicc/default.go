@@ -229,8 +229,10 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	origins, _ := flow.PageOrigins(f.page, f.origins)
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
 	if interactive {
+		cfg.Chosen = true
 		return runTUI(cfg, stdout, stderr)
 	}
+	cfg.Chosen = len(f.browsers) > 0
 	return runPlain(cfg, f, stdout, stderr)
 }
 
@@ -270,7 +272,7 @@ func (o *plainOut) event(e flow.Event) {
 		b, _ := json.Marshal(e)
 		fmt.Fprintf(o.stdout, "%s\n", b)
 	}
-	if line := plainLine(e); line != "" && (!o.json || e.Event == flow.Error) {
+	if line := plainLine(e); line != "" && (!o.json || e.Event == flow.Error || e.Event == flow.ForeignBrowser) {
 		fmt.Fprintf(o.stderr, "slicc: %s\n", line)
 	}
 }
@@ -311,6 +313,8 @@ func plainLine(e flow.Event) string {
 		return "link lost: " + firstNonEmpty(e.Message, e.Reason, "closed")
 	case flow.Status:
 		return e.Message
+	case flow.ForeignBrowser:
+		return foreignLine(e)
 	case flow.Error:
 		return "error: " + e.Message
 	case flow.Closed:
@@ -320,6 +324,18 @@ func plainLine(e flow.Event) string {
 		return "closed " + strings.Join(e.Browsers, ", ")
 	}
 	return ""
+}
+
+func foreignLine(e flow.Event) string {
+	who := e.Name
+	if e.Profile != "" {
+		who += " (profile " + e.Profile + ")"
+	}
+	what := "found a seven tab"
+	if e.OpenedTab != nil && *e.OpenedTab {
+		what = "opened a new seven tab"
+	}
+	return fmt.Sprintf("using %s at %s, which slicc didn't launch; %s. Use --browser or --cdp to choose another.", who, e.CDP, what)
 }
 
 func firstNonEmpty(s ...string) string {

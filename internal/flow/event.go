@@ -27,10 +27,12 @@ const (
 	BrowserBack Kind = "browser-back"
 	Closed      Kind = "closed"
 	Error       Kind = "error"
+
+	ForeignBrowser Kind = "foreign-browser"
 )
 
 var Public = map[Kind]bool{
-	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, Closed: true, Error: true,
+	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, Closed: true, Error: true, ForeignBrowser: true,
 }
 
 const (
@@ -62,6 +64,7 @@ type Event struct {
 	Stream       string          `json:"stream,omitempty"`
 	Kernel       string          `json:"kernel,omitempty"`
 	Compute      string          `json:"compute,omitempty"`
+	OpenedTab    *bool           `json:"openedTab,omitempty"`
 	Time         time.Time       `json:"-"`
 }
 
