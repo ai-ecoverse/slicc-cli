@@ -79,8 +79,7 @@ func parseCommand(data []byte) (*command, int64, bool) {
 	return c, n, true
 }
 
-func (g *guard) fromPage(data []byte) pageVerdict {
-	c, id, ok := parseCommand(data)
+func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	if !ok {
 		if id < 0 {
 			return pageVerdict{}
@@ -100,7 +99,12 @@ func (g *guard) fromPage(data []byte) pageVerdict {
 }
 
 func (g *guard) admitLocked(c *command) pageVerdict {
-	g.pending[callKey{c.session, c.id}] = resultKind(c.method)
+	k := callKey{c.session, c.id}
+	g.pending[k] = resultKind(c.method)
+	if t := c.str("targetId"); c.method == "Target.attachToTarget" && t != "" {
+		g.attachCalls[k] = t
+		g.explicit[t]++
+	}
 	return pageVerdict{forward: c.bytes(), cmd: c}
 }
 
@@ -142,6 +146,10 @@ func resultKind(method string) callKind {
 		return kindBrowserSession
 	case "Target.createBrowserContext":
 		return kindContext
+	case "Target.createTarget":
+		return kindCreate
+	case "Target.attachToTarget":
+		return kindAttach
 	}
 	return kindPlain
 }
@@ -150,7 +158,7 @@ func (g *guard) sessionRefusedLocked(id string) bool {
 	if id == "" {
 		return false
 	}
-	if id == g.relaySession || g.hidden[id] || g.refused[id] {
+	if id == g.relaySession || g.hidden[id] || g.refused[id] || g.held[id] != nil || g.navSessions[id] != nil {
 		return true
 	}
 	if s, ok := g.sessions[id]; ok {
@@ -165,6 +173,9 @@ func (g *guard) checkLocked(c *command) string {
 	}
 	if g.sessionRefusedLocked(c.session) {
 		return refusedTarget
+	}
+	if reason := g.navCheckLocked(c.session); reason != "" {
+		return reason
 	}
 	k := callKey{c.session, c.id}
 	if _, busy := g.pending[k]; busy {
@@ -357,7 +368,7 @@ func (g *guard) scanString(k, s string, c *command) string {
 		return refusedTarget
 	case idKeys[k] && g.targetProtectedLocked(s):
 		return refusedTarget
-	case k == "sessionId" && s != "" && s == g.relaySession:
+	case k == "sessionId" && s != "" && (s == g.relaySession || g.navSessions[s] != nil):
 		return refusedTarget
 	case k == "sessionId" && g.sessionRefusedLocked(s) && c.method != "Target.detachFromTarget":
 		return refusedTarget

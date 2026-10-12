@@ -214,6 +214,11 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 		}
 		req, _ := p["request"].(map[string]any)
 		u, _ := req["url"].(string)
+		if rt, _ := p["resourceType"].(string); m.Method == "Fetch.requestPaused" && rt == "Document" && g.o.URL(u) {
+			g.logf("cdp: failed a document request into a protected origin that a page session paused")
+			msg, _ := g.newCallLocked(m.SessionID, "Fetch.failRequest", map[string]any{"requestId": id, "errorReason": "BlockedByClient"}, false)
+			return false, false, [][]byte{msg}
+		}
 		if g.o.URL(u) {
 			g.markRequestLocked(m.SessionID, id)
 		}

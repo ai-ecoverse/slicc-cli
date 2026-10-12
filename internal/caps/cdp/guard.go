@@ -35,10 +35,13 @@ const (
 	kindCookies
 	kindBrowserSession
 	kindContext
+	kindCreate
+	kindAttach
 )
 
 type relayCall struct {
 	ch chan message
+	fn func(m message) [][]byte
 }
 
 type target struct {
@@ -56,6 +59,7 @@ type session struct {
 	id      string
 	target  string
 	parent  string
+	typ     string
 	refused bool
 }
 
@@ -81,13 +85,19 @@ type guard struct {
 	markedCount     int
 	saturated       map[string]bool
 	swProtected     map[string]bool
+	navTargets      map[string]*navTarget
+	navSessions     map[string]*navTarget
+	held            map[string]*heldSession
+	explicit        map[string]int
+	attachCalls     map[callKey]string
+	patterns        []any
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &guard{
+	g := &guard{
 		o:               o,
 		logf:            logf,
 		targets:         map[string]*target{},
@@ -102,7 +112,14 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		marked:          map[string]map[string]bool{},
 		saturated:       map[string]bool{},
 		swProtected:     map[string]bool{},
+		navTargets:      map[string]*navTarget{},
+		navSessions:     map[string]*navTarget{},
+		held:            map[string]*heldSession{},
+		explicit:        map[string]int{},
+		attachCalls:     map[callKey]string{},
 	}
+	g.patterns = g.documentPatterns()
+	return g
 }
 
 type message struct {
@@ -301,6 +318,8 @@ func (g *guard) addRefusedLocked(id string) {
 }
 
 func (g *guard) destroyedLocked(id string) {
+	g.navForgetLocked(id)
+	g.dropHeldLocked(id)
 	t, ok := g.targets[id]
 	if !ok || t.gone {
 		return
@@ -325,7 +344,19 @@ func (g *guard) forgetSessionLocked(id string) {
 	for k := range g.pending {
 		if k.session == id {
 			delete(g.pending, k)
+			g.attachDoneLocked(k)
 		}
+	}
+}
+
+func (g *guard) attachDoneLocked(k callKey) {
+	t, ok := g.attachCalls[k]
+	if !ok {
+		return
+	}
+	delete(g.attachCalls, k)
+	if g.explicit[t]--; g.explicit[t] <= 0 {
+		delete(g.explicit, t)
 	}
 }
 

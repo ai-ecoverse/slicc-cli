@@ -46,6 +46,7 @@ export class CdpClient {
   #nextId = 1;
   #pending = new Map();
   #waiters = new Set();
+  #listeners = new Set();
   #writing = Promise.resolve();
 
   constructor(stream) {
@@ -93,6 +94,7 @@ export class CdpClient {
       return;
     }
     this.events.push(msg);
+    for (const listener of this.#listeners) listener(msg);
     for (const waiter of [...this.#waiters]) {
       if (waiter.match(msg)) {
         this.#waiters.delete(waiter);
@@ -127,6 +129,11 @@ export class CdpClient {
     const next = this.#writing.then(() => this.stream.write(bytes));
     this.#writing = next.catch(() => {});
     return next;
+  }
+
+  on(listener) {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
   }
 
   waitEvent(match, timeout = 15000) {

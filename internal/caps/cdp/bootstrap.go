@@ -71,7 +71,11 @@ func (rl *relay) syncCall(ctx context.Context, sessionID, method string, params 
 }
 
 func (rl *relay) checkPage(data []byte) ([]byte, bool) {
-	v := rl.g.fromPage(data)
+	c, id, ok := parseCommand(data)
+	if ok {
+		rl.awaitGuard(c.session)
+	}
+	v := rl.g.fromCommand(c, id, ok)
 	if v.history != nil {
 		v = rl.resolveHistory(v.history)
 	}
@@ -99,4 +103,18 @@ func (rl *relay) resolveHistory(c *command) pageVerdict {
 	case <-rl.s.Done():
 	}
 	return rl.g.afterHistory(c, message{}, false)
+}
+
+func (rl *relay) awaitGuard(sessionID string) {
+	ready := rl.g.navWait(sessionID)
+	if ready == nil {
+		return
+	}
+	t := time.NewTimer(NavTimeout)
+	defer t.Stop()
+	select {
+	case <-ready:
+	case <-t.C:
+	case <-rl.s.Done():
+	}
 }
