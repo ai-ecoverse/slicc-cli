@@ -15,7 +15,7 @@ func main() {
 	if len(args) == 1 && args[0] == "--version" {
 		v := os.Getenv("FAKEJERK_VERSION")
 		if v == "" {
-			v = "0.3.1"
+			v = "0.6.0"
 		}
 		fmt.Println("jerk " + v)
 		return

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	MinVersion      = "0.3.0"
+	MinVersion      = "0.6.0"
 	DefaultDuration = 3600
 	MaxDuration     = 86400
 	Timeout         = 60 * time.Second
@@ -85,37 +85,56 @@ func ValidLeaseID(id string) bool {
 	return true
 }
 
-func Find(dirs ...string) *Jerk {
-	path := lookup(dirs)
-	if path == "" {
-		return nil
+func Find(dirs ...string) (*Jerk, string) {
+	old := ""
+	for _, path := range candidates(dirs) {
+		v := version(path)
+		if v == nil {
+			continue
+		}
+		if atLeast(v[1:], MinVersion) {
+			return &Jerk{Path: path, Version: v[0]}, ""
+		}
+		if old == "" {
+			old = v[0]
+		}
 	}
+	return nil, old
+}
+
+func version(path string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, path, "--version").Output()
 	if err != nil {
 		return nil
 	}
-	m := versionRE.FindStringSubmatch(string(out))
-	if m == nil || !atLeast(m[1:], MinVersion) {
-		return nil
-	}
-	return &Jerk{Path: path, Version: m[0]}
+	return versionRE.FindStringSubmatch(string(out))
 }
 
-func lookup(dirs []string) string {
+func candidates(dirs []string) []string {
+	var out []string
 	if p, err := exec.LookPath("jerk"); err == nil {
-		return p
+		out = append(out, p)
 	}
 	for _, d := range dirs {
 		for _, name := range []string{"jerk", "jerk.exe"} {
 			p := d + string(os.PathSeparator) + name
-			if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-				return p
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && !sameFile(out, fi) {
+				out = append(out, p)
 			}
 		}
 	}
-	return ""
+	return out
+}
+
+func sameFile(paths []string, fi os.FileInfo) bool {
+	for _, p := range paths {
+		if o, err := os.Stat(p); err == nil && os.SameFile(o, fi) {
+			return true
+		}
+	}
+	return false
 }
 
 func atLeast(got []string, min string) bool {

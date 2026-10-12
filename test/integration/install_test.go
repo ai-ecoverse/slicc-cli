@@ -236,10 +236,10 @@ func TestInstallRequiresTheAttestation(t *testing.T) {
 }
 
 func TestInstallTakesAnAttestationOverSHA256SUMS(t *testing.T) {
-	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v0.3.0", buildCompanion(t, "jerk", "0.3.0"))
+	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v0.6.0", buildCompanion(t, "jerk", "0.6.0"))
 	f.attestOver(t, bundleOptions{}, true)
 	env, dest := installEnv(t, f)
-	if r := runBin(t, env, binary, "install", "jerk"); r.code != 0 || !strings.Contains(r.stdout, "installed jerk 0.3.0 at "+dest) {
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 0 || !strings.Contains(r.stdout, "installed jerk 0.6.0 at "+dest) {
 		t.Fatalf("%+v", r)
 	}
 	f.attestOver(t, bundleOptions{san: releaseSAN("ai-ecoverse/slicc-cli")}, true)
@@ -254,10 +254,10 @@ func TestInstallTakesAnAttestationOverSHA256SUMS(t *testing.T) {
 	}
 }
 
-func TestInstallRefusesJerkBeforeTheReleaseLayout(t *testing.T) {
-	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v0.2.9", buildCompanion(t, "jerk", "0.2.9"))
+func TestInstallRefusesAJerkOlderThanTheLinkNeeds(t *testing.T) {
+	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v0.5.0", buildCompanion(t, "jerk", "0.5.0"))
 	env, dest := installEnv(t, f)
-	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "ai-ecoverse/slicc-jerk 0.2.9 predates the release layout slicc installs from (ai-ecoverse/slicc-jerk 0.3.0 and later)") {
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "ai-ecoverse/slicc-jerk 0.5.0 is older than 0.6.0, the first release slicc works with") {
 		t.Fatalf("%+v", r)
 	}
 	if _, err := os.Stat(dest); err == nil {

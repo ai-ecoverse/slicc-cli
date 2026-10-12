@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/fence"
+	"github.com/ai-ecoverse/slicc-cli/internal/jerk"
 	"github.com/ai-ecoverse/slicc-cli/internal/telemetry"
 	"github.com/ai-ecoverse/slicc-cli/internal/update"
 )
@@ -21,7 +22,7 @@ import (
 const installUsage = `usage: slicc install jerk|fnox [--checksum-only]
 
 Installs a companion tool into slicc's own data folder, where slicc finds it:
-  jerk   slicc-jerk, the latest release of ai-ecoverse/slicc-jerk
+  jerk   slicc-jerk, the latest release of ai-ecoverse/slicc-jerk (0.6.0 on)
   fnox   fnox, the latest release of ai-ecoverse/fnox-build
 
 slicc downloads the release binary for this OS and CPU, checks it against
@@ -36,7 +37,7 @@ type companion struct {
 }
 
 var installable = map[string]companion{
-	"jerk": {repo: "ai-ecoverse/slicc-jerk", binary: "jerk", since: "0.3.0"},
+	"jerk": {repo: "ai-ecoverse/slicc-jerk", binary: "jerk", since: jerk.MinVersion},
 	"fnox": {repo: "ai-ecoverse/fnox-build", binary: "fnox"},
 }
 
@@ -76,7 +77,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if c.since != "" && update.IsNewer(c.since, rel.Version) {
-		fmt.Fprintf(stderr, "slicc install: %s %s predates the release layout slicc installs from (%s %s and later)\n", c.repo, rel.Version, c.repo, c.since)
+		fmt.Fprintf(stderr, "slicc install: %s %s is older than %s, the first release slicc works with\n", c.repo, rel.Version, c.since)
 		return 1
 	}
 	if have := installedVersion(ctx, dest); have == rel.Version {

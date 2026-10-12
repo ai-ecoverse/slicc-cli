@@ -27,9 +27,12 @@ func jerkDirs() []string {
 }
 
 func serveJerk(n *node.Node, seal, explicit bool, status func(string, ...any)) {
-	j := jerk.Find(jerkDirs()...)
+	j, old := jerk.Find(jerkDirs()...)
 	if j == nil {
-		if explicit {
+		switch {
+		case old != "":
+			status("jerk: host jerk %s is older than %s; run slicc install jerk", old, jerk.MinVersion)
+		case explicit:
 			status("jerk: no slicc-jerk %s or later on PATH or in slicc's data folder; not offering it", jerk.MinVersion)
 		}
 		return
