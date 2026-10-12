@@ -15,6 +15,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
 const (
@@ -43,12 +44,13 @@ type Registry struct {
 	onAdd   func(ctx context.Context, id string, hostports []string)
 	onCheck func(ctx context.Context, id string, hostports []string)
 
-	mu      sync.Mutex
-	entries []*entry
-	known   map[string]string
-	taken   map[string]bool
-	gone    map[string]*entry
-	links   map[*link.Link]*pusher
+	mu        sync.Mutex
+	protected *protect.Origins
+	entries   []*entry
+	known     map[string]string
+	taken     map[string]bool
+	gone      map[string]*entry
+	links     map[*link.Link]*pusher
 
 	version      int
 	helloVersion int
@@ -66,6 +68,26 @@ func NewRegistry(logf func(format string, args ...any)) *Registry {
 		gone:  map[string]*entry{},
 		links: map[*link.Link]*pusher{},
 	}
+}
+
+func (r *Registry) Protect(origins []string) error {
+	o, err := protect.New(origins)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.protected = o
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Registry) origins() *protect.Origins {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.protected == nil {
+		r.protected = protect.MustNew(nil)
+	}
+	return r.protected
 }
 
 func probe(ctx context.Context, raw string) (browser.Endpoint, error) {

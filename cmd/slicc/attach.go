@@ -54,8 +54,9 @@ or the browsers' debugging ports and endpoints. With --runner it also offers
 ssh: seven's kernel reaches this machine's SSH server, which never listens on
 a port, and its forwarding goes through the same policy. With --cdp or
 --cdp-extra it also offers cdp: seven gets full control of every browser
-listed. With --mount it also offers fs: seven's kernel can mount the folders
-listed, read-only with :ro.
+listed, except tabs, cookies and storage on seven's own origins (sliccy.ai
+and --origin). With --mount it also offers fs: seven's kernel can mount the
+folders listed, read-only with :ro.
 
 When seven offers kernel-in, slicc listens on 127.0.0.1:<kernel port> and
 carries navigations and WebSockets to http://<port>.kernel.localhost/ into
@@ -168,7 +169,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer closer()
 	pol := policy.Local(append(cdpPorts(append([]string{f.cdp}, f.extra...)...), kernelPolicyPort(f))...).With(f.allow, f.deny)
-	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, pol, f.hosts.hosts, logf)
+	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, f.origins, pol, f.hosts.hosts, logf)
 	if err != nil {
 		status("%v", err)
 		return 1

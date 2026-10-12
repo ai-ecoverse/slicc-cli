@@ -52,7 +52,8 @@ flags:
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
   --name <name>        the name and host this link shows in seven
   --cdp <url>          let seven drive this browser over the link (cdp,
-                       repeatable); seven gets full control of it, and its
+                       repeatable); seven gets full control of it, except
+                       tabs, cookies and storage on sliccy.ai, and its
                        endpoint and port are denied to tcp, http and ssh
 ` + mountUsage + computeUsage + `
 With --runner the link also offers ssh: seven's kernel reaches this machine's
@@ -212,7 +213,7 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	}
 	pol := policy.Remote(cdpPorts(ff.cdp...)...).With(ff.allow, ff.deny)
 	if len(ff.cdp) > 0 {
-		if r.cdp, err = cdpBrowsers(context.Background(), "", ff.cdp, pol, ff.hosts.hosts, logf); err != nil {
+		if r.cdp, err = cdpBrowsers(context.Background(), "", ff.cdp, nil, pol, ff.hosts.hosts, logf); err != nil {
 			return nil, err
 		}
 	}

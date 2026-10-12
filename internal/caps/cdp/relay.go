@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 	cdpclient "github.com/ai-ecoverse/slicc-cli/internal/cdp"
@@ -60,13 +61,21 @@ func (r *Registry) serve(s *link.Stream) {
 		}
 	}()
 	conn, opened, err := dial(ctx, e.ep)
-	cancel()
 	if err != nil {
+		cancel()
 		r.logf("cdp %s: %v", req.Browser, err)
 		_ = s.Reset("ECONNREFUSED: " + err.Error())
 		return
 	}
-	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser}
+	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf)}
+	err = rl.bootstrap(ctx)
+	cancel()
+	if err != nil {
+		_ = conn.CloseNow()
+		r.logf("cdp %s: %v", req.Browser, err)
+		_ = s.Reset("ECONNREFUSED: slicc can't watch the browser's targets: " + err.Error())
+		return
+	}
 	if !r.track(e, rl) {
 		_ = conn.CloseNow()
 		_ = s.Reset("ENOENT: browser removed")
@@ -160,10 +169,12 @@ func getVersion(ctx context.Context, conn *websocket.Conn) (Opened, error) {
 }
 
 type relay struct {
-	s    *link.Stream
-	conn *websocket.Conn
-	logf func(format string, args ...any)
-	id   string
+	s      *link.Stream
+	conn   *websocket.Conn
+	logf   func(format string, args ...any)
+	id     string
+	g      *guard
+	pageMu sync.Mutex
 
 	pageEnded   atomic.Bool
 	browserDone atomic.Bool
@@ -198,14 +209,35 @@ func (rl *relay) toPage() {
 		if typ != websocket.MessageText || filtered(data) {
 			continue
 		}
-		msg := make([]byte, 4+len(data))
-		binary.BigEndian.PutUint32(msg, uint32(len(data)))
-		copy(msg[4:], data)
-		if _, err := rl.s.Write(msg); err != nil {
+		v := rl.g.fromBrowser(data)
+		if v.lost {
+			time.AfterFunc(LostGrace, func() {
+				if !rl.browserDone.Load() {
+					rl.kill("ECONNRESET: " + refusedLost)
+				}
+			})
+		}
+		for _, msg := range v.send {
+			_ = rl.conn.Write(ctx, websocket.MessageText, msg)
+		}
+		if v.forward == nil {
+			continue
+		}
+		if err := rl.writePage(v.forward); err != nil {
 			_ = rl.conn.CloseNow()
 			return
 		}
 	}
+}
+
+func (rl *relay) writePage(data []byte) error {
+	msg := make([]byte, 4+len(data))
+	binary.BigEndian.PutUint32(msg, uint32(len(data)))
+	copy(msg[4:], data)
+	rl.pageMu.Lock()
+	defer rl.pageMu.Unlock()
+	_, err := rl.s.Write(msg)
+	return err
 }
 
 func (rl *relay) browserClosed(err error) {
@@ -263,7 +295,14 @@ func (rl *relay) toBrowser() {
 		if rl.browserDone.Load() {
 			continue
 		}
-		if err := rl.conn.Write(ctx, websocket.MessageText, buf.Bytes()); err != nil {
+		out, ok := rl.checkPage(buf.Bytes())
+		if !ok {
+			return
+		}
+		if out == nil {
+			continue
+		}
+		if err := rl.conn.Write(ctx, websocket.MessageText, out); err != nil {
 			if rl.browserDone.Load() {
 				continue
 			}

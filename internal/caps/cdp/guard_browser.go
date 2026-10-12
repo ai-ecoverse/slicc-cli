@@ -1,0 +1,333 @@
+package cdp
+
+import (
+	"encoding/json"
+	"strings"
+)
+
+type browserVerdict struct {
+	forward []byte
+	send    [][]byte
+	lost    bool
+}
+
+func (g *guard) fromBrowser(data []byte) browserVerdict {
+	var m message
+	if err := json.Unmarshal(data, &m); err != nil {
+		g.logf("cdp: dropped a browser message that isn't JSON")
+		return browserVerdict{}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if m.ID != nil {
+		return g.responseLocked(&m, data)
+	}
+	if m.SessionID != "" && m.SessionID == g.relaySession {
+		return browserVerdict{send: g.relayEventLocked(&m)}
+	}
+	if g.sessionRefusedLocked(m.SessionID) {
+		return browserVerdict{}
+	}
+	if h, ok := eventHandlers[m.Method]; ok {
+		return h(g, &m, data)
+	}
+	if strings.HasPrefix(m.Method, "Storage.") || strings.HasPrefix(m.Method, "BackgroundService.") || strings.HasPrefix(m.Method, "DOMStorage.") {
+		if p, ok := decodeObject(m.Params); ok && g.eventProtected(p, 0) {
+			return browserVerdict{}
+		}
+	}
+	return browserVerdict{forward: data}
+}
+
+func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
+	k := callKey{m.SessionID, *m.ID}
+	if rc, ok := g.relayCalls[k]; ok {
+		delete(g.relayCalls, k)
+		if rc.ch != nil {
+			rc.ch <- *m
+		}
+		return browserVerdict{}
+	}
+	kind, ok := g.pending[k]
+	delete(g.pending, k)
+	if g.sessionRefusedLocked(m.SessionID) {
+		return browserVerdict{}
+	}
+	if !ok || m.Error != nil || kind == kindPlain {
+		return browserVerdict{forward: data}
+	}
+	res, ok := decodeObject(m.Result)
+	if !ok {
+		return browserVerdict{forward: data}
+	}
+	var send [][]byte
+	switch kind {
+	case kindTargets:
+		list, _ := res["targetInfos"].([]any)
+		for _, item := range list {
+			send = append(send, g.infoLocked(item)...)
+		}
+	case kindTargetInfo:
+		send = g.infoLocked(res["targetInfo"])
+	case kindCookies:
+		res["cookies"] = g.filterCookies(res["cookies"])
+	case kindBrowserSession:
+		if s, _ := res["sessionId"].(string); s != "" {
+			g.browserSessions[s] = true
+		}
+	case kindContext:
+		if s, _ := res["browserContextId"].(string); s != "" {
+			g.ownContexts[s] = true
+		}
+	}
+	m.Result = encode(res)
+	return browserVerdict{forward: encode(m), send: send}
+}
+
+func toInfo(v any) (targetInfo, map[string]any) {
+	obj, _ := v.(map[string]any)
+	var info targetInfo
+	if obj == nil {
+		return info, nil
+	}
+	_ = json.Unmarshal(encode(obj), &info)
+	return info, obj
+}
+
+func (g *guard) infoLocked(v any) [][]byte {
+	info, obj := toInfo(v)
+	if obj == nil || info.TargetID == "" {
+		return nil
+	}
+	send := g.observeLocked(info)
+	if g.targetProtectedLocked(info.TargetID) {
+		redacted := redactURL(info.URL)
+		obj["url"] = redacted
+		obj["title"] = redacted
+	}
+	return send
+}
+
+func (g *guard) relayEventLocked(m *message) [][]byte {
+	var p struct {
+		TargetInfo targetInfo `json:"targetInfo"`
+		TargetID   string     `json:"targetId"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	switch m.Method {
+	case "Target.targetCreated", "Target.targetInfoChanged":
+		return g.observeLocked(p.TargetInfo)
+	case "Target.targetDestroyed":
+		g.destroyedLocked(p.TargetID)
+	}
+	return nil
+}
+
+type eventHandler func(g *guard, m *message, data []byte) browserVerdict
+
+var eventHandlers = map[string]eventHandler{
+	"Target.targetCreated":                       (*guard).targetEvent,
+	"Target.targetInfoChanged":                   (*guard).targetEvent,
+	"Target.attachedToTarget":                    (*guard).attachedEvent,
+	"Target.detachedFromTarget":                  (*guard).detachedEvent,
+	"Target.receivedMessageFromTarget":           (*guard).innerMessageEvent,
+	"Page.frameNavigated":                        (*guard).frameNavigatedEvent,
+	"Runtime.executionContextCreated":            (*guard).contextCreatedEvent,
+	"Network.requestWillBeSent":                  (*guard).requestEvent,
+	"Network.requestWillBeSentExtraInfo":         (*guard).requestExtraEvent,
+	"Network.responseReceived":                   (*guard).responseEvent,
+	"Network.responseReceivedExtraInfo":          (*guard).responseExtraEvent,
+	"Network.requestIntercepted":                 (*guard).pausedEvent,
+	"Network.webSocketCreated":                   (*guard).socketCreatedEvent,
+	"Network.webTransportCreated":                (*guard).socketCreatedEvent,
+	"Network.webSocketWillSendHandshakeRequest":  (*guard).markedDropEvent,
+	"Network.webSocketHandshakeResponseReceived": (*guard).markedDropEvent,
+	"Network.webSocketFrameError":                (*guard).markedDropEvent,
+	"Network.eventSourceMessageReceived":         (*guard).markedDropEvent,
+	"Network.dataReceived":                       (*guard).markedDropEvent,
+	"Fetch.requestPaused":                        (*guard).pausedEvent,
+	"Fetch.authRequired":                         (*guard).pausedEvent,
+	"ServiceWorker.workerRegistrationUpdated":    (*guard).swRegistrationsEvent,
+	"ServiceWorker.workerVersionUpdated":         (*guard).swVersionsEvent,
+	"ServiceWorker.workerErrorReported":          (*guard).swErrorEvent,
+}
+
+func (g *guard) withParams(m *message, data []byte, fn func(p map[string]any) (keep, changed bool, send [][]byte)) browserVerdict {
+	p, ok := decodeObject(m.Params)
+	if !ok {
+		return browserVerdict{forward: data}
+	}
+	keep, changed, send := fn(p)
+	switch {
+	case !keep:
+		return browserVerdict{send: send}
+	case changed:
+		m.Params = encode(p)
+		return browserVerdict{forward: encode(m), send: send}
+	}
+	return browserVerdict{forward: data, send: send}
+}
+
+func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
+	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		send := g.infoLocked(p["targetInfo"])
+		info, _ := toInfo(p["targetInfo"])
+		return true, g.targetProtectedLocked(info.TargetID), send
+	})
+}
+
+func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
+	var p struct {
+		SessionID  string     `json:"sessionId"`
+		TargetInfo targetInfo `json:"targetInfo"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	if p.SessionID == "" || p.SessionID == g.relaySession {
+		return browserVerdict{}
+	}
+	send := g.observeLocked(p.TargetInfo)
+	if g.targetProtectedLocked(p.TargetInfo.TargetID) {
+		g.hidden[p.SessionID] = true
+		msg, _ := g.newCallLocked(m.SessionID, "Target.detachFromTarget", map[string]any{"sessionId": p.SessionID}, false)
+		g.logf("cdp: detached an auto-attached session on a protected origin")
+		return browserVerdict{send: append(send, msg)}
+	}
+	g.sessions[p.SessionID] = &session{id: p.SessionID, target: p.TargetInfo.TargetID, parent: m.SessionID}
+	if p.TargetInfo.Type == "browser" {
+		g.browserSessions[p.SessionID] = true
+	}
+	return browserVerdict{forward: data, send: send}
+}
+
+func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
+	var p struct {
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	if p.SessionID != "" && p.SessionID == g.relaySession {
+		g.lost = true
+		return browserVerdict{lost: true}
+	}
+	if g.hidden[p.SessionID] {
+		delete(g.hidden, p.SessionID)
+		g.forgetSessionLocked(p.SessionID)
+		return browserVerdict{}
+	}
+	g.forgetSessionLocked(p.SessionID)
+	return browserVerdict{forward: data}
+}
+
+func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {
+	var p struct {
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	if g.sessionRefusedLocked(p.SessionID) {
+		return browserVerdict{}
+	}
+	return browserVerdict{forward: data}
+}
+
+func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
+	var p struct {
+		Frame struct {
+			ID             string `json:"id"`
+			ParentID       string `json:"parentId"`
+			SecurityOrigin string `json:"securityOrigin"`
+		} `json:"frame"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	t := g.sessionTargetLocked(m.SessionID)
+	if t == nil || p.Frame.ParentID != "" || p.Frame.ID != t.id || !g.o.URL(p.Frame.SecurityOrigin) {
+		return browserVerdict{forward: data}
+	}
+	return browserVerdict{send: g.markLocked(t)}
+}
+
+func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
+	var p struct {
+		Context struct {
+			Origin  string `json:"origin"`
+			AuxData struct {
+				IsDefault bool   `json:"isDefault"`
+				FrameID   string `json:"frameId"`
+			} `json:"auxData"`
+		} `json:"context"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	t := g.sessionTargetLocked(m.SessionID)
+	if t == nil || !p.Context.AuxData.IsDefault || p.Context.AuxData.FrameID != t.id || !g.o.URL(p.Context.Origin) {
+		return browserVerdict{forward: data}
+	}
+	return browserVerdict{send: g.markLocked(t)}
+}
+
+func (g *guard) eventProtected(v any, depth int) bool {
+	if depth > maxScanDepth {
+		return false
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			s, isString := val.(string)
+			switch {
+			case isString && (urlKeys[k] || k == "scriptURL") && g.o.URL(s):
+				return true
+			case isString && k == "storageKey" && g.o.StorageKey(s):
+				return true
+			case !isString && g.eventProtected(val, depth+1):
+				return true
+			}
+		}
+	case []any:
+		for _, val := range t {
+			if g.eventProtected(val, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (g *guard) swRegistrationsEvent(m *message, data []byte) browserVerdict {
+	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		return true, g.filterWorkers(p, "registrations", "scopeURL", "registrationId"), nil
+	})
+}
+
+func (g *guard) swVersionsEvent(m *message, data []byte) browserVerdict {
+	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		return true, g.filterWorkers(p, "versions", "scriptURL", "versionId"), nil
+	})
+}
+
+func (g *guard) swErrorEvent(m *message, data []byte) browserVerdict {
+	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		e, _ := p["errorMessage"].(map[string]any)
+		reg, _ := e["registrationId"].(string)
+		return !g.swProtected[reg] && !g.eventProtected(e, 0), false, nil
+	})
+}
+
+func (g *guard) filterWorkers(p map[string]any, field, urlKey, idKey string) bool {
+	list, _ := p[field].([]any)
+	kept := make([]any, 0, len(list))
+	for _, item := range list {
+		w, _ := item.(map[string]any)
+		u, _ := w[urlKey].(string)
+		id, _ := w[idKey].(string)
+		reg, _ := w["registrationId"].(string)
+		if g.o.URL(u) || g.swProtected[reg] {
+			if len(g.swProtected) < maxMarked {
+				g.swProtected[id] = true
+			}
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if len(kept) == len(list) {
+		return false
+	}
+	p[field] = kept
+	return true
+}
