@@ -2,6 +2,7 @@ package fs
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -128,6 +129,9 @@ func (f *folder) startLocked() {
 	f.gen++
 	gen := f.gen
 	note := func(rel string, known bool) {
+		if known && fenced().covers(filepath.Join(f.root, filepath.FromSlash(rel))) {
+			return
+		}
 		f.h.mu.Lock()
 		defer f.h.mu.Unlock()
 		if f.gen == gen && !f.closed {
@@ -377,13 +381,9 @@ func (s *Server) watch(st *link.Stream, a args) error {
 	}()
 	var unsubs []func()
 	for _, m := range mounts {
-		name, root := m.Name, m.Root
-		unsubs = append(unsubs, s.hub.subscribe(root, func(ev event) {
-			paths := fenced().visible(root, ev.paths)
-			if !ev.all && len(paths) == 0 {
-				return
-			}
-			w.push(watchLine{Mount: name, Paths: paths, All: ev.all})
+		name := m.Name
+		unsubs = append(unsubs, s.hub.subscribe(m.Root, func(ev event) {
+			w.push(watchLine{Mount: name, Paths: ev.paths, All: ev.all})
 		}))
 	}
 	defer func() {

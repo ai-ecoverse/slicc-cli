@@ -91,13 +91,3 @@ func (f *fenceSet) guards(p string) bool {
 func Fenced(root string) bool {
 	return fenced().covers(root)
 }
-
-func (f *fenceSet) visible(root string, rels []string) []string {
-	out := rels[:0:0]
-	for _, rel := range rels {
-		if !f.covers(filepath.Join(root, filepath.FromSlash(rel))) {
-			out = append(out, rel)
-		}
-	}
-	return out
-}

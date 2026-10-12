@@ -2,6 +2,7 @@ package integration
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -66,6 +67,7 @@ func TestFSFence(t *testing.T) {
 	t.Run("fenced folders aren't mounted", e.testFenceMounts)
 	t.Run("fenced paths are refused", e.testFencePaths)
 	t.Run("ancestors can't be moved", e.testFenceAncestors)
+	t.Run("short names are fenced too", e.testFenceShortNames)
 	t.Run("watch hides fenced paths", e.testFenceWatch)
 }
 
@@ -159,9 +161,22 @@ func (e *fenceEnv) testFenceWatch(t *testing.T) {
 	lines, _ := w.state(t)
 	for _, l := range lines[at:] {
 		for _, p := range paths(l) {
-			if strings.HasPrefix(p, e.fnox) || strings.HasPrefix(p, e.jerk) {
+			if strings.HasPrefix(p, e.fnox) || strings.HasPrefix(p, e.jerk) || p == ".config" || p == path.Dir(e.jerk) {
 				t.Fatalf("watch showed %q: %v", p, lines[at:])
 			}
 		}
 	}
+}
+
+func (e *fenceEnv) testFenceShortNames(t *testing.T) {
+	short := shortName(filepath.Join(e.home, ".config", "fnox"))
+	parent := shortName(filepath.Join(e.home, ".config"))
+	if short == "" || short == "fnox" || parent == "" || parent == ".config" {
+		t.Skip("no 8.3 names on this volume")
+	}
+	c := e.rw
+	c.errno(t, "stat", map[string]any{"path": ".config/" + short}, "EACCES")
+	c.errno(t, "stat", map[string]any{"path": parent + "/" + short + "/config.toml"}, "EACCES")
+	c.errno(t, "rename", map[string]any{"from": ".config/" + short, "to": "moved"}, "EACCES")
+	c.errno(t, "rename", map[string]any{"from": parent, "to": "moved"}, "EACCES")
 }

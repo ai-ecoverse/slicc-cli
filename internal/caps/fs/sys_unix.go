@@ -29,6 +29,8 @@ func realpath(p string) (string, error) {
 
 func isDirectory(string) error { return nil }
 
+func longLeaf(p string) string { return p }
+
 func u32[T ~uint16 | ~uint32](v T) uint32 { return uint32(v) }
 
 func i64[T ~int32 | ~uint32 | ~int64](v T) int64 { return int64(v) }
