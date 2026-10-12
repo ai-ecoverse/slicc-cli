@@ -67,12 +67,18 @@ func TestSliccyNextStagesTheLatestRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "sliccy-next")
-	r := sliccyNext(t, node, repo, out, registryEnv(t, newFakeRegistry(t, platformDeps("1.2.4")...)), "--dry-run")
+	reg := newFakeRegistry(t, platformDeps("1.2.4")...)
+	r := sliccyNext(t, node, repo, out, registryEnvWaiting(t, reg, 120), "--dry-run")
 	if r.code != 0 || !strings.Contains(r.stdout, "the latest release is v1.2.4; staging sliccy@7.0.0-next.1.2.4") {
 		t.Fatalf("%+v", r)
 	}
 	if !strings.Contains(r.stdout, "every optional dependency of sliccy@7.0.0-next.1.2.4 is on the registry") || !strings.Contains(r.stderr, "with tag next") || !strings.Contains(r.stderr, "(dry-run)") {
 		t.Fatalf("publish: %+v", r)
+	}
+	for _, dep := range platformDeps("1.2.4") {
+		if !reg.wasAsked(dep) {
+			t.Fatalf("the fake registry was never asked for %s", dep)
+		}
 	}
 	launcherJS, err := os.ReadFile(filepath.Join(out, "slicc", "bin", "slicc.js"))
 	if err != nil || string(launcherJS) != "launcher 1.2.4\n" {
