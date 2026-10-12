@@ -313,7 +313,7 @@ func TestDefaultPlainOpensSevenInARunningBrowser(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	out := f.stderr.String()
-	if strings.Contains(out, "not an allowed origin") {
+	if strings.Contains(out, "left seven") {
 		t.Fatalf("the new tab's blank context was reported: %q", out)
 	}
 	if !strings.Contains(out, "slicc: done") || strings.Contains(out, "\x1b[") {

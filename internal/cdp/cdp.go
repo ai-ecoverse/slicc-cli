@@ -85,7 +85,7 @@ func Discover(ctx context.Context, endpoint string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := endpointClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("cdp: discover %s: %w", u, err)
 	}
@@ -110,7 +110,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, resp, err := websocket.Dial(ctx, wsURL, nil)
+	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: endpointClient})
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}

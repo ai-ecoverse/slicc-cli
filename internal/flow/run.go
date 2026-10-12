@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ type Config struct {
 	Allow    policy.Rules
 	Deny     policy.Rules
 	Browser  browser.Options
+	Chosen   bool
 	Register func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []Browser) (Caps, error)
 	Compute  string
 	Emit     func(Event)
@@ -195,20 +197,50 @@ func (r *run) setupHost(ctx context.Context, e browser.Entry) error {
 	if br.Launched {
 		return nil
 	}
-	return r.ensureTab(ctx)
+	opened, err := r.ensureTab(ctx)
+	if err != nil {
+		return err
+	}
+	if r.foreign(e) {
+		r.emit(Event{Event: ForeignBrowser, Browser: e.ID, Name: e.Name, Profile: ProfileLabel(*e.Endpoint), CDP: br.CDP, OpenedTab: &opened})
+	}
+	return nil
 }
 
-func (r *run) ensureTab(ctx context.Context) error {
+func (r *run) foreign(e browser.Entry) bool {
+	if r.cfg.Chosen || e.Endpoint == nil || e.Endpoint.Profile != "" {
+		return false
+	}
+	key := browser.EndpointKey(e.Endpoint.CDP)
+	for _, raw := range r.cfg.Browser.CDPURLs {
+		if browser.EndpointKey(raw) == key {
+			return false
+		}
+	}
+	return true
+}
+
+func ProfileLabel(ep browser.Endpoint) string {
+	switch {
+	case ep.Browser != "":
+		return "default"
+	case ep.UserDataDir != "":
+		return filepath.Base(ep.UserDataDir)
+	}
+	return ""
+}
+
+func (r *run) ensureTab(ctx context.Context) (bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if tab := r.sevenTab(tctx); tab != "" {
-		return nil
+		return false, nil
 	}
 	if err := r.client.Call(tctx, "", "Target.createTarget", map[string]any{"url": r.cfg.Page}, nil); err != nil {
-		return fmt.Errorf("open %s: %w", r.cfg.Page, err)
+		return false, fmt.Errorf("open %s: %w", r.cfg.Page, err)
 	}
 	r.emit(Event{Event: Status, Message: "opened " + r.cfg.Page + " in a new tab"})
-	return nil
+	return true, nil
 }
 
 func (r *run) sevenTab(ctx context.Context) string {

@@ -73,9 +73,10 @@ func (f *recordingCDP) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	f.requests = append(f.requests, line)
+	redirect := f.redirect
 	f.mu.Unlock()
-	if f.redirect != "" {
-		http.Redirect(w, r, f.redirect, http.StatusFound)
+	if redirect != "" {
+		http.Redirect(w, r, redirect, http.StatusFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -92,6 +93,12 @@ func (f *recordingCDP) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (f *recordingCDP) redirectTo(u string) {
+	f.mu.Lock()
+	f.redirect = u
+	f.mu.Unlock()
 }
 
 func (f *recordingCDP) got() []string {
@@ -278,7 +285,7 @@ func TestDiscoveryReadsOnlyVersionAndListInEverySource(t *testing.T) {
 func TestDiscoveryFollowsNoRedirectsAndNoProxy(t *testing.T) {
 	elsewhere := newRecordingCDP(t)
 	redirecting := newRecordingCDP(t)
-	redirecting.redirect = elsewhere.URL + "/json/new?https://example.com/"
+	redirecting.redirectTo(elsewhere.URL + "/json/new?https://example.com/")
 	ep, err := browser.ProbeEndpoint(context.Background(), redirecting.URL, browser.Options{})
 	if err == nil {
 		t.Fatalf("a redirecting endpoint was listed: %+v", ep)

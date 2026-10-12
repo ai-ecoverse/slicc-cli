@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	cdpclient "github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/coder/websocket"
 )
@@ -33,7 +34,7 @@ var dropped = [][]byte{
 	[]byte(`{"method":"Network.webSocketFrameSent"`),
 }
 
-var httpClient = &http.Client{Transport: &http.Transport{Proxy: nil, DisableCompression: true}}
+var httpClient = cdpclient.EndpointClient(nil, 0)
 
 func (r *Registry) Handler() link.Handler {
 	return r.serve

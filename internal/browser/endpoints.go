@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 )
 
 var ActivePortFile = catalog.Discovery.ActivePortFile
@@ -123,24 +125,8 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
-var discoveryTransport = newDiscoveryTransport()
-
-func newDiscoveryTransport() *http.Transport {
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.Proxy = nil
-	return t
-}
-
 func (o Options) httpClient() *http.Client {
-	t := o.Transport
-	if t == nil {
-		t = discoveryTransport
-	}
-	return &http.Client{
-		Timeout:       o.Timeout,
-		Transport:     t,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	return cdp.EndpointClient(o.Transport, o.Timeout)
 }
 
 func (o Options) platform(goos string) platform {
@@ -384,6 +370,14 @@ func endpointKey(base string) string {
 		host = "127.0.0.1"
 	}
 	return net.JoinHostPort(host, u.Port())
+}
+
+func EndpointKey(raw string) string {
+	base, _, err := NormalizeCDPURL(raw)
+	if err != nil {
+		return ""
+	}
+	return endpointKey(base)
 }
 
 func normalizedCDP(base string) string {
