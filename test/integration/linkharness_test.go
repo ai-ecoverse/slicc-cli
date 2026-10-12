@@ -182,13 +182,17 @@ func (p *page) waitFor(expr string, timeout time.Duration) {
 	}
 }
 
+var pollTrace = &requestLog{}
+
 func (p *page) until(expr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		var ok bool
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		t0 := time.Now()
 		err := p.session.Evaluate(ctx, "Boolean("+expr+")", cdp.EvaluateOptions{ReturnByValue: true}, &ok)
 		cancel()
+		pollTrace.add(fmt.Sprintf("eval %s ok=%v err=%v", time.Since(t0).Round(time.Millisecond), ok, err))
 		if err == nil && ok {
 			return nil
 		}

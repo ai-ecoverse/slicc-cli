@@ -13,7 +13,7 @@ func TestZZPageLoadStress(t *testing.T) {
 		t.Skip()
 	}
 	var times []time.Duration
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 80; i++ {
 		ok := t.Run("iter", func(t *testing.T) {
 			b := launchBrowser(t)
 			srv := pageServer(t)
@@ -35,7 +35,11 @@ func TestZZPageLoadStress(t *testing.T) {
 			p.waitLoaded(url, 60*time.Second)
 			d := time.Since(start)
 			times = append(times, d)
-			t.Logf("iteration %d: loaded in %s; requests:\n%s", i, d, pageRequests.since(start))
+			if d > 2500*time.Millisecond {
+				t.Logf("iteration %d: loaded in %s; requests:\n%s\npolls:\n%s", i, d, pageRequests.since(start), pollTrace.since(start))
+			} else {
+				t.Logf("iteration %d: loaded in %s", i, d)
+			}
 		})
 		_ = ok
 	}
