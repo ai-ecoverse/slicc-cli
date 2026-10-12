@@ -4,6 +4,7 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
+const path = require('node:path');
 const tty = require('node:tty');
 
 const targets = {
@@ -43,6 +44,31 @@ function binaryPath() {
   return bin;
 }
 
+const companions = { '@ai-ecoverse/slicc-jerk': 'jerk', '@ai-ecoverse/fnox': 'fnox' };
+
+function companionDirs() {
+  const names = (bin) => (process.platform === 'win32' ? [`${bin}.cmd`, `${bin}.exe`, bin] : [bin]);
+  const dirs = [];
+  for (const [pkg, bin] of Object.entries(companions)) {
+    for (const modules of require.resolve.paths(pkg) || []) {
+      if (!fs.existsSync(path.join(modules, pkg, 'package.json'))) continue;
+      const dir = path.join(modules, '.bin');
+      if (names(bin).some((n) => fs.existsSync(path.join(dir, n))) && !dirs.includes(dir)) dirs.push(dir);
+      break;
+    }
+  }
+  return dirs;
+}
+
+function childEnv() {
+  const env = { ...process.env, SLICC_LAUNCHER: 'npm' };
+  const dirs = companionDirs();
+  if (!dirs.length) return env;
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+  env[key] = [...dirs, env[key]].filter(Boolean).join(path.delimiter);
+  return env;
+}
+
 const forwarded =
   process.platform === 'win32' ? [] : ['SIGTERM', 'SIGHUP', 'SIGQUIT', 'SIGUSR2'];
 const swallowed = process.platform === 'win32' ? ['SIGINT', 'SIGBREAK'] : [];
@@ -52,7 +78,7 @@ if (process.platform !== 'win32') {
 
 const child = spawn(binaryPath(), process.argv.slice(2), {
   stdio: 'inherit',
-  env: { ...process.env, SLICC_LAUNCHER: 'npm' },
+  env: childEnv(),
 });
 
 const handlers = new Map();

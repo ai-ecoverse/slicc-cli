@@ -21,6 +21,7 @@ const guarded = {
   sliccy: { tag: 'next', version: /^7\.0\.0-next\./, gate: 'SLICCY_NEXT_PUBLISH' },
 };
 const defaultGate = 'SLICC_NPM_PUBLISH';
+const companions = new Set(['@ai-ecoverse/slicc-jerk', '@ai-ecoverse/fnox']);
 
 function fail(message) {
   process.stderr.write(`npm-publish: ${message}\n`);
@@ -61,7 +62,7 @@ async function onRegistry(base, name, version, timeoutMs) {
 }
 
 async function requireDependencies(pkg) {
-  const deps = Object.entries(pkg.optionalDependencies || {});
+  const deps = Object.entries(pkg.optionalDependencies || {}).filter(([name]) => !companions.has(name));
   if (!guarded[pkg.name] || !deps.length) return;
   const base = registry();
   const waitMs = Number(process.env.SLICC_REGISTRY_WAIT_SECONDS ?? 900) * 1000;

@@ -26,6 +26,7 @@ var (
 	Browser = Source{"browser"}
 	SSH     = Source{"ssh"}
 	CDP     = Source{"cdp"}
+	Install = Source{"install"}
 )
 
 var commands = map[string]bool{
@@ -33,6 +34,7 @@ var commands = map[string]bool{
 	"attach":   true,
 	"browsers": true,
 	"follow":   true,
+	"install":  true,
 	"launch":   true,
 	"prompt":   true,
 	"update":   true,

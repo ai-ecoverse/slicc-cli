@@ -51,6 +51,7 @@ try {
     '--out', values.out,
     '--version', `7.0.0-next.${version}`,
     '--deps-version', version,
+    '--companions',
   ]);
 } finally {
   rmSync(work, { recursive: true, force: true });
