@@ -163,7 +163,7 @@ func (p *page) waitLoaded(url string, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	serr := p.session.Evaluate(ctx, `({ href: location.href, readyState: document.readyState, resources: performance.getEntriesByType('resource').map((e) => e.name + ' ' + Math.round(e.duration) + 'ms') })`, cdp.EvaluateOptions{ReturnByValue: true}, &state)
-	p.t.Fatalf("%s did not load in %s (%v); page state %v (%v); page server since %s:\n%s", url, timeout, err, state, serr, start.Format("15:04:05.000"), pageRequests.since(start.Add(-time.Second)))
+	p.t.Fatalf("%s did not load in %s (%v); page state %v (%v); page server since %s:\n%s\npolls:\n%s", url, timeout, err, state, serr, start.Format("15:04:05.000"), pageRequests.since(start.Add(-time.Second)), pollTrace.since(start))
 }
 
 func (p *page) eval(expr string, out any) {

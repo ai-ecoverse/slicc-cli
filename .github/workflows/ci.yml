@@ -41,6 +41,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest]
+        shard: [1, 2, 3]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -54,9 +55,7 @@ jobs:
         with:
           node-version: 24
 
-      - run: go test -race -count=1 -timeout 15m -run TestZZPageLoadStress -v ./test/integration/...
-        env:
-          ZZ_STRESS: '1'
+      - run: go test -race -count=1 -timeout 15m ./test/integration/...
 
       - run: go build -trimpath -o bin/ ./cmd/slicc
         env:
