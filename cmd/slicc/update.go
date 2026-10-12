@@ -12,22 +12,26 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/update"
 )
 
-const updateUsage = `usage: slicc update [--check]
+const updateUsage = `usage: slicc update [--check] [--checksum-only]
 
-Replaces this binary with the latest release of ai-ecoverse/slicc-cli.
---check only reports whether a newer release exists. A copy installed
-with go install, npm or an app bundle is not replaced; slicc update
-prints how to update it instead.
+Replaces this binary with the latest release of ai-ecoverse/slicc-cli,
+once it matches the release's SHA256SUMS and its GitHub build provenance
+attestation verifies (signed by the repo's release.yml on main).
+--check only reports whether a newer release exists. --checksum-only skips
+the attestation, with a warning. A copy installed with go install, npm or
+an app bundle is not replaced; slicc update prints how to update it instead.
 `
 
 var launcher = update.TakeLauncher()
 
 func runUpdate(args []string, stdout, stderr io.Writer) int {
-	check := false
+	check, checksumOnly := false, false
 	for _, arg := range args {
 		switch arg {
 		case "--check":
 			check = true
+		case "--checksum-only":
+			checksumOnly = true
 		case "--help", "-h":
 			fmt.Fprint(stdout, updateUsage)
 			return 0
@@ -49,6 +53,10 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	checker := update.NewChecker()
+	checker.ChecksumOnly = checksumOnly
+	if checksumOnly && !check {
+		fmt.Fprintln(stderr, "slicc update: warning: --checksum-only skips the attestation; only SHA256SUMS is checked")
+	}
 	rel, err := checker.Latest(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "slicc update: %s\n", err)
@@ -81,7 +89,7 @@ func applyUpdate(ctx context.Context, checker *update.Checker, rel *update.Relea
 		telemetry.ReportError(telemetry.Update, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "updated %s to slicc %s\n", exe, rel.Version)
+	fmt.Fprintf(stdout, "updated %s to slicc %s (%s)\n", exe, rel.Version, verified(checker))
 	return 0
 }
 
@@ -95,4 +103,11 @@ func startUpdateNotice(stderr io.Writer) func() {
 		update.RemoveStale(exe)
 	}
 	return update.NewNotifier(version, m, stderr).Start()
+}
+
+func verified(c *update.Checker) string {
+	if c.ChecksumOnly {
+		return "SHA256SUMS only; the attestation wasn't checked"
+	}
+	return "SHA256SUMS and the build provenance attestation by " + c.Identity().SAN()
 }

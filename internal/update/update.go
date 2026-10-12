@@ -17,6 +17,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/attest"
 )
 
 const (
@@ -27,6 +29,8 @@ const (
 	userAgent      = "slicc-cli"
 	maxBinaryBytes = 512 << 20
 	maxSumsBytes   = 1 << 20
+	maxAttestBytes = 8 << 20
+	ReleaseRef     = "refs/heads/main"
 )
 
 type Release struct {
@@ -37,13 +41,16 @@ type Release struct {
 }
 
 type Checker struct {
-	Repo    string
-	Binary  string
-	APIBase string
-	HTTP    *http.Client
-	GOOS    string
-	GOARCH  string
-	Verify  func(ctx context.Context, path, version string) error
+	Repo         string
+	Binary       string
+	Ref          string
+	ChecksumOnly bool
+	Root         *attest.TrustedRoot
+	APIBase      string
+	HTTP         *http.Client
+	GOOS         string
+	GOARCH       string
+	Verify       func(ctx context.Context, path, version string) error
 }
 
 func NewChecker() *Checker {
@@ -54,6 +61,7 @@ func NewChecker() *Checker {
 	return &Checker{
 		Repo:    Repo,
 		Binary:  "slicc",
+		Ref:     ReleaseRef,
 		APIBase: strings.TrimRight(base, "/"),
 		HTTP:    &http.Client{Timeout: 5 * time.Minute},
 		GOOS:    runtime.GOOS,
@@ -206,10 +214,49 @@ func (c *Checker) download(ctx context.Context, rel *Release, dest string) error
 	if written > maxBinaryBytes {
 		return fmt.Errorf("%s is larger than %d bytes", rel.AssetName, maxBinaryBytes)
 	}
-	if got := hex.EncodeToString(hash.Sum(nil)); got != want {
+	got := hex.EncodeToString(hash.Sum(nil))
+	if got != want {
 		return fmt.Errorf("%s does not match its SHA-256 in %s", rel.AssetName, ChecksumsName)
 	}
+	if !c.ChecksumOnly {
+		if err := c.attested(ctx, rel.AssetName, got); err != nil {
+			return err
+		}
+	}
 	return os.Chmod(dest, 0o755)
+}
+
+func (c *Checker) Identity() attest.Identity {
+	return attest.Identity{Repo: c.Repo, Ref: c.Ref}
+}
+
+func (c *Checker) attested(ctx context.Context, asset, digest string) error {
+	root := c.Root
+	if root == nil {
+		var err error
+		if root, err = attest.DefaultRoot(); err != nil {
+			return err
+		}
+	}
+	body, err := c.get(ctx, c.APIBase+"/repos/"+c.Repo+"/attestations/sha256:"+digest, maxAttestBytes, "application/vnd.github+json")
+	if err != nil {
+		return fmt.Errorf("fetching the attestation of %s: %w", asset, err)
+	}
+	var list struct {
+		Attestations []struct {
+			Bundle json.RawMessage `json:"bundle"`
+		} `json:"attestations"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil || len(list.Attestations) == 0 {
+		return fmt.Errorf("%s has no attestation", asset)
+	}
+	var last error
+	for _, a := range list.Attestations {
+		if last = attest.Verify(a.Bundle, digest, c.Identity(), root); last == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("no attestation of %s by %s verifies: %w", asset, c.Identity().SAN(), last)
 }
 
 var rename = os.Rename

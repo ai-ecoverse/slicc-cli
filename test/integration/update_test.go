@@ -91,18 +91,21 @@ func runBin(t *testing.T, env []string, bin string, args ...string) result {
 
 type fakeGitHub struct {
 	*httptest.Server
-	tag      string
-	payload  []byte
-	sums     string
-	status   int
-	requests atomic.Int32
+	tag          string
+	payload      []byte
+	sums         string
+	status       int
+	requests     atomic.Int32
+	sig          *fakeSigstore
+	attestations []byte
 }
 
 func newFakeGitHub(t *testing.T, tag string, payload []byte, options ...func(*fakeGitHub)) *fakeGitHub {
 	t.Helper()
 	sum := sha256.Sum256(payload)
-	f := &fakeGitHub{tag: tag, payload: payload, status: http.StatusOK}
+	f := &fakeGitHub{tag: tag, payload: payload, status: http.StatusOK, sig: newFakeSigstore(t)}
 	f.sums = fmt.Sprintf("%s  %s\n%s  slicc-other-arch\n", hex.EncodeToString(sum[:]), assetName(), strings.Repeat("0", 64))
+	f.attestations = attestationList(f.sig.bundle(t, hex.EncodeToString(sum[:]), bundleOptions{san: releaseSAN("ai-ecoverse/slicc-cli")}))
 	for _, option := range options {
 		option(f)
 	}
@@ -118,6 +121,10 @@ func withStatus(status int) func(*fakeGitHub) {
 
 func withSums(sums string) func(*fakeGitHub) {
 	return func(f *fakeGitHub) { f.sums = sums }
+}
+
+func withAttestations(list []byte) func(*fakeGitHub) {
+	return func(f *fakeGitHub) { f.attestations = list }
 }
 
 func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
@@ -141,12 +148,17 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	case "/dl/SHA256SUMS":
 		_, _ = w.Write([]byte(f.sums))
 	default:
+		sum := sha256.Sum256(f.payload)
+		if r.URL.Path == "/repos/ai-ecoverse/slicc-cli/attestations/sha256:"+hex.EncodeToString(sum[:]) && f.attestations != nil {
+			_, _ = w.Write(f.attestations)
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
 
 func (f *fakeGitHub) env(t *testing.T, extra ...string) []string {
-	return isolatedEnv(t, append([]string{"SLICC_UPDATE_API_BASE=" + f.URL}, extra...)...)
+	return isolatedEnv(t, append([]string{"SLICC_UPDATE_API_BASE=" + f.URL, f.sig.env()}, extra...)...)
 }
 
 func newRelease(t *testing.T, version string) []byte {
@@ -371,5 +383,30 @@ func TestUpdateNoticeKeepsItsOwnCacheApartFromSixs(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(six); string(got) != string(sixState) {
 		t.Fatalf("six's cache changed: %q", got)
+	}
+}
+
+func TestUpdateRequiresTheAttestation(t *testing.T) {
+	payload := newRelease(t, "1.1.0")
+	sum := sha256.Sum256(payload)
+	sig := newFakeSigstore(t)
+	for name, list := range map[string][]byte{
+		"none":             []byte(`{"attestations":[]}`),
+		"another workflow": attestationList(sig.bundle(t, hex.EncodeToString(sum[:]), bundleOptions{san: "https://github.com/ai-ecoverse/slicc-cli/.github/workflows/ci.yml@refs/heads/main"})),
+		"another file":     attestationList(sig.bundle(t, strings.Repeat("0", 64), bundleOptions{san: releaseSAN("ai-ecoverse/slicc-cli")})),
+	} {
+		gh := newFakeGitHub(t, "v1.1.0", payload, withAttestations(list))
+		gh.sig = sig
+		bin := buildVersion(t, "1.0.0", t.TempDir())
+		if r := runBin(t, gh.env(t), bin, "update"); r.code != 1 || !strings.Contains(r.stderr, "attestation") {
+			t.Fatalf("%s: %+v", name, r)
+		}
+		assertUntouched(t, bin)
+	}
+	gh := newFakeGitHub(t, "v1.1.0", payload, withAttestations([]byte(`{"attestations":[]}`)))
+	bin := buildVersion(t, "1.0.0", t.TempDir())
+	r := runBin(t, gh.env(t), bin, "update", "--checksum-only")
+	if r.code != 0 || !strings.Contains(r.stderr, "warning: --checksum-only") || !strings.Contains(r.stdout, "SHA256SUMS only") || versionOf(t, bin) != "slicc 1.1.0" {
+		t.Fatalf("--checksum-only: %+v", r)
 	}
 }

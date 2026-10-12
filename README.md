@@ -140,7 +140,7 @@ A profile that doesn't exist is an error (`SLICC six's Chrome profile doesn't ex
 Put the binary and the release's `SHA256SUMS` in one folder, then check:
 - **Checksum on macOS and Linux:** `shasum -a 256 -c SHA256SUMS --ignore-missing`. On Linux `sha256sum -c SHA256SUMS --ignore-missing` does the same.
 - **Checksum on Windows (PowerShell):** `(Get-FileHash slicc-windows-amd64.exe -Algorithm SHA256).Hash.ToLower()` must equal the hash on that file's line in `SHA256SUMS` (`Select-String slicc-windows-amd64.exe SHA256SUMS`).
-- **Provenance:** `gh attestation verify <file> --repo ai-ecoverse/slicc-cli` checks the GitHub build-provenance attestation (Sigstore) that the release workflow made for that exact file.
+- **Provenance:** `gh attestation verify <file> --repo ai-ecoverse/slicc-cli` checks the GitHub build-provenance attestation (Sigstore) that the release workflow made for that exact file. `slicc update` checks the same attestation itself (see [Attestations](#attestations)).
 
 Signing:
 - **macOS:** the binaries are signed with a Developer ID, with the hardened runtime, and notarized. A bare binary can't carry a stapled ticket (only apps, disk images and installer packages can), so Gatekeeper checks the notarization online the first time it runs. Inside Sliccstart.app the binary is stapled with the app.
@@ -155,15 +155,42 @@ slicc works with two tools that run on this machine: slicc-jerk (`jerk`), which 
 **`slicc install jerk|fnox`** installs one into the data folder's `bin`:
 - `jerk` from the latest release of `ai-ecoverse/slicc-jerk`, `fnox` from the latest release of `ai-ecoverse/fnox-build`;
 - **the release contract** (the same as slicc-cli's own): a plain binary `<name>-<os>-<arch>` (`.exe` on Windows; `darwin`, `linux`, `windows` × `amd64`, `arm64`), and `SHA256SUMS` with a line for it, both attested by the repo's `release.yml`;
-- slicc checks the download against `SHA256SUMS`, then installs it only once its `--version` names the release's version, through a rename next to the old one (as `slicc update` does);
-- it says `installed <name> <version> at <path>; its SHA-256 matches the release's SHA256SUMS (the attestation isn't checked yet)`, or `<name> <version> is already installed at <path>`;
+- slicc checks the download against `SHA256SUMS` and verifies its attestation (see [Attestations](#attestations)), then installs it only once its `--version` names the release's version, through a rename next to the old one (as `slicc update` does);
+- it says `installed <name> <version> at <path> (SHA256SUMS and the build provenance attestation by <identity>)`, or `<name> <version> is already installed at <path>`;
+- `--checksum-only` skips the attestation, with a warning, and says `SHA256SUMS only; the attestation wasn't checked`;
 - the GitHub API base follows `SLICC_UPDATE_API_BASE`, as for `update`.
 
 Only a user runs `slicc install`. Nothing on a link starts an install.
 
+## Attestations
+
+`slicc update` and `slicc install` verify the GitHub build provenance attestation of every binary they download, after its `SHA256SUMS` check, and refuse it when that fails. A release without an attestation fails too. `--checksum-only` is the only way around it, and it warns.
+
+**Where the attestation comes from.** `GET /repos/<repo>/attestations/sha256:<digest>` on the GitHub API. slicc accepts the binary when one of the bundles there verifies.
+
+**What is verified** (`internal/attest`, standard library only), for a Sigstore bundle v0.3 with one DSSE envelope, one Fulcio certificate and one Rekor (v1) entry:
+1. the envelope is an in-toto statement whose predicate type is `https://slsa.dev/provenance/v1`, with a subject whose SHA-256 is the file's;
+2. its single DSSE signature verifies with the certificate's key (ECDSA P-256 or P-384) over the DSSE pre-authentication encoding;
+3. the certificate chains, as a code-signing certificate, to a Fulcio root in the trusted root that is valid at the entry's integrated time, and the certificate itself was valid then;
+4. the certificate's identity: issuer (Fulcio extension `1.3.6.1.4.1.57264.1.8`) `https://token.actions.githubusercontent.com`, and exactly one subject alternative name, the URI `https://github.com/<repo>/.github/workflows/release.yml@refs/heads/main`, pinned per repo: `ai-ecoverse/slicc-cli` for `update`, `ai-ecoverse/slicc-jerk` and `ai-ecoverse/fnox-build` for `install`;
+5. the Rekor entry is a `dsse` 0.0.1 entry whose payload hash, signature and verifier are the envelope's and the certificate's;
+6. its signed entry timestamp verifies with the key of a Rekor log in the trusted root, valid at the integrated time;
+7. its inclusion proof leads from the entry to the proof's root hash (RFC 6962), and the checkpoint carries that tree size and root hash and is signed by the same log.
+
+Errors name the step that failed (`attestation identity: …`). A bundle from a Rekor v2 log, or any other shape, fails closed.
+
+**The trusted root.** `internal/attest/trusted_root.json` is Sigstore's public-good trusted root (the `trusted_root.json` target of `https://tuf-repo-cdn.sigstore.dev`), embedded in the binary. `SLICC_SIGSTORE_TRUSTED_ROOT` replaces it, for tests.
+
+**Rotating the trusted root.** The *Sigstore* workflow runs daily. Its `trusted-root` job runs `node scripts/sigstore-root.mjs`, which follows the TUF repository's `timestamp.json`, snapshot and targets to the current `trusted_root.json` and compares its SHA-256 with the embedded file; when they differ, it opens an issue. To rotate:
+1. run `node scripts/sigstore-root.mjs --write`, which downloads the new file and checks it against the targets hash;
+2. review the diff (new Fulcio certificates or Rekor keys, `validFor` ranges) against Sigstore's announcement; the script doesn't check TUF signatures, so this review is the trust decision;
+3. open a `fix:` PR, so a release ships it. Binaries released before it keep the old root, and fail closed on attestations that need the new one until they update with `--checksum-only` or by hand.
+
+**Parity.** The workflow's `parity` job runs `TestAttestParityWithGH`: for the latest release, `gh attestation verify --repo ai-ecoverse/slicc-cli --signer-workflow …/release.yml` and slicc's verifier must both accept the binary, and both refuse it after one byte is appended.
+
 ## Updates
 
-`slicc update` replaces the running binary (symlinks resolved) with the latest GitHub release of `ai-ecoverse/slicc-cli`. It downloads the asset for this OS and CPU and checks it against the release's `SHA256SUMS`. The new binary has to answer `--version` with the release's version before anything is replaced. The swap is a rename next to the old binary; on Windows the running binary is first moved aside to `<name>.old`, which the next run deletes. `slicc update --check` only reports.
+`slicc update [--check] [--checksum-only]` replaces the running binary (symlinks resolved) with the latest GitHub release of `ai-ecoverse/slicc-cli`. It downloads the asset for this OS and CPU, checks it against the release's `SHA256SUMS`, and verifies its build provenance attestation (see [Attestations](#attestations)); `--checksum-only` skips the attestation, with a warning. The new binary has to answer `--version` with the release's version before anything is replaced. The swap is a rename next to the old binary; on Windows the running binary is first moved aside to `<name>.old`, which the next run deletes. `slicc update --check` only reports.
 
 **The version.** A release build has its version linked in (`-X main.version=<version>`). Without one, `slicc` reads its Go build info: a binary built by `go install …@<version>` (or `go run`) from a downloaded module, with a checksum in the build info, reports that module version without the leading `v`. Anything else built from a checkout reports `dev`.
 
@@ -191,7 +218,8 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 | --- | --- |
 | `SLICC_NO_TELEMETRY=1` | send no telemetry |
 | `SLICC_NO_UPDATE_CHECK=1` | no update notice and no background check |
-| `SLICC_UPDATE_API_BASE` | GitHub API base for `update` and the notice (default `https://api.github.com`), for mirrors and tests |
+| `SLICC_UPDATE_API_BASE` | GitHub API base for `update`, `install` and the notice (default `https://api.github.com`), for mirrors and tests |
+| `SLICC_SIGSTORE_TRUSTED_ROOT` | a Sigstore `trusted_root.json` to verify attestations against instead of the embedded one, for tests (see [Attestations](#attestations)) |
 | `SLICC_TELEMETRY_URL` | telemetry collector base (default `https://rum.hlx.page/`) |
 | `OPTEL_RATE`, `OPTEL_DEBUG` | go-optel's sampling rate and beacon logging |
 | `SLICC_LAUNCHER` | set to `npm` by the npm launcher; removed from the environment that `slicc` passes on |

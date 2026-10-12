@@ -18,16 +18,17 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/update"
 )
 
-const installUsage = `usage: slicc install jerk|fnox
+const installUsage = `usage: slicc install jerk|fnox [--checksum-only]
 
 Installs a companion tool into slicc's own data folder, where slicc finds it:
   jerk   slicc-jerk, the latest release of ai-ecoverse/slicc-jerk
   fnox   fnox, the latest release of ai-ecoverse/fnox-build
 
 slicc downloads the release binary for this OS and CPU, checks it against
-the release's SHA256SUMS, and installs it once it answers --version. The
-GitHub attestation isn't checked yet. Run it again to update. Nothing on a
-link can start an install.
+the release's SHA256SUMS and verifies its GitHub build provenance
+attestation (signed by the repo's release.yml on main), then installs it
+once it answers --version. --checksum-only skips the attestation, with a
+warning. Run it again to update. Nothing on a link can start an install.
 `
 
 type companion struct {
@@ -46,6 +47,10 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, installUsage)
 		return 0
 	}
+	checksumOnly := len(args) == 2 && args[1] == "--checksum-only"
+	if checksumOnly {
+		args = args[:1]
+	}
 	if len(args) != 1 || installable[args[0]].repo == "" {
 		fmt.Fprintf(stderr, "slicc install: name jerk or fnox\n\n%s", installUsage)
 		return 2
@@ -60,7 +65,10 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	checker := update.NewChecker()
-	checker.Repo, checker.Binary, checker.Verify = c.repo, c.binary, answersVersion
+	checker.Repo, checker.Binary, checker.Verify, checker.ChecksumOnly = c.repo, c.binary, answersVersion, checksumOnly
+	if checksumOnly {
+		fmt.Fprintln(stderr, "slicc install: warning: --checksum-only skips the attestation; only SHA256SUMS is checked")
+	}
 	rel, err := checker.Latest(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "slicc install: %s: %s\n", c.repo, err)
@@ -81,7 +89,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		telemetry.ReportError(telemetry.Install, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "installed %s %s at %s; its SHA-256 matches the release's SHA256SUMS (the attestation isn't checked yet)\n", c.binary, rel.Version, dest)
+	fmt.Fprintf(stdout, "installed %s %s at %s (%s)\n", c.binary, rel.Version, dest, verified(checker))
 	return 0
 }
 

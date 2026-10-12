@@ -1,0 +1,59 @@
+name: Sigstore
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - internal/attest/**
+      - internal/update/**
+      - test/integration/attest*
+      - scripts/sigstore-root.mjs
+      - .github/workflows/sigstore.yml
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+
+      - run: go test -count=1 -run 'TestAttest' ./test/integration/...
+        env:
+          SLICC_ATTEST_PARITY: '1'
+          GH_TOKEN: ${{ github.token }}
+
+  trusted-root:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - id: check
+        run: node scripts/sigstore-root.mjs | tee "$RUNNER_TEMP/root.txt"
+
+      - if: failure() && steps.check.outcome == 'failure' && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: Sigstore's trusted root rotated; re-embed internal/attest/trusted_root.json
+        run: |
+          if [ -z "$(gh issue list --state open --search "in:title \"$TITLE\"" --json number --jq '.[].number')" ]; then
+            gh issue create --title "$TITLE" --body "$(cat "$RUNNER_TEMP/root.txt")
+
+          Follow *Rotating the trusted root* in README.md."
+          fi

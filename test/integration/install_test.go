@@ -38,7 +38,20 @@ type fakeReleases struct {
 	mu               sync.Mutex
 	payload          []byte
 	sums             string
+	attestations     []byte
 	asked            atomic.Int32
+	sig              *fakeSigstore
+}
+
+func (f *fakeReleases) attest(t *testing.T, o bundleOptions) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sum := sha256.Sum256(f.payload)
+	if o.san == "" {
+		o.san = releaseSAN(f.repo)
+	}
+	f.attestations = attestationList(f.sig.bundle(t, hex.EncodeToString(sum[:]), o))
 }
 
 func (f *fakeReleases) set(payload []byte, sums string) {
@@ -52,7 +65,7 @@ func (f *fakeReleases) set(payload []byte, sums string) {
 
 func newFakeReleases(t *testing.T, repo, name, tag string, payload []byte) *fakeReleases {
 	t.Helper()
-	f := &fakeReleases{repo: repo, asset: name + "-" + runtime.GOOS + "-" + runtime.GOARCH, tag: tag, payload: payload}
+	f := &fakeReleases{repo: repo, asset: name + "-" + runtime.GOOS + "-" + runtime.GOARCH, tag: tag, payload: payload, sig: newFakeSigstore(t)}
 	if runtime.GOOS == "windows" {
 		f.asset += ".exe"
 	}
@@ -61,8 +74,9 @@ func newFakeReleases(t *testing.T, repo, name, tag string, payload []byte) *fake
 	f.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.asked.Add(1)
 		f.mu.Lock()
-		payload, sums := f.payload, f.sums
+		payload, sums, attestations := f.payload, f.sums, f.attestations
 		f.mu.Unlock()
+		digest := sha256.Sum256(payload)
 		switch r.URL.Path {
 		case "/repos/" + f.repo + "/releases/latest":
 			_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": f.tag, "assets": []map[string]string{
@@ -73,18 +87,25 @@ func newFakeReleases(t *testing.T, repo, name, tag string, payload []byte) *fake
 			_, _ = w.Write(payload)
 		case "/dl/sums":
 			_, _ = w.Write([]byte(sums))
+		case "/repos/" + f.repo + "/attestations/sha256:" + hex.EncodeToString(digest[:]):
+			if attestations == nil {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write(attestations)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	f.Start()
 	t.Cleanup(f.Close)
+	f.attest(t, bundleOptions{})
 	return f
 }
 
 func installEnv(t *testing.T, f *fakeReleases) ([]string, string) {
 	t.Helper()
-	env := isolatedEnv(t, "SLICC_UPDATE_API_BASE="+f.URL)
+	env := isolatedEnv(t, "SLICC_UPDATE_API_BASE="+f.URL, f.sig.env())
 	home := ""
 	for _, kv := range env {
 		if v, ok := strings.CutPrefix(kv, "HOME="); ok {
@@ -109,7 +130,7 @@ func TestInstallCompanions(t *testing.T) {
 			f := newFakeReleases(t, c.repo, c.name, "v1.4.2", buildCompanion(t, c.name, "1.4.2"))
 			env, dest := installEnv(t, f)
 			r := runBin(t, env, binary, "install", c.name)
-			if r.code != 0 || !strings.Contains(r.stdout, "installed "+c.name+" 1.4.2 at "+dest) || !strings.Contains(r.stdout, "the attestation isn't checked yet") {
+			if r.code != 0 || !strings.Contains(r.stdout, "installed "+c.name+" 1.4.2 at "+dest) || !strings.Contains(r.stdout, "the build provenance attestation by "+releaseSAN(c.repo)) {
 				t.Fatalf("%+v", r)
 			}
 			if out, err := exec.Command(dest, "--version").Output(); err != nil || strings.TrimSpace(string(out)) != c.name+" 1.4.2" {
@@ -136,6 +157,7 @@ func TestInstallRefusesABadDownload(t *testing.T) {
 	payload := buildCompanion(t, "jerk", "1.4.1")
 	sum := sha256.Sum256(payload)
 	f.set(payload, hex.EncodeToString(sum[:])+"  "+f.asset+"\n")
+	f.attest(t, bundleOptions{})
 	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, `reports version "1.4.1", expected 1.4.2`) {
 		t.Fatalf("version: %+v", r)
 	}
@@ -178,5 +200,27 @@ func TestInstalledCompanionsAreOnTheChildrensPath(t *testing.T) {
 	parts := filepath.SplitList(strings.TrimSpace(strings.ReplaceAll(out, "\r", "")))
 	if code != 0 || len(parts) < 2 || parts[len(parts)-1] != bin {
 		t.Fatalf("code %d stderr %q: PATH %v doesn't end with %s", code, errOut, parts, bin)
+	}
+}
+
+func TestInstallRequiresTheAttestation(t *testing.T) {
+	f := newFakeReleases(t, "ai-ecoverse/fnox-build", "fnox", "v0.9.0", buildCompanion(t, "fnox", "0.9.0"))
+	env, dest := installEnv(t, f)
+	f.mu.Lock()
+	f.attestations = nil
+	f.mu.Unlock()
+	if r := runBin(t, env, binary, "install", "fnox"); r.code != 1 || !strings.Contains(r.stderr, "fetching the attestation of "+f.asset) {
+		t.Fatalf("no attestation: %+v", r)
+	}
+	f.attest(t, bundleOptions{san: releaseSAN("ai-ecoverse/fnox")})
+	if r := runBin(t, env, binary, "install", "fnox"); r.code != 1 || !strings.Contains(r.stderr, "no attestation of "+f.asset+" by "+releaseSAN("ai-ecoverse/fnox-build")+" verifies: attestation identity") {
+		t.Fatalf("the fork's identity: %+v", r)
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("an unattested binary was installed")
+	}
+	r := runBin(t, env, binary, "install", "fnox", "--checksum-only")
+	if r.code != 0 || !strings.Contains(r.stderr, "warning: --checksum-only skips the attestation") || !strings.Contains(r.stdout, "SHA256SUMS only; the attestation wasn't checked") {
+		t.Fatalf("--checksum-only: %+v", r)
 	}
 }
