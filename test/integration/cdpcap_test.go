@@ -76,7 +76,7 @@ func setupCDP(t *testing.T) *cdpEnv {
 		plain:   plain,
 		wsURL:   "ws" + strings.TrimPrefix(plain.URL, "http") + "/ws",
 	}
-	env.a = startAttach(t, false, "--cdp", b.endpoint, "--cdp-extra", extra.endpoint, "--origin", srv.URL, "--name", "it-node")
+	env.a = startAttach(t, "--cdp", b.endpoint, "--cdp-extra", extra.endpoint, "--origin", srv.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	return env

@@ -30,6 +30,11 @@ const sourceSize = 4 << 20
 
 func setupLink(t *testing.T, stdio bool, extra ...string) *linkEnv {
 	t.Helper()
+	return setupLinkEnv(t, stdio, nil, extra...)
+}
+
+func setupLinkEnv(t *testing.T, stdio bool, procEnv []string, extra ...string) *linkEnv {
+	t.Helper()
 	b := launchBrowser(t)
 	srv := pageServer(t)
 	data := make([]byte, sourceSize)
@@ -51,7 +56,7 @@ func setupLink(t *testing.T, stdio bool, extra ...string) *linkEnv {
 	} else {
 		args = append(args, "--origin", srv.URL)
 	}
-	env.a = startAttach(t, stdio, append(args, extra...)...)
+	env.a = startAttachEnv(t, stdio, procEnv, append(args, extra...)...)
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	if stdio {
 		relayStdio(t, env.p, env.a)
@@ -297,7 +302,7 @@ func (e *linkEnv) testReload(t *testing.T) {
 func TestAttachIgnoresOtherOrigins(t *testing.T) {
 	b := launchBrowser(t)
 	srv := pageServer(t)
-	a := startAttach(t, false, "--cdp", b.endpoint)
+	a := startAttach(t, "--cdp", b.endpoint)
 	p := b.openPage(t, srv.URL+"/index.html")
 	a.waitStderr(t, "waiting for a seven tab", 10*time.Second)
 	time.Sleep(2 * time.Second)

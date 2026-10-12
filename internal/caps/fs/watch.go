@@ -377,9 +377,13 @@ func (s *Server) watch(st *link.Stream, a args) error {
 	}()
 	var unsubs []func()
 	for _, m := range mounts {
-		name := m.Name
-		unsubs = append(unsubs, s.hub.subscribe(m.Root, func(ev event) {
-			w.push(watchLine{Mount: name, Paths: ev.paths, All: ev.all})
+		name, root := m.Name, m.Root
+		unsubs = append(unsubs, s.hub.subscribe(root, func(ev event) {
+			paths := fenced().visible(root, ev.paths)
+			if !ev.all && len(paths) == 0 {
+				return
+			}
+			w.push(watchLine{Mount: name, Paths: paths, All: ev.all})
 		}))
 	}
 	defer func() {

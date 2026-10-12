@@ -53,6 +53,10 @@ func Load(specs []string, warn func(format string, args ...any)) []Mount {
 			warn("--mount %s: not an existing folder, skipping", spec)
 			continue
 		}
+		if Fenced(root) {
+			warn("--mount %s: slicc never shares this folder, which holds its own keys or a credential tool's files, skipping", spec)
+			continue
+		}
 		if name == "" {
 			name = filepath.Base(root)
 		}

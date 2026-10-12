@@ -10,7 +10,9 @@ import (
 const mountUsage = `  --mount <path>[:<name>][:ro]
                        share this folder with seven's kernel (the fs
                        capability, repeatable); the name defaults to the
-                       folder's own, and :ro makes it read-only
+                       folder's own, and :ro makes it read-only; slicc's
+                       own keys, browser profiles, slicc-jerk's and fnox's
+                       files are never shared
 `
 
 func serveMounts(n *node.Node, mounts []fs.Mount, status func(string, ...any)) func() {

@@ -45,7 +45,7 @@ func startKernel(t *testing.T, extra ...string) *kernelEnv {
 	args := append([]string{"--cdp", b.endpoint, "--name", "it-node", "--origin", srv.URL, "--kernel-port", strconv.Itoa(port)}, extra...)
 	env := &kernelEnv{linkEnv: &linkEnv{t: t, b: b, origin: srv.URL}, port: port, addr: fmt.Sprintf("127.0.0.1:%d", port)}
 	env.echo = serveTCP(t, func(c net.Conn) { _, _ = io.Copy(c, c) })
-	env.a = startAttach(t, false, args...)
+	env.a = startAttach(t, args...)
 	env.p = b.openPage(t, srv.URL+"/index.html?kernel")
 	env.waitUp("")
 	return env
@@ -344,7 +344,7 @@ func TestKernelBindFailure(t *testing.T) {
 	_, port := hostPort(t, ln.Addr().String())
 	b := launchBrowser(t)
 	srv := pageServer(t)
-	a := startAttach(t, false, "--cdp", b.endpoint, "--origin", srv.URL, "--kernel-port", strconv.Itoa(port))
+	a := startAttach(t, "--cdp", b.endpoint, "--origin", srv.URL, "--kernel-port", strconv.Itoa(port))
 	e := &linkEnv{t: t, b: b, a: a, origin: srv.URL}
 	e.echo = serveTCP(t, func(c net.Conn) { _, _ = io.Copy(c, c) })
 	e.p = b.openPage(t, srv.URL+"/index.html?kernel")
@@ -373,7 +373,7 @@ func TestKernelOff(t *testing.T) {
 			srv := pageServer(t)
 			port := freePort(t)
 			args := append([]string{"--cdp", b.endpoint, "--origin", srv.URL, "--kernel-port", strconv.Itoa(port)}, c.flags...)
-			a := startAttach(t, false, args...)
+			a := startAttach(t, args...)
 			e := &linkEnv{t: t, b: b, a: a, origin: srv.URL}
 			e.p = b.openPage(t, srv.URL+"/index.html"+c.query)
 			e.waitUp("")

@@ -55,7 +55,7 @@ func TestTheCDPRelayFollowsNoRedirects(t *testing.T) {
 	extra := newRecordingCDP(t)
 	elsewhere := newRecordingCDP(t)
 	env := &linkEnv{t: t, b: b, origin: srv.URL}
-	env.a = startAttach(t, false, "--cdp", b.endpoint, "--cdp-extra", extra.URL, "--origin", srv.URL, "--name", "it-node")
+	env.a = startAttach(t, "--cdp", b.endpoint, "--cdp-extra", extra.URL, "--origin", srv.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	var h struct {
@@ -91,7 +91,7 @@ func TestSetupNeverNamesOriginsThatArentSeven(t *testing.T) {
 	other := plainServer(t)
 	otherHost := strings.TrimPrefix(other.URL, "http://")
 	env := &linkEnv{t: t, b: b, origin: srv.URL}
-	env.a = startAttach(t, false, "--cdp", b.endpoint, "--origin", srv.URL, "--name", "it-node")
+	env.a = startAttach(t, "--cdp", b.endpoint, "--origin", srv.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	var ok bool
