@@ -33,6 +33,7 @@ type CDP struct {
 	session *cdp.Session
 	ctxID   int
 	nonce   string
+	origin  string
 
 	in   chan Message
 	err  error
@@ -330,6 +331,7 @@ func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 	nonce := NewNonce()
 	w.c.mu.Lock()
 	w.c.ctxID = ec.ID
+	w.c.origin = ec.Origin
 	w.c.nonce = nonce
 	w.c.mu.Unlock()
 	hctx, cancel := context.WithCancel(ctx)
@@ -397,7 +399,7 @@ func (w *watch) bindingCalled(ctx context.Context, p cdp.BindingCalled) {
 		return
 	}
 	w.c.mu.Lock()
-	ctxID, nonce := w.c.ctxID, w.c.nonce
+	ctxID, nonce, origin := w.c.ctxID, w.c.nonce, w.c.origin
 	w.c.mu.Unlock()
 	if ctxID == 0 || p.ExecutionContextID != ctxID {
 		w.c.opts.Logf("signal: ignoring %s from context %d", BindingName, p.ExecutionContextID)
@@ -411,6 +413,7 @@ func (w *watch) bindingCalled(ctx context.Context, p cdp.BindingCalled) {
 	switch m.T {
 	case TypeOffer, TypeCandidate, TypeBye:
 		w.c.opts.Logf("signal: %s from the page", m.T)
+		m.Origin = origin
 		w.c.emit(ctx, m)
 	default:
 		w.c.opts.Logf("signal: ignoring %q from the page", strings.ToValidUTF8(m.T, "?"))

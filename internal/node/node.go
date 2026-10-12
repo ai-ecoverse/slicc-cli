@@ -37,6 +37,7 @@ type Node struct {
 	api        *webrtc.API
 	helloHooks []func(*link.Hello)
 	subs       subscribers
+	origins    sync.Map
 }
 
 func New(cfg Config) *Node {
@@ -100,6 +101,14 @@ func (n *Node) Resolver() *policy.Resolver {
 }
 
 func (n *Node) Logf(format string, args ...any) { n.cfg.Logf(format, args...) }
+
+func (n *Node) Local() bool { return n.cfg.Mode == "local" }
+
+func (n *Node) PeerOrigin(l *link.Link) string {
+	v, _ := n.origins.Load(l)
+	s, _ := v.(string)
+	return s
+}
 
 func (n *Node) Caps() []string { return slices.Clone(n.caps) }
 
@@ -208,6 +217,9 @@ func (n *Node) answer(ctx context.Context, conn signal.Conn, m signal.Message, o
 		return nil
 	}
 	c := &current{nonce: m.Nonce, l: l, watched: make(chan struct{})}
+	if m.Origin != "" {
+		n.origins.Store(l, m.Origin)
+	}
 	n.emit(Event{Kind: EventConnecting, Link: l})
 	go n.watch(c)
 	return c
@@ -228,6 +240,7 @@ func (n *Node) watch(c *current) {
 	case <-l.Done():
 	}
 	<-l.Done()
+	n.origins.Delete(l)
 	e := Event{Kind: EventLinkDown, Link: l, Reason: c.getReason()}
 	if err := l.Err(); e.Reason == "" && err != nil && !errors.Is(err, link.ErrClosed) {
 		n.cfg.Status("link down: %v", err)

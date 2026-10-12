@@ -55,7 +55,7 @@ flags:
                        repeatable); seven gets full control of it, except
                        tabs, cookies and storage on sliccy.ai, and its
                        endpoint and port are denied to tcp, http and ssh
-` + mountUsage + computeUsage + `
+` + jerkFollowUsage + mountUsage + computeUsage + `
 With --runner the link also offers ssh: seven's kernel reaches this machine's
 SSH server, which never listens on a port, and its forwarding goes through
 the remote policy. With --mount it also offers fs: the seven on the other
@@ -73,6 +73,8 @@ type followFlags struct {
 	hosts      hostsFlag
 	cdp        stringList
 	mounts     stringList
+	jerk       bool
+	jerkSeal   bool
 }
 
 func looksLikeURL(arg string) bool {
@@ -113,6 +115,8 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.Var(&f.hosts, "hosts", "")
 	fs.Var(&f.cdp, "cdp", "")
 	fs.Var(&f.mounts, "mount", "")
+	fs.BoolVar(&f.jerk, "jerk", false, "")
+	fs.BoolVar(&f.jerkSeal, "jerk-seal", false, "")
 	fs.BoolVar(&f.signalOnly, "signal-only", false, "")
 	fs.DurationVar(&f.timeout, "timeout", defaultSignalOnlyTimeout, "")
 	f.compute.register(fs)
@@ -237,6 +241,9 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	closeSSH, err := ff.compute.serve(r.node, status)
 	if err != nil {
 		return nil, err
+	}
+	if ff.jerk || ff.jerkSeal {
+		serveJerk(r.node, ff.jerkSeal, true, status)
 	}
 	closeMounts := serveMounts(r.node, hostfs.Load(ff.mounts, status), status)
 	r.closeSSH = func() { closeMounts(); closeSSH() }

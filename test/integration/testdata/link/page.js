@@ -370,6 +370,22 @@ globalThis.linkTest = {
       return describe(error);
     }
   },
+  async jerk(open, shared = false) {
+    try {
+      const stream = await state.link.open({ ...open, kind: 'jerk' }, { shared });
+      stream.end();
+      const text = new TextDecoder().decode(await stream.readAll());
+      await stream.done;
+      return { opened: stream.opened, events: text.split('\n').filter(Boolean).map((l) => JSON.parse(l)) };
+    } catch (error) {
+      return describe(error);
+    }
+  },
+  async jerkPair(a, b, delay = 500) {
+    const first = this.jerk(a);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    return Promise.all([first, this.jerk(b)]);
+  },
   browserUpdates() {
     return state.browserUpdates;
   },

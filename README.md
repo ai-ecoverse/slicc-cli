@@ -180,6 +180,8 @@ Only a user runs `slicc install`. Nothing on a link starts an install.
 
 Errors name the step that failed (`attestation identity: …`). A bundle from a Rekor v2 log, or any other shape, fails closed.
 
+**Unsupported: Rekor v2.** Bundles from Rekor v2 logs (Ed25519 log keys, `dsse` 0.0.2 entries, RFC 3161 timestamps instead of signed entry timestamps) aren't supported. They fail closed, so `update` and `install` refuse such a release until the verifier learns them; `--checksum-only` is the way around it meanwhile.
+
 **The trusted root.** `internal/attest/trusted_root.json` is Sigstore's public-good trusted root (Fulcio CAs, Rekor and CT log keys) (the `trusted_root.json` target of `https://tuf-repo-cdn.sigstore.dev`), embedded in the binary. `SLICC_SIGSTORE_TRUSTED_ROOT` replaces it, for tests.
 
 **Rotating the trusted root.** The *Sigstore* workflow runs daily. Its `trusted-root` job runs `node scripts/sigstore-root.mjs`, which follows the TUF repository's `timestamp.json`, snapshot and targets to the current `trusted_root.json` and compares its SHA-256 with the embedded file; when they differ, it opens an issue. To rotate:
@@ -255,7 +257,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `--browser <id>`: an id from `slicc browsers` (an installed id such as `chrome`, or `cdp:<host>:<port>`), or a name, case-insensitively. Repeatable: the first hosts seven, the others are extras. Without it, the best match that can host seven. An endpoint in SLICC six's profile is refused (`<id> is SLICC six's Chrome; only --profile six uses it`).
 - `--cdp <url>`: also consider this CDP endpoint, as `slicc browsers --cdp`.
 - `--page <url>`: the seven page, default `https://seven.sliccy.ai/`. It must be `http` or `https`, and its origin is accepted as a seven origin.
-- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--mount`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
+- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven. `--profile six` and `--profile six:<port>` use SLICC six's own Chrome profile instead, without the picker (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)).
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
@@ -429,6 +431,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - `--mount <path>[:<name>][:ro]`: share this folder with seven's kernel (cap `fs`, repeatable); see [Host folders](#host-folders).
 - `--kernel-port`: the local port for [kernel services](#kernel-services) (1–65535, default `80`).
 - `--no-kernel`: no kernel services; nothing listens.
+- `--no-jerk`: don't offer this machine's slicc-jerk (caps `jerk` and `jerk-seal`, see [`jerk`](#jerk-slicc-jerk-over-the-link)).
 
 **Setup over CDP.**
 1. slicc picks the first page tab whose URL has an allowed origin. Until there is one it says `waiting for a seven tab` and watches for new tabs.
@@ -472,7 +475,7 @@ One WebRTC peer connection. seven offers and the node answers. The node:
 - **Resets with `EOPNOTSUPP`:** an OPEN for a kind it doesn't serve.
 - **Closes the link:** an unknown frame type, a short or malformed frame (END with a payload, CREDIT that isn't 4 bytes), stream id 0, a reused id, an id with the wrong parity (page streams are odd, node streams even), or a second OPEN on a stream channel.
 
-HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "node", "caps": ["net", "http", "credentialed", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`. With `--mount`, `caps` adds `"fs"` and HELLO adds `"mounts"` (see [Host folders](#host-folders)).
+HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "node", "caps": ["net", "http", "credentialed", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`. With `--mount`, `caps` adds `"fs"` and HELLO adds `"mounts"` (see [Host folders](#host-folders)). With host jerk, `caps` adds `"jerk"` and `"jerk-seal"` and HELLO adds `"jerk": { "version" }` (see [`jerk`](#jerk-slicc-jerk-over-the-link)).
 
 **`ssh`** (cap `ssh`), page → node, with `--runner` only:
 - OPEN `{ "kind": "ssh" }`, OPENED `{}` at once. The stream's bytes are one SSH connection to the node's SSH server.
@@ -517,6 +520,43 @@ Any value of `credentialed` other than `false` or `null` counts as true, so a ma
 **`kernel`** (page cap `kernel-in`), node → page:
 - OPEN `{ "kind": "kernel", "port" }`, sent only to a page whose HELLO lists `kernel-in`. The page dials that kernel port and answers OPENED or RESET (`ECONNREFUSED` when nothing listens). See [Kernel services](#kernel-services).
 - Then raw bytes both ways: the node's first DATA is everything it has read from the browser's connection so far, request head included. END half-closes, as for `tcp`.
+
+### `jerk`: slicc-jerk over the link
+
+Link spec §5.14 (J1). slicc-jerk (`jerk`, [Companion tools](#companion-tools)) gets tokens on this machine. Over the link seven can ask it for status, start sign-ins a human completes, and seal a lease into its vault. No token crosses the link except in `seal`'s `lease` event, which only seven's link layer reads and hands to the vault.
+
+**Offered** when host jerk is found: the first `jerk` on `PATH`, else `jerk` in the data folder's `bin`, whose `jerk --version` names 0.3.0 or later.
+- `slicc` and `slicc attach`: caps `jerk` and `jerk-seal`, unless `--no-jerk`.
+- `follow`: only with `--jerk` (cap `jerk`) or `--jerk-seal` (both).
+- `prompt`, `watch` and `abort`: never.
+- slicc says `jerk: offering slicc-jerk <version> (jerk, jerk-seal)`, and HELLO adds `"jerk": { "version" }`. Without the cap an OPEN gets `EOPNOTSUPP`.
+
+**OPEN** `{ "kind": "jerk", "op", "provider"?, "scope"?, "lease_id"?, "duration"?, "params"? }`. The page sends END right after it. slicc runs jerk as the user, with no terminal and its stderr dropped:
+
+| op | cap | runs |
+| --- | --- | --- |
+| `list` | `jerk` | `jerk list --json` |
+| `status` | `jerk` | `jerk <provider> get --json` (never `--reveal`) |
+| `accounts` | `jerk` | `jerk <provider> list --json` |
+| `create` | `jerk` | `jerk <provider> create --via-link [--seven-origin <origin>] [--scope S] [-p k=v]…` |
+| `seal` | `jerk-seal` | `FNOX_LEASE_DURATION=<duration> jerk <provider> lease --via-link` (`duration` 1 to 86 400 whole seconds, default 3600) |
+| `unseal` | `jerk-seal` | `FNOX_LEASE_ID=<lease_id> jerk <provider> drop --lease --via-link` |
+
+- `--seven-origin` is the origin of the seven tab slicc set up with over CDP. A link set up over stdio or the tray hub has none, and `create` runs without it.
+- **OPENED `{}`** once jerk has started. Then NDJSON events, then END:
+  - `{ "event": "progress", "message" }` for `create`, from each `{"event":"progress","message"}` line jerk writes;
+  - `{ "event": "lease", "credentials", "expires_at", "lease_id" }`, once, for `seal`, only when jerk exited 0 with string credentials and an RFC 3339 `expires_at`; otherwise the result is exit 1, `jerk gave no lease with an expiry`;
+  - exactly one `{ "event": "result", "exit", "provider"?, "user"?, "scopes"?, "expires_at"?, "env"?, "message", "items"? }`. `items` holds the rows of `list` and `accounts`. Results and rows keep only these status fields: `provider`, `name`, `source`, `requires`, `cli`, `user`, `scopes`, `expires_at`, `env` and `id`, as strings, booleans or string lists. Anything else jerk prints (a masked token, say) is dropped.
+- jerk's exits 0 to 5 are results. slicc never logs a lease or a result's contents, only `jerk: <op> <provider>: exit <n>`.
+
+**RESETs:**
+- `EPROTO`: an unknown op, a missing or malformed `provider` (`^[a-z0-9][a-z0-9-]{0,63}$`) or `lease_id`, a `duration` out of range, a `scope` that isn't printable words, or a `param` whose key isn't `^[a-z][a-z0-9_]{0,31}$` or whose value isn't printable (at most 16, 256 bytes each). Host jerk checks the keys against the provider's own `params` and exits 2 for unknown ones.
+- `EACCES`: `drop` (there's no such op; `unseal` drops what jerk minted), and `seal` or `unseal` without `jerk-seal`.
+- `EBUSY`: a second `create` on a link while one runs.
+- `ETIMEDOUT`: a `create` still running after 2 min 30 s, which is then killed. Other ops get 60 s and then answer exit 1, `jerk timed out`.
+- `ECONNRESET`: jerk couldn't start, died of a signal, or exited with a code above 5.
+
+A page RESET or a closed link kills the jerk it started.
 
 ### `cdp` (browser control)
 
@@ -811,7 +851,7 @@ A command that can't start exits 127 with the reason on stderr.
 ```
 slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name <name>] [--cdp <url>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
-             [--mount <path>[:<name>][:ro]]...
+             [--mount <path>[:<name>][:ro]]... [--jerk] [--jerk-seal]
 ```
 
 `follow` links this machine to a seven on another machine through the tray hub (see [Tray hub signaling](#tray-hub-signaling-remote-setup)). It serves the link until interrupted (`SIGINT`, `SIGTERM`) and reconnects when the link drops. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics. The join URL is never printed.
@@ -823,8 +863,9 @@ slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name 
 - `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: compute over SSH (cap `ssh`), exactly as for `attach`. `direct-tcpip` forwarding goes through the remote policy, so it reaches public addresses only unless `--allow` says otherwise. `--runner` works with or without `--exit`.
 - `--cdp <url>`: let seven drive this browser over the link (repeatable, in any form `slicc browsers --cdp` takes; each must answer when `follow` starts). See [`cdp`](#cdp-browser-control), and its warning: the seven on the other machine gets full control of every browser listed. No browser is `seven: true`. Without `--cdp`, `follow` doesn't offer `cdp`, and a `cdp` OPEN is refused with `EOPNOTSUPP`. Each browser's debugging port and its own endpoint addresses are [denied](#network-policy) to `tcp`, `http` and `ssh` forwarding.
 - `--mount <path>[:<name>][:ro]`: share this folder with the seven on the other machine (cap `fs`, repeatable); see [Host folders](#host-folders). It can read the folder, and change it unless `:ro`.
+- `--jerk`: offer this machine's slicc-jerk for status and sign-ins (cap `jerk`). `--jerk-seal` also lets the seven on the other machine seal this machine's tokens into its vault (cap `jerk-seal`) and implies `--jerk`. Without host jerk, `follow` says `jerk: no slicc-jerk 0.3.0 or later on PATH or in slicc's data folder; not offering it` and runs on without it. See [`jerk`](#jerk-slicc-jerk-over-the-link).
 
-HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "node", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` and `http` with `--exit`, `ssh` with `--runner` (plus `sshHostKey`), `cdp` (and HELLO `browsers`) with `--cdp`, `fs` (and HELLO `mounts`) with `--mount`, and always `join`.
+HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "node", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net` and `http` with `--exit`, `ssh` with `--runner` (plus `sshHostKey`), `cdp` (and HELLO `browsers`) with `--cdp`, `fs` (and HELLO `mounts`) with `--mount`, `jerk` (and HELLO `jerk`) with `--jerk`, `jerk-seal` with `--jerk-seal`, and always `join`.
 
 **Identity.** The device is its DTLS certificate. `follow` keeps one ECDSA P-256 certificate per hub origin (`scheme://host:port`), valid for 20 years, in `<config>/slicc/tray-certs.json` (mode `0600`). Every link to that hub uses it, so the fingerprint stays the same across reconnects, restarts and updates. The first run on a hub mints it and says `new device, fingerprint sha-256 …`; later runs say `device, fingerprint …`. Every dial attaches with a fresh `controllerId`, which is only a routing handle.
 
