@@ -114,6 +114,15 @@ export class CdpClient {
     return reply;
   }
 
+  sendRaw(id, text) {
+    const reply = new Promise((resolve, reject) => this.#pending.set(id, { resolve, reject }));
+    this.write(frameMessage(text)).catch((error) => {
+      this.#pending.get(id)?.reject(error);
+      this.#pending.delete(id);
+    });
+    return reply;
+  }
+
   write(bytes) {
     const next = this.#writing.then(() => this.stream.write(bytes));
     this.#writing = next.catch(() => {});

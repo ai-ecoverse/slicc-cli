@@ -43,8 +43,11 @@ func cdpPorts(urls ...string) []uint16 {
 	return ports
 }
 
-func cdpBrowsers(ctx context.Context, seven string, extra []string, pol *policy.Policy, hosts *policy.Hosts, logf func(string, ...any)) (*capcdp.Registry, error) {
+func cdpBrowsers(ctx context.Context, seven string, extra, origins []string, pol *policy.Policy, hosts *policy.Hosts, logf func(string, ...any)) (*capcdp.Registry, error) {
 	r := capcdp.NewRegistry(logf)
+	if err := r.Protect(origins); err != nil {
+		return nil, err
+	}
 	r.OnAdd(func(ctx context.Context, id string, hostports []string) {
 		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
@@ -87,7 +90,7 @@ func followBrowsers(n *node.Node, r *capcdp.Registry, status func(string, ...any
 	for _, b := range r.List() {
 		ids = append(ids, b.ID)
 	}
-	status("cdp on (%s): seven gets full control of these browsers", strings.Join(ids, ", "))
+	status("cdp on (%s): seven gets full control of these browsers, except tabs, cookies and storage on sliccy.ai", strings.Join(ids, ", "))
 }
 
 func serveBrowsers(ctx context.Context, n *node.Node, r *capcdp.Registry) {
