@@ -257,7 +257,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `--browser <id>`: an id from `slicc browsers` (an installed id such as `chrome`, or `cdp:<host>:<port>`), or a name, case-insensitively. Repeatable: the first hosts seven, the others are extras. Without it, the best match that can host seven. An endpoint in SLICC six's profile is refused (`<id> is SLICC six's Chrome; only --profile six uses it`).
 - `--cdp <url>`: also consider this CDP endpoint, as `slicc browsers --cdp`.
 - `--page <url>`: the seven page, default `https://seven.sliccy.ai/`. It must be `http` or `https`, and its origin is accepted as a seven origin.
-- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
+- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount`, `--no-vault`, `--vault-origin`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven. `--profile six` and `--profile six:<port>` use SLICC six's own Chrome profile instead, without the picker (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)).
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
@@ -412,7 +412,7 @@ Plain output: the CDP HTTP URL on stdout, status lines on stderr. With `--json`,
 ```
 slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp] [--kernel-port <n>] [--no-kernel]
-             [--mount <path>[:<name>][:ro]]...
+             [--mount <path>[:<name>][:ro]]... [--no-vault] [--vault-origin <origin>]... [--no-jerk]
 ```
 
 `attach` links a seven that is open in a running CDP browser and serves the link until it is interrupted (`SIGINT`, `SIGTERM`), or until stdin closes with `--signal stdio`. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics, pion's included. pion never writes to stderr itself.
@@ -432,6 +432,8 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - `--kernel-port`: the local port for [kernel services](#kernel-services) (1–65535, default `80`).
 - `--no-kernel`: no kernel services; nothing listens.
 - `--no-jerk`: don't offer this machine's slicc-jerk (caps `jerk` and `jerk-seal`, see [`jerk`](#jerk-slicc-jerk-over-the-link)).
+- `--no-vault`: no [vault listener](#vault-listener); nothing listens and nothing pairs.
+- `--vault-origin <origin>`: also pair with a vault on this origin (`scheme://host[:port]`, repeatable). `https://vault.sliccy.ai` is always a vault origin.
 
 **Setup over CDP.**
 1. slicc picks the first page tab whose URL has an allowed origin. Until there is one it says `waiting for a seven tab` and watches for new tabs.
@@ -651,6 +653,46 @@ seven's kernel runs servers (vite, `python -m http.server`), and kernel port `N`
 The browser's connection waits unread for `OPENED`.
 
 **Security.** The `Host` check defends against DNS rebinding. Kernel services are reachable like any dev server on localhost: by any local process, and by any web page Chrome lets reach loopback. Use `--no-kernel` to keep them inside the page.
+
+## Vault listener
+
+seven keeps credentials in its vault, a frame on `https://vault.sliccy.ai` inside the seven tab. A local `slicc` (`slicc` and `slicc attach --signal cdp`) gives the vault a direct path to this machine that never passes through seven's page: a loopback listener the vault reaches with `fetch`, paired with the vault over CDP (link spec §8). `follow`, `prompt`, `watch`, `abort` and `--signal stdio` never listen or pair, and `--no-vault` turns it off.
+
+**The listener.** `127.0.0.1` on a free port, opened at start. Its port is protected like the kernel listener's (see [Network policy](#network-policy)). It accepts only the key of its current pairing. Every request passes slicc-node's gate, in order:
+1. `Host` must be `127.0.0.1`, `localhost` or `[::1]` with the listener's port, otherwise `403 host not allowed`.
+2. Only `/api/fetch-proxy` and `/api/jerk` exist, otherwise `404 not found`. `/api/jerk` exists only with host jerk.
+3. `Origin` must be a vault origin, otherwise `403 origin not allowed`, without CORS headers.
+4. A preflight (`OPTIONS`) is answered `204` with `Access-Control-Allow-Methods: POST, OPTIONS`, `Access-Control-Allow-Headers: Content-Type, X-Bridge-Token, X-Slicc-Raw-Request, X-Slicc-Raw-Probe, X-Slicc-Vault-Challenge`, `Access-Control-Max-Age: 600`, and `Access-Control-Allow-Private-Network: true` when it is asked for.
+5. Anything but `POST` is `405 method not allowed`.
+6. `X-Bridge-Token` must equal the pairing key (base64url), compared in constant time, otherwise `403 proxy key missing or wrong`. The probe is the one request without it.
+
+From step 4 on, answers carry `Access-Control-Allow-Origin: <origin>`, `Access-Control-Expose-Headers: X-Proxy-Error` and `Vary: Origin`. Refusals are JSON `{ "error": "<reason>" }` with `X-Proxy-Error: 1`.
+
+**Probe.** `POST /api/fetch-proxy` with `X-Slicc-Raw-Probe: 1` and `X-Slicc-Vault-Challenge: <16 to 64 random bytes, base64url>`, without the key, answers `{ "rawFetch": 1, "requestBodyStreaming": false, "maxRequestBodyBytes": 268435456, "vault": 1, "version", "jerk"?: 1, "proof"? }`. `proof` is the base64url HMAC-SHA256 under the pairing key of `slicc-vault/1`, a zero byte, the request's `Origin`, a zero byte and the challenge as sent. It's there only while slicc holds a pairing. A malformed challenge is `400`. The vault sends its key only to a port whose fresh proof checks out.
+
+**Fetch.** `POST /api/fetch-proxy` with the key and `X-Slicc-Raw-Request: <json>`. This is slicc-node's raw fetch, with the head rules of the [`http`](#link) stream kind:
+- the URL must be `https:` on port 443, otherwise `403 EACCES: https on port 443 only`;
+- the body is buffered, up to 256 MiB (`413` past that), and isn't sent for `GET` and `HEAD`;
+- the request goes out through the node's policy-checked dialer, with the system roots, and redirects aren't followed;
+- the answer is `200`, `Content-Type: application/vnd.slicc.raw-fetch`, a `u32` BE length, the JSON head `{ "status", "statusText", "headers", "url" }`, then the decoded body;
+- a failure before the head is `502 fetch failed: <reason>` (`EACCES: …` for a policy refusal), and a break mid-body drops the connection.
+- Every request counts as credentialed: the log shows only method and host, and errors never carry the path, query, headers or body.
+
+**jerk.** `POST /api/jerk` with the key and a JSON body of at most 4 KiB:
+- `{ "op": "lease", "provider", "duration"? }` runs `FNOX_LEASE_DURATION=<duration> jerk <provider> lease --via-link`. `duration` defaults to 3600 and is at most 86 400.
+- `{ "op": "drop", "provider", "lease_id" }` runs `FNOX_LEASE_ID=<lease_id> jerk <provider> drop --lease --via-link`.
+- The answer is `200` JSON `{ "lease"?: { "credentials", "expires_at", "lease_id" }, "result": { "exit", "provider", "user"?, "scopes"?, "expires_at"?, "env"?, "message" } }`. `lease` is there only for a `lease` that exited 0 with credentials and an `expires_at`, and then `env` lists the credential names.
+- jerk runs as the user, without a terminal, for at most 60 s (`exit` 1, `jerk timed out`). A provider that doesn't match `^[a-z0-9][a-z0-9-]{0,63}$`, a bad `duration` or `lease_id`, or another `op` is `400`.
+- Host jerk is the first `jerk` on `PATH`, else `jerk` in slicc's data folder's `bin`, when `jerk --version` names 1.0.0 or later. `--no-jerk` turns the route off. slicc never logs or keeps a lease.
+
+**Pairing over CDP.** slicc pairs with the vault frame in the seven tab it set up with (link spec §8.3):
+1. It grants `local-network-access`, `local-network` and `loopback-network` to each vault origin, best effort.
+2. It attaches its own session to the tab, with `Target.setAutoAttach` for out-of-process frames, and calls `Runtime.addBinding { name: "sliccVaultSend" }` and `Runtime.enable` on the tab and on each frame target on a vault origin.
+3. For a new default context of a frame on a vault origin whose parent is the tab's main frame, while the main frame is on an allowed seven origin, it calls `globalThis.sliccVaultReceive({ "t": "pair", "v": 1, "nonce", "node", "name", "seven", "port", "keyId"?, "jerk"? })` in that context, retried every 250 ms until the receiver exists. `keyId` is the first 32 hex characters of the SHA-256 of the key slicc holds for this vault and seven origin.
+4. The vault answers through `sliccVaultSend`: `{ "t": "paired", "nonce", "key"? }` or `{ "t": "refused", "nonce", "reason" }`. slicc takes a reply only from that context, with its nonce; a context destroyed or replaced in the meantime voids it. A `key` must be 32 bytes, base64url.
+5. A new key is written to `<config>/slicc/vault-<vault host>+<seven host>.key` (a non-default port appended as `_<port>`), mode `0600`, written aside and renamed. Without `key`, slicc uses the key it holds. Either way the listener's key becomes that one, and slicc says `vault: paired, listening on 127.0.0.1:<port>`.
+
+A reload of the vault frame or of seven pairs again. This session is slicc's own: the `cdp` capability never reaches the vault's frames.
 
 ## Host folders
 

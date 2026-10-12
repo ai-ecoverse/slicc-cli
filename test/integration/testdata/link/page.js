@@ -2,6 +2,7 @@ import { kernel, onKernel } from './kernel.js';
 import { Frame, Link, ResetError, fetchRaw, resolve } from './link.js';
 import { cdpTest } from './cdp.js';
 import { protectTest } from './protect.js';
+import { vaultHost } from './vault-host.js';
 import { fsTest } from './fs-test.js';
 import { agentTest, onAgent } from './agent.js';
 
@@ -404,6 +405,7 @@ globalThis.linkTest = {
   agent: agentTest,
   cdp: cdpTest(() => state.link, describe),
   protect: protectTest(() => state.link, describe),
+  vault: vaultHost,
   fs: fsTest(() => state.link, describe, { sha256, toBase64, fromBase64, prng }),
   kernel() {
     return { opens: kernel.opens, hanging: kernel.hanging.length, requests: kernel.requests };

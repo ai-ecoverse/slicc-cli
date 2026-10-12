@@ -46,7 +46,7 @@ flags:
   --kernel-port <n>    serve http://<port>.kernel.localhost on this local
                        port instead of 80
   --no-kernel          don't serve <port>.kernel.localhost at all
-` + jerkLocalUsage + mountUsage + computeUsage + `
+` + jerkLocalUsage + vaultUsage + mountUsage + computeUsage + `
 The link offers the net capability (tcp and resolve streams) and the http
 capability (fetches without redirects) under the local policy: public
 addresses, this machine and the local network, but not link-local addresses
@@ -62,6 +62,11 @@ When seven offers kernel-in, slicc listens on 127.0.0.1:<kernel port> and
 carries navigations and WebSockets to http://<port>.kernel.localhost/ into
 the page's kernel. If that port can't be bound, slicc says so and runs on
 without it.
+
+With --signal cdp, slicc also listens on a free loopback port for seven's
+vault, and pairs with the vault frame in the seven tab over CDP. The vault
+then sends the requests it injects credentials into, and its slicc-jerk
+lease requests, straight to slicc, never through seven's page.
 `
 
 type attachFlags struct {
@@ -78,6 +83,7 @@ type attachFlags struct {
 	noKernel   bool
 	mounts     stringList
 	noJerk     bool
+	vault      vaultFlags
 }
 
 type multi []string
@@ -108,6 +114,7 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	fs.BoolVar(&f.noKernel, "no-kernel", false, "")
 	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
+	f.vault.register(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stderr, attachUsage)
@@ -122,6 +129,10 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	}
 	if err := f.compute.validate(); err != nil {
 		fmt.Fprintf(stderr, "slicc attach: %v\n\n%s", err, attachUsage)
+		return f, 2
+	}
+	if err := f.vault.validate(); err != nil {
+		fmt.Fprintf(stderr, "slicc attach: %v\n", err)
 		return f, 2
 	}
 	if code := checkMounts(f.mounts, "slicc attach", stderr); code >= 0 {
@@ -164,13 +175,19 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	conn, closer, err := openSignal(ctx, f, origins, stdin, stdout, status, logf)
+	var vr *vaultRun
+	if f.signal == "cdp" {
+		vr = f.vault.start(!f.noJerk, status)
+	}
+	defer vr.close()
+	pair := func(c *cdp.Client) func(cdp.TargetInfo) { return vr.pair(c, origins, f.name, status, logf) }
+	conn, closer, err := openSignal(ctx, f, origins, stdin, stdout, pair, status, logf)
 	if err != nil {
 		status("%v", err)
 		return 1
 	}
 	defer closer()
-	pol := policy.Local(append(cdpPorts(append([]string{f.cdp}, f.extra...)...), kernelPolicyPort(f))...).With(f.allow, f.deny)
+	pol := policy.Local(append(cdpPorts(append([]string{f.cdp}, f.extra...)...), kernelPolicyPort(f), vr.port())...).With(f.allow, f.deny)
 	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, f.origins, pol, f.hosts.hosts, logf)
 	if err != nil {
 		status("%v", err)
@@ -183,6 +200,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if !f.noJerk {
 		serveJerk(n, true, false, status)
 	}
+	vr.serve(n, logf)
 	closeSSH, err := f.compute.serve(n, status)
 	if err != nil {
 		status("%v", err)
@@ -207,7 +225,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func openSignal(ctx context.Context, f attachFlags, origins *signal.Origins, stdin io.Reader, stdout io.Writer, status, logf func(string, ...any)) (signal.Conn, func(), error) {
+func openSignal(ctx context.Context, f attachFlags, origins *signal.Origins, stdin io.Reader, stdout io.Writer, pair func(*cdp.Client) func(cdp.TargetInfo), status, logf func(string, ...any)) (signal.Conn, func(), error) {
 	if f.signal == "stdio" {
 		s, err := signal.NewStdio(stdin, stdout)
 		if err != nil {
@@ -223,7 +241,7 @@ func openSignal(ctx context.Context, f attachFlags, origins *signal.Origins, std
 		return nil, nil, err
 	}
 	status("connected to %s", f.cdp)
-	s := signal.NewCDP(signal.CDPOptions{Client: client, Origins: origins, Logf: logf, Status: status})
+	s := signal.NewCDP(signal.CDPOptions{Client: client, Origins: origins, Logf: logf, Status: status, OnTarget: pair(client)})
 	return s, func() { _ = s.Close(); _ = client.Close() }, nil
 }
 

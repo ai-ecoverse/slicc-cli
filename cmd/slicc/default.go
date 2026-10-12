@@ -22,9 +22,11 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
+	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
+	"github.com/ai-ecoverse/slicc-cli/internal/signal"
 	"github.com/ai-ecoverse/slicc-cli/internal/tui"
 )
 
@@ -55,6 +57,9 @@ flags for slicc with no command:
                       port instead of 80
   --no-kernel         don't serve <port>.kernel.localhost at all
   --no-jerk           don't offer this machine's slicc-jerk to seven
+  --no-vault          don't listen on loopback for seven's vault
+  --vault-origin <origin>
+                      also pair with a vault on this origin (repeatable)
   --mount <path>[:<name>][:ro]
                       share this folder with seven's kernel (repeatable)
   --allow <rule>      allow CIDR or CIDR:port (repeatable, comma-separated)
@@ -86,6 +91,7 @@ type defaultFlags struct {
 	compute  computeFlags
 	mounts   stringList
 	noJerk   bool
+	vault    vaultFlags
 }
 
 func isDefault(args []string) bool {
@@ -145,6 +151,10 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 		fmt.Fprintf(stderr, "slicc: --kernel-port must be 1-65535\n")
 		return f, 2
 	}
+	if err := f.vault.validate(); err != nil {
+		fmt.Fprintf(stderr, "slicc: %v\n", err)
+		return f, 2
+	}
 	if f.noKernel {
 		f.kernel = 0
 	}
@@ -174,7 +184,7 @@ func (f *defaultFlags) parseProfile(stderr io.Writer) int {
 	return -1
 }
 
-func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), mounts []hostfs.Mount, withJerk bool) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
+func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), mounts []hostfs.Mount, withJerk bool, vr *vaultRun) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
 	return func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []flow.Browser) (flow.Caps, error) {
 		tcp.Register(n)
 		resolve.Register(n)
@@ -182,6 +192,7 @@ func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), 
 		if withJerk {
 			serveJerk(n, true, false, logf)
 		}
+		vr.serve(n, logf)
 		closeMounts := serveMounts(n, mounts, logf)
 		var seven string
 		var extra, order []string
@@ -247,12 +258,18 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	if os.Getenv("SLICC_DEBUG") != "" && !interactive {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
-	mounts := hostfs.Load(f.mounts, func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) })
+	warn := func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) }
+	mounts := hostfs.Load(f.mounts, warn)
+	origins, _ := flow.PageOrigins(f.page, f.origins)
+	vr := f.vault.start(!f.noJerk, warn)
+	defer vr.close()
+	allowed, _ := signal.NewOrigins(origins)
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts, !f.noJerk), Compute: f.compute.dashboard(), Logf: logf,
+		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts, !f.noJerk, vr), Compute: f.compute.dashboard(), Logf: logf,
+		Protect:  []uint16{vr.port()},
+		OnClient: func(c *cdp.Client) func(cdp.TargetInfo) { return vr.pair(c, allowed, f.name, logf, logf) },
 	}
-	origins, _ := flow.PageOrigins(f.page, f.origins)
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
 	if interactive {
 		cfg.Chosen = true

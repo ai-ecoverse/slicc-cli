@@ -48,6 +48,8 @@ type Config struct {
 	Compute  string
 	Emit     func(Event)
 	Logf     func(format string, args ...any)
+	Protect  []uint16
+	OnClient func(*cdp.Client) func(cdp.TargetInfo)
 }
 
 type launched struct {
@@ -299,6 +301,7 @@ func (r *run) policy() *policy.Policy {
 	if r.cfg.Kernel > 0 {
 		ports = append(ports, uint16(r.cfg.Kernel))
 	}
+	ports = append(ports, r.cfg.Protect...)
 	return policy.Local(ports...).With(r.cfg.Allow, r.cfg.Deny)
 }
 
@@ -330,12 +333,12 @@ func (r *run) serve(ctx context.Context) error {
 		defer close(pumped)
 		r.pump(q, n, pol)
 	}()
-	sig := signal.NewCDP(signal.CDPOptions{
-		Client:  r.client,
-		Origins: r.allowed,
-		Logf:    r.cfg.Logf,
-		Status:  func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) },
-	})
+	status := func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) }
+	var onTarget func(cdp.TargetInfo)
+	if r.cfg.OnClient != nil {
+		onTarget = r.cfg.OnClient(r.client)
+	}
+	sig := signal.NewCDP(signal.CDPOptions{Client: r.client, Origins: r.allowed, Logf: r.cfg.Logf, Status: status, OnTarget: onTarget})
 	r.emit(Event{Event: Serving, Caps: n.Caps(), Policy: pol.Summary(), Compute: r.cfg.Compute})
 	err = n.Serve(ctx, sig)
 	unsubscribe()

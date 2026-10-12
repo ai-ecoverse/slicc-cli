@@ -20,10 +20,11 @@ const (
 )
 
 type CDPOptions struct {
-	Client  *cdp.Client
-	Origins *Origins
-	Logf    func(format string, args ...any)
-	Status  func(format string, args ...any)
+	Client   *cdp.Client
+	Origins  *Origins
+	Logf     func(format string, args ...any)
+	Status   func(format string, args ...any)
+	OnTarget func(cdp.TargetInfo)
 }
 
 type CDP struct {
@@ -196,6 +197,9 @@ func (c *CDP) setup(ctx context.Context, t cdp.TargetInfo) (*cdp.Session, error)
 		return nil, err
 	}
 	c.opts.Status("found seven at %s", t.URL)
+	if c.opts.OnTarget != nil {
+		c.opts.OnTarget(t)
+	}
 	c.grantLocalNetwork(ctx, t.URL)
 	if err := bounded(ctx, func(cctx context.Context) error { return s.AddBinding(cctx, BindingName) }); err != nil {
 		return nil, err
