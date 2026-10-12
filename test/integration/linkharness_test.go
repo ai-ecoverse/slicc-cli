@@ -158,7 +158,7 @@ func chromeCensus() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name,Id,CPU,WorkingSet | Format-Table -AutoSize | Out-String -Width 200; 'chrome: ' + (Get-Process chrome -ErrorAction SilentlyContinue | Measure-Object).Count; 'crashpad: ' + (Get-Process chrome_crashpad_handler -ErrorAction SilentlyContinue | Measure-Object).Count; (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "$a = Get-Process | Select-Object Id,Name,CPU; Start-Sleep -Milliseconds 1000; $b = Get-Process | Select-Object Id,Name,CPU; $b | ForEach-Object { $p = $_; $o = $a | Where-Object Id -eq $p.Id; [pscustomobject]@{Name=$p.Name; Id=$p.Id; CPU1s=[math]::Round(($p.CPU - $o.CPU),2)} } | Sort-Object CPU1s -Descending | Select-Object -First 12 | Format-Table -AutoSize | Out-String -Width 200; 'chrome: ' + (Get-Process chrome -ErrorAction SilentlyContinue | Measure-Object).Count; 'crashpad: ' + (Get-Process chrome_crashpad_handler -ErrorAction SilentlyContinue | Measure-Object).Count; (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average").CombinedOutput()
 	return fmt.Sprintf("%s (%v)", out, err)
 }
 

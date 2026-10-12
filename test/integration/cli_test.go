@@ -33,7 +33,9 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	stalls.start()
 	code := m.Run()
+	stalls.report()
 	if hits := guard.stop(); len(hits) > 0 {
 		fmt.Fprintf(os.Stderr, "FAIL: tests reached 127.0.0.1:%d-%d outside the fakes:\n  %s\n", firstRealPort, lastRealPort, strings.Join(hits, "\n  "))
 		code = 1
