@@ -41,7 +41,8 @@ func commitLauncher(t *testing.T, repo string, run func(args ...string), content
 	}
 }
 
-func platformDeps(version string) []string {
+func platformDeps() []string {
+	const version = "1.2.4"
 	deps := []string{}
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		for _, arch := range []string{"arm64", "amd64"} {
@@ -67,7 +68,7 @@ func TestSliccyNextStagesTheLatestRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "sliccy-next")
-	reg := newFakeRegistry(t, platformDeps("1.2.4")...)
+	reg := newFakeRegistry(t, platformDeps()...)
 	r := sliccyNext(t, node, repo, out, registryEnvWaiting(t, reg, 120), "--dry-run")
 	if r.code != 0 || !strings.Contains(r.stdout, "the latest release is v1.2.4; staging sliccy@7.0.0-next.1.2.4") {
 		t.Fatalf("%+v", r)
@@ -75,7 +76,7 @@ func TestSliccyNextStagesTheLatestRelease(t *testing.T) {
 	if !strings.Contains(r.stdout, "every optional dependency of sliccy@7.0.0-next.1.2.4 is on the registry") || !strings.Contains(r.stderr, "with tag next") || !strings.Contains(r.stderr, "(dry-run)") {
 		t.Fatalf("publish: %+v", r)
 	}
-	for _, dep := range platformDeps("1.2.4") {
+	for _, dep := range platformDeps() {
 		if !reg.wasAsked(dep) {
 			t.Fatalf("the fake registry was never asked for %s", dep)
 		}
@@ -111,7 +112,7 @@ func TestSliccyNextChecksTheRegistryEvenInADryRun(t *testing.T) {
 	node := requireNode(t)
 	repo, run := gitRepo(t)
 	commitLauncher(t, repo, run, "launcher\n", "v1.2.4")
-	deps := platformDeps("1.2.4")
+	deps := platformDeps()
 	r := sliccyNext(t, node, repo, filepath.Join(t.TempDir(), "out"), registryEnv(t, newFakeRegistry(t, deps[1:]...)), "--dry-run")
 	if r.code == 0 || !strings.Contains(r.stderr, "refusing to publish sliccy@7.0.0-next.1.2.4; not on the registry: "+deps[0]) || strings.Contains(r.stdout+r.stderr, "Publishing to") {
 		t.Fatalf("%+v", r)
@@ -133,7 +134,7 @@ func TestSliccyNextIsGuardedLikeTheRelease(t *testing.T) {
 	repo, run := gitRepo(t)
 	commitLauncher(t, repo, run, "launcher\n", "v1.2.4")
 	env := []string{}
-	for _, kv := range registryEnv(t, newFakeRegistry(t, platformDeps("1.2.4")...)) {
+	for _, kv := range registryEnv(t, newFakeRegistry(t, platformDeps()...)) {
 		if !strings.HasPrefix(kv, "SLICCY_NEXT_PUBLISH=") {
 			env = append(env, kv)
 		}
