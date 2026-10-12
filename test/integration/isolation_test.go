@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -61,34 +60,17 @@ func realGetenv(key string) string {
 	return ""
 }
 
-func probedPortListener(t *testing.T) (net.Listener, int) {
-	t.Helper()
-	for _, port := range browser.DefaultProbePorts {
-		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
-		if err == nil {
-			return ln, port
-		}
-	}
-	if os.Getenv("CI") != "" {
-		t.Fatal("every probed CDP port is taken")
-	}
-	t.Skip("every probed CDP port is taken on this machine")
-	return nil, 0
-}
-
 func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
-	ln, port := probedPortListener(t)
-	var hits atomic.Int32
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"Browser":"Chrome/150.0.0.0","webSocketDebuggerUrl":"ws://127.0.0.1:`+strconv.Itoa(port)+`/devtools/browser/x"}`)
-	})}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
 	if os.Getenv(browser.DiscoveryEnv) != "isolated" {
 		t.Fatalf("%s is %q in the test process", browser.DiscoveryEnv, os.Getenv(browser.DiscoveryEnv))
 	}
+	var hits atomic.Int32
+	var port int
+	port = guard.lend(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"Browser":"Chrome/150.0.0.0","webSocketDebuggerUrl":"ws://127.0.0.1:`+strconv.Itoa(port)+`/devtools/browser/x"}`)
+	}))
 
 	cmd := exec.Command(binary, "--plain")
 	var stderr strings.Builder
