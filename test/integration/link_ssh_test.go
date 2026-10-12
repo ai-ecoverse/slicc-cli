@@ -42,8 +42,13 @@ func homeEnv(home string) []string {
 func startSSHNode(t *testing.T, b *chromeProc, srv *httptest.Server, args ...string) *sshNode {
 	t.Helper()
 	home := t.TempDir()
+	return startSSHNodeEnv(t, b, srv, home, homeEnv(home), args...)
+}
+
+func startSSHNodeEnv(t *testing.T, b *chromeProc, srv *httptest.Server, home string, env []string, args ...string) *sshNode {
+	t.Helper()
 	n := &sshNode{home: home}
-	n.a = startAttachEnv(t, true, homeEnv(home), append([]string{"--signal", "stdio", "--name", "it-ssh"}, args...)...)
+	n.a = startAttachEnv(t, true, env, append([]string{"--signal", "stdio", "--name", "it-ssh"}, args...)...)
 	n.p = b.openPage(t, srv.URL+"/index.html")
 	relayStdio(t, n.p, n.a)
 	n.p.waitFor("linkTest.status().up", 30*time.Second)
