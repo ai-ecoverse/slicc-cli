@@ -188,7 +188,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer closer()
 	pol := policy.Local(append(cdpPorts(append([]string{f.cdp}, f.extra...)...), kernelPolicyPort(f), vr.port())...).With(f.allow, f.deny)
-	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, f.origins, pol, f.hosts.hosts, logf)
+	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, append(append([]string(nil), f.origins...), f.vault.origins...), pol, f.hosts.hosts, logf)
 	if err != nil {
 		status("%v", err)
 		return 1

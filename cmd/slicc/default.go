@@ -126,6 +126,7 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	fs.BoolVar(&f.json, "json", false, "")
 	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
+	f.vault.register(fs)
 	var six string
 	registerSix(fs, &six)
 	err = fs.Parse(args)
@@ -266,9 +267,11 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	allowed, _ := signal.NewOrigins(origins)
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts, !f.noJerk, vr), Compute: f.compute.dashboard(), Logf: logf,
-		Protect:  []uint16{vr.port()},
-		OnClient: func(c *cdp.Client) func(cdp.TargetInfo) { return vr.pair(c, allowed, f.name, logf, logf) },
+		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, append(pageOrigins(f.page, f.origins), f.vault.origins...), logf, mounts, !f.noJerk, vr), Compute: f.compute.dashboard(), Logf: logf,
+		Protect: []uint16{vr.port()},
+		OnClient: func(c *cdp.Client, status func(string, ...any)) func(cdp.TargetInfo) {
+			return vr.pair(c, allowed, f.name, status, logf)
+		},
 	}
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
 	if interactive {

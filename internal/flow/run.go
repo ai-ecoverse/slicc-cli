@@ -49,7 +49,7 @@ type Config struct {
 	Emit     func(Event)
 	Logf     func(format string, args ...any)
 	Protect  []uint16
-	OnClient func(*cdp.Client) func(cdp.TargetInfo)
+	OnClient func(*cdp.Client, func(format string, args ...any)) func(cdp.TargetInfo)
 }
 
 type launched struct {
@@ -336,7 +336,7 @@ func (r *run) serve(ctx context.Context) error {
 	status := func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) }
 	var onTarget func(cdp.TargetInfo)
 	if r.cfg.OnClient != nil {
-		onTarget = r.cfg.OnClient(r.client)
+		onTarget = r.cfg.OnClient(r.client, status)
 	}
 	sig := signal.NewCDP(signal.CDPOptions{Client: r.client, Origins: r.allowed, Logf: r.cfg.Logf, Status: status, OnTarget: onTarget})
 	r.emit(Event{Event: Serving, Caps: n.Caps(), Policy: pol.Summary(), Compute: r.cfg.Compute})

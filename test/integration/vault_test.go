@@ -134,7 +134,17 @@ func TestVaultPairing(t *testing.T) {
 	t.Run("fetch refusals", e.testVaultFetchRefusals)
 	t.Run("jerk", e.testVaultJerk)
 	t.Run("the port is protected", e.testVaultPortProtected)
+	t.Run("the cdp capability can't reach the vault", e.testVaultProtected)
 	t.Run("a reload keeps the key", e.testVaultReload)
+}
+
+func (e *vaultEnv) testVaultProtected(t *testing.T) {
+	var r cdpOutcome
+	pe := &protectEnv{linkEnv: e.linkEnv}
+	pe.evalJSON(t, "linkTest.protect.create("+jsArgs("chrome", e.vaultOrigin+"/index.html")+")", &r)
+	if !r.refused() {
+		t.Fatalf("createTarget on the vault origin: %+v", r)
+	}
 }
 
 func (e *vaultEnv) testPairMessage(t *testing.T) {
