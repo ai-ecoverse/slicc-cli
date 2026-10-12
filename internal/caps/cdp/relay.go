@@ -220,14 +220,27 @@ func (rl *relay) toPage() {
 		for _, msg := range v.send {
 			_ = rl.conn.Write(ctx, websocket.MessageText, msg)
 		}
-		if v.forward == nil {
-			continue
+		for _, id := range v.hold {
+			rl.expireLater(id)
 		}
-		if err := rl.writePage(v.forward); err != nil {
-			_ = rl.conn.CloseNow()
-			return
+		if v.forward != nil {
+			v.page = append([][]byte{v.forward}, v.page...)
+		}
+		for _, msg := range v.page {
+			if err := rl.writePage(msg); err != nil {
+				_ = rl.conn.CloseNow()
+				return
+			}
 		}
 	}
+}
+
+func (rl *relay) expireLater(sessionID string) {
+	time.AfterFunc(HoldTimeout, func() {
+		for _, msg := range rl.g.expireHold(sessionID) {
+			_ = rl.conn.Write(context.Background(), websocket.MessageText, msg)
+		}
+	})
 }
 
 func (rl *relay) writePage(data []byte) error {

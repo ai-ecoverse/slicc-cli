@@ -16,6 +16,32 @@ async function names(c, method, params, sessionId) {
   return { names: r.result.cookies.map((k) => `${k.name}@${k.domain}`) };
 }
 
+const beacon = (base, tag) => `try { navigator.sendBeacon(${JSON.stringify(base)} + '/beacon?tag=' + ${JSON.stringify(tag)} + '&origin=' + encodeURIComponent(location.origin)); } catch {}`;
+
+const later = (url) => `setTimeout(() => { location.href = ${JSON.stringify(url)}; }, 50); true`;
+
+async function load(c, sessionId, url) {
+  const loaded = c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 20000);
+  await c.send('Page.navigate', { url }, sessionId);
+  await loaded;
+  return c.evaluate('location.href', sessionId);
+}
+
+async function leave(c, sessionId, url) {
+  const gone = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
+    () => true,
+    () => false,
+  );
+  await c.send('Runtime.evaluate', { expression: later(url) }, sessionId);
+  return gone;
+}
+
+async function instrument(c, sessionId, base, tag) {
+  await c.send('Page.enable', {}, sessionId);
+  await c.send('Page.addScriptToEvaluateOnNewDocument', { source: beacon(base, tag) }, sessionId);
+  await c.send('Page.setBypassCSP', { enabled: true }, sessionId);
+}
+
 export function protectTest(getLink, describe) {
   const run = async (browser, fn) => {
     let c;
@@ -172,6 +198,98 @@ export function protectTest(getLink, describe) {
         }
         await c.send('Target.closeTarget', { targetId });
         return { opened, counts, leaked };
+      }),
+    navInit: (browser, base, tag, start, next, away) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(start);
+        await instrument(c, sessionId, base, tag);
+        const before = await load(c, sessionId, next);
+        const detached = await leave(c, sessionId, away);
+        return { targetId, before, detached };
+      }),
+    navPopup: (browser, base, tag, opener, popup, away, direct) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(opener);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+        const isPopup = (e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.openerId === targetId;
+        const attached = c.waitEvent(isPopup, 20000);
+        await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(popup)}))`, userGesture: true }, sessionId);
+        const ev = await attached;
+        const ps = ev.params.sessionId;
+        const out = { popup: ev.params.targetInfo.targetId, url: ev.params.targetInfo.url, waiting: ev.params.waitingForDebugger };
+        await instrument(c, ps, base, tag);
+        await c.send('Runtime.runIfWaitingForDebugger', {}, ps);
+        out.before = await load(c, ps, `${popup}&again=1`);
+        out.detached = await leave(c, ps, away);
+        const seen = c.events.filter(isPopup).length;
+        await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(direct)}))`, userGesture: true }, sessionId);
+        for (let i = 0; i < 150; i += 1) {
+          const { targetInfos } = await c.send('Target.getTargets');
+          out.popups = targetInfos.filter((t) => t.openerId === targetId).map((t) => ({ targetId: t.targetId, url: t.url }));
+          if (out.popups.length > 1 && out.popups.every((p) => p.url)) break;
+          await sleep(100);
+        }
+        await sleep(500);
+        out.direct = c.events.filter(isPopup).slice(seen).map((e) => e.params.targetInfo.url);
+        await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+        return out;
+      }),
+    navHang: (browser, opener, hang, wait) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(opener);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+        const isPopup = (e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.openerId === targetId;
+        await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(hang)}))`, userGesture: true }, sessionId);
+        await sleep(wait);
+        const attached = c.events.filter(isPopup).map((e) => e.params.targetInfo.url);
+        const { targetInfos } = await c.send('Target.getTargets');
+        const popups = targetInfos.filter((t) => t.openerId === targetId).map((t) => ({ targetId: t.targetId, url: t.url }));
+        await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+        return { targetId, attached, popups };
+      }),
+    navFrame: (browser, base, tag, page, cross, away) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(page);
+        await instrument(c, sessionId, base, tag);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
+        const isFrame = (e) => e.method === 'Target.attachedToTarget' && e.sessionId === sessionId;
+        const attached = c.waitEvent(isFrame, 20000);
+        await c.evaluate(`document.getElementById('f').src = ${JSON.stringify(cross)}; true`, sessionId);
+        const ev = await attached;
+        const out = { targetId, cross: { type: ev.params.targetInfo.type, url: ev.params.targetInfo.url, waiting: ev.params.waitingForDebugger } };
+        out.cross.href = await c.evaluate('location.href', ev.params.sessionId);
+        const seen = c.events.filter(isFrame).length;
+        await c.evaluate(`new Promise((resolve) => { const g = document.getElementById('g'); g.onload = () => resolve(true); g.src = ${JSON.stringify(away)}; })`, sessionId);
+        await sleep(1000);
+        out.later = c.events.filter(isFrame).slice(seen).map((e) => e.params.targetInfo.url);
+        out.frames = await c.evaluate(`[...document.querySelectorAll('iframe')].map((f) => { try { return f.contentWindow.location.href; } catch { return 'cross-origin'; } })`, sessionId);
+        return out;
+      }),
+    navFetch: (browser, base, start, next, away) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(start);
+        const paused = [];
+        const forged = btoa('<!doctype html><title>forged</title>');
+        c.on((e) => {
+          if (e.method !== 'Fetch.requestPaused' || e.sessionId !== sessionId) return;
+          const response = e.params.responseStatusCode !== undefined || e.params.responseErrorReason !== undefined;
+          paused.push({ url: e.params.request.url, type: e.params.resourceType, response });
+          if (e.params.request.url === away) {
+            const headers = [{ name: 'content-type', value: 'text/html' }];
+            c.send('Fetch.fulfillRequest', { requestId: e.params.requestId, responseCode: 200, responseHeaders: headers, body: forged }, sessionId).catch(() => {});
+            return;
+          }
+          c.send('Fetch.continueRequest', { requestId: e.params.requestId }, sessionId).catch(() => {});
+        });
+        await c.send('Page.enable', {}, sessionId);
+        await c.send('Network.enable', {}, sessionId);
+        await c.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }, { urlPattern: '*', requestStage: 'Response' }] }, sessionId);
+        const href = await load(c, sessionId, next);
+        const title = await c.evaluate('document.title', sessionId);
+        const sub = await c.evaluate(`fetch(${JSON.stringify(`${base}/doc?n=sub`)}).then((r) => r.text())`, sessionId);
+        const sent = c.events.filter((e) => e.method === 'Network.requestWillBeSent' && e.sessionId === sessionId).map((e) => e.params.request.url);
+        const detached = await leave(c, sessionId, away);
+        return { targetId, href, title, sub, sent, paused, detached };
       }),
     ownContext: (browser) =>
       run(browser, async (c) => {

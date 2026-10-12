@@ -2,6 +2,7 @@ package protect
 
 import (
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 
@@ -178,6 +179,45 @@ func (o *Origins) StorageKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func (o *Origins) DocumentPatterns() []string {
+	var out []string
+	add := func(prefix, host, port string) {
+		hosts := []string{host}
+		if net.ParseIP(strings.Trim(host, "[]")) == nil {
+			hosts = append(hosts, host+".")
+		}
+		for _, h := range hosts {
+			p := prefix + h + port + "/*"
+			if !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+	}
+	for _, d := range rules.Domains {
+		add("*://*", d, "")
+		add("*://*", d, ":*")
+	}
+	for _, h := range rules.Hosts {
+		if slices.ContainsFunc(rules.Domains, func(d string) bool { return under(h, d) }) {
+			continue
+		}
+		add("*://*", h, "")
+		add("*://*", h, ":*")
+	}
+	if o == nil {
+		return out
+	}
+	for _, e := range o.extra {
+		u := parse(e)
+		port := ""
+		if p := u.Port(); p != "" {
+			port = ":" + p
+		}
+		add(scheme(u)+"://*", hostOf(u), port)
+	}
+	return out
 }
 
 func Redact(raw string) string {

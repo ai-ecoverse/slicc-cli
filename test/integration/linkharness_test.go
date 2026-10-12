@@ -66,7 +66,7 @@ func launchBrowser(t *testing.T) *chromeProc {
 	return launchBrowserOn(t, 0)
 }
 
-func launchBrowserOn(t *testing.T, debugPort int) *chromeProc {
+func launchBrowserOn(t *testing.T, debugPort int, extra ...string) *chromeProc {
 	t.Helper()
 	chrome := findChrome()
 	if chrome == "" {
@@ -82,8 +82,9 @@ func launchBrowserOn(t *testing.T, debugPort int) *chromeProc {
 	args := []string{
 		"--headless=new", "--remote-debugging-port=" + strconv.Itoa(debugPort), "--user-data-dir=" + dir,
 		"--no-first-run", "--no-default-browser-check", "--disable-background-networking",
-		"--disable-component-update", "--disable-sync", "about:blank",
+		"--disable-component-update", "--disable-sync",
 	}
+	args = append(append(args, extra...), "about:blank")
 	if runtime.GOOS == "linux" {
 		args = append([]string{"--no-sandbox"}, args...)
 	}

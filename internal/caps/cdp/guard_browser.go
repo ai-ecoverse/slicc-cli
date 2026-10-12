@@ -7,7 +7,9 @@ import (
 
 type browserVerdict struct {
 	forward []byte
+	page    [][]byte
 	send    [][]byte
+	hold    []string
 	lost    bool
 }
 
@@ -23,7 +25,10 @@ func (g *guard) fromBrowser(data []byte) browserVerdict {
 		return g.responseLocked(&m, data)
 	}
 	if m.SessionID != "" && m.SessionID == g.relaySession {
-		return browserVerdict{send: g.relayEventLocked(&m)}
+		return g.relayEventLocked(&m)
+	}
+	if nt, ok := g.navSessions[m.SessionID]; ok && m.SessionID != "" {
+		return browserVerdict{send: g.navEventLocked(nt, &m)}
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
 		return browserVerdict{}
@@ -46,10 +51,15 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		if rc.ch != nil {
 			rc.ch <- *m
 		}
+		if rc.fn != nil {
+			return browserVerdict{send: rc.fn(*m)}
+		}
 		return browserVerdict{}
 	}
 	kind, ok := g.pending[k]
 	delete(g.pending, k)
+	attached := g.attachCalls[k]
+	g.attachDoneLocked(k)
 	if g.sessionRefusedLocked(m.SessionID) {
 		return browserVerdict{}
 	}
@@ -78,6 +88,13 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	case kindContext:
 		if s, _ := res["browserContextId"].(string); s != "" {
 			g.ownContexts[s] = true
+		}
+	case kindCreate:
+		id, _ := res["targetId"].(string)
+		send = g.touchLocked(id, "page")
+	case kindAttach:
+		if t, ok := g.targets[attached]; ok {
+			send = g.touchLocked(attached, t.typ)
 		}
 	}
 	m.Result = encode(res)
@@ -108,19 +125,28 @@ func (g *guard) infoLocked(v any) [][]byte {
 	return send
 }
 
-func (g *guard) relayEventLocked(m *message) [][]byte {
+func (g *guard) relayEventLocked(m *message) browserVerdict {
 	var p struct {
 		TargetInfo targetInfo `json:"targetInfo"`
 		TargetID   string     `json:"targetId"`
+		SessionID  string     `json:"sessionId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	switch m.Method {
 	case "Target.targetCreated", "Target.targetInfoChanged":
-		return g.observeLocked(p.TargetInfo)
+		send := g.observeLocked(p.TargetInfo)
+		if p.TargetInfo.URL == "" || len(g.held) == 0 {
+			return browserVerdict{send: send}
+		}
+		v := g.releaseLocked(p.TargetInfo.TargetID, decodeParams(m.Params)["targetInfo"])
+		v.send = append(send, v.send...)
+		return v
 	case "Target.targetDestroyed":
 		g.destroyedLocked(p.TargetID)
+	case "Target.detachedFromTarget":
+		g.navDetachedLocked(p.SessionID)
 	}
-	return nil
+	return browserVerdict{}
 }
 
 type eventHandler func(g *guard, m *message, data []byte) browserVerdict
@@ -178,25 +204,30 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 
 func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	var p struct {
-		SessionID  string     `json:"sessionId"`
-		TargetInfo targetInfo `json:"targetInfo"`
+		SessionID          string     `json:"sessionId"`
+		TargetInfo         targetInfo `json:"targetInfo"`
+		WaitingForDebugger bool       `json:"waitingForDebugger"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	if p.SessionID == "" || p.SessionID == g.relaySession {
 		return browserVerdict{}
 	}
-	send := g.observeLocked(p.TargetInfo)
-	if g.targetProtectedLocked(p.TargetInfo.TargetID) {
-		g.hidden[p.SessionID] = true
-		msg, _ := g.newCallLocked(m.SessionID, "Target.detachFromTarget", map[string]any{"sessionId": p.SessionID}, false)
-		g.logf("cdp: detached an auto-attached session on a protected origin")
-		return browserVerdict{send: append(send, msg)}
+	info := p.TargetInfo
+	if t, ok := g.targets[info.TargetID]; ok && info.URL == "" && t.url != "" {
+		info.URL = t.url
 	}
-	g.sessions[p.SessionID] = &session{id: p.SessionID, target: p.TargetInfo.TargetID, parent: m.SessionID}
-	if p.TargetInfo.Type == "browser" {
+	send := g.observeLocked(info)
+	if g.targetProtectedLocked(info.TargetID) {
+		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID}))}
+	}
+	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
+		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
+	}
+	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type}
+	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
 	}
-	return browserVerdict{forward: data, send: send}
+	return browserVerdict{forward: data, send: append(send, g.touchLocked(info.TargetID, info.Type)...)}
 }
 
 func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
@@ -207,6 +238,11 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 	if p.SessionID != "" && p.SessionID == g.relaySession {
 		g.lost = true
 		return browserVerdict{lost: true}
+	}
+	if _, ok := g.held[p.SessionID]; ok {
+		delete(g.held, p.SessionID)
+		g.forgetSessionLocked(p.SessionID)
+		return browserVerdict{}
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)
