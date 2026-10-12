@@ -72,8 +72,13 @@ type Hello struct {
 	SSHHostKey string    `json:"sshHostKey,omitempty"`
 	Browsers   []Browser `json:"browsers,omitempty"`
 	Mounts     []Mount   `json:"mounts,omitempty"`
+	Jerk       *Jerk     `json:"jerk,omitempty"`
 
 	Raw json.RawMessage `json:"-"`
+}
+
+type Jerk struct {
+	Version string `json:"version"`
 }
 
 func (h Hello) HasCap(c string) bool {

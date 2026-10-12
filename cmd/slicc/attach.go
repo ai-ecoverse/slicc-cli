@@ -46,7 +46,7 @@ flags:
   --kernel-port <n>    serve http://<port>.kernel.localhost on this local
                        port instead of 80
   --no-kernel          don't serve <port>.kernel.localhost at all
-` + mountUsage + computeUsage + `
+` + jerkLocalUsage + mountUsage + computeUsage + `
 The link offers the net capability (tcp and resolve streams) and the http
 capability (fetches without redirects) under the local policy: public
 addresses, this machine and the local network, but not link-local addresses
@@ -77,6 +77,7 @@ type attachFlags struct {
 	kernelPort int
 	noKernel   bool
 	mounts     stringList
+	noJerk     bool
 }
 
 type multi []string
@@ -106,6 +107,7 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	fs.IntVar(&f.kernelPort, "kernel-port", kernelin.DefaultPort, "")
 	fs.BoolVar(&f.noKernel, "no-kernel", false, "")
 	fs.Var(&f.mounts, "mount", "")
+	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stderr, attachUsage)
@@ -178,6 +180,9 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	tcp.Register(n)
 	resolve.Register(n)
 	httpcap.Register(n)
+	if !f.noJerk {
+		serveJerk(n, true, false, status)
+	}
 	closeSSH, err := f.compute.serve(n, status)
 	if err != nil {
 		status("%v", err)

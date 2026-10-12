@@ -40,6 +40,7 @@ type Message struct {
 	Reason     string
 	Node       string
 	ICEServers []ICEServer
+	Origin     string
 }
 
 type wire struct {

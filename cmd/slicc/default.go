@@ -54,6 +54,7 @@ flags for slicc with no command:
   --kernel-port <n>   serve http://<port>.kernel.localhost on this local
                       port instead of 80
   --no-kernel         don't serve <port>.kernel.localhost at all
+  --no-jerk           don't offer this machine's slicc-jerk to seven
   --mount <path>[:<name>][:ro]
                       share this folder with seven's kernel (repeatable)
   --allow <rule>      allow CIDR or CIDR:port (repeatable, comma-separated)
@@ -84,6 +85,7 @@ type defaultFlags struct {
 	json     bool
 	compute  computeFlags
 	mounts   stringList
+	noJerk   bool
 }
 
 func isDefault(args []string) bool {
@@ -117,6 +119,7 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	fs.BoolVar(&f.plain, "plain", false, "")
 	fs.BoolVar(&f.json, "json", false, "")
 	fs.Var(&f.mounts, "mount", "")
+	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
 	var six string
 	registerSix(fs, &six)
 	err = fs.Parse(args)
@@ -171,11 +174,14 @@ func (f *defaultFlags) parseProfile(stderr io.Writer) int {
 	return -1
 }
 
-func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), mounts []hostfs.Mount) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
+func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), mounts []hostfs.Mount, withJerk bool) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
 	return func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []flow.Browser) (flow.Caps, error) {
 		tcp.Register(n)
 		resolve.Register(n)
 		httpcap.Register(n)
+		if withJerk {
+			serveJerk(n, true, false, logf)
+		}
 		closeMounts := serveMounts(n, mounts, logf)
 		var seven string
 		var extra, order []string
@@ -244,7 +250,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	mounts := hostfs.Load(f.mounts, func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) })
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts), Compute: f.compute.dashboard(), Logf: logf,
+		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts, !f.noJerk), Compute: f.compute.dashboard(), Logf: logf,
 	}
 	origins, _ := flow.PageOrigins(f.page, f.origins)
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
