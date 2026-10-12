@@ -34,11 +34,43 @@ const { values } = parseArgs({
     'deps-version': { type: 'string' },
     'launcher-only': { type: 'boolean', default: false },
     launcher: { type: 'string', default: join(root, 'npm', 'slicc.js') },
+    companions: { type: 'boolean', default: false },
   },
 });
 
+const COMPANIONS = ['@ai-ecoverse/slicc-jerk', '@ai-ecoverse/fnox'];
+
+function registryBase() {
+  return (process.env.npm_config_registry || 'https://registry.npmjs.org/').replace(/\/+$/, '');
+}
+
+async function latest(name) {
+  try {
+    const res = await fetch(`${registryBase()}/${name.replace('/', '%2f')}/latest`, {
+      headers: { accept: 'application/json', 'cache-control': 'no-cache' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const version = (await res.json()).version;
+    return /^\d+\.\d+\.\d+$/.test(version) ? version : null;
+  } catch {
+    return null;
+  }
+}
+
+async function companionDeps() {
+  const deps = {};
+  if (!values.companions) return deps;
+  for (const name of COMPANIONS) {
+    const version = await latest(name);
+    if (version) deps[name] = `^${version}`;
+    else process.stdout.write(`${name} has no release on the registry yet; leaving it out\n`);
+  }
+  return deps;
+}
+
 if (!values.version) {
-  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name]... [--only os-arch] [--deps-version semver] [--launcher-only] [--launcher file]\n');
+  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name]... [--only os-arch] [--deps-version semver] [--launcher-only] [--launcher file] [--companions]\n');
   process.exit(2);
 }
 const version = values.version.replace(/^v/, '');
@@ -89,7 +121,7 @@ function stagePlatform(target) {
   return name;
 }
 
-function stageLauncher(platforms) {
+function stageLauncher(platforms, companions) {
   const dir = join(values.out, 'slicc');
   mkdirSync(join(dir, 'bin'), { recursive: true });
   copyFileSync(values.launcher, join(dir, 'bin', 'slicc.js'));
@@ -105,13 +137,13 @@ function stageLauncher(platforms) {
     bin: Object.fromEntries(binNames.map((name) => [name, 'bin/slicc.js'])),
     files: ['bin/slicc.js'],
     engines: { node: '>=18' },
-    optionalDependencies: Object.fromEntries(platforms.map((name) => [name, depsVersion])),
+    optionalDependencies: { ...Object.fromEntries(platforms.map((name) => [name, depsVersion])), ...companions },
   });
 }
 
 rmSync(values.out, { recursive: true, force: true });
 const platformName = (t) => `${SCOPE}/slicc-${t.goos}-${t.goarch}`;
 const platforms = values['launcher-only'] ? selected.map(platformName) : selected.map(stagePlatform);
-stageLauncher(platforms);
+stageLauncher(platforms, await companionDeps());
 const staged = values['launcher-only'] ? 'no platform packages' : `${platforms.length} platform packages`;
 process.stdout.write(`staged ${values.name}@${version} (platform packages at ${depsVersion}) and ${staged} in ${values.out}\n`);

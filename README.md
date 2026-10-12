@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift.
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
 ## Commands (planned)
 
@@ -15,10 +15,11 @@
 | `slicc <join-url> prompt <text>`, `watch`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-and-abort)) |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
 | `slicc update [--check]` | replace this binary with the latest release (works now; see [Updates](#updates)) |
+| `slicc install jerk\|fnox` | install slicc-jerk or fnox into slicc's data folder (works now; see [Companion tools](#companion-tools)) |
 
 ## Install
 
-- **npm:** `npm install -g @ai-ecoverse/slicc`, or `npx @ai-ecoverse/slicc`. The package is a small Node launcher; npm picks one of the platform packages `@ai-ecoverse/slicc-<os>-<arch>` (`darwin`, `linux`, `windows` × `amd64`, `arm64`) through `optionalDependencies` and their `os` and `cpu` fields. The launcher runs that binary with the same arguments, stdio and environment plus `SLICC_LAUNCHER=npm`, forwards `SIGTERM`, `SIGHUP`, `SIGQUIT` and `SIGUSR2` to it, and `SIGINT` too when stdin is not a terminal (a terminal's Ctrl-C already reaches the binary; on Windows the console delivers Ctrl-C and Ctrl-Break to both). It exits with the binary's exit code, or dies of the same signal. An install with `--omit=optional` has no binary, and the launcher says so.
+- **npm:** `npm install -g @ai-ecoverse/slicc`, or `npx @ai-ecoverse/slicc`. The package is a small Node launcher; npm picks one of the platform packages `@ai-ecoverse/slicc-<os>-<arch>` (`darwin`, `linux`, `windows` × `amd64`, `arm64`) through `optionalDependencies` and their `os` and `cpu` fields. The launcher runs that binary with the same arguments, stdio and environment plus `SLICC_LAUNCHER=npm`, forwards `SIGTERM`, `SIGHUP`, `SIGQUIT` and `SIGUSR2` to it, and `SIGINT` too when stdin is not a terminal (a terminal's Ctrl-C already reaches the binary; on Windows the console delivers Ctrl-C and Ctrl-Break to both). It exits with the binary's exit code, or dies of the same signal. An install with `--omit=optional` has no binary, and the launcher says so. The companion tools come the same way (see [Companion tools](#companion-tools)).
 - **GitHub releases:** every release of `ai-ecoverse/slicc-cli` carries `slicc-<os>-<arch>` (`.exe` on Windows) for all six targets, plus `SHA256SUMS`. See [Verifying a download](#verifying-a-download).
 - **Go:** `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest`. See [Install with Go](#install-with-go).
 
@@ -144,6 +145,21 @@ Put the binary and the release's `SHA256SUMS` in one folder, then check:
 Signing:
 - **macOS:** the binaries are signed with a Developer ID, with the hardened runtime, and notarized. A bare binary can't carry a stapled ticket (only apps, disk images and installer packages can), so Gatekeeper checks the notarization online the first time it runs. Inside Sliccstart.app the binary is stapled with the app.
 - **Windows:** the binaries are unsigned for now. Authenticode signing through Azure Trusted Signing comes before general availability. Until then a browser download gets a SmartScreen warning, and AppLocker, WDAC or Intune policies can block the binary.
+
+## Companion tools
+
+slicc works with two tools that run on this machine: slicc-jerk (`jerk`), which gets tokens for seven's vault, and fnox. slicc finds them on `PATH` or in `bin` of its data folder: `~/Library/Application Support/slicc` on macOS, `$XDG_DATA_HOME/slicc` (default `~/.local/share/slicc`) on Linux, `%LOCALAPPDATA%\slicc` on Windows. That folder is never shared over `fs` (see [Host folders](#host-folders)).
+
+**With npm.** `@ai-ecoverse/slicc` and `sliccy` list `@ai-ecoverse/slicc-jerk` and `@ai-ecoverse/fnox` as `optionalDependencies` (`^` the latest release), but only those that are on the registry when the release is staged (`npm-stage.mjs --companions`); the others are left out with a notice. The publish check that waits for the platform packages doesn't wait for them. The launcher puts the `node_modules/.bin` of each installed companion package first on `PATH` for the binary, so `jerk` and `fnox` resolve for slicc and its children.
+
+**`slicc install jerk|fnox`** installs one into the data folder's `bin`:
+- `jerk` from the latest release of `ai-ecoverse/slicc-jerk`, `fnox` from the latest release of `ai-ecoverse/fnox-build`;
+- **the release contract** (the same as slicc-cli's own): a plain binary `<name>-<os>-<arch>` (`.exe` on Windows; `darwin`, `linux`, `windows` × `amd64`, `arm64`), and `SHA256SUMS` with a line for it, both attested by the repo's `release.yml`;
+- slicc checks the download against `SHA256SUMS`, then installs it only once its `--version` names the release's version, through a rename next to the old one (as `slicc update` does);
+- it says `installed <name> <version> at <path>; its SHA-256 matches the release's SHA256SUMS (the attestation isn't checked yet)`, or `<name> <version> is already installed at <path>`;
+- the GitHub API base follows `SLICC_UPDATE_API_BASE`, as for `update`.
+
+Only a user runs `slicc install`. Nothing on a link starts an install.
 
 ## Updates
 

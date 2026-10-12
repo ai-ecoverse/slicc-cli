@@ -37,6 +37,8 @@ type Release struct {
 }
 
 type Checker struct {
+	Repo    string
+	Binary  string
 	APIBase string
 	HTTP    *http.Client
 	GOOS    string
@@ -50,6 +52,8 @@ func NewChecker() *Checker {
 		base = DefaultAPIBase
 	}
 	return &Checker{
+		Repo:    Repo,
+		Binary:  "slicc",
 		APIBase: strings.TrimRight(base, "/"),
 		HTTP:    &http.Client{Timeout: 5 * time.Minute},
 		GOOS:    runtime.GOOS,
@@ -59,10 +63,14 @@ func NewChecker() *Checker {
 }
 
 func AssetName(goos, goarch string) string {
+	return NamedAsset("slicc", goos, goarch)
+}
+
+func NamedAsset(name, goos, goarch string) string {
 	if goos == "windows" {
-		return fmt.Sprintf("slicc-%s-%s.exe", goos, goarch)
+		return fmt.Sprintf("%s-%s-%s.exe", name, goos, goarch)
 	}
-	return fmt.Sprintf("slicc-%s-%s", goos, goarch)
+	return fmt.Sprintf("%s-%s-%s", name, goos, goarch)
 }
 
 type githubRelease struct {
@@ -74,7 +82,7 @@ type githubRelease struct {
 }
 
 func (c *Checker) Latest(ctx context.Context) (*Release, error) {
-	body, err := c.get(ctx, c.APIBase+"/repos/"+Repo+"/releases/latest", maxSumsBytes, "application/vnd.github+json")
+	body, err := c.get(ctx, c.APIBase+"/repos/"+c.Repo+"/releases/latest", maxSumsBytes, "application/vnd.github+json")
 	if err != nil {
 		return nil, fmt.Errorf("asking GitHub for the latest release: %w", err)
 	}
@@ -85,7 +93,7 @@ func (c *Checker) Latest(ctx context.Context) (*Release, error) {
 	if !IsReleaseVersion(gh.TagName) {
 		return nil, fmt.Errorf("the latest release has an unexpected tag %q", gh.TagName)
 	}
-	rel := &Release{Version: Normalize(gh.TagName), AssetName: AssetName(c.GOOS, c.GOARCH)}
+	rel := &Release{Version: Normalize(gh.TagName), AssetName: NamedAsset(c.Binary, c.GOOS, c.GOARCH)}
 	for _, a := range gh.Assets {
 		switch a.Name {
 		case rel.AssetName:
@@ -221,7 +229,7 @@ func (c *Checker) Apply(ctx context.Context, rel *Release, exe string) error {
 
 func swap(goos, staging, exe string) error {
 	parked := false
-	if goos == "windows" {
+	if _, err := os.Stat(exe); goos == "windows" && err == nil {
 		old := exe + ".old"
 		_ = os.Remove(old)
 		if err := rename(exe, old); err != nil {
