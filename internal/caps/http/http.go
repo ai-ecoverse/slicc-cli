@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	nethttp "net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 const (
 	Kind                = "http"
 	Cap                 = "http"
+	CredentialedCap     = "credentialed"
 	PrebufferSize       = 1 << 20
 	TLSHandshakeTimeout = 30 * time.Second
 )
@@ -37,7 +39,16 @@ type Options struct {
 }
 
 func Register(n *node.Node) {
-	n.Handle(Cap, Kind, Handler(Options{Dialer: n.Dialer(), Logf: n.Logf}))
+	RegisterOptions(n, Options{Dialer: n.Dialer(), Logf: n.Logf})
+}
+
+func RegisterOptions(n *node.Node, o Options) {
+	n.Handle(Cap, Kind, Handler(o))
+	n.OnHello(func(h *link.Hello) {
+		if !slices.Contains(h.Caps, CredentialedCap) {
+			h.Caps = append(h.Caps, CredentialedCap)
+		}
+	})
 }
 
 func NewTransport(o Options) *nethttp.Transport {
@@ -65,6 +76,7 @@ func Handler(o Options) link.Handler {
 }
 
 func serve(s *link.Stream, tr nethttp.RoundTripper, logf func(string, ...any)) {
+	cred := Credentialed(s.OpenPayload())
 	if err := s.Accept(nil); err != nil {
 		return
 	}
@@ -77,6 +89,14 @@ func serve(s *link.Stream, tr nethttp.RoundTripper, logf func(string, ...any)) {
 	if err != nil {
 		_ = s.Reset("EPROTO: " + err.Error())
 		return
+	}
+	if cred && !HTTPS443(req.URL) {
+		_ = s.Reset("EACCES: credentialed requests go only to https on port 443")
+		return
+	}
+	scrub := func(err error) string { return err.Error() }
+	if cred {
+		scrub = func(err error) string { return Scrub(err, req.URL) }
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -96,14 +116,14 @@ func serve(s *link.Stream, tr nethttp.RoundTripper, logf func(string, ...any)) {
 	if err != nil {
 		if ctx.Err() == nil {
 			code := tcp.Errno(err)
-			logf("http %s %s://%s: %s: %v", req.Method, req.URL.Scheme, req.URL.Host, code, err)
-			_ = s.Reset(code + ": fetch failed: " + err.Error())
+			logf("http %s %s://%s: %s: %s", req.Method, req.URL.Scheme, req.URL.Host, code, scrub(err))
+			_ = s.Reset(code + ": fetch failed: " + scrub(err))
 		}
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 	logf("http %s %s://%s: %d", req.Method, req.URL.Scheme, req.URL.Host, resp.StatusCode)
-	if relay(s, head, resp) {
+	if relay(s, head, resp, scrub) {
 		select {
 		case <-b.drained:
 		case <-s.Done():
@@ -118,7 +138,7 @@ func resetRead(s *link.Stream, err error) {
 	}
 }
 
-func relay(s *link.Stream, head RequestHead, resp *nethttp.Response) bool {
+func relay(s *link.Stream, head RequestHead, resp *nethttp.Response, scrub func(error) string) bool {
 	list := HeaderList(resp.Header)
 	if DecodedPartial(resp.StatusCode, list) {
 		_ = s.Reset("EPROTO: upstream answered a range request with an encoded partial body")
@@ -136,7 +156,7 @@ func relay(s *link.Stream, head RequestHead, resp *nethttp.Response) bool {
 	}
 	if HasBody(head.Method, resp.StatusCode) {
 		if err := copyBody(s, Decode(resp.Body, codings)); err != nil {
-			_ = s.Reset("ECONNRESET: " + err.Error())
+			_ = s.Reset("ECONNRESET: " + scrub(err))
 			return false
 		}
 	}

@@ -349,13 +349,13 @@ globalThis.linkTest = {
       return describe(error);
     }
   },
-  async http(request, shared = false, keep = 1 << 20) {
+  async http(request, shared = false, keep = 1 << 20, open = {}) {
     try {
       const req = { ...request };
       if (request.body64 !== undefined) req.body = fromBase64(request.body64);
       if (request.head64 !== undefined) req.head = fromBase64(request.head64);
       if (request.prng) req.body = prng(request.prng.size, request.prng.seed);
-      const res = await fetchRaw(state.link, req, { shared });
+      const res = await fetchRaw(state.link, req, { shared, open });
       const parts = [];
       let total = 0;
       for await (const chunk of res.body) {
