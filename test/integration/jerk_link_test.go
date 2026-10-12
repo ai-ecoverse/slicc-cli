@@ -295,7 +295,8 @@ func TestJerkLimitsInProcess(t *testing.T) {
 		t.Fatalf("a create past its timeout: %+v", r)
 	}
 	start := time.Now()
-	if r := env.p.jerk(t, map[string]any{"op": "status", "provider": "orphan"}); r.Reset != "" || r.last()["message"] != "left a child holding stdout" || time.Since(start) > 10*time.Second {
+	t.Cleanup(func() { time.Sleep(time.Until(start.Add(9 * time.Second))) })
+	if r := env.p.jerk(t, map[string]any{"op": "status", "provider": "orphan"}); r.Reset != "" || r.last()["message"] != "left a child holding stdout" || time.Since(start) > 6*time.Second {
 		t.Fatalf("a child holding jerk's stdout: %+v after %s", r, time.Since(start))
 	}
 	r := env.p.jerk(t, map[string]any{"op": "create", "provider": "github"})
