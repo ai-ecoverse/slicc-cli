@@ -35,6 +35,10 @@ func (m *Model) openProfiles() {
 		return
 	}
 	e := m.entries[m.cursor]
+	if e.Kind == browser.KindSix {
+		m.message = "SLICC six's profile is used as it is; it has no SLICC profiles to choose"
+		return
+	}
 	if e.Kind != browser.KindInstalled || e.Installed.Engine != browser.EngineChromium {
 		m.message = "profiles are for browsers slicc launches; " + e.Name + " is not one"
 		return

@@ -23,6 +23,10 @@ keep running until interrupted. On exit, close the browser it started.
   --browser <id>     an installed browser or Electron app id from
                      "slicc browsers" (default: the best installed browser)
   --profile <name>   profile directory name (default: the browser id)
+  --profile six[:<port>]
+                     SLICC six's own Chrome profile, used in place: attach
+                     to six's Chrome when it runs with CDP, else launch the
+                     browser six used (or --browser) in it
   --url <url>        page to open at start
   --headless         run without a window
   --no-seven-flags   leave out the flags that keep a background seven tab
@@ -40,6 +44,7 @@ type launchFlags struct {
 	noSeven   bool
 	kill      bool
 	json      bool
+	six       *int
 }
 
 func parseLaunch(args []string, stdout, stderr io.Writer) (launchFlags, int, bool) {
@@ -63,7 +68,14 @@ func parseLaunch(args []string, stdout, stderr io.Writer) (launchFlags, int, boo
 		fmt.Fprintf(stderr, "slicc launch: unexpected argument %q\n\n%s", fs.Arg(0), launchUsage)
 		return f, 2, false
 	}
-	if f.profile != "" && !browser.ValidProfileName(f.profile) {
+	port, six, err := browser.ParseSixProfile(f.profile)
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "slicc launch: %v\n", err)
+		return f, 2, false
+	case six:
+		f.six, f.profile = &port, ""
+	case f.profile != "" && !browser.ValidProfileName(f.profile):
 		fmt.Fprintf(stderr, "slicc launch: invalid profile name %q\n", f.profile)
 		return f, 2, false
 	}
@@ -129,6 +141,9 @@ func runLaunch(args []string, stdout, stderr io.Writer) int {
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigs)
 	ctx := context.Background()
+	if f.six != nil {
+		return runLaunchSix(ctx, f, out, sigs)
+	}
 	in, err := pickInstalled(ctx, f.browserID)
 	if err != nil {
 		return out.fail(err)
@@ -137,6 +152,11 @@ func runLaunch(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return out.fail(err)
 	}
+	return serveLaunched(ctx, f, out, sigs, in, b)
+}
+
+func serveLaunched(ctx context.Context, f launchFlags, out launchOut, sigs <-chan os.Signal, in browser.Installed, b *browser.Browser) int {
+	stdout, stderr := out.stdout, out.stderr
 	out.event(launchEvent{
 		Event: "launched", ID: in.ID, Name: in.Name, Version: in.Version, Engine: string(in.Engine), PID: b.PID,
 		Profile: b.Profile, ProfileDir: b.ProfileDir, CDP: b.CDP, WebSocketURL: b.WebSocketURL,

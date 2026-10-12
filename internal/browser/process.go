@@ -258,7 +258,7 @@ func underLegacyProfiles(dir string) bool {
 	return false
 }
 
-func processCandidates(ctx context.Context, o Options, d discovery) []candidate {
+func processCandidates(ctx context.Context, o Options, d discovery, six sixMatcher) []candidate {
 	if !d.process {
 		return nil
 	}
@@ -272,18 +272,19 @@ func processCandidates(ctx context.Context, o Options, d discovery) []candidate 
 	}
 	var cands []candidate
 	for _, h := range parseProcessTable(out, runtime.GOOS == "windows", os.Getpid()) {
+		isSix := six.is(h.dir)
 		if h.port > 0 {
-			cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(h.port), source: SourceProcess, dir: h.dir})
+			cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(h.port), source: SourceProcess, dir: h.dir, six: isSix})
 			continue
 		}
-		if h.dir == "" || underLegacyProfiles(h.dir) {
+		if h.dir == "" || (underLegacyProfiles(h.dir) && !isSix) {
 			continue
 		}
 		port, ws, err := ReadActivePort(h.dir)
 		if err != nil {
 			continue
 		}
-		cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), wsPath: ws, source: SourceProcess, dir: h.dir})
+		cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), wsPath: ws, source: SourceProcess, dir: h.dir, six: isSix})
 	}
 	return cands
 }

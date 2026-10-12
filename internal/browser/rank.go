@@ -25,6 +25,9 @@ func installedTier(in Installed) int {
 }
 
 func endpointTier(ep Endpoint) int {
+	if ep.Six {
+		return TierSix
+	}
 	if ep.SevenOpen {
 		return TierSevenOpen
 	}
