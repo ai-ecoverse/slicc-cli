@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	nethttp "net/http"
-	"slices"
 	"sync"
 	"time"
 
@@ -44,11 +43,7 @@ func Register(n *node.Node) {
 
 func RegisterOptions(n *node.Node, o Options) {
 	n.Handle(Cap, Kind, Handler(o))
-	n.OnHello(func(h *link.Hello) {
-		if !slices.Contains(h.Caps, CredentialedCap) {
-			h.Caps = append(h.Caps, CredentialedCap)
-		}
-	})
+	n.Advertise(CredentialedCap)
 }
 
 func NewTransport(o Options) *nethttp.Transport {

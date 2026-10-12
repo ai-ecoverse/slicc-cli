@@ -154,3 +154,11 @@ func TestCredentialedCapInHello(t *testing.T) {
 		}
 	}
 }
+
+func TestCredentialedInServingEvent(t *testing.T) {
+	n := node.New(node.Config{Name: "caps", Policy: policy.Local()})
+	httpcap.Register(n)
+	if !slices.Equal(n.Caps(), []string{"http", "credentialed"}) || !slices.Equal(n.Hello().Caps, n.Caps()) {
+		t.Fatalf("caps %v, hello %v", n.Caps(), n.Hello().Caps)
+	}
+}
