@@ -447,6 +447,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - Each offer starts a new link and replaces the current one.
 - A navigation or reload ends the link, and the next allowed context starts the setup again with a new nonce.
 - A closed tab ends the link, and slicc waits for another seven tab.
+- A tab that closes while slicc attaches to it doesn't stop slicc: each setup call has 10 s, and when the tab is gone slicc looks for another seven tab.
 
 **Setup over stdio** (`--signal stdio`), for a test harness that owns CDP itself:
 - The same messages go as NDJSON: slicc writes `hello`, `answer`, `candidate` and `bye` lines to stdout, and reads `offer`, `candidate` and `bye` lines from stdin. Messages with another nonce are ignored.

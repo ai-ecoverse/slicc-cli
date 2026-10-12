@@ -16,6 +16,7 @@ import (
 const (
 	BindingName  = "sliccLinkSend"
 	ReceiverName = "sliccLinkReceive"
+	SetupTimeout = 10 * time.Second
 )
 
 type CDPOptions struct {
@@ -111,10 +112,27 @@ func (c *CDP) run(ctx context.Context) {
 			return
 		}
 		if err := c.serveTarget(ctx, sub, target); err != nil {
+			if ctx.Err() == nil && c.gone(ctx, target.TargetID) {
+				c.opts.Logf("signal: the seven tab went away during setup: %v", err)
+				continue
+			}
 			c.finish(err)
 			return
 		}
 	}
+}
+
+func (c *CDP) gone(ctx context.Context, targetID string) bool {
+	targets, err := c.opts.Client.Targets(ctx)
+	if err != nil {
+		return false
+	}
+	for _, t := range targets {
+		if t.TargetID == targetID {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *CDP) findTarget(ctx context.Context, sub *cdp.Subscription) (cdp.TargetInfo, error) {
@@ -154,23 +172,33 @@ func (c *CDP) findTarget(ctx context.Context, sub *cdp.Subscription) (cdp.Target
 }
 
 func (c *CDP) serveTarget(ctx context.Context, sub *cdp.Subscription, t cdp.TargetInfo) error {
-	s, err := c.opts.Client.Attach(ctx, t.TargetID)
+	s, err := c.setup(ctx, t)
 	if err != nil {
-		return err
-	}
-	c.opts.Status("found seven at %s", t.URL)
-	c.grantLocalNetwork(ctx, t.URL)
-	if err := s.AddBinding(ctx, BindingName); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	c.session = s
-	c.mu.Unlock()
-	if err := s.Call(ctx, "Runtime.enable", nil, nil); err != nil {
 		return err
 	}
 	w := &watch{c: c, s: s, targetID: t.TargetID, mainFrame: t.TargetID}
 	return w.loop(ctx, sub)
+}
+
+func (c *CDP) setup(ctx context.Context, t cdp.TargetInfo) (*cdp.Session, error) {
+	sctx, cancel := context.WithTimeout(ctx, SetupTimeout)
+	defer cancel()
+	s, err := c.opts.Client.Attach(sctx, t.TargetID)
+	if err != nil {
+		return nil, err
+	}
+	c.opts.Status("found seven at %s", t.URL)
+	c.grantLocalNetwork(sctx, t.URL)
+	if err := s.AddBinding(sctx, BindingName); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.session = s
+	c.mu.Unlock()
+	if err := s.Call(sctx, "Runtime.enable", nil, nil); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func (c *CDP) grantLocalNetwork(ctx context.Context, rawURL string) {
