@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/base64"
+	wire "encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -24,8 +25,8 @@ import (
 type fakeSigstore struct {
 	root, inter       *x509.Certificate
 	rootKey, interKey *ecdsa.PrivateKey
-	rekor             *ecdsa.PrivateKey
-	logID             []byte
+	rekor, ct         *ecdsa.PrivateKey
+	logID, ctID       []byte
 	rootPath          string
 }
 
@@ -34,6 +35,7 @@ type bundleOptions struct {
 	san       string
 	predicate string
 	notAfter  time.Duration
+	sct       string
 }
 
 func newFakeSigstore(t *testing.T) *fakeSigstore {
@@ -43,6 +45,7 @@ func newFakeSigstore(t *testing.T) *fakeSigstore {
 	f.rootKey, _ = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	f.interKey, _ = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	f.rekor, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	f.ct, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	now := time.Now()
 	ca := func(cn string, pub, signer *ecdsa.PrivateKey, parent *x509.Certificate) *x509.Certificate {
 		tmpl := &x509.Certificate{
@@ -71,12 +74,23 @@ func newFakeSigstore(t *testing.T) *fakeSigstore {
 	}
 	id := sha256.Sum256(pub)
 	f.logID = id[:]
+	ctPub, err := x509.MarshalPKIXPublicKey(&f.ct.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctID := sha256.Sum256(ctPub)
+	f.ctID = ctID[:]
 	root := map[string]any{
 		"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
 		"tlogs": []any{map[string]any{
 			"baseUrl": "https://rekor.sigstore.dev", "hashAlgorithm": "SHA2_256",
 			"publicKey": map[string]any{"rawBytes": pub, "keyDetails": "PKIX_ECDSA_P256_SHA_256", "validFor": map[string]string{"start": now.Add(-time.Hour).UTC().Format(time.RFC3339)}},
 			"logId":     map[string]any{"keyId": f.logID},
+		}},
+		"ctlogs": []any{map[string]any{
+			"baseUrl": "https://ctfe.sigstore.test", "hashAlgorithm": "SHA2_256",
+			"publicKey": map[string]any{"rawBytes": ctPub, "keyDetails": "PKIX_ECDSA_P256_SHA_256", "validFor": map[string]string{"start": now.Add(-time.Hour).UTC().Format(time.RFC3339)}},
+			"logId":     map[string]any{"keyId": f.ctID},
 		}},
 		"certificateAuthorities": []any{map[string]any{
 			"subject":   map[string]string{"organization": "sigstore.test", "commonName": "test-root"},
@@ -129,10 +143,7 @@ func (f *fakeSigstore) bundle(t *testing.T, digest string, o bundleOptions) []by
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}, URIs: []*url.URL{san},
 		ExtraExtensions: []pkix.Extension{{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}, Value: issuer}},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, f.inter, &key.PublicKey, f.interKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	der := f.withSCT(t, tmpl, &key.PublicKey, o.sct)
 	payload, _ := json.Marshal(map[string]any{
 		"_type": "https://in-toto.io/Statement/v1", "predicateType": o.predicate,
 		"subject":   []any{map[string]any{"name": "asset", "digest": map[string]string{"sha256": digest}}},
@@ -184,4 +195,48 @@ func attestationList(bundles ...[]byte) []byte {
 	}
 	out, _ := json.Marshal(map[string]any{"attestations": list})
 	return out
+}
+
+func (f *fakeSigstore) withSCT(t *testing.T, tmpl *x509.Certificate, pub *ecdsa.PublicKey, mode string) []byte {
+	t.Helper()
+	pre, err := x509.CreateCertificate(rand.Reader, tmpl, f.inter, pub, f.interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode == "none" {
+		return pre
+	}
+	cert, _ := x509.ParseCertificate(pre)
+	tbs := cert.RawTBSCertificate
+	ts := uint64(time.Now().UnixMilli())
+	issuer := sha256.Sum256(f.inter.RawSubjectPublicKeyInfo)
+	msg := []byte{0, 0}
+	msg = wire.BigEndian.AppendUint64(msg, ts)
+	msg = append(msg, 0, 1)
+	msg = append(msg, issuer[:]...)
+	msg = append(msg, byte(len(tbs)>>16), byte(len(tbs)>>8), byte(len(tbs)))
+	msg = append(msg, tbs...)
+	msg = append(msg, 0, 0)
+	signer := f.ct
+	if mode == "wrong-key" {
+		signer, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	}
+	d := sha256.Sum256(msg)
+	sig, _ := ecdsa.SignASN1(rand.Reader, signer, d[:])
+	one := append([]byte{0}, f.ctID...)
+	one = wire.BigEndian.AppendUint64(one, ts)
+	one = append(one, 0, 0, 4, 3)
+	one = wire.BigEndian.AppendUint16(one, uint16(len(sig)))
+	one = append(one, sig...)
+	list := wire.BigEndian.AppendUint16(nil, uint16(len(one)))
+	list = append(list, one...)
+	list = append(wire.BigEndian.AppendUint16(nil, uint16(len(list))), list...)
+	value, _ := asn1.Marshal(list)
+	final := *tmpl
+	final.ExtraExtensions = append(append([]pkix.Extension{}, tmpl.ExtraExtensions...), pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 4, 2}, Value: value})
+	der, err := x509.CreateCertificate(rand.Reader, &final, f.inter, pub, f.interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return der
 }

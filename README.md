@@ -172,14 +172,15 @@ Only a user runs `slicc install`. Nothing on a link starts an install.
 1. the envelope is an in-toto statement whose predicate type is `https://slsa.dev/provenance/v1`, with a subject whose SHA-256 is the file's;
 2. its single DSSE signature verifies with the certificate's key (ECDSA P-256 or P-384) over the DSSE pre-authentication encoding;
 3. the certificate chains, as a code-signing certificate, to a Fulcio root in the trusted root that is valid at the entry's integrated time, and the certificate itself was valid then;
-4. the certificate's identity: issuer (Fulcio extension `1.3.6.1.4.1.57264.1.8`) `https://token.actions.githubusercontent.com`, and exactly one subject alternative name, the URI `https://github.com/<repo>/.github/workflows/release.yml@refs/heads/main`, pinned per repo: `ai-ecoverse/slicc-cli` for `update`, `ai-ecoverse/slicc-jerk` and `ai-ecoverse/fnox-build` for `install`;
-5. the Rekor entry is a `dsse` 0.0.1 entry whose payload hash, signature and verifier are the envelope's and the certificate's;
-6. its signed entry timestamp verifies with the key of a Rekor log in the trusted root, valid at the integrated time;
-7. its inclusion proof leads from the entry to the proof's root hash (RFC 6962), and the checkpoint carries that tree size and root hash and is signed by the same log.
+4. one of the certificate's embedded SCTs (`1.3.6.1.4.1.11129.2.4.2`) verifies with a certificate transparency log key in the trusted root, valid at the SCT's time, over the precertificate (the certificate body without its SCT list) and its issuer's key hash (RFC 6962);
+5. the certificate's identity: issuer (Fulcio extension `1.3.6.1.4.1.57264.1.8`) `https://token.actions.githubusercontent.com`, and exactly one subject alternative name, the URI `https://github.com/<repo>/.github/workflows/release.yml@refs/heads/main`, pinned per repo: `ai-ecoverse/slicc-cli` for `update`, `ai-ecoverse/slicc-jerk` and `ai-ecoverse/fnox-build` for `install`;
+6. the Rekor entry is a `dsse` 0.0.1 entry whose payload hash, signature and verifier are the envelope's and the certificate's;
+7. its signed entry timestamp verifies with the key of a Rekor log in the trusted root, valid at the integrated time;
+8. its inclusion proof leads from the entry to the proof's root hash (RFC 6962), and the checkpoint carries that tree size and root hash and is signed by the same log.
 
 Errors name the step that failed (`attestation identity: …`). A bundle from a Rekor v2 log, or any other shape, fails closed.
 
-**The trusted root.** `internal/attest/trusted_root.json` is Sigstore's public-good trusted root (the `trusted_root.json` target of `https://tuf-repo-cdn.sigstore.dev`), embedded in the binary. `SLICC_SIGSTORE_TRUSTED_ROOT` replaces it, for tests.
+**The trusted root.** `internal/attest/trusted_root.json` is Sigstore's public-good trusted root (Fulcio CAs, Rekor and CT log keys) (the `trusted_root.json` target of `https://tuf-repo-cdn.sigstore.dev`), embedded in the binary. `SLICC_SIGSTORE_TRUSTED_ROOT` replaces it, for tests.
 
 **Rotating the trusted root.** The *Sigstore* workflow runs daily. Its `trusted-root` job runs `node scripts/sigstore-root.mjs`, which follows the TUF repository's `timestamp.json`, snapshot and targets to the current `trusted_root.json` and compares its SHA-256 with the embedded file; when they differ, it opens an issue. To rotate:
 1. run `node scripts/sigstore-root.mjs --write`, which downloads the new file and checks it against the targets hash;

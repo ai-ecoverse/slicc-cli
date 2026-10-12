@@ -44,6 +44,7 @@ type authority struct {
 
 type TrustedRoot struct {
 	tlogs       []tlog
+	ctlogs      []tlog
 	authorities []authority
 }
 
@@ -53,18 +54,9 @@ type rawValidity struct {
 }
 
 type rawRoot struct {
-	MediaType string `json:"mediaType"`
-	Tlogs     []struct {
-		BaseURL   string `json:"baseUrl"`
-		PublicKey struct {
-			RawBytes   []byte      `json:"rawBytes"`
-			KeyDetails string      `json:"keyDetails"`
-			ValidFor   rawValidity `json:"validFor"`
-		} `json:"publicKey"`
-		LogID struct {
-			KeyID []byte `json:"keyId"`
-		} `json:"logId"`
-	} `json:"tlogs"`
+	MediaType              string   `json:"mediaType"`
+	Tlogs                  []rawLog `json:"tlogs"`
+	CTLogs                 []rawLog `json:"ctlogs"`
 	CertificateAuthorities []struct {
 		CertChain struct {
 			Certificates []struct {
@@ -73,6 +65,38 @@ type rawRoot struct {
 		} `json:"certChain"`
 		ValidFor rawValidity `json:"validFor"`
 	} `json:"certificateAuthorities"`
+}
+
+type rawLog struct {
+	BaseURL   string `json:"baseUrl"`
+	PublicKey struct {
+		RawBytes   []byte      `json:"rawBytes"`
+		KeyDetails string      `json:"keyDetails"`
+		ValidFor   rawValidity `json:"validFor"`
+	} `json:"publicKey"`
+	LogID struct {
+		KeyID []byte `json:"keyId"`
+	} `json:"logId"`
+}
+
+func parseLogs(raw []rawLog) ([]tlog, error) {
+	var out []tlog
+	for _, t := range raw {
+		if t.PublicKey.KeyDetails != ecdsaP256SHA256 {
+			continue
+		}
+		pub, err := x509.ParsePKIXPublicKey(t.PublicKey.RawBytes)
+		key, ok := pub.(*ecdsa.PublicKey)
+		if err != nil || !ok {
+			return nil, errors.New("attest: a log key in the trusted root doesn't parse")
+		}
+		v, err := parseValidity(t.PublicKey.ValidFor)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, tlog{baseURL: t.BaseURL, keyID: t.LogID.KeyID, key: key, valid: v})
+	}
+	return out, nil
 }
 
 func parseValidity(v rawValidity) (validity, error) {
@@ -102,20 +126,12 @@ func ParseTrustedRoot(b []byte) (*TrustedRoot, error) {
 		return nil, fmt.Errorf("attest: the trusted root has media type %q", raw.MediaType)
 	}
 	r := &TrustedRoot{}
-	for _, t := range raw.Tlogs {
-		if t.PublicKey.KeyDetails != ecdsaP256SHA256 {
-			continue
-		}
-		pub, err := x509.ParsePKIXPublicKey(t.PublicKey.RawBytes)
-		key, ok := pub.(*ecdsa.PublicKey)
-		if err != nil || !ok {
-			return nil, errors.New("attest: a transparency log key in the trusted root doesn't parse")
-		}
-		v, err := parseValidity(t.PublicKey.ValidFor)
-		if err != nil {
-			return nil, err
-		}
-		r.tlogs = append(r.tlogs, tlog{baseURL: t.BaseURL, keyID: t.LogID.KeyID, key: key, valid: v})
+	var err error
+	if r.tlogs, err = parseLogs(raw.Tlogs); err != nil {
+		return nil, err
+	}
+	if r.ctlogs, err = parseLogs(raw.CTLogs); err != nil {
+		return nil, err
 	}
 	for _, ca := range raw.CertificateAuthorities {
 		certs := ca.CertChain.Certificates
@@ -136,8 +152,8 @@ func ParseTrustedRoot(b []byte) (*TrustedRoot, error) {
 		}
 		r.authorities = append(r.authorities, authority{root: chain[len(chain)-1], intermediates: chain[:len(chain)-1], valid: v})
 	}
-	if len(r.tlogs) == 0 || len(r.authorities) == 0 {
-		return nil, errors.New("attest: the trusted root has no usable transparency log or certificate authority")
+	if len(r.tlogs) == 0 || len(r.ctlogs) == 0 || len(r.authorities) == 0 {
+		return nil, errors.New("attest: the trusted root has no usable transparency log, certificate transparency log or certificate authority")
 	}
 	return r, nil
 }

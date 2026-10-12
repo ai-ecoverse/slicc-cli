@@ -207,6 +207,8 @@ func TestAttestGeneratedBundles(t *testing.T) {
 		{"another workflow", "identity", bundleOptions{san: "https://github.com/ai-ecoverse/slicc-cli/.github/workflows/ci.yml@refs/heads/main"}},
 		{"a branch ref", "identity", bundleOptions{san: "https://github.com/ai-ecoverse/slicc-cli/.github/workflows/release.yml@refs/heads/feature"}},
 		{"an expired leaf", "certificate", bundleOptions{san: san, notAfter: -30 * time.Second}},
+		{"no embedded SCT", "sct", bundleOptions{san: san, sct: "none"}},
+		{"an SCT by another log key", "sct", bundleOptions{san: san, sct: "wrong-key"}},
 	} {
 		if got := step(attest.Verify(f.bundle(t, digest, c.o), digest, sliccRelease, root)); got != c.want {
 			t.Fatalf("%s: got %s, want %s", c.name, got, c.want)
