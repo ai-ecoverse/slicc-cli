@@ -144,15 +144,12 @@ func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
 	})
 }
 
-func (g *guard) requestExtraEvent(m *message, data []byte) browserVerdict {
-	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
-		id, _ := p["requestId"].(string)
-		changed := g.filterAssociated(p, "associatedCookies")
-		if changed || g.requestMarkedLocked(m.SessionID, id) {
-			changed = stripHeaders(p["headers"], "cookie") || changed
-		}
-		return true, changed, nil
-	})
+func (g *guard) requestExtra(p map[string]any, marked bool) bool {
+	changed := g.filterAssociated(p, "associatedCookies")
+	if changed || marked {
+		changed = stripHeaders(p["headers"], "cookie") || changed
+	}
+	return changed
 }
 
 func (g *guard) filterAssociated(p map[string]any, field string) bool {
@@ -187,23 +184,20 @@ func (g *guard) responseEvent(m *message, data []byte) browserVerdict {
 	})
 }
 
-func (g *guard) responseExtraEvent(m *message, data []byte) browserVerdict {
-	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
-		id, _ := p["requestId"].(string)
-		changed := g.filterAssociated(p, "blockedCookies")
-		changed = g.filterAssociated(p, "exemptedCookies") || changed
-		if !g.requestMarkedLocked(m.SessionID, id) {
-			return true, changed, nil
+func (g *guard) responseExtra(p map[string]any, marked bool) bool {
+	changed := g.filterAssociated(p, "blockedCookies")
+	changed = g.filterAssociated(p, "exemptedCookies") || changed
+	if !marked {
+		return changed
+	}
+	changed = stripHeaders(p["headers"], "set-cookie", "set-cookie2") || changed
+	for _, k := range []string{"headersText", "blockedCookies", "exemptedCookies"} {
+		if _, ok := p[k]; ok {
+			delete(p, k)
+			changed = true
 		}
-		changed = stripHeaders(p["headers"], "set-cookie", "set-cookie2") || changed
-		for _, k := range []string{"headersText", "blockedCookies", "exemptedCookies"} {
-			if _, ok := p[k]; ok {
-				delete(p, k)
-				changed = true
-			}
-		}
-		return true, changed, nil
-	})
+	}
+	return changed
 }
 
 func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {

@@ -10,6 +10,7 @@ type browserVerdict struct {
 	page    [][]byte
 	send    [][]byte
 	hold    []string
+	extra   []requestKey
 	lost    bool
 }
 
@@ -159,13 +160,15 @@ var eventHandlers = map[string]eventHandler{
 	"Target.receivedMessageFromTarget":           (*guard).innerMessageEvent,
 	"Page.frameNavigated":                        (*guard).frameNavigatedEvent,
 	"Runtime.executionContextCreated":            (*guard).contextCreatedEvent,
-	"Network.requestWillBeSent":                  (*guard).requestEvent,
-	"Network.requestWillBeSentExtraInfo":         (*guard).requestExtraEvent,
-	"Network.responseReceived":                   (*guard).responseEvent,
-	"Network.responseReceivedExtraInfo":          (*guard).responseExtraEvent,
+	"Network.requestWillBeSent":                  afterRequest((*guard).requestEvent, false),
+	"Network.requestWillBeSentExtraInfo":         (*guard).extraEvent,
+	"Network.responseReceived":                   afterRequest((*guard).responseEvent, true),
+	"Network.responseReceivedExtraInfo":          (*guard).extraEvent,
+	"Network.loadingFinished":                    afterRequest(forwardEvent, true),
+	"Network.loadingFailed":                      afterRequest(forwardEvent, true),
 	"Network.requestIntercepted":                 (*guard).pausedEvent,
-	"Network.webSocketCreated":                   (*guard).socketCreatedEvent,
-	"Network.webTransportCreated":                (*guard).socketCreatedEvent,
+	"Network.webSocketCreated":                   afterRequest((*guard).socketCreatedEvent, true),
+	"Network.webTransportCreated":                afterRequest((*guard).socketCreatedEvent, true),
 	"Network.webSocketWillSendHandshakeRequest":  (*guard).markedDropEvent,
 	"Network.webSocketHandshakeResponseReceived": (*guard).markedDropEvent,
 	"Network.webSocketFrameError":                (*guard).markedDropEvent,
