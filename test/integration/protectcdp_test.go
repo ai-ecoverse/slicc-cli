@@ -96,8 +96,25 @@ func (e *protectEnv) targets(t *testing.T) []protectTarget {
 	return r.Targets
 }
 
+func pageTargets(t *testing.T, b *chromeProc) map[string]string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	infos, err := b.client.Targets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, ti := range infos {
+		if ti.Type == "page" {
+			out[ti.TargetID] = ti.URL
+		}
+	}
+	return out
+}
+
 func (e *protectEnv) testCreate(t *testing.T) {
-	before := len(targetIDs(t, e.b))
+	before := pageTargets(t, e.b)
 	for _, u := range []string{e.seven + "/", e.seven + "/nowhere", "HTTP://127.0.0.1:" + e.seven[strings.LastIndexByte(e.seven, ':')+1:] + "/x", "blob:" + e.seven + "/0b9e", "https://seven.sliccy.ai/", "https://www.sliccy.ai/", "https://vault.sliccy.ai/"} {
 		var r cdpOutcome
 		e.evalJSON(t, "linkTest.protect.create("+jsArgs("chrome", u)+")", &r)
@@ -105,8 +122,10 @@ func (e *protectEnv) testCreate(t *testing.T) {
 			t.Fatalf("createTarget %s: %+v", u, r)
 		}
 	}
-	if after := len(targetIDs(t, e.b)); after != before {
-		t.Fatalf("a refused createTarget made a target: %d before, %d after", before, after)
+	for id, u := range pageTargets(t, e.b) {
+		if _, ok := before[id]; !ok {
+			t.Fatalf("a refused createTarget made a page at %s", u)
+		}
 	}
 	var ok cdpOutcome
 	e.evalJSON(t, "linkTest.protect.create("+jsArgs("chrome", e.allowed+"/?n=create")+")", &ok)
