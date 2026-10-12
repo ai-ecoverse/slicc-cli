@@ -29,13 +29,21 @@ type heldExtra struct {
 	data []byte
 }
 
-func requestIDOf(raw json.RawMessage) string {
+func requestIDOf(m *message) string {
+	var p struct {
+		RequestID string `json:"requestId"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	return p.RequestID
+}
+
+func pausedIDOf(m *message) string {
 	var p struct {
 		RequestID      string `json:"requestId"`
 		InterceptionID string `json:"interceptionId"`
 	}
-	_ = json.Unmarshal(raw, &p)
-	if p.RequestID == "" {
+	_ = json.Unmarshal(m.Params, &p)
+	if m.Method == "Network.requestIntercepted" {
 		return p.InterceptionID
 	}
 	return p.RequestID
@@ -55,7 +63,7 @@ func (g *guard) filterExtraLocked(m *message, data []byte, marked bool) browserV
 }
 
 func (g *guard) extraEvent(m *message, data []byte) browserVerdict {
-	k := requestKey{m.SessionID, requestIDOf(m.Params)}
+	k := requestKey{m.SessionID, requestIDOf(m)}
 	if k.request == "" {
 		return g.filterExtraLocked(m, data, true)
 	}
@@ -136,9 +144,13 @@ func (g *guard) forgetExtrasLocked(session string) {
 }
 
 func afterRequest(h eventHandler, level reqLevel) eventHandler {
+	return afterRequestBy(h, level, requestIDOf)
+}
+
+func afterRequestBy(h eventHandler, level reqLevel, idOf func(m *message) string) eventHandler {
 	return func(g *guard, m *message, data []byte) browserVerdict {
 		v := h(g, m, data)
-		k := requestKey{m.SessionID, requestIDOf(m.Params)}
+		k := requestKey{m.SessionID, idOf(m)}
 		if k.request == "" {
 			return v
 		}
