@@ -189,7 +189,7 @@ func dialPage(t *testing.T, endpoint, url string) *page {
 		t.Fatal(err)
 	}
 	p := &page{t: t, b: &chromeProc{endpoint: endpoint, client: client}, target: target, session: s}
-	p.waitFor("typeof globalThis.linkTest === 'object'", 15*time.Second)
+	p.waitLoaded(url, 15*time.Second)
 	return p
 }
 
