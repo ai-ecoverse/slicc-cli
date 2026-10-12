@@ -448,3 +448,12 @@ func waitPairs(t *testing.T, p *page) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+func TestVaultFlagsParse(t *testing.T) {
+	for _, args := range [][]string{{"--vault-origin", "not an origin"}, {"attach", "--cdp", "http://127.0.0.1:1", "--vault-origin", "nope"}} {
+		r := runBin(t, isolatedEnv(t), binary, args...)
+		if r.code != 2 || !strings.Contains(r.stderr, "is not an origin") {
+			t.Fatalf("%v: %+v", args, r)
+		}
+	}
+}
