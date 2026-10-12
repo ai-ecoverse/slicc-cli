@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -22,9 +23,12 @@ func main() {
 			dir = v
 		}
 	}
-	saw, _ := os.ReadFile(filepath.Join(dir, "DevToolsActivePort"))
+	active := filepath.Join(dir, "DevToolsActivePort")
+	saw, _ := os.ReadFile(active)
+	probe, _ := strconv.Atoi(os.Getenv("FAKE_CHROME_PROBE_MS"))
+	busy := probeShared(active, time.Duration(probe)*time.Millisecond)
 	if log := os.Getenv("FAKE_CHROME_LOG"); log != "" {
-		b, _ := json.Marshal(map[string]any{"args": os.Args[1:], "sawActivePort": string(saw)})
+		b, _ := json.Marshal(map[string]any{"args": os.Args[1:], "sawActivePort": string(saw), "sharedOpens": busy})
 		_ = os.WriteFile(log, b, 0o600)
 	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -35,7 +39,7 @@ func main() {
 	release := hold(dir)
 	port := l.Addr().(*net.TCPAddr).Port
 	ws := "/devtools/browser/fake-" + strconv.Itoa(os.Getpid())
-	if err := os.WriteFile(filepath.Join(dir, "DevToolsActivePort"), []byte(fmt.Sprintf("%d\n%s", port, ws)), 0o600); err != nil {
+	if err := writeExclusive(active, []byte(fmt.Sprintf("%d\n%s", port, ws))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

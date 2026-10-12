@@ -374,6 +374,7 @@ func LaunchSix(ctx context.Context, in Installed, six Six, lo LaunchOptions) (*B
 	if lockHeld(dir) {
 		return nil, ErrSixBusy
 	}
+	staleAt, _ := os.Stat(filepath.Join(dir, ActivePortFile))
 	stale, _ := os.ReadFile(filepath.Join(dir, ActivePortFile))
 	name, args := spawnCommand(in, ChromiumArgs(dir, lo.URL, lo.Headless, !lo.NoSevenFlags, lo.ExtraArgs), dir, lo.Headless)
 	b, err := start(in, name, args)
@@ -383,7 +384,7 @@ func LaunchSix(ctx context.Context, in Installed, six Six, lo LaunchOptions) (*B
 	b.ProfileDir = dir
 	b.Profile = six.Label
 	b.six = true
-	b.stale = stale
+	b.stale, b.staleAt = stale, staleAt
 	ctx, cancel := context.WithTimeout(ctx, lo.LaunchTimeout)
 	defer cancel()
 	if err := b.waitActivePort(ctx, lo.Options); err != nil {
