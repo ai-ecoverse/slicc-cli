@@ -21,7 +21,7 @@ func main() {
 		return
 	}
 	if len(args) == 1 && args[0] == "__hold" {
-		time.Sleep(20 * time.Second)
+		time.Sleep(8 * time.Second)
 		return
 	}
 	logCall(args)
