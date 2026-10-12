@@ -123,8 +123,24 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
+var discoveryTransport = newDiscoveryTransport()
+
+func newDiscoveryTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	return t
+}
+
 func (o Options) httpClient() *http.Client {
-	return &http.Client{Timeout: o.Timeout, Transport: o.Transport}
+	t := o.Transport
+	if t == nil {
+		t = discoveryTransport
+	}
+	return &http.Client{
+		Timeout:       o.Timeout,
+		Transport:     t,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 func (o Options) platform(goos string) platform {

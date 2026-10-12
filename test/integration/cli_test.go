@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +29,15 @@ func TestMain(m *testing.M) {
 	if err := build.Run(); err != nil {
 		panic(err)
 	}
+	if err := guard.start(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	code := m.Run()
+	if hits := guard.stop(); len(hits) > 0 {
+		fmt.Fprintf(os.Stderr, "FAIL: tests reached 127.0.0.1:%d-%d outside the fakes:\n  %s\n", firstRealPort, lastRealPort, strings.Join(hits, "\n  "))
+		code = 1
+	}
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
