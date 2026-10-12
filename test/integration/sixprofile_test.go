@@ -765,3 +765,29 @@ func TestSixWithTheSameBrowserTwiceHasNoExtra(t *testing.T) {
 		t.Fatal("an unknown --browser with --profile six")
 	}
 }
+
+func TestSixLaunchLeavesTheStalePortFileClosedWhileTheBrowserStarts(t *testing.T) {
+	h := newFakeHome(t)
+	o := h.options()
+	six := browser.SixProfileFor(o, 0)
+	makeSixTree(t, six.Dir, staleActivePort(t))
+	staleSixLock(t, six.Dir)
+	in := buildFakeChrome(t)
+	log := filepath.Join(t.TempDir(), "fakechrome.json")
+	t.Setenv("FAKE_CHROME_LOG", log)
+	t.Setenv("FAKE_CHROME_PROBE_MS", "1500")
+	b, err := browser.LaunchSix(context.Background(), in, six, browser.LaunchOptions{Options: o, Headless: true, LaunchTimeout: 20 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAndCheck(t, b)
+	var logged struct {
+		SharedOpens int `json:"sharedOpens"`
+	}
+	if err := json.Unmarshal([]byte(readText(t, log)), &logged); err != nil {
+		t.Fatal(err)
+	}
+	if logged.SharedOpens != 0 {
+		t.Fatalf("slicc held six's stale DevToolsActivePort open %d times while the browser was starting", logged.SharedOpens)
+	}
+}

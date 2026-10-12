@@ -50,6 +50,7 @@ type Browser struct {
 	closed   bool
 	six      bool
 	stale    []byte
+	staleAt  os.FileInfo
 }
 
 func (b *Browser) Done() <-chan struct{} {
@@ -271,8 +272,22 @@ func (b *Browser) waitActivePort(ctx context.Context, o Options) error {
 	}
 }
 
+func sameFile(a, b os.FileInfo) bool {
+	return a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
 func (b *Browser) freshActivePort() (int, string, error) {
-	data, err := os.ReadFile(filepath.Join(b.ProfileDir, ActivePortFile))
+	name := filepath.Join(b.ProfileDir, ActivePortFile)
+	if b.staleAt != nil {
+		info, err := os.Stat(name)
+		if err != nil {
+			return 0, "", err
+		}
+		if sameFile(info, b.staleAt) {
+			return 0, "", errors.New("stale")
+		}
+	}
+	data, err := os.ReadFile(name)
 	if err != nil {
 		return 0, "", err
 	}
