@@ -152,13 +152,23 @@ func (b *chromeProc) openPage(t *testing.T, url string) *page {
 	return p
 }
 
+func chromeCensus() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name,Id,CPU,WorkingSet | Format-Table -AutoSize | Out-String -Width 200; 'chrome: ' + (Get-Process chrome -ErrorAction SilentlyContinue | Measure-Object).Count; 'crashpad: ' + (Get-Process chrome_crashpad_handler -ErrorAction SilentlyContinue | Measure-Object).Count; (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average").CombinedOutput()
+	return fmt.Sprintf("%s (%v)", out, err)
+}
+
 func (p *page) waitLoaded(url string, timeout time.Duration) {
 	p.t.Helper()
 	start := time.Now()
 	err := p.until("typeof globalThis.linkTest === 'object'", timeout)
 	if err == nil {
 		if d := time.Since(start); d > 3*time.Second {
-			p.t.Logf("SLOWLOAD %s loaded in %s; page server:\n%s\npolls:\n%s", url, d, pageRequests.since(start.Add(-time.Second)), pollTrace.since(start))
+			p.t.Logf("SLOWLOAD %s loaded in %s; page server:\n%s\npolls:\n%s\nprocesses:\n%s", url, d, pageRequests.since(start.Add(-time.Second)), pollTrace.since(start), chromeCensus())
 		}
 		return
 	}
