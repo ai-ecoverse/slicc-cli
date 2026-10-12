@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -73,17 +72,6 @@ func (p *page) waitVerified(t *testing.T) {
 	}
 }
 
-func buildFakeJerk(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	build := exec.Command("go", "build", "-o", filepath.Join(dir, exeName("jerk")), "./testdata/fakejerk")
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
 type vaultEnv struct {
 	*linkEnv
 	home, vaultOrigin, jerkLog string
@@ -96,7 +84,7 @@ func setupVault(t *testing.T) *vaultEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jerkDir := buildFakeJerk(t)
+	jerkDir := fakeJerkDir(t)
 	vs := vaultServer(t)
 	_, vport := hostPort(t, strings.TrimPrefix(vs.URL, "http://"))
 	e := &vaultEnv{home: tmp, vaultOrigin: "http://localhost:" + strconv.Itoa(vport), jerkLog: filepath.Join(tmp, "jerk.log")}
@@ -268,7 +256,7 @@ func (e *vaultEnv) testVaultFetchRefusals(t *testing.T) {
 func (e *vaultEnv) testVaultJerk(t *testing.T) {
 	r := e.p.vaultCall(t, "jerk", map[string]any{"body": map[string]any{"op": "lease", "provider": "github", "duration": 900}})
 	lease, result := r.obj("body").obj("lease"), r.obj("body").obj("result")
-	if r.num("status") != 200 || lease.obj("credentials").str("GH_TOKEN") != "gho_fake_github" || lease.str("expires_at") == "" || lease.str("lease_id") != "jerk-github-1" {
+	if r.num("status") != 200 || lease.obj("credentials").str("GH_TOKEN") != "gho_secret_github" || lease.str("expires_at") == "" || lease.str("lease_id") != "jerk-github-1" {
 		t.Fatalf("lease: %v", r)
 	}
 	if result.num("exit") != 0 || result.str("provider") != "github" || result.str("user") != "octocat" || result.str("expires_at") != lease.str("expires_at") || len(result["env"].([]any)) != 2 {
@@ -311,7 +299,7 @@ func (e *vaultEnv) testVaultJerk(t *testing.T) {
 	if len(calls) < 2 || calls[0]["duration"] != "900" || calls[1]["lease"] != "jerk-github-1" {
 		t.Fatalf("jerk calls %v", calls)
 	}
-	if strings.Contains(e.a.stderr.String(), "gho_fake") {
+	if strings.Contains(e.a.stderr.String(), "gho_secret") {
 		t.Fatalf("the log shows the lease:\n%s", e.a.stderr.String())
 	}
 }
