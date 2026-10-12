@@ -14,7 +14,10 @@ const (
 	UpdateTimeout = 10 * time.Second
 )
 
-var ErrTaken = errors.New("fs: the mount name is taken")
+var (
+	ErrTaken  = errors.New("fs: the mount name is taken")
+	ErrFenced = errors.New("fs: slicc never shares this folder")
+)
 
 type pusher struct {
 	wake chan struct{}
@@ -33,6 +36,9 @@ func (s *Server) hello(h *link.Hello) {
 }
 
 func (s *Server) Add(m Mount) error {
+	if Fenced(m.Root) {
+		return ErrFenced
+	}
 	s.mu.Lock()
 	if s.byName[m.Name] != nil {
 		s.mu.Unlock()

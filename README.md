@@ -551,6 +551,14 @@ The browser's connection waits unread for `OPENED`.
 - Names never reveal host paths, and neither does anything else on the link.
 - Without a folder, the node doesn't advertise `fs`, and an `fs` OPEN gets `EOPNOTSUPP`.
 
+**Private paths.** Some folders are never shared, even inside a folder that is:
+- slicc's own config, data and cache folders (`<config>/slicc`, which holds the DTLS certificates, the SSH host key, the tray state and the vault pairing keys);
+- browser profiles: slicc's `seven-profiles` and `profiles`, SLICC six's profiles and `SLICC_USER_DATA_DIR`, and the user data folders of the browsers slicc knows, since the vault's storage lives there;
+- slicc-jerk's files: `$XDG_CONFIG_HOME/slicc-jerk` and `$XDG_STATE_HOME/slicc-jerk` (`~/.config` and `~/.local/state` when unset, macOS included), `/etc/slicc-jerk`, and `SLICC_JERK_CONFIG`; and on Windows `slicc-jerk` under `%APPDATA%`, `%LOCALAPPDATA%` and `%ProgramData%`;
+- host fnox's files: `FNOX_CONFIG_DIR` and `FNOX_STATE_DIR` with fnox's own defaults (`$XDG_CONFIG_HOME/fnox` and `$XDG_STATE_HOME/fnox`, else `~/.config/fnox` and `~/.local/state/fnox`, or `~\AppData\Local\fnox` on Windows), `FNOX_AGE_KEY_FILE`, and the daemon's socket folders.
+
+The paths are read from slicc's own environment at start. A `--mount` of one of them, or of a folder inside one, is skipped with `--mount <spec>: slicc never shares this folder, which holds its own keys or a credential tool's files, skipping`. In a folder that contains one, every operation on a private path or below it is `EACCES` with `slicc never shares this path`. That holds when the path is reached through a symlink or, on macOS and Windows, typed with a different case. A `rename`, `rmdir`, `unlink` or `symlink` of a folder that holds a private path (`.config`, for example) is refused too, so a private folder can't be moved out of the fence or replaced. `list` still shows a private folder's name, and `watch` leaves out changes inside it.
+
 **HELLO.** `caps` lists `fs`, and `"mounts"` lists the folders:
 
 ```json

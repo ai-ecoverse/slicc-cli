@@ -36,6 +36,11 @@ func pathOp(m *Mount, op string, a args) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if op == "rmdir" || op == "unlink" {
+			if err := guard(t); err != nil {
+				return nil, err
+			}
+		}
 		return onePath(op, t, a)
 	case "rename":
 		return rename(m, a)
@@ -106,6 +111,12 @@ func rename(m *Mount, a args) (any, error) {
 	if from.root || to.root {
 		return nil, fail("EBUSY")
 	}
+	if err := guard(from); err != nil {
+		return nil, err
+	}
+	if err := guard(to); err != nil {
+		return nil, err
+	}
 	if err := renamePath(from.path, to.path); err != nil {
 		if errors.Is(err, syscall.EEXIST) || errors.Is(err, os.ErrExist) {
 			return nil, fail("ENOTEMPTY")
@@ -126,6 +137,9 @@ func symlink(m *Mount, a args) (any, error) {
 	}
 	t, err := m.resolve(p)
 	if err != nil {
+		return nil, err
+	}
+	if err := guard(t); err != nil {
 		return nil, err
 	}
 	return empty{}, makeSymlink(target, t.path)

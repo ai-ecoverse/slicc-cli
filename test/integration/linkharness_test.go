@@ -233,9 +233,9 @@ type attachProc struct {
 	stdout io.ReadCloser
 }
 
-func startAttach(t *testing.T, stdio bool, args ...string) *attachProc {
+func startAttach(t *testing.T, args ...string) *attachProc {
 	t.Helper()
-	return startAttachEnv(t, stdio, nil, args...)
+	return startAttachEnv(t, false, nil, args...)
 }
 
 func startAttachEnv(t *testing.T, stdio bool, env []string, args ...string) *attachProc {

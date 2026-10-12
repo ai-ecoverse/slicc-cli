@@ -250,7 +250,7 @@ func TestPromptNextToAttachKeepsBothLocalLinks(t *testing.T) {
 		_, _ = io.Copy(io.Discard, c)
 	})
 	host, port := hostPort(t, echo)
-	a := startAttach(t, false, "--cdp", s.b.endpoint, "--origin", s.origin, "--no-kernel")
+	a := startAttach(t, "--cdp", s.b.endpoint, "--origin", s.origin, "--no-kernel")
 	a.waitStderr(t, "link up with", 60*time.Second)
 	s.p.agentDo(`queue({steps: [{event: {t: 'text', id: 'a1', delta: 'side by side'}}, {hold: true}]})`)
 	pr := s.run(t, nil, "prompt", "hi")

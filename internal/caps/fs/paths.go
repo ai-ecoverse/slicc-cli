@@ -83,6 +83,9 @@ func (m *Mount) resolve(rel string) (target, error) {
 	if len(parts) == 0 {
 		return target{path: m.Root, root: true}, nil
 	}
+	if fenced().covers(filepath.Join(append([]string{m.Root}, parts...)...)) {
+		return target{}, fail("EACCES", fencedMessage)
+	}
 	parent := m.Root
 	if len(parts) > 1 {
 		if parent, err = realpath(filepath.Join(append([]string{m.Root}, parts[:len(parts)-1]...)...)); err != nil {
@@ -95,5 +98,16 @@ func (m *Mount) resolve(rel string) (target, error) {
 			return target{}, err
 		}
 	}
-	return target{path: filepath.Join(parent, parts[len(parts)-1])}, nil
+	t := target{path: filepath.Join(parent, parts[len(parts)-1])}
+	if fenced().covers(t.path) {
+		return target{}, fail("EACCES", fencedMessage)
+	}
+	return t, nil
+}
+
+func guard(t target) error {
+	if fenced().guards(t.path) {
+		return fail("EACCES", fencedMessage)
+	}
+	return nil
 }
