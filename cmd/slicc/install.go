@@ -32,11 +32,11 @@ warning. Run it again to update. Nothing on a link can start an install.
 `
 
 type companion struct {
-	repo, binary string
+	repo, binary, since string
 }
 
 var installable = map[string]companion{
-	"jerk": {repo: "ai-ecoverse/slicc-jerk", binary: "jerk"},
+	"jerk": {repo: "ai-ecoverse/slicc-jerk", binary: "jerk", since: "0.3.0"},
 	"fnox": {repo: "ai-ecoverse/fnox-build", binary: "fnox"},
 }
 
@@ -73,6 +73,10 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "slicc install: %s: %s\n", c.repo, err)
 		telemetry.ReportError(telemetry.Install, err)
+		return 1
+	}
+	if c.since != "" && update.IsNewer(c.since, rel.Version) {
+		fmt.Fprintf(stderr, "slicc install: %s %s predates the release layout slicc installs from (%s %s and later)\n", c.repo, rel.Version, c.repo, c.since)
 		return 1
 	}
 	if have := installedVersion(ctx, dest); have == rel.Version {

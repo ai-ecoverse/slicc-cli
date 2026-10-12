@@ -153,8 +153,8 @@ slicc works with two tools that run on this machine: slicc-jerk (`jerk`), which 
 **With npm.** `@ai-ecoverse/slicc` and `sliccy` list `@ai-ecoverse/slicc-jerk` and `@ai-ecoverse/fnox` as `optionalDependencies` (`^` the latest release), but only those that are on the registry when the release is staged (`npm-stage.mjs --companions`); the others are left out with a notice. The publish check that waits for the platform packages doesn't wait for them. The launcher puts the `node_modules/.bin` of each installed companion package first on `PATH` for the binary, so `jerk` and `fnox` resolve for slicc and its children.
 
 **`slicc install jerk|fnox`** installs one into the data folder's `bin`:
-- `jerk` from the latest release of `ai-ecoverse/slicc-jerk`, `fnox` from the latest release of `ai-ecoverse/fnox-build`;
-- **the release contract** (the same as slicc-cli's own): a plain binary `<name>-<os>-<arch>` (`.exe` on Windows; `darwin`, `linux`, `windows` × `amd64`, `arm64`), and `SHA256SUMS` with a line for it, both attested by the repo's `release.yml`;
+- `jerk` from the latest release of `ai-ecoverse/slicc-jerk` (0.3.0 or later; an older latest release is refused with `… predates the release layout slicc installs from`), `fnox` from the latest release of `ai-ecoverse/fnox-build`;
+- **the release contract** (the same as slicc-cli's own): a plain binary `<name>-<os>-<arch>` (`.exe` on Windows; `darwin`, `linux`, `windows` × `amd64`, `arm64`), and `SHA256SUMS` with a line for it, with a build provenance attestation by the repo's `release.yml` over the binary or over `SHA256SUMS`;
 - slicc checks the download against `SHA256SUMS` and verifies its attestation (see [Attestations](#attestations)), then installs it only once its `--version` names the release's version, through a rename next to the old one (as `slicc update` does);
 - it says `installed <name> <version> at <path> (SHA256SUMS and the build provenance attestation by <identity>)`, or `<name> <version> is already installed at <path>`;
 - `--checksum-only` skips the attestation, with a warning, and says `SHA256SUMS only; the attestation wasn't checked`;
@@ -166,7 +166,7 @@ Only a user runs `slicc install`. Nothing on a link starts an install.
 
 `slicc update` and `slicc install` verify the GitHub build provenance attestation of every binary they download, after its `SHA256SUMS` check, and refuse it when that fails. A release without an attestation fails too. `--checksum-only` is the only way around it, and it warns.
 
-**Where the attestation comes from.** `GET /repos/<repo>/attestations/sha256:<digest>` on the GitHub API. slicc accepts the binary when one of the bundles there verifies.
+**Where the attestation comes from.** `GET /repos/<repo>/attestations/sha256:<digest>` on the GitHub API, first for the binary's digest. When the binary has none, slicc looks up the digest of the release's `SHA256SUMS` instead: an attestation over `SHA256SUMS` covers the binary through its line there, which slicc has already checked. slicc accepts the binary when one of the bundles verifies.
 
 **What is verified** (`internal/attest`, standard library only), for a Sigstore bundle v0.3 with one DSSE envelope, one Fulcio certificate and one Rekor (v1) entry:
 1. the envelope is an in-toto statement whose predicate type is `https://slsa.dev/provenance/v1`, with a subject whose SHA-256 is the file's;
