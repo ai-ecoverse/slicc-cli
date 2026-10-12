@@ -328,5 +328,13 @@ export function protectTest(getLink, describe) {
         await c.send('Target.closeTarget', { targetId });
         return out;
       }),
+    extraInfo: (browser, last) =>
+      run(browser, async (c) => {
+        const done = c.waitEvent((e) => e.method === 'Network.responseReceivedExtraInfo' && e.params.requestId === last, 15000);
+        await c.send('Network.enable', {});
+        await done;
+        const events = c.events.filter((e) => e.method.startsWith('Network.')).map((e) => ({ method: e.method, requestId: e.params.requestId, text: JSON.stringify(e.params) }));
+        return { events };
+      }),
   };
 }

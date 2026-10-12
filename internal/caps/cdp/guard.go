@@ -91,6 +91,10 @@ type guard struct {
 	explicit        map[string]int
 	attachCalls     map[callKey]string
 	patterns        []any
+	heldExtras      map[requestKey][]heldExtra
+	heldExtraCount  int
+	settled         map[requestKey]bool
+	settledOrder    []requestKey
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -117,6 +121,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		held:            map[string]*heldSession{},
 		explicit:        map[string]int{},
 		attachCalls:     map[callKey]string{},
+		heldExtras:      map[requestKey][]heldExtra{},
+		settled:         map[requestKey]bool{},
 	}
 	g.patterns = g.documentPatterns()
 	return g
@@ -341,6 +347,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.markedCount -= len(g.marked[id])
 	delete(g.marked, id)
 	delete(g.saturated, id)
+	g.forgetExtrasLocked(id)
 	for k := range g.pending {
 		if k.session == id {
 			delete(g.pending, k)
