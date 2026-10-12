@@ -157,6 +157,9 @@ func (p *page) waitLoaded(url string, timeout time.Duration) {
 	start := time.Now()
 	err := p.until("typeof globalThis.linkTest === 'object'", timeout)
 	if err == nil {
+		if d := time.Since(start); d > 3*time.Second {
+			p.t.Logf("SLOWLOAD %s loaded in %s; page server:\n%s\npolls:\n%s", url, d, pageRequests.since(start.Add(-time.Second)), pollTrace.since(start))
+		}
 		return
 	}
 	var state any
