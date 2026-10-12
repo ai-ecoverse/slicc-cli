@@ -126,7 +126,7 @@ func (e *linkEnv) testKindCaps(t *testing.T) {
 		Caps []string `json:"caps"`
 	}
 	e.p.eval("linkTest.ready()", &h)
-	if !slices.Equal(h.Caps, []string{"net", "http", "cdp", "credentialed"}) {
+	if !slices.Equal(h.Caps, []string{"net", "http", "credentialed", "cdp"}) {
 		t.Fatalf("caps %v", h.Caps)
 	}
 }

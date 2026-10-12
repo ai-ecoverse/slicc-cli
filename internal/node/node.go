@@ -71,10 +71,14 @@ func DefaultHost() string {
 }
 
 func (n *Node) Handle(capability, kind string, h link.Handler) {
+	n.Advertise(capability)
+	n.handlers[kind] = h
+}
+
+func (n *Node) Advertise(capability string) {
 	if !slices.Contains(n.caps, capability) {
 		n.caps = append(n.caps, capability)
 	}
-	n.handlers[kind] = h
 }
 
 func (n *Node) OnHello(f func(*link.Hello)) { n.helloHooks = append(n.helloHooks, f) }
