@@ -36,6 +36,7 @@ type Pairer struct {
 	o      PairOptions
 	mu     sync.Mutex
 	target string
+	closed bool
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -51,9 +52,13 @@ func NewPairer(o PairOptions) *Pairer {
 }
 
 func (p *Pairer) Target(t cdp.TargetInfo) {
+	go p.switchTo(t)
+}
+
+func (p *Pairer) switchTo(t cdp.TargetInfo) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.target == t.TargetID {
+	if p.closed || p.target == t.TargetID {
 		return
 	}
 	p.stopLocked()
@@ -78,6 +83,7 @@ func (p *Pairer) stopLocked() {
 
 func (p *Pairer) Close() {
 	p.mu.Lock()
+	p.closed = true
 	p.stopLocked()
 	p.mu.Unlock()
 }
