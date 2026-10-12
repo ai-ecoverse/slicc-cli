@@ -101,6 +101,7 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 func (g *guard) admitLocked(c *command) pageVerdict {
 	k := callKey{c.session, c.id}
 	g.pending[k] = resultKind(c.method)
+	g.noteBodyCallLocked(k, c)
 	if t := c.str("targetId"); c.method == "Target.attachToTarget" && t != "" {
 		g.attachCalls[k] = t
 		g.explicit[t]++
@@ -150,6 +151,8 @@ func resultKind(method string) callKind {
 		return kindCreate
 	case "Target.attachToTarget":
 		return kindAttach
+	case "Page.printToPDF", "Network.loadNetworkResource", "IO.resolveBlob":
+		return kindStreams
 	}
 	return kindPlain
 }
@@ -213,6 +216,7 @@ var methodRules = map[string]func(g *guard, c *command) string{
 		return "Extensions.loadUnpacked could load an extension into seven's origin"
 	},
 	"Fetch.enable":                (*guard).fetchRule,
+	"IO.read":                     (*guard).streamRule,
 	"Network.clearBrowserCookies": (*guard).clearCookiesRule,
 	"Storage.clearCookies":        contextRule(refusedCookies),
 	"Browser.resetPermissions":    contextRule("Browser.resetPermissions resets seven's permissions too"),

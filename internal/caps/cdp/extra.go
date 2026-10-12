@@ -12,6 +12,13 @@ const (
 	requestExtraInfo = "Network.requestWillBeSentExtraInfo"
 )
 
+type reqLevel uint8
+
+const (
+	levelKnown reqLevel = iota + 1
+	levelSettled
+)
+
 type requestKey struct {
 	session string
 	request string
@@ -24,14 +31,18 @@ type heldExtra struct {
 
 func requestIDOf(raw json.RawMessage) string {
 	var p struct {
-		RequestID string `json:"requestId"`
+		RequestID      string `json:"requestId"`
+		InterceptionID string `json:"interceptionId"`
 	}
 	_ = json.Unmarshal(raw, &p)
+	if p.RequestID == "" {
+		return p.InterceptionID
+	}
 	return p.RequestID
 }
 
 func (g *guard) extraReadyLocked(k requestKey) bool {
-	return g.settled[k] || g.requestMarkedLocked(k.session, k.request)
+	return g.seen[k] >= levelSettled || g.requestMarkedLocked(k.session, k.request)
 }
 
 func (g *guard) filterExtraLocked(m *message, data []byte, marked bool) browserVerdict {
@@ -93,15 +104,19 @@ func (g *guard) expireExtras(k requestKey) [][]byte {
 	return g.releaseExtrasLocked(k, true)
 }
 
-func (g *guard) settleLocked(k requestKey) {
-	if g.settled[k] {
+func (g *guard) settleLocked(k requestKey, level reqLevel) {
+	was, ok := g.seen[k]
+	if was >= level {
 		return
 	}
-	g.settled[k] = true
-	g.settledOrder = append(g.settledOrder, k)
-	for len(g.settledOrder) > maxSettled {
-		delete(g.settled, g.settledOrder[0])
-		g.settledOrder = g.settledOrder[1:]
+	g.seen[k] = level
+	if ok {
+		return
+	}
+	g.seenOrder = append(g.seenOrder, k)
+	for len(g.seenOrder) > maxSettled {
+		delete(g.seen, g.seenOrder[0])
+		g.seenOrder = g.seenOrder[1:]
 	}
 }
 
@@ -112,26 +127,28 @@ func (g *guard) forgetExtrasLocked(session string) {
 			delete(g.heldExtras, k)
 		}
 	}
-	for k := range g.settled {
+	for k := range g.seen {
 		if k.session == session {
-			delete(g.settled, k)
+			delete(g.seen, k)
 		}
 	}
+	g.forgetAnswersLocked(session)
 }
 
-func afterRequest(h eventHandler, settles bool) eventHandler {
+func afterRequest(h eventHandler, level reqLevel) eventHandler {
 	return func(g *guard, m *message, data []byte) browserVerdict {
 		v := h(g, m, data)
 		k := requestKey{m.SessionID, requestIDOf(m.Params)}
 		if k.request == "" {
 			return v
 		}
-		if settles {
-			g.settleLocked(k)
-		}
+		g.settleLocked(k, level)
 		if g.extraReadyLocked(k) {
 			v.page = append(v.page, g.releaseExtrasLocked(k, false)...)
 		}
+		page, send := g.releaseAnswersLocked(k)
+		v.page = append(v.page, page...)
+		v.send = append(v.send, send...)
 		return v
 	}
 }

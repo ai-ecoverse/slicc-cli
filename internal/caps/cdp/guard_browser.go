@@ -11,6 +11,7 @@ type browserVerdict struct {
 	send    [][]byte
 	hold    []string
 	extra   []requestKey
+	answers []callKey
 	lost    bool
 }
 
@@ -61,8 +62,13 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	delete(g.pending, k)
 	attached := g.attachCalls[k]
 	g.attachDoneLocked(k)
+	bc, body := g.bodyCalls[k]
+	delete(g.bodyCalls, k)
 	if g.sessionRefusedLocked(m.SessionID) {
-		return browserVerdict{}
+		return browserVerdict{send: g.closeStreamLocked(bc, m)}
+	}
+	if body {
+		return g.bodyAnswerLocked(k, bc, m, data)
 	}
 	if !ok || m.Error != nil || kind == kindPlain {
 		return browserVerdict{forward: data}
@@ -82,6 +88,8 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		send = g.infoLocked(res["targetInfo"])
 	case kindCookies:
 		res["cookies"] = g.filterCookies(res["cookies"])
+	case kindStreams:
+		g.recordStreamsLocked(res)
 	case kindBrowserSession:
 		if s, _ := res["sessionId"].(string); s != "" {
 			g.browserSessions[s] = true
@@ -160,22 +168,22 @@ var eventHandlers = map[string]eventHandler{
 	"Target.receivedMessageFromTarget":           (*guard).innerMessageEvent,
 	"Page.frameNavigated":                        (*guard).frameNavigatedEvent,
 	"Runtime.executionContextCreated":            (*guard).contextCreatedEvent,
-	"Network.requestWillBeSent":                  afterRequest((*guard).requestEvent, false),
+	"Network.requestWillBeSent":                  afterRequest((*guard).requestEvent, levelKnown),
 	"Network.requestWillBeSentExtraInfo":         (*guard).extraEvent,
-	"Network.responseReceived":                   afterRequest((*guard).responseEvent, true),
+	"Network.responseReceived":                   afterRequest((*guard).responseEvent, levelSettled),
 	"Network.responseReceivedExtraInfo":          (*guard).extraEvent,
-	"Network.loadingFinished":                    afterRequest(forwardEvent, true),
-	"Network.loadingFailed":                      afterRequest(forwardEvent, true),
-	"Network.requestIntercepted":                 (*guard).pausedEvent,
-	"Network.webSocketCreated":                   afterRequest((*guard).socketCreatedEvent, true),
-	"Network.webTransportCreated":                afterRequest((*guard).socketCreatedEvent, true),
+	"Network.loadingFinished":                    afterRequest(forwardEvent, levelSettled),
+	"Network.loadingFailed":                      afterRequest(forwardEvent, levelSettled),
+	"Network.requestIntercepted":                 afterRequest((*guard).pausedEvent, levelSettled),
+	"Network.webSocketCreated":                   afterRequest((*guard).socketCreatedEvent, levelSettled),
+	"Network.webTransportCreated":                afterRequest((*guard).socketCreatedEvent, levelSettled),
 	"Network.webSocketWillSendHandshakeRequest":  (*guard).markedDropEvent,
 	"Network.webSocketHandshakeResponseReceived": (*guard).markedDropEvent,
 	"Network.webSocketFrameError":                (*guard).markedDropEvent,
 	"Network.eventSourceMessageReceived":         (*guard).markedDropEvent,
 	"Network.dataReceived":                       (*guard).markedDropEvent,
-	"Fetch.requestPaused":                        (*guard).pausedEvent,
-	"Fetch.authRequired":                         (*guard).pausedEvent,
+	"Fetch.requestPaused":                        afterRequest((*guard).pausedEvent, levelSettled),
+	"Fetch.authRequired":                         afterRequest((*guard).pausedEvent, levelSettled),
 	"ServiceWorker.workerRegistrationUpdated":    (*guard).swRegistrationsEvent,
 	"ServiceWorker.workerVersionUpdated":         (*guard).swVersionsEvent,
 	"ServiceWorker.workerErrorReported":          (*guard).swErrorEvent,

@@ -328,6 +328,16 @@ export function protectTest(getLink, describe) {
         await c.send('Target.closeTarget', { targetId });
         return out;
       }),
+    calls: (browser, calls) =>
+      run(browser, async (c) => {
+        const out = [];
+        for (const [method, params] of calls) {
+          const started = Date.now();
+          const r = await outcome(c.send(method, params));
+          out.push({ method, ms: Date.now() - started, ...r });
+        }
+        return { out };
+      }),
     extraInfo: (browser, last) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Network.responseReceivedExtraInfo' && e.params.requestId === last, 15000);
