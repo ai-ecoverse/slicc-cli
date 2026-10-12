@@ -200,22 +200,31 @@ func (g *guard) responseExtra(p map[string]any, marked bool) bool {
 	return changed
 }
 
+func pausedIDs(method string, p map[string]any) (string, string) {
+	rid, _ := p["requestId"].(string)
+	if method == "Network.requestIntercepted" {
+		iid, _ := p["interceptionId"].(string)
+		return iid, rid
+	}
+	nid, _ := p["networkId"].(string)
+	return rid, nid
+}
+
 func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
-		id, _ := p["requestId"].(string)
-		if id == "" {
-			id, _ = p["interceptionId"].(string)
-		}
+		id, other := pausedIDs(m.Method, p)
 		req, _ := p["request"].(map[string]any)
 		u, _ := req["url"].(string)
 		if rt, _ := p["resourceType"].(string); m.Method == "Fetch.requestPaused" && rt == "Document" && g.o.URL(u) {
 			g.logf("cdp: failed a document request into a protected origin that a page session paused")
 			g.markRequestLocked(m.SessionID, id)
+			g.markRequestLocked(m.SessionID, other)
 			msg, _ := g.newCallLocked(m.SessionID, "Fetch.failRequest", map[string]any{"requestId": id, "errorReason": "BlockedByClient"}, false)
 			return false, false, [][]byte{msg}
 		}
-		if g.o.URL(u) {
+		if g.o.URL(u) || g.requestMarkedLocked(m.SessionID, other) {
 			g.markRequestLocked(m.SessionID, id)
+			g.markRequestLocked(m.SessionID, other)
 		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
 			return true, false, nil
