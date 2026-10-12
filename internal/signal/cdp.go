@@ -180,22 +180,29 @@ func (c *CDP) serveTarget(ctx context.Context, sub *cdp.Subscription, t cdp.Targ
 	return w.loop(ctx, sub)
 }
 
-func (c *CDP) setup(ctx context.Context, t cdp.TargetInfo) (*cdp.Session, error) {
-	sctx, cancel := context.WithTimeout(ctx, SetupTimeout)
+func bounded(ctx context.Context, fn func(context.Context) error) error {
+	cctx, cancel := context.WithTimeout(ctx, SetupTimeout)
 	defer cancel()
-	s, err := c.opts.Client.Attach(sctx, t.TargetID)
-	if err != nil {
+	return fn(cctx)
+}
+
+func (c *CDP) setup(ctx context.Context, t cdp.TargetInfo) (*cdp.Session, error) {
+	var s *cdp.Session
+	if err := bounded(ctx, func(cctx context.Context) (err error) {
+		s, err = c.opts.Client.Attach(cctx, t.TargetID)
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	c.opts.Status("found seven at %s", t.URL)
-	c.grantLocalNetwork(sctx, t.URL)
-	if err := s.AddBinding(sctx, BindingName); err != nil {
+	c.grantLocalNetwork(ctx, t.URL)
+	if err := bounded(ctx, func(cctx context.Context) error { return s.AddBinding(cctx, BindingName) }); err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
 	c.session = s
 	c.mu.Unlock()
-	if err := s.Call(sctx, "Runtime.enable", nil, nil); err != nil {
+	if err := bounded(ctx, func(cctx context.Context) error { return s.Call(cctx, "Runtime.enable", nil, nil) }); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -209,7 +216,9 @@ func (c *CDP) grantLocalNetwork(ctx context.Context, rawURL string) {
 	origin := u.Scheme + "://" + u.Host
 	for _, name := range localNetworkPermissions {
 		params := map[string]any{"permission": map[string]any{"name": name}, "setting": "granted", "origin": origin}
-		if err := c.opts.Client.Call(ctx, "", "Browser.setPermission", params, nil); err != nil {
+		if err := bounded(ctx, func(cctx context.Context) error {
+			return c.opts.Client.Call(cctx, "", "Browser.setPermission", params, nil)
+		}); err != nil {
 			c.opts.Logf("signal: grant %s to %s: %v", name, origin, err)
 		}
 	}
