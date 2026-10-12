@@ -886,6 +886,8 @@ In the same process, probe ports, dirs and a process list passed in explicitly (
 
 On macOS, a headless Chrome started with `HOME` pointed at a temporary dir may never load a page (seen on a developer Mac, not on CI). So on macOS the test that has `slicc` launch Chrome for seven runs it with the real `HOME` and a unique `--profile`, which it deletes afterwards.
 
+On GitHub's Windows runners the system drive `C:` is slow: with Chrome profiles there, Chrome sometimes waited seconds before a new tab's first request (up to past the 15 s page-load limit) or before exiting (`did not exit`). With them on `D:`, the runner's temp drive, those stalls weren't seen and the suite ran about a quarter faster. So CI points `TEMP` and `TMP` at the runner's temp dir, and the tests' temporary homes and Chrome profiles live there. When a test page doesn't load, the failure says where it stopped: the tab's URL and `readyState`, the resources it fetched, and every request the page server saw.
+
 The real-Chrome tests in `test/integration/` launch headless, so they run the executable directly. A windowed launch on macOS goes through `open -n -W -a`, which CI doesn't cover: on GitHub's macOS runners, Chrome started that way never writes `DevToolsActivePort`.
 
 ## Releases

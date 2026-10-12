@@ -60,7 +60,7 @@ func requireChrome(t *testing.T, env []string) {
 type launched struct {
 	cmd    *exec.Cmd
 	events *bufio.Scanner
-	stderr *strings.Builder
+	stderr *syncBuffer
 	exit   chan error
 }
 
@@ -73,7 +73,7 @@ func startLaunch(t *testing.T, env []string, args ...string) *launched {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &launched{cmd: cmd, events: bufio.NewScanner(stdout), stderr: &strings.Builder{}, exit: make(chan error, 1)}
+	l := &launched{cmd: cmd, events: bufio.NewScanner(stdout), stderr: &syncBuffer{}, exit: make(chan error, 1)}
 	cmd.Stderr = l.stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

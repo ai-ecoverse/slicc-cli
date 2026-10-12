@@ -148,8 +148,22 @@ func (b *chromeProc) openPage(t *testing.T, url string) *page {
 		_ = b.client.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": res.TargetID}, nil)
 	})
 	p := &page{t: t, b: b, target: res.TargetID, session: s}
-	p.waitFor("typeof globalThis.linkTest === 'object'", 15*time.Second)
+	p.waitLoaded(url, 15*time.Second)
 	return p
+}
+
+func (p *page) waitLoaded(url string, timeout time.Duration) {
+	p.t.Helper()
+	start := time.Now()
+	err := p.until("typeof globalThis.linkTest === 'object'", timeout)
+	if err == nil {
+		return
+	}
+	var state any
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	serr := p.session.Evaluate(ctx, `({ href: location.href, readyState: document.readyState, resources: performance.getEntriesByType('resource').map((e) => e.name + ' ' + Math.round(e.duration) + 'ms') })`, cdp.EvaluateOptions{ReturnByValue: true}, &state)
+	p.t.Fatalf("%s did not load in %s (%v); page state %v (%v); page server since %s:\n%s", url, timeout, err, state, serr, start.Format("15:04:05.000"), pageRequests.since(start.Add(-time.Second)))
 }
 
 func (p *page) eval(expr string, out any) {
@@ -163,6 +177,12 @@ func (p *page) eval(expr string, out any) {
 
 func (p *page) waitFor(expr string, timeout time.Duration) {
 	p.t.Helper()
+	if err := p.until(expr, timeout); err != nil {
+		p.t.Fatal(err)
+	}
+}
+
+func (p *page) until(expr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		var ok bool
@@ -170,10 +190,10 @@ func (p *page) waitFor(expr string, timeout time.Duration) {
 		err := p.session.Evaluate(ctx, "Boolean("+expr+")", cdp.EvaluateOptions{ReturnByValue: true}, &ok)
 		cancel()
 		if err == nil && ok {
-			return
+			return nil
 		}
 		if time.Now().After(deadline) {
-			p.t.Fatalf("timed out waiting for %s (last error %v)", expr, err)
+			return fmt.Errorf("timed out waiting for %s (last error %v)", expr, err)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -341,9 +361,43 @@ func closedAddr(t *testing.T) string {
 	return addr
 }
 
+type requestLog struct {
+	mu    sync.Mutex
+	lines []timedLine
+}
+
+type timedLine struct {
+	at   time.Time
+	line string
+}
+
+func (l *requestLog) add(line string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, timedLine{time.Now(), line})
+}
+
+func (l *requestLog) since(t time.Time) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var b strings.Builder
+	for _, e := range l.lines {
+		if !e.at.Before(t) {
+			fmt.Fprintf(&b, "  %s %s\n", e.at.Format("15:04:05.000"), e.line)
+		}
+	}
+	return b.String()
+}
+
+var pageRequests = &requestLog{}
+
 func pageServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.FileServer(http.Dir(filepath.Join("testdata", "link"))))
+	files := http.FileServer(http.Dir(filepath.Join("testdata", "link")))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pageRequests.add(r.Host + " " + r.Method + " " + r.URL.RequestURI())
+		files.ServeHTTP(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	return srv
 }
