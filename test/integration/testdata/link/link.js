@@ -474,8 +474,8 @@ export async function resolve(link, name, family = 0, { shared = true } = {}) {
   return { ...stream.opened, extra: extra.byteLength, shared: stream.shared };
 }
 
-export async function fetchRaw(link, { url, method = 'GET', headers = [], body = null, head = null }, { shared = false } = {}) {
-  const stream = await link.open({ kind: 'http' }, { shared });
+export async function fetchRaw(link, { url, method = 'GET', headers = [], body = null, head = null }, { shared = false, open = {} } = {}) {
+  const stream = await link.open({ ...open, kind: 'http' }, { shared });
   const sending = (async () => {
     await stream.write(head ?? encodeHead({ url, method, headers }));
     if (body instanceof Uint8Array) {
