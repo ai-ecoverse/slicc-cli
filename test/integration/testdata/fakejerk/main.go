@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,6 +18,10 @@ func main() {
 			v = "0.3.1"
 		}
 		fmt.Println("jerk " + v)
+		return
+	}
+	if len(args) == 1 && args[0] == "__hold" {
+		time.Sleep(20 * time.Second)
 		return
 	}
 	logCall(args)
@@ -51,6 +56,13 @@ func provider(p, rest string) int {
 		return 3
 	case "dies":
 		return 99
+	case "orphan":
+		self, _ := os.Executable()
+		child := exec.Command(self, "__hold")
+		child.Stdout = os.Stdout
+		_ = child.Start()
+		fmt.Println(`{"message":"left a child holding stdout"}`)
+		return 0
 	case "slow":
 		time.Sleep(4 * time.Second)
 	case "nolease":
