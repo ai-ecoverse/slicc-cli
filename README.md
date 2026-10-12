@@ -343,7 +343,7 @@ Launches a browser with CDP and keeps running until interrupted (Ctrl-C, `SIGINT
   - Each profile dir is renamed into `seven-profiles`, which is created when missing. `playwright-cli` may already have created it.
   - Once every profile has been looked at, the move writes `seven-profiles/.migrated-from-profiles` and never runs again. A run that is cut short picks up where it stopped next time.
   - A name that already exists in `seven-profiles` stays in the old folder, with the notice `slicc: profile <name> stays in <old>, since <new>/<name> already exists`.
-  - Left alone: six's profiles (`browser-coding-agent-chrome` and `browser-coding-agent-chrome-<port>`, in any case, and the `SLICC_USER_DATA_DIR` dir), dotfiles (six's `.profile-migration-complete`), and anything that isn't a valid profile name.
+  - Left alone: six's profiles (`browser-coding-agent-chrome` and `browser-coding-agent-chrome-<port>`, in any case, and the `SLICC_USER_DATA_DIR` dir; nothing moves at all when the old folder is in one of them), dotfiles (six's `.profile-migration-complete`), and anything that isn't a valid profile name.
   - A profile whose `SingletonLock` points at a live process stays where it is, with a one-line notice on stderr: `slicc: profile <name> is in use by process <pid>, so it stays in <old>; quit that browser, then move it to <new>`.
   - `slicc/profiles` is never scanned or launched into afterwards.
 - Before the launch, a stale `DevToolsActivePort`, Chrome's `Singleton*` files and the session-restore snapshot are removed, and the last exit is marked clean, so only the start page opens.

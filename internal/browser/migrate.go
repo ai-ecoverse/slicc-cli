@@ -39,6 +39,9 @@ func MigrateProfiles(o Options) []string {
 const MigratedMarker = ".migrated-from-profiles"
 
 func migrateProfiles(from, to string, six sixMatcher) []string {
+	if six.within(from) {
+		return nil
+	}
 	marker := filepath.Join(to, MigratedMarker)
 	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -66,7 +69,7 @@ func migrateProfile(e os.DirEntry, from, to string, six sixMatcher) string {
 		return ""
 	}
 	src, dst := filepath.Join(from, name), filepath.Join(to, name)
-	if six.is(src) {
+	if six.within(src) {
 		return ""
 	}
 	if pid := profileOwner(src); pid > 0 {

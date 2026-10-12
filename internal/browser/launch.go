@@ -153,7 +153,7 @@ func Launch(ctx context.Context, in Installed, lo LaunchOptions) (*Browser, erro
 	if err != nil {
 		return nil, err
 	}
-	if o := lo.withDefaults(); newSixMatcher(o.platform(runtime.GOOS), true).is(dir) {
+	if o := lo.withDefaults(); newSixMatcher(o.platform(runtime.GOOS), true).within(dir) {
 		return nil, ErrSixDir
 	}
 	var sites []string

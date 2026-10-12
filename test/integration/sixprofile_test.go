@@ -736,3 +736,32 @@ func TestASevenProfileThatIsSixsIsNeverPrepared(t *testing.T) {
 	}
 	requireSameTree(t, "after the refused launch", before, snapshotTree(t, dir))
 }
+
+func TestNothingMovesOutOfSixsProfileWhenItIsTheOldProfilesFolder(t *testing.T) {
+	h := newFakeHome(t)
+	legacy := h.legacyProfilesDir(t)
+	makeSixTree(t, legacy, "")
+	writeFile(t, filepath.Join(legacy, "chrome", "Default", "Preferences"), `{"looks":"like a seven profile"}`)
+	before := snapshotTree(t, legacy)
+	env := overrideEnv(sixEnv(h, "home"), map[string]string{"SLICC_USER_DATA_DIR": legacy})
+	browsersJSON(t, env)
+	requireSameTree(t, "after the migration check", before, snapshotTree(t, legacy))
+	if _, err := os.Stat(filepath.Join(h.profilesDir(), "Default")); err == nil {
+		t.Fatal("a folder of six's profile was moved into seven-profiles")
+	}
+}
+
+func TestSixWithTheSameBrowserTwiceHasNoExtra(t *testing.T) {
+	h := newFakeHome(t)
+	o := h.options()
+	makeSixTree(t, browser.SixProfileFor(o, 0).Dir, "")
+	chrome := browser.Installed{ID: "chrome", Name: "Google Chrome", Engine: browser.EngineChromium, Version: "154.0.8037.98", Path: "/g", Executable: "/g", DebugSupport: browser.DebugSupported}
+	entries := browser.Rank(nil, []browser.Installed{chrome})
+	sel, err := flow.ResolveSix(o, 0, entries, []string{"chrome", "Google Chrome"})
+	if err != nil || len(sel) != 1 || sel[0].ID != "six" || sel[0].Installed.ID != "chrome" {
+		t.Fatalf("selection %v, %v", ids(sel), err)
+	}
+	if _, err := flow.ResolveSix(o, 0, entries, []string{"electron:none"}); err == nil {
+		t.Fatal("an unknown --browser with --profile six")
+	}
+}
