@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -114,18 +116,31 @@ func TestSliccyOnlyPublishesToNext(t *testing.T) {
 
 type fakeRegistry struct {
 	*httptest.Server
+	mu        sync.Mutex
 	published map[string]bool
+	asked     map[string]bool
+}
+
+func (f *fakeRegistry) wasAsked(dep string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.asked[dep]
 }
 
 func newFakeRegistry(t *testing.T, published ...string) *fakeRegistry {
 	t.Helper()
-	f := &fakeRegistry{published: map[string]bool{}}
+	f := &fakeRegistry{published: map[string]bool{}, asked: map[string]bool{}}
 	for _, p := range published {
 		f.published[p] = true
 	}
 	f.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		at := strings.LastIndex(path, "/")
+		if at > 0 {
+			f.mu.Lock()
+			f.asked[path[:at]+"@"+path[at+1:]] = true
+			f.mu.Unlock()
+		}
 		if r.Method == http.MethodGet && at > 0 && f.published[path[:at]+"@"+path[at+1:]] {
 			_ = json.NewEncoder(w).Encode(map[string]string{"name": path[:at], "version": path[at+1:]})
 			return
@@ -139,8 +154,13 @@ func newFakeRegistry(t *testing.T, published ...string) *fakeRegistry {
 
 func registryEnv(t *testing.T, reg *fakeRegistry) []string {
 	t.Helper()
+	return registryEnvWaiting(t, reg, 0)
+}
+
+func registryEnvWaiting(t *testing.T, reg *fakeRegistry, seconds int) []string {
+	t.Helper()
 	env := []string{}
-	for _, kv := range publishEnv(t, "SLICCY_NEXT_PUBLISH=true", "SLICC_REGISTRY_WAIT_SECONDS=0") {
+	for _, kv := range publishEnv(t, "SLICCY_NEXT_PUBLISH=true", "SLICC_REGISTRY_WAIT_SECONDS="+strconv.Itoa(seconds)) {
 		if !strings.HasPrefix(kv, "npm_config_registry=") {
 			env = append(env, kv)
 		}
@@ -156,7 +176,7 @@ func TestSliccyNeedsItsPlatformPackagesOnTheRegistry(t *testing.T) {
 	if r.code == 0 || !strings.Contains(r.stderr, "refusing to publish sliccy@7.0.0-next.1.2.3-test; not on the registry: "+dep) || strings.Contains(r.stdout+r.stderr, "Publishing to") {
 		t.Fatalf("missing dependency: %+v", r)
 	}
-	r = publish(t, node, staged, registryEnv(t, newFakeRegistry(t, dep)), "--tag", "next")
+	r = publish(t, node, staged, registryEnvWaiting(t, newFakeRegistry(t, dep), 120), "--tag", "next")
 	if !strings.Contains(r.stdout, "every optional dependency of sliccy@7.0.0-next.1.2.3-test is on the registry") || strings.Contains(r.stderr, "not on the registry") {
 		t.Fatalf("dependency present: %+v", r)
 	}
