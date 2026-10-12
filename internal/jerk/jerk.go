@@ -209,19 +209,23 @@ func (j *Jerk) Run(ctx context.Context, provider string, c Call) Outcome {
 	cmd.Env = childEnv(c.Env)
 	cmd.Stderr = io.Discard
 	cmd.WaitDelay = 2 * time.Second
-	stdout, err := cmd.StdoutPipe()
-	if err == nil {
-		err = cmd.Start()
-	}
-	if err != nil {
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	if err := cmd.Start(); err != nil {
 		return Outcome{Died: true, Result: Result{Exit: 1, Provider: provider, Message: "jerk couldn't start"}}
 	}
 	if c.Started != nil {
 		c.Started()
 	}
-	out := parse(io.LimitReader(stdout, maxOutput), c.Progress)
-	_, _ = io.Copy(io.Discard, stdout)
-	err = cmd.Wait()
+	parsed := make(chan Outcome, 1)
+	go func() {
+		o := parse(io.LimitReader(pr, maxOutput), c.Progress)
+		_, _ = io.Copy(io.Discard, pr)
+		parsed <- o
+	}()
+	err := cmd.Wait()
+	_ = pw.Close()
+	out := <-parsed
 	out.Result.Provider = provider
 	var ee *exec.ExitError
 	switch {
@@ -229,6 +233,8 @@ func (j *Jerk) Run(ctx context.Context, provider string, c Call) Outcome {
 		return Outcome{TimedOut: true, Result: Result{Exit: 1, Provider: provider, Message: "jerk timed out"}}
 	case errors.As(err, &ee):
 		out.Result.Exit = ee.ExitCode()
+	case errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil:
+		out.Result.Exit = cmd.ProcessState.ExitCode()
 	case err != nil:
 		out.Died = true
 	default:
