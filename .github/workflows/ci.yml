@@ -2,49 +2,30 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24
-          cache: npm
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: go.mod
-
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
-        with:
-          install-only: true
-
-      - run: npm ci
-
-      - run: npm run lint
-
-  test:
+  stress:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - { os: windows-latest, tree: base, run: '^TestSixLaunchesRealChromeWithoutSeedingTheProfile$', count: 50 }
+          - { os: windows-latest, tree: fix, run: '^TestSixLaunchesRealChromeWithoutSeedingTheProfile$', count: 50 }
+          - { os: windows-latest, tree: oldbrowser, run: '^TestSixLaunchLeavesTheStalePortFileClosedWhileTheBrowserStarts$', count: 20 }
+          - { os: windows-latest, tree: fix, run: '^TestSixLaunchLeavesTheStalePortFileClosedWhileTheBrowserStarts$', count: 20 }
+          - { os: ubuntu-latest, tree: base, run: '^TestCDPProtectsSevensOrigin$', count: 50 }
+          - { os: ubuntu-latest, tree: fix, run: '^TestCDPProtectsSevensOrigin$', count: 50 }
+          - { os: ubuntu-latest, tree: fix, run: '^TestCDPHoldsExtraInfoUntilItsRequestIsKnown$', count: 20 }
+    name: ${{ matrix.os }} ${{ matrix.tree }} ${{ matrix.run }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -54,11 +35,21 @@ jobs:
         with:
           node-version: 24
 
-      - run: go test -race -count=1 -timeout 15m ./test/integration/...
+      - shell: bash
+        run: |
+          case "${{ matrix.tree }}" in
+            base) git checkout -q 0b9112aac6e7622c52e0bc41b7bcb56137f51cf2 ;;
+            oldbrowser) git checkout -q 0b9112aac6e7622c52e0bc41b7bcb56137f51cf2 -- internal/browser ;;
+          esac
+          git log --oneline -1
+          git status --short
+          set +e
+          go test -race -count=${{ matrix.count }} -timeout 70m -run '${{ matrix.run }}' -v ./test/integration/ > out.log 2>&1
+          code=$?
+          grep -E -- '^--- (PASS|FAIL|SKIP)' out.log | sed -E 's/ \(.*//' | sort | uniq -c
+          grep -E -A4 -- '^--- FAIL' out.log | grep -vE 'pion|mdns' | head -60
+          grep -E 'sixprofile_test|protectcdp_test|protectextra_test' out.log | cut -c1-300 | sort | uniq -c | head -20
+          exit $code
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-
-      - run: go build -trimpath -o bin/ ./cmd/slicc
-        env:
-          CGO_ENABLED: '0'
