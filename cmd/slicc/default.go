@@ -45,6 +45,10 @@ flags for slicc with no command:
                       its origin is accepted too
   --origin <origin>   also accept seven on this origin (repeatable)
   --profile <name>    SLICC profile for a launched browser (default: its id)
+  --profile six[:<port>]
+                      use SLICC six's own Chrome profile in place: attach
+                      to six's Chrome when it runs with CDP, else launch
+                      Chrome in it (no picker; --browser picks the browser)
   --headless          launch browsers without a window
   --name <name>       the name and host this link shows in seven
   --kernel-port <n>   serve http://<port>.kernel.localhost on this local
@@ -68,6 +72,7 @@ type defaultFlags struct {
 	page     string
 	origins  []string
 	profile  string
+	six      *int
 	headless bool
 	kernel   int
 	noKernel bool
@@ -140,15 +145,30 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	if f.noKernel {
 		f.kernel = 0
 	}
-	if f.profile != "" && !browser.ValidProfileName(f.profile) {
-		fmt.Fprintf(stderr, "slicc: invalid profile name %q\n", f.profile)
-		return f, 2
+	if code := f.parseProfile(stderr); code >= 0 {
+		return f, code
 	}
 	if _, err := flow.PageOrigins(f.page, f.origins); err != nil {
 		fmt.Fprintf(stderr, "slicc: %v\n", err)
 		return f, 2
 	}
 	return f, -1
+}
+
+func (f *defaultFlags) parseProfile(stderr io.Writer) int {
+	port, six, err := browser.ParseSixProfile(f.profile)
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "slicc: %v\n", err)
+		return 2
+	case six:
+		f.six = &port
+		f.profile = ""
+	case f.profile != "" && !browser.ValidProfileName(f.profile):
+		fmt.Fprintf(stderr, "slicc: invalid profile name %q\n", f.profile)
+		return 2
+	}
+	return -1
 }
 
 func registerCaps(cf computeFlags, logf func(string, ...any), mounts []hostfs.Mount) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
@@ -216,7 +236,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	if code >= 0 {
 		return code
 	}
-	interactive := !f.json && !f.plain && !f.yes && len(f.browsers) == 0 && isTerminal(os.Stdin) && isTerminal(stdout)
+	interactive := !f.json && !f.plain && !f.yes && len(f.browsers) == 0 && f.six == nil && isTerminal(os.Stdin) && isTerminal(stdout)
 	logf := func(string, ...any) {}
 	if os.Getenv("SLICC_DEBUG") != "" && !interactive {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
@@ -232,7 +252,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 		cfg.Chosen = true
 		return runTUI(cfg, stdout, stderr)
 	}
-	cfg.Chosen = len(f.browsers) > 0
+	cfg.Chosen = len(f.browsers) > 0 || f.six != nil
 	return runPlain(cfg, f, stdout, stderr)
 }
 
@@ -247,7 +267,13 @@ func runPlain(cfg flow.Config, f defaultFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "slicc: %v\n", err)
 	}
 	out.event(flow.Event{Schema: flow.Schema, Event: flow.Discovered, Entries: r.Entries})
-	sel, err := flow.Resolve(r.Entries, f.browsers)
+	var sel []browser.Entry
+	var err error
+	if f.six != nil {
+		sel, err = flow.ResolveSix(cfg.Browser, *f.six, r.Entries, f.browsers)
+	} else {
+		sel, err = flow.Resolve(r.Entries, f.browsers)
+	}
 	if err != nil {
 		out.event(flow.Event{Schema: flow.Schema, Event: flow.Error, Message: err.Error()})
 		return 1
@@ -347,6 +373,15 @@ func firstNonEmpty(s ...string) string {
 	return ""
 }
 
+func tuiProfiles(o browser.Options) func(browser.Entry) []string {
+	return func(e browser.Entry) []string {
+		if e.Installed == nil || e.Six != nil {
+			return nil
+		}
+		return flow.Profiles(o, *e.Installed)
+	}
+}
+
 func runTUI(cfg flow.Config, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -357,7 +392,7 @@ func runTUI(cfg flow.Config, stdout, stderr io.Writer) int {
 		Profile:  cfg.Profile,
 		Color:    os.Getenv("NO_COLOR") == "",
 		Notice:   strings.TrimSpace(takeNotice()),
-		Profiles: func(e browser.Entry) []string { return flow.Profiles(cfg.Browser, *e.Installed) },
+		Profiles: tuiProfiles(cfg.Browser),
 		Stop:     cancel,
 	}
 	tcfg.Start = func(c tui.Choice) {
@@ -382,7 +417,7 @@ func runTUI(cfg flow.Config, stdout, stderr io.Writer) int {
 	p = tea.NewProgram(tui.New(tcfg), tea.WithOutput(stdout))
 	go func() {
 		r := browser.Discover(ctx, cfg.Browser)
-		p.Send(tui.EntriesMsg(r.Entries))
+		p.Send(tui.EntriesMsg(flow.WithSixRows(cfg.Browser, r.Entries)))
 	}()
 	_, err := p.Run()
 	cancel()

@@ -14,7 +14,7 @@ import (
 var ErrNoBrowser = errors.New("no browser that can host seven was found; install Chrome or pass --cdp <url>")
 
 func CanHost(e browser.Entry) error {
-	if e.Kind == browser.KindEndpoint {
+	if e.Kind == browser.KindEndpoint || e.Kind == browser.KindSix {
 		return nil
 	}
 	if e.Installed == nil {
@@ -33,9 +33,13 @@ func CanExtra(e browser.Entry) error {
 	return nil
 }
 
+func IsSix(e browser.Entry) bool {
+	return e.Six != nil || (e.Endpoint != nil && e.Endpoint.Six)
+}
+
 func Default(entries []browser.Entry) (browser.Entry, error) {
 	for _, e := range entries {
-		if CanHost(e) == nil {
+		if !IsSix(e) && CanHost(e) == nil {
 			return e, nil
 		}
 	}
@@ -71,6 +75,9 @@ func Resolve(entries []browser.Entry, ids []string) ([]browser.Entry, error) {
 		e, ok := Find(entries, id)
 		if !ok {
 			return nil, fmt.Errorf("no browser %q; see slicc browsers", id)
+		}
+		if IsSix(e) {
+			return nil, sixRefused(e)
 		}
 		if seen[e.ID] {
 			continue

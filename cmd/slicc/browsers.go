@@ -84,6 +84,9 @@ func entryState(e browser.Entry) string {
 		if e.Endpoint.WSOnly {
 			parts = append(parts, "websocket only")
 		}
+		if e.Endpoint.Six {
+			parts = append(parts, "SLICC six's profile")
+		}
 		return strings.Join(parts, ", ")
 	}
 	parts := []string{"installed"}
