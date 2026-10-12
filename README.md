@@ -148,7 +148,7 @@ Signing:
 
 ## Companion tools
 
-slicc works with two tools that run on this machine: slicc-jerk (`jerk`), which gets tokens for seven's vault, and fnox. slicc finds them on `PATH` or in `bin` of its data folder: `~/Library/Application Support/slicc` on macOS, `$XDG_DATA_HOME/slicc` (default `~/.local/share/slicc`) on Linux, `%LOCALAPPDATA%\slicc` on Windows. That folder is never shared over `fs` (see [Host folders](#host-folders)).
+slicc works with two tools that run on this machine: slicc-jerk (`jerk`), which gets tokens for seven's vault, and fnox. slicc finds them on `PATH` or in `bin` of its data folder: `~/Library/Application Support/slicc` on macOS, `$XDG_DATA_HOME/slicc` (default `~/.local/share/slicc`) on Linux, `%LOCALAPPDATA%\slicc` on Windows. That folder is never shared over `fs` (see [Host folders](#host-folders)). When its `bin` exists, slicc appends it to its own `PATH` at start, so its children (the SSH runner, and jerk calling fnox) find the tools too; a copy already on `PATH` wins.
 
 **With npm.** `@ai-ecoverse/slicc` and `sliccy` list `@ai-ecoverse/slicc-jerk` and `@ai-ecoverse/fnox` as `optionalDependencies` (`^` the latest release), but only those that are on the registry when the release is staged (`npm-stage.mjs --companions`); the others are left out with a notice. The publish check that waits for the platform packages doesn't wait for them. The launcher puts the `node_modules/.bin` of each installed companion package first on `PATH` for the binary, so `jerk` and `fnox` resolve for slicc and its children.
 

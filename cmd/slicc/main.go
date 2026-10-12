@@ -30,6 +30,7 @@ usage:
 ` + defaultHelp
 
 func run(args []string, stdout, stderr io.Writer) int {
+	companionsOnPath()
 	defer startup(args, stderr)()
 	if isDefault(args) {
 		return runDefault(args, stdout, stderr)

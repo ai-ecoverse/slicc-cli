@@ -111,3 +111,24 @@ func answersVersion(ctx context.Context, path, version string) error {
 	}
 	return nil
 }
+
+func companionsOnPath() {
+	dir, err := fence.DataDir()
+	if err != nil {
+		return
+	}
+	bin := filepath.Join(dir, "bin")
+	if fi, err := os.Stat(bin); err != nil || !fi.IsDir() {
+		return
+	}
+	path := os.Getenv("PATH")
+	for _, p := range filepath.SplitList(path) {
+		if p == bin {
+			return
+		}
+	}
+	if path != "" {
+		path += string(os.PathListSeparator)
+	}
+	_ = os.Setenv("PATH", path+bin)
+}

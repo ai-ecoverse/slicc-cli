@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -34,9 +35,19 @@ func buildCompanion(t *testing.T, name, version string) []byte {
 type fakeReleases struct {
 	*httptest.Server
 	repo, asset, tag string
+	mu               sync.Mutex
 	payload          []byte
 	sums             string
 	asked            atomic.Int32
+}
+
+func (f *fakeReleases) set(payload []byte, sums string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if payload != nil {
+		f.payload = payload
+	}
+	f.sums = sums
 }
 
 func newFakeReleases(t *testing.T, repo, name, tag string, payload []byte) *fakeReleases {
@@ -47,8 +58,11 @@ func newFakeReleases(t *testing.T, repo, name, tag string, payload []byte) *fake
 	}
 	sum := sha256.Sum256(payload)
 	f.sums = fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), f.asset)
-	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.asked.Add(1)
+		f.mu.Lock()
+		payload, sums := f.payload, f.sums
+		f.mu.Unlock()
 		switch r.URL.Path {
 		case "/repos/" + f.repo + "/releases/latest":
 			_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": f.tag, "assets": []map[string]string{
@@ -56,13 +70,14 @@ func newFakeReleases(t *testing.T, repo, name, tag string, payload []byte) *fake
 				{"name": "SHA256SUMS", "browser_download_url": f.URL + "/dl/sums"},
 			}})
 		case "/dl/asset":
-			_, _ = w.Write(f.payload)
+			_, _ = w.Write(payload)
 		case "/dl/sums":
-			_, _ = w.Write([]byte(f.sums))
+			_, _ = w.Write([]byte(sums))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
+	f.Start()
 	t.Cleanup(f.Close)
 	return f
 }
@@ -111,16 +126,16 @@ func TestInstallCompanions(t *testing.T) {
 func TestInstallRefusesABadDownload(t *testing.T) {
 	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v1.4.2", buildCompanion(t, "jerk", "1.4.2"))
 	env, dest := installEnv(t, f)
-	f.sums = strings.Repeat("0", 64) + "  " + f.asset + "\n"
+	f.set(nil, strings.Repeat("0", 64)+"  "+f.asset+"\n")
 	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "does not match its SHA-256 in SHA256SUMS") {
 		t.Fatalf("checksum: %+v", r)
 	}
 	if _, err := os.Stat(dest); err == nil {
 		t.Fatal("a mismatched download was installed")
 	}
-	f.payload = buildCompanion(t, "jerk", "1.4.1")
-	sum := sha256.Sum256(f.payload)
-	f.sums = hex.EncodeToString(sum[:]) + "  " + f.asset + "\n"
+	payload := buildCompanion(t, "jerk", "1.4.1")
+	sum := sha256.Sum256(payload)
+	f.set(payload, hex.EncodeToString(sum[:])+"  "+f.asset+"\n")
 	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, `reports version "1.4.1", expected 1.4.2`) {
 		t.Fatalf("version: %+v", r)
 	}
@@ -141,5 +156,27 @@ func TestInstallUsage(t *testing.T) {
 	}
 	if r := runBin(t, isolatedEnv(t), binary, "--help"); !strings.Contains(r.stdout, "slicc install jerk|fnox") {
 		t.Fatalf("%+v", r)
+	}
+}
+
+func TestInstalledCompanionsAreOnTheChildrensPath(t *testing.T) {
+	requireBinary(t, "ssh")
+	home := t.TempDir()
+	data := filepath.Join(home, ".local", "share", "slicc")
+	switch runtime.GOOS {
+	case "darwin":
+		data = filepath.Join(home, "Library", "Application Support", "slicc")
+	case "windows":
+		data = filepath.Join(home, "Local", "slicc")
+	}
+	bin := filepath.Join(data, "bin")
+	writeFile(t, filepath.Join(bin, exeName("jerk")), "")
+	env := append(homeEnv(home), "XDG_DATA_HOME="+filepath.Join(home, ".local", "share"), "LOCALAPPDATA="+filepath.Join(home, "Local"))
+	b := launchBrowser(t)
+	n := startSSHNodeEnv(t, b, pageServer(t), home, env, runnerArgs()...)
+	out, errOut, code := systemSSH(t, n.fixture(t), n.hello.SSHHostKey, "", "env PATH")
+	parts := filepath.SplitList(strings.TrimSpace(strings.ReplaceAll(out, "\r", "")))
+	if code != 0 || len(parts) < 2 || parts[len(parts)-1] != bin {
+		t.Fatalf("code %d stderr %q: PATH %v doesn't end with %s", code, errOut, parts, bin)
 	}
 }
