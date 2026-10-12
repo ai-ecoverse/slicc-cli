@@ -82,7 +82,7 @@ func launchBrowserOn(t *testing.T, debugPort int) *chromeProc {
 	args := []string{
 		"--headless=new", "--remote-debugging-port=" + strconv.Itoa(debugPort), "--user-data-dir=" + dir,
 		"--no-first-run", "--no-default-browser-check", "--disable-background-networking",
-		"--disable-component-update", "--disable-sync", "--no-proxy-server", "about:blank",
+		"--disable-component-update", "--disable-sync", "about:blank",
 	}
 	if runtime.GOOS == "linux" {
 		args = append([]string{"--no-sandbox"}, args...)

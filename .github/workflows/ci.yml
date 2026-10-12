@@ -55,6 +55,10 @@ jobs:
         with:
           node-version: 24
 
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
       - run: go test -race -count=1 -timeout 15m -v ./test/integration/...
 
       - run: go build -trimpath -o bin/ ./cmd/slicc
