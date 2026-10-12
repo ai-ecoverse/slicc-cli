@@ -113,6 +113,9 @@ func (o *Origins) URL(raw string) bool {
 	}
 	if slices.Contains(rules.Schemes, s) {
 		h := hostOf(u)
+		if slices.Contains(rules.Hosts, h) {
+			return true
+		}
 		for _, d := range rules.Domains {
 			if under(h, d) {
 				return true
@@ -145,6 +148,11 @@ func (o *Origins) CookieDomain(domain string) bool {
 	}
 	for _, x := range rules.Domains {
 		if under(d, x) || under(x, d) {
+			return true
+		}
+	}
+	for _, h := range rules.Hosts {
+		if under(h, d) {
 			return true
 		}
 	}

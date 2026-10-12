@@ -98,7 +98,7 @@ func (e *protectEnv) targets(t *testing.T) []protectTarget {
 
 func (e *protectEnv) testCreate(t *testing.T) {
 	before := len(targetIDs(t, e.b))
-	for _, u := range []string{e.seven + "/", e.seven + "/nowhere", "HTTP://127.0.0.1:" + e.seven[strings.LastIndexByte(e.seven, ':')+1:] + "/x", "blob:" + e.seven + "/0b9e", "https://seven.sliccy.ai/", "https://www.sliccy.ai/"} {
+	for _, u := range []string{e.seven + "/", e.seven + "/nowhere", "HTTP://127.0.0.1:" + e.seven[strings.LastIndexByte(e.seven, ':')+1:] + "/x", "blob:" + e.seven + "/0b9e", "https://seven.sliccy.ai/", "https://www.sliccy.ai/", "https://vault.sliccy.ai/"} {
 		var r cdpOutcome
 		e.evalJSON(t, "linkTest.protect.create("+jsArgs("chrome", u)+")", &r)
 		if !r.refused() || r.Error.Message != refusedText {

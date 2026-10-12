@@ -50,6 +50,9 @@ func TestProtectedVectors(t *testing.T) {
 }
 
 func TestProtectRefusalAndRedaction(t *testing.T) {
+	if !protect.MustNew(nil).URL("https://vault.sliccy.ai/") || !protect.MustNew(nil).CookieDomain("vault.sliccy.ai") {
+		t.Fatal("the vault isn't protected")
+	}
 	if protect.Refusal() != "slicc: refused: target is on seven's origin" {
 		t.Fatalf("refusal %q", protect.Refusal())
 	}
