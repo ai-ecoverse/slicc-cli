@@ -92,6 +92,17 @@ func TestAttestRealReleases(t *testing.T) {
 			t.Fatalf("%s: %v", v, err)
 		}
 	}
+	jb, err := os.ReadFile(filepath.Join("testdata", "attest", "jerk-v0.3.0.bundle.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jd, _ := os.ReadFile(filepath.Join("testdata", "attest", "jerk-v0.3.0.sha256"))
+	if err := attest.Verify(jb, strings.TrimSpace(string(jd)), attest.Identity{Repo: "ai-ecoverse/slicc-jerk", Ref: "refs/heads/main"}, root); err != nil {
+		t.Fatalf("slicc-jerk v0.3.0: %v", err)
+	}
+	if got := step(attest.Verify(jb, strings.TrimSpace(string(jd)), sliccRelease, root)); got != "identity" {
+		t.Fatalf("slicc-jerk's attestation as slicc-cli's: %s", got)
+	}
 	b, digest := realBundle(t, "v1.31.0")
 	other, _ := realBundle(t, "v1.20.0")
 	otherBody := entry(func() jsonMap { var m jsonMap; _ = json.Unmarshal(other, &m); return m }())["canonicalizedBody"]
