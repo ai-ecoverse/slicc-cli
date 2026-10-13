@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -122,7 +123,12 @@ func (cf *computeFlags) checkRunner(stderr io.Writer) int {
 		return -1
 	}
 	prog := cf.runner[0]
-	if _, err := exec.LookPath(prog); err == nil {
+	if path, err := exec.LookPath(prog); err == nil {
+		if !filepath.IsAbs(path) {
+			if abs, err := filepath.Abs(path); err == nil {
+				cf.runner[0] = abs
+			}
+		}
 		return -1
 	}
 	if strings.ContainsFunc(prog, unicode.IsSpace) {
