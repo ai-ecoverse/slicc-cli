@@ -37,6 +37,9 @@ opens seven in it and links it. In a terminal it shows a picker and then a
 dashboard. Without a terminal, or with --yes, --browser, --plain or --json,
 it takes the best match and prints status lines on stderr. q, Ctrl-C or
 SIGTERM says bye to seven, closes the browsers this run launched and exits.
+With no SLICC profile and no CDP endpoint (and no --browser, --cdp or
+--profile), slicc links seven in your default browser instead, as slicc
+pair does; in a terminal (or with --open) it opens the pairing URL there.
 
 flags for slicc with no command:
   --default-browser   link seven in your everyday browser instead, without
@@ -57,6 +60,10 @@ flags for slicc with no command:
   --kernel-port <n>   serve http://<port>.kernel.localhost on this local
                       port instead of 80
   --no-kernel         don't serve <port>.kernel.localhost at all
+  --no-fallback       with no SLICC profile and no CDP endpoint, exit
+                      instead of linking seven in the default browser
+  --open              when falling back without a terminal, open the
+                      pairing URL in the default browser too
   --no-jerk           don't offer this machine's slicc-jerk to seven
   --mount <path>[:<name>][:ro]
                       share this folder with seven's kernel (repeatable)
@@ -71,24 +78,26 @@ how to run six with npx sliccy@6, and exit 2.
 `
 
 type defaultFlags struct {
-	browsers []string
-	cdp      []string
-	page     string
-	origins  []string
-	profile  string
-	six      *int
-	headless bool
-	kernel   int
-	noKernel bool
-	name     string
-	allow    policy.Rules
-	deny     policy.Rules
-	yes      bool
-	plain    bool
-	json     bool
-	compute  computeFlags
-	mounts   stringList
-	noJerk   bool
+	browsers   []string
+	cdp        []string
+	page       string
+	origins    []string
+	profile    string
+	six        *int
+	headless   bool
+	kernel     int
+	noKernel   bool
+	name       string
+	allow      policy.Rules
+	deny       policy.Rules
+	yes        bool
+	plain      bool
+	json       bool
+	compute    computeFlags
+	mounts     stringList
+	noJerk     bool
+	open       bool
+	noFallback bool
 }
 
 func isDefault(args []string) bool {
@@ -123,6 +132,8 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	fs.BoolVar(&f.json, "json", false, "")
 	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
+	fs.BoolVar(&f.open, "open", false, "")
+	fs.BoolVar(&f.noFallback, "no-fallback", false, "")
 	var six string
 	registerSix(fs, &six)
 	err = fs.Parse(args)
@@ -266,13 +277,21 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
 	if interactive {
 		cfg.Chosen = true
-		return runTUI(cfg, stdout, stderr)
+		var found *browser.Result
+		if f.fallbackAllowed() {
+			r := browser.Discover(context.Background(), cfg.Browser)
+			if flow.Fallback(cfg.Browser, r.Entries) {
+				return runFallback(f, mounts, stdout, stderr)
+			}
+			found = &r
+		}
+		return runTUI(cfg, found, stdout, stderr)
 	}
 	cfg.Chosen = len(f.browsers) > 0 || f.six != nil
-	return runPlain(cfg, f, stdout, stderr)
+	return runPlain(cfg, f, mounts, stdout, stderr)
 }
 
-func runPlain(cfg flow.Config, f defaultFlags, stdout, stderr io.Writer) int {
+func runPlain(cfg flow.Config, f defaultFlags, mounts []hostfs.Mount, stdout, stderr io.Writer) int {
 	flushNotice(stderr)
 	out := plainOut{stdout: stdout, stderr: stderr, json: f.json}
 	cfg.Emit = out.event
@@ -283,6 +302,10 @@ func runPlain(cfg flow.Config, f defaultFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "slicc: %v\n", err)
 	}
 	out.event(flow.Event{Schema: flow.Schema, Event: flow.Discovered, Entries: r.Entries})
+	if f.fallbackAllowed() && flow.Fallback(cfg.Browser, r.Entries) {
+		stop()
+		return runFallback(f, mounts, stdout, stderr)
+	}
 	var sel []browser.Entry
 	var err error
 	if f.six != nil {
@@ -398,7 +421,7 @@ func tuiProfiles(o browser.Options) func(browser.Entry) []string {
 	}
 }
 
-func runTUI(cfg flow.Config, stdout, stderr io.Writer) int {
+func runTUI(cfg flow.Config, found *browser.Result, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var p *tea.Program
@@ -432,7 +455,12 @@ func runTUI(cfg flow.Config, stdout, stderr io.Writer) int {
 	}
 	p = tea.NewProgram(tui.New(tcfg), tea.WithOutput(stdout))
 	go func() {
-		r := browser.Discover(ctx, cfg.Browser)
+		var r browser.Result
+		if found != nil {
+			r = *found
+		} else {
+			r = browser.Discover(ctx, cfg.Browser)
+		}
 		p.Send(tui.EntriesMsg(flow.WithSixRows(cfg.Browser, r.Entries)))
 	}()
 	_, err := p.Run()
