@@ -139,6 +139,9 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 		fmt.Fprintf(stderr, "slicc: %v\n\n%s", err, defaultUsage)
 		return f, 2
 	}
+	if code := f.compute.checkRunner(stderr); code >= 0 {
+		return f, code
+	}
 	if code := checkMounts(f.mounts, "slicc", stderr); code >= 0 {
 		return f, code
 	}
