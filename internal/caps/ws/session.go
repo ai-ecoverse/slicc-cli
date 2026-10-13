@@ -124,29 +124,48 @@ func (x *session) up() {
 			x.fail(CloseMessageTooBig, "a message over 64 MiB")
 			return
 		}
-		payload := make([]byte, n)
-		if _, err := io.ReadFull(x.s, payload); err != nil {
-			_ = x.c.Close()
-			return
-		}
 		if t == RecordClose {
-			code, reason, ok := ParseClose(payload)
-			if !ok {
-				x.fail(CloseProtocolError, "a malformed close record")
-				return
-			}
-			x.sendClose(code, reason)
+			x.closeRecord(n)
 			return
 		}
 		mt := websocket.BinaryMessage
 		if t == RecordText {
 			mt = websocket.TextMessage
 		}
-		if err := x.c.WriteMessage(mt, payload); err != nil {
+		if err := x.message(mt, n); err != nil {
 			_ = x.c.Close()
 			return
 		}
 	}
+}
+
+func (x *session) message(mt int, n uint32) error {
+	w, err := x.c.NextWriter(mt)
+	if err != nil {
+		return err
+	}
+	if _, err := io.CopyN(w, x.s, int64(n)); err != nil {
+		return err
+	}
+	return w.Close()
+}
+
+func (x *session) closeRecord(n uint32) {
+	if n > 2+MaxCloseReason {
+		x.fail(CloseProtocolError, "a malformed close record")
+		return
+	}
+	payload := make([]byte, n)
+	if _, err := io.ReadFull(x.s, payload); err != nil {
+		_ = x.c.Close()
+		return
+	}
+	code, reason, ok := ParseClose(payload)
+	if !ok {
+		x.fail(CloseProtocolError, "a malformed close record")
+		return
+	}
+	x.sendClose(code, reason)
 }
 
 func (x *session) fail(code int, reason string) {

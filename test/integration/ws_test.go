@@ -125,6 +125,12 @@ func (u *wsUpstream) waitOutcome(t *testing.T, tag, want string) {
 	}
 }
 
+func (u *wsUpstream) outcomesOf(tag string) []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return slices.Clone(u.outcomes[tag])
+}
+
 func (u *wsUpstream) header(tag string) http.Header {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -491,6 +497,16 @@ func (e *linkEnv) testWSDrops(t *testing.T, up *wsUpstream) {
 		t.Fatalf("page drop: %+v", r)
 	}
 	up.waitOutcome(t, "page-drop", "dropped")
+	r = e.ws(t, map[string]any{"open": wsOpen(up.url("/echo?tag=page-partial")), "steps": []map[string]any{
+		{"head": []int{1, 100}}, {"raw": base64.StdEncoding.EncodeToString([]byte("0123456789"))}, {"end": true},
+	}})
+	if len(r.Records) != 0 || !r.Ended || r.Reset != "" {
+		t.Fatalf("page ends inside a record: %+v", r)
+	}
+	up.waitOutcome(t, "page-partial", "dropped")
+	if got := up.outcomesOf("page-partial"); len(got) != 1 {
+		t.Fatalf("the far end saw %q", got)
+	}
 	e.ws(t, map[string]any{"open": wsOpen(up.url("/echo?tag=page-reset")), "steps": []map[string]any{
 		{"send": "text", "text": "x"}, {"wait": 1}, {"reset": "ECONNRESET"},
 	}})
