@@ -126,7 +126,7 @@ func (e *linkEnv) testKindCaps(t *testing.T) {
 		Caps []string `json:"caps"`
 	}
 	e.p.eval("linkTest.ready()", &h)
-	if !slices.Equal(h.Caps, []string{"net", "http", "credentialed", "cdp"}) {
+	if !slices.Equal(h.Caps, []string{"net", "http", "credentialed", "ws", "cdp"}) {
 		t.Fatalf("caps %v", h.Caps)
 	}
 }
@@ -439,4 +439,5 @@ func followExitKinds(t *testing.T, p *page) {
 	if r.Reset != "EACCES" {
 		t.Fatalf("follow http outside the allow rule: %+v", r)
 	}
+	followWS(t, env)
 }

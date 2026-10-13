@@ -20,6 +20,7 @@ import (
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
+	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
@@ -45,8 +46,8 @@ until interrupted, reconnecting when it drops. Status lines go to stderr.
 The join URL is never printed.
 
 flags:
-  --exit               offer this machine's network to seven (tcp, resolve
-                       and http streams) under the remote policy: public
+  --exit               offer this machine's network to seven (tcp, resolve,
+                       http and ws streams) under the remote policy: public
                        addresses only
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
@@ -54,7 +55,8 @@ flags:
   --cdp <url>          let seven drive this browser over the link (cdp,
                        repeatable); seven gets full control of it, except
                        tabs, cookies and storage on sliccy.ai, and its
-                       endpoint and port are denied to tcp, http and ssh
+                       endpoint and port are denied to tcp, http, ws and
+                       ssh
 ` + jerkFollowUsage + mountUsage + computeUsage + `
 With --runner the link also offers ssh: seven's kernel reaches this machine's
 SSH server, which never listens on a port, and its forwarding goes through
@@ -234,7 +236,8 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 		tcp.Register(r.node)
 		resolve.Register(r.node)
 		httpcap.Register(r.node)
-		status("exit on (tcp, resolve, http), %s", pol.Summary())
+		wscap.Register(r.node)
+		status("exit on (tcp, resolve, http, ws), %s", pol.Summary())
 	} else {
 		status("exit off")
 	}

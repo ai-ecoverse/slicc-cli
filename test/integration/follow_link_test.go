@@ -317,7 +317,7 @@ func TestFollowLinksThroughTheTrayAndServesTCP(t *testing.T) {
 	if !created {
 		t.Fatal("first run did not mint a device")
 	}
-	fp.waitStderr(t, "slicc: exit on (tcp, resolve, http)", 10*time.Second)
+	fp.waitStderr(t, "slicc: exit on (tcp, resolve, http, ws)", 10*time.Second)
 	fp.waitStderr(t, "slicc: linked to link test page", 60*time.Second)
 	p.waitUp(t, "")
 	if got := p.fingerprint(); got != fingerprint || !strings.HasPrefix(got, "sha-256 ") {
@@ -359,7 +359,7 @@ func TestFollowWithoutExitRefusesTCP(t *testing.T) {
 	if res.Reset != "EOPNOTSUPP" {
 		t.Fatalf("tcp without --exit: %+v", res)
 	}
-	for _, open := range []string{`{kind: 'resolve', name: 'localhost', family: 0}`, `{kind: 'http'}`, `{kind: 'cdp', browser: 'chrome'}`} {
+	for _, open := range []string{`{kind: 'resolve', name: 'localhost', family: 0}`, `{kind: 'http'}`, `{kind: 'ws', url: 'ws://1.1.1.1/'}`, `{kind: 'cdp', browser: 'chrome'}`} {
 		p.eval("linkTest.open("+open+")", &res)
 		if res.Reset != "EOPNOTSUPP" {
 			t.Fatalf("%s without --exit: %+v", open, res)

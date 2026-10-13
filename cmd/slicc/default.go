@@ -22,6 +22,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
+	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
@@ -179,6 +180,7 @@ func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), 
 		tcp.Register(n)
 		resolve.Register(n)
 		httpcap.Register(n)
+		wscap.Register(n)
 		if withJerk {
 			serveJerk(n, true, false, logf)
 		}

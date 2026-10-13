@@ -4,6 +4,7 @@ import { cdpTest } from './cdp.js';
 import { protectTest } from './protect.js';
 import { fsTest } from './fs-test.js';
 import { agentTest, onAgent } from './agent.js';
+import { wsTest } from './ws.js';
 
 const kernelIn = new URLSearchParams(location.search).has('kernel');
 
@@ -405,6 +406,7 @@ globalThis.linkTest = {
   cdp: cdpTest(() => state.link, describe),
   protect: protectTest(() => state.link, describe),
   fs: fsTest(() => state.link, describe, { sha256, toBase64, fromBase64, prng }),
+  ws: wsTest(() => state.link, describe, { sha256, fromBase64, prng }),
   kernel() {
     return { opens: kernel.opens, hanging: kernel.hanging.length, requests: kernel.requests };
   },
