@@ -731,3 +731,30 @@ func TestTelemetryNamesTheLoopbackCommands(t *testing.T) {
 		t.Fatalf("beacons: %+v", col.got())
 	}
 }
+
+func TestLoopbackWithNoFreePortExitsOne(t *testing.T) {
+	e := newLoopEnv(t)
+	var held []net.Listener
+	for p := e.first; p <= e.first+1; p++ {
+		ln, err := net.Listen("tcp4", "127.0.0.1:"+strconv.Itoa(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, ln)
+	}
+	defer func() {
+		for _, ln := range held {
+			_ = ln.Close()
+		}
+	}()
+	env := overrideEnv(e.env, map[string]string{"SLICC_LOOPBACK_PORTS": fmt.Sprintf("%d-%d", e.first, e.first+1)})
+	cmd := exec.Command(binary, "pair")
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	_ = cmd.Run()
+	want := fmt.Sprintf("slicc: no free port in %d-%d on 127.0.0.1\n", e.first, e.first+1)
+	if code := cmd.ProcessState.ExitCode(); code != 1 || !strings.HasSuffix(stderr.String(), want) || stdout.Len() != 0 {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, stdout.String(), stderr.String())
+	}
+}
