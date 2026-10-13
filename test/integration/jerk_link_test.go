@@ -347,12 +347,12 @@ func TestFollowJerkFlags(t *testing.T) {
 
 func TestJerkFindSkipsAnOldJerk(t *testing.T) {
 	onPath, data := t.TempDir(), t.TempDir()
-	writeExe(t, filepath.Join(onPath, exeName("jerk")), buildCompanion(t, "jerk", "0.5.0"))
+	writeExe(t, filepath.Join(onPath, exeName("jerk")), buildJerk(t, "0.5.0"))
 	t.Setenv("PATH", onPath+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if j, old := jerk.Find(data); j != nil || old != "0.5.0" {
 		t.Fatalf("only an old jerk: %+v, %q", j, old)
 	}
-	writeExe(t, filepath.Join(data, exeName("jerk")), buildCompanion(t, "jerk", "0.6.0"))
+	writeExe(t, filepath.Join(data, exeName("jerk")), buildJerk(t, "0.6.0"))
 	if j, old := jerk.Find(data); j == nil || j.Version != "0.6.0" || j.Path != filepath.Join(data, exeName("jerk")) || old != "" {
 		t.Fatalf("an old jerk on PATH and a new one in the data folder: %+v, %q", j, old)
 	}

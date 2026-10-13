@@ -100,11 +100,11 @@ func TestNPMStageAddsCompanionsThatAreOnTheRegistry(t *testing.T) {
 	if deps["@ai-ecoverse/slicc-jerk"] != "^1.4.0" || deps["@ai-ecoverse/slicc-"+target()] != "1.2.3-test" || len(deps) != 2 {
 		t.Fatalf("with --companions: %v", deps)
 	}
-	if !strings.Contains(r.stdout, "@ai-ecoverse/fnox has no release on the registry yet; leaving it out") {
+	if strings.Contains(r.stdout, "leaving it out") {
 		t.Fatalf("%+v", r)
 	}
 	_, r = stageWithEnv(t, node, publishEnv(t), "--companions")
-	if !strings.Contains(r.stdout, "@ai-ecoverse/slicc-jerk has no release on the registry yet") {
+	if !strings.Contains(r.stdout, "@ai-ecoverse/slicc-jerk has no release on the registry yet; leaving it out") {
 		t.Fatalf("an unreachable registry: %+v", r)
 	}
 }
@@ -112,9 +112,9 @@ func TestNPMStageAddsCompanionsThatAreOnTheRegistry(t *testing.T) {
 func TestNPMPublishDoesNotWaitForCompanions(t *testing.T) {
 	node := requireNode(t)
 	dep := "@ai-ecoverse/slicc-" + target() + "@1.2.3-test"
-	reg := newLatestRegistry(t, map[string]string{"@ai-ecoverse/slicc-jerk": "1.4.0", "@ai-ecoverse/fnox": "0.2.0"}, dep)
+	reg := newLatestRegistry(t, map[string]string{"@ai-ecoverse/slicc-jerk": "1.4.0"}, dep)
 	out, _ := stageWithEnv(t, node, publishEnv(t, "npm_config_registry="+reg.URL+"/"), "--name", "sliccy", "--launcher-only", "--version", "7.0.0-next.1.2.3", "--deps-version", "1.2.3-test", "--companions")
-	if deps := optionalDeps(t, out); deps["@ai-ecoverse/fnox"] != "^0.2.0" || len(deps) != 3 {
+	if deps := optionalDeps(t, out); deps["@ai-ecoverse/slicc-jerk"] != "^1.4.0" || len(deps) != 2 {
 		t.Fatalf("deps %v", deps)
 	}
 	r := publish(t, node, out, publishEnv(t, "npm_config_registry="+reg.URL+"/", "SLICCY_NEXT_PUBLISH=true", "SLICC_REGISTRY_WAIT_SECONDS=0"), "--tag", "next", "--dry-run", "--require-registry")

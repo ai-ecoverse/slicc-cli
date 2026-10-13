@@ -17,10 +17,10 @@ import (
 	"testing"
 )
 
-func buildCompanion(t *testing.T, name, version string) []byte {
+func buildJerk(t *testing.T, version string) []byte {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), exeName(name))
-	build := exec.Command("go", "build", "-ldflags", "-X main.name="+name+" -X main.version="+version, "-o", out, "./testdata/fakecompanion")
+	out := filepath.Join(t.TempDir(), exeName("jerk"))
+	build := exec.Command("go", "build", "-ldflags", "-X main.name=jerk -X main.version="+version, "-o", out, "./testdata/fakecompanion")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if msg, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, msg)
@@ -74,9 +74,9 @@ func (f *fakeReleases) set(payload []byte, sums string) {
 	f.sums = sums
 }
 
-func newFakeReleases(t *testing.T, repo, name, tag string, payload []byte) *fakeReleases {
+func newJerkReleases(t *testing.T, tag string, payload []byte) *fakeReleases {
 	t.Helper()
-	f := &fakeReleases{repo: repo, asset: name + "-" + runtime.GOOS + "-" + runtime.GOARCH, tag: tag, payload: payload, sig: newFakeSigstore(t)}
+	f := &fakeReleases{repo: "ai-ecoverse/slicc-jerk", asset: "jerk-" + runtime.GOOS + "-" + runtime.GOARCH, tag: tag, payload: payload, sig: newFakeSigstore(t)}
 	if runtime.GOOS == "windows" {
 		f.asset += ".exe"
 	}
@@ -135,27 +135,23 @@ func installEnv(t *testing.T, f *fakeReleases) ([]string, string) {
 }
 
 func TestInstallCompanions(t *testing.T) {
-	for _, c := range []struct{ name, repo string }{{"jerk", "ai-ecoverse/slicc-jerk"}, {"fnox", "ai-ecoverse/fnox-build"}} {
-		t.Run(c.name, func(t *testing.T) {
-			f := newFakeReleases(t, c.repo, c.name, "v1.4.2", buildCompanion(t, c.name, "1.4.2"))
-			env, dest := installEnv(t, f)
-			r := runBin(t, env, binary, "install", c.name)
-			if r.code != 0 || !strings.Contains(r.stdout, "installed "+c.name+" 1.4.2 at "+dest) || !strings.Contains(r.stdout, "the build provenance attestation by "+releaseSAN(c.repo)) {
-				t.Fatalf("%+v", r)
-			}
-			if out, err := exec.Command(dest, "--version").Output(); err != nil || strings.TrimSpace(string(out)) != c.name+" 1.4.2" {
-				t.Fatalf("%s: %q %v", dest, out, err)
-			}
-			r = runBin(t, env, binary, "install", c.name)
-			if r.code != 0 || !strings.Contains(r.stdout, c.name+" 1.4.2 is already installed at "+dest) {
-				t.Fatalf("again: %+v", r)
-			}
-		})
+	f := newJerkReleases(t, "v1.4.2", buildJerk(t, "1.4.2"))
+	env, dest := installEnv(t, f)
+	r := runBin(t, env, binary, "install", "jerk")
+	if r.code != 0 || !strings.Contains(r.stdout, "installed jerk 1.4.2 at "+dest) || !strings.Contains(r.stdout, "the build provenance attestation by "+releaseSAN("ai-ecoverse/slicc-jerk")) {
+		t.Fatalf("%+v", r)
+	}
+	if out, err := exec.Command(dest, "--version").Output(); err != nil || strings.TrimSpace(string(out)) != "jerk 1.4.2" {
+		t.Fatalf("%s: %q %v", dest, out, err)
+	}
+	r = runBin(t, env, binary, "install", "jerk")
+	if r.code != 0 || !strings.Contains(r.stdout, "jerk 1.4.2 is already installed at "+dest) {
+		t.Fatalf("again: %+v", r)
 	}
 }
 
 func TestInstallRefusesABadDownload(t *testing.T) {
-	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v1.4.2", buildCompanion(t, "jerk", "1.4.2"))
+	f := newJerkReleases(t, "v1.4.2", buildJerk(t, "1.4.2"))
 	env, dest := installEnv(t, f)
 	f.set(nil, strings.Repeat("0", 64)+"  "+f.asset+"\n")
 	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "does not match its SHA-256 in SHA256SUMS") {
@@ -164,7 +160,7 @@ func TestInstallRefusesABadDownload(t *testing.T) {
 	if _, err := os.Stat(dest); err == nil {
 		t.Fatal("a mismatched download was installed")
 	}
-	payload := buildCompanion(t, "jerk", "1.4.1")
+	payload := buildJerk(t, "1.4.1")
 	sum := sha256.Sum256(payload)
 	f.set(payload, hex.EncodeToString(sum[:])+"  "+f.asset+"\n")
 	f.attest(t, bundleOptions{})
@@ -177,16 +173,16 @@ func TestInstallRefusesABadDownload(t *testing.T) {
 }
 
 func TestInstallUsage(t *testing.T) {
-	for _, args := range [][]string{{"install"}, {"install", "gh"}, {"install", "jerk", "fnox"}} {
-		if r := runBin(t, isolatedEnv(t), binary, args...); r.code != 2 || !strings.Contains(r.stderr, "usage: slicc install jerk|fnox") {
+	for _, args := range [][]string{{"install"}, {"install", "gh"}, {"install", "fnox"}, {"install", "jerk", "gh"}} {
+		if r := runBin(t, isolatedEnv(t), binary, args...); r.code != 2 || !strings.Contains(r.stderr, "slicc install: name jerk\n") || !strings.Contains(r.stderr, "usage: slicc install jerk [--checksum-only]") {
 			t.Fatalf("%v: %+v", args, r)
 		}
 	}
 	r := runBin(t, isolatedEnv(t), binary, "install", "--help")
-	if r.code != 0 || !strings.Contains(r.stdout, "ai-ecoverse/fnox-build") || !strings.Contains(r.stdout, "SHA256SUMS") {
+	if r.code != 0 || !strings.Contains(r.stdout, "ai-ecoverse/slicc-jerk") || !strings.Contains(r.stdout, "SHA256SUMS") || strings.Contains(r.stdout, "fnox") {
 		t.Fatalf("%+v", r)
 	}
-	if r := runBin(t, isolatedEnv(t), binary, "--help"); !strings.Contains(r.stdout, "slicc install jerk|fnox") {
+	if r := runBin(t, isolatedEnv(t), binary, "--help"); !strings.Contains(r.stdout, "slicc install jerk ") || strings.Contains(r.stdout, "fnox") {
 		t.Fatalf("%+v", r)
 	}
 }
@@ -214,29 +210,29 @@ func TestInstalledCompanionsAreOnTheChildrensPath(t *testing.T) {
 }
 
 func TestInstallRequiresTheAttestation(t *testing.T) {
-	f := newFakeReleases(t, "ai-ecoverse/fnox-build", "fnox", "v0.9.0", buildCompanion(t, "fnox", "0.9.0"))
+	f := newJerkReleases(t, "v0.9.0", buildJerk(t, "0.9.0"))
 	env, dest := installEnv(t, f)
 	f.mu.Lock()
 	f.attestations = nil
 	f.mu.Unlock()
-	if r := runBin(t, env, binary, "install", "fnox"); r.code != 1 || !strings.Contains(r.stderr, "fetching the attestation of "+f.asset) {
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "fetching the attestation of "+f.asset) {
 		t.Fatalf("no attestation: %+v", r)
 	}
-	f.attest(t, bundleOptions{san: releaseSAN("ai-ecoverse/fnox")})
-	if r := runBin(t, env, binary, "install", "fnox"); r.code != 1 || !strings.Contains(r.stderr, "no attestation of "+f.asset+" by "+releaseSAN("ai-ecoverse/fnox-build")+" verifies: attestation identity") {
-		t.Fatalf("the fork's identity: %+v", r)
+	f.attest(t, bundleOptions{san: releaseSAN("ai-ecoverse/slicc-jerk-fork")})
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "no attestation of "+f.asset+" by "+releaseSAN("ai-ecoverse/slicc-jerk")+" verifies: attestation identity") {
+		t.Fatalf("another repo's identity: %+v", r)
 	}
 	if _, err := os.Stat(dest); err == nil {
 		t.Fatal("an unattested binary was installed")
 	}
-	r := runBin(t, env, binary, "install", "fnox", "--checksum-only")
+	r := runBin(t, env, binary, "install", "jerk", "--checksum-only")
 	if r.code != 0 || !strings.Contains(r.stderr, "warning: --checksum-only skips the attestation") || !strings.Contains(r.stdout, "SHA256SUMS only; the attestation wasn't checked") {
 		t.Fatalf("--checksum-only: %+v", r)
 	}
 }
 
 func TestInstallTakesAnAttestationOverSHA256SUMS(t *testing.T) {
-	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v0.6.0", buildCompanion(t, "jerk", "0.6.0"))
+	f := newJerkReleases(t, "v0.6.0", buildJerk(t, "0.6.0"))
 	f.attestOver(t, bundleOptions{}, true)
 	env, dest := installEnv(t, f)
 	if r := runBin(t, env, binary, "install", "jerk"); r.code != 0 || !strings.Contains(r.stdout, "installed jerk 0.6.0 at "+dest) {
@@ -255,7 +251,7 @@ func TestInstallTakesAnAttestationOverSHA256SUMS(t *testing.T) {
 }
 
 func TestInstallRefusesAJerkOlderThanTheLinkNeeds(t *testing.T) {
-	f := newFakeReleases(t, "ai-ecoverse/slicc-jerk", "jerk", "v0.5.0", buildCompanion(t, "jerk", "0.5.0"))
+	f := newJerkReleases(t, "v0.5.0", buildJerk(t, "0.5.0"))
 	env, dest := installEnv(t, f)
 	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "ai-ecoverse/slicc-jerk 0.5.0 is older than 0.6.0, the first release slicc works with") {
 		t.Fatalf("%+v", r)

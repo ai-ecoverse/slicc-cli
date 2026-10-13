@@ -44,7 +44,7 @@ function binaryPath() {
   return bin;
 }
 
-const companions = { '@ai-ecoverse/slicc-jerk': 'jerk', '@ai-ecoverse/fnox': 'fnox' };
+const companions = { '@ai-ecoverse/slicc-jerk': 'jerk' };
 
 function companionDirs() {
   const names = (bin) => (process.platform === 'win32' ? [`${bin}.cmd`, `${bin}.exe`, bin] : [bin]);

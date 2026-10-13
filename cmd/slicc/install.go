@@ -19,11 +19,10 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/update"
 )
 
-const installUsage = `usage: slicc install jerk|fnox [--checksum-only]
+const installUsage = `usage: slicc install jerk [--checksum-only]
 
 Installs a companion tool into slicc's own data folder, where slicc finds it:
   jerk   slicc-jerk, the latest release of ai-ecoverse/slicc-jerk (0.6.0 on)
-  fnox   fnox, the latest release of ai-ecoverse/fnox-build
 
 slicc downloads the release binary for this OS and CPU, checks it against
 the release's SHA256SUMS and verifies its GitHub build provenance
@@ -38,7 +37,6 @@ type companion struct {
 
 var installable = map[string]companion{
 	"jerk": {repo: "ai-ecoverse/slicc-jerk", binary: "jerk", since: jerk.MinVersion},
-	"fnox": {repo: "ai-ecoverse/fnox-build", binary: "fnox"},
 }
 
 var versionRE = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
@@ -53,7 +51,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		args = args[:1]
 	}
 	if len(args) != 1 || installable[args[0]].repo == "" {
-		fmt.Fprintf(stderr, "slicc install: name jerk or fnox\n\n%s", installUsage)
+		fmt.Fprintf(stderr, "slicc install: name jerk\n\n%s", installUsage)
 		return 2
 	}
 	c := installable[args[0]]
