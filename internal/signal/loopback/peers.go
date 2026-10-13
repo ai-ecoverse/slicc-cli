@@ -3,6 +3,7 @@ package loopback
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -70,7 +71,10 @@ func (p *Peers) update(f func(*peersFile) (bool, error)) error {
 		return err
 	}
 	defer unlock()
-	pf := p.load()
+	pf, err := p.load()
+	if err != nil {
+		return err
+	}
 	changed, err := f(&pf)
 	if err != nil || !changed {
 		return err
@@ -82,17 +86,23 @@ func OpenPeers(dir string) *Peers { return &Peers{path: filepath.Join(dir, peers
 
 func (p *Peers) Path() string { return p.path }
 
-func (p *Peers) load() peersFile {
+func (p *Peers) load() (peersFile, error) {
 	f := peersFile{Version: stateVersion, Peers: map[string]Peer{}}
 	data, err := os.ReadFile(p.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return f, nil
+	}
 	if err != nil {
-		return f
+		return f, err
 	}
 	var got peersFile
-	if json.Unmarshal(data, &got) != nil || got.Version != stateVersion || got.Peers == nil {
-		return f
+	if json.Unmarshal(data, &got) != nil || got.Version != stateVersion {
+		return f, fmt.Errorf("%s is not a list of paired sevens slicc can read; slicc leaves it alone, move it away to start over", p.path)
 	}
-	return got
+	if got.Peers == nil {
+		got.Peers = map[string]Peer{}
+	}
+	return got, nil
 }
 
 func (p *Peers) Pin(fp, origin string) error {
@@ -110,14 +120,19 @@ func (p *Peers) Pin(fp, origin string) error {
 func (p *Peers) Origin(fp string) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	e, ok := p.load().Peers[fp]
+	f, err := p.load()
+	if err != nil {
+		return "", false
+	}
+	e, ok := f.Peers[fp]
 	return e.Origin, ok
 }
 
-func (p *Peers) List() []Peer {
+func (p *Peers) List() ([]Peer, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return sorted(p.load().Peers)
+	f, err := p.load()
+	return sorted(f.Peers), err
 }
 
 func sorted(m map[string]Peer) []Peer {
