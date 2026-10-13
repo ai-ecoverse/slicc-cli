@@ -81,6 +81,9 @@ func TestCDPChecksBodyAnswersAgainstTheirRequest(t *testing.T) {
 		{"IO.read", map[string]any{"handle": "stream-plain"}},
 		{"Network.getAllCookies", map[string]any{}},
 		{"Network.getCookies", map[string]any{"urls": []string{env.plain.URL + "/"}}},
+		{"Network.replayXHR", map[string]any{"requestId": "plain"}},
+		{"Network.replayXHR", map[string]any{"requestId": "replay-guess"}},
+		{"Network.replayXHR", map[string]any{"requestId": "early"}},
 	}
 	var r struct {
 		Out []callOutcome `json:"out"`
@@ -93,7 +96,7 @@ func TestCDPChecksBodyAnswersAgainstTheirRequest(t *testing.T) {
 	if strings.Contains(string(b), "secret") {
 		t.Errorf("an answer carried seven's data: %s", b)
 	}
-	refused := map[int]string{0: "seven's origin", 3: "hasn't seen this request", 4: "seven's origin", 6: "seven's origin", 8: "didn't hand out this stream", 9: "didn't hand out this stream"}
+	refused := map[int]string{0: "seven's origin", 3: "hasn't seen this request", 4: "seven's origin", 6: "seven's origin", 8: "didn't hand out this stream", 9: "didn't hand out this stream", 14: "hasn't seen this request", 15: "seven's origin"}
 	for i, o := range r.Out {
 		want, refuse := refused[i]
 		switch {
@@ -117,6 +120,9 @@ func TestCDPChecksBodyAnswersAgainstTheirRequest(t *testing.T) {
 	closed := false
 	for _, m := range fake.received() {
 		if strings.Contains(m, `"IO.read"`) && (strings.Contains(m, "stream-seven") || strings.Contains(m, "stream-guess")) {
+			t.Errorf("the browser got %s", m)
+		}
+		if strings.Contains(m, `"Network.replayXHR"`) && !strings.Contains(m, `"plain"`) {
 			t.Errorf("the browser got %s", m)
 		}
 		closed = closed || (strings.Contains(m, `"IO.close"`) && strings.Contains(m, "stream-seven"))

@@ -217,6 +217,7 @@ var methodRules = map[string]func(g *guard, c *command) string{
 	},
 	"Fetch.enable":                (*guard).fetchRule,
 	"IO.read":                     (*guard).streamRule,
+	"Network.replayXHR":           (*guard).replayRule,
 	"Network.clearBrowserCookies": (*guard).clearCookiesRule,
 	"Storage.clearCookies":        contextRule(refusedCookies),
 	"Browser.resetPermissions":    contextRule("Browser.resetPermissions resets seven's permissions too"),

@@ -179,3 +179,14 @@ func (g *guard) streamRule(c *command) string {
 	}
 	return refusedStream
 }
+
+func (g *guard) replayRule(c *command) string {
+	id := c.str("requestId")
+	switch {
+	case id == "" || g.requestMarkedLocked(c.session, id):
+		return refusedBody
+	case g.seen[requestKey{c.session, id}] < levelKnown:
+		return refusedUnknown
+	}
+	return ""
+}
