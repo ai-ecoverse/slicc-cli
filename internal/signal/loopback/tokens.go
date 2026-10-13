@@ -15,8 +15,9 @@ const (
 )
 
 type tokens struct {
-	mu sync.Mutex
-	m  map[string]time.Time
+	mu     sync.Mutex
+	m      map[string]time.Time
+	burned map[string]bool
 }
 
 func (t *tokens) mint(now time.Time) string {
@@ -49,7 +50,17 @@ func (t *tokens) burn(tok string, now time.Time) bool {
 		return false
 	}
 	delete(t.m, hit)
+	if t.burned == nil {
+		t.burned = map[string]bool{}
+	}
+	t.burned[hit] = true
 	return true
+}
+
+func (t *tokens) used(tok string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.burned[tok]
 }
 
 func (t *tokens) valid(tok string, now time.Time) bool {
