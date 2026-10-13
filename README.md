@@ -123,13 +123,13 @@ Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and
 
 ## Coming from slicc-node
 
-`npx @ai-ecoverse/slicc-node` and slicc-swift ran a local HTTP proxy, which seven reached on loopback with the URL and key from the launch URL's `#proxy=…&key=…` fragment. `slicc` links seven over WebRTC instead (see [Link](#link)). On this machine the link is set up over CDP, and from another machine through the tray hub. So nothing listens for seven, and there is no proxy port, no key and no launch fragment.
+`npx @ai-ecoverse/slicc-node` and slicc-swift ran a local HTTP proxy, which seven reached on loopback with the URL and key from the launch URL's `#proxy=…&key=…` fragment. `slicc` links seven over WebRTC instead (see [Link](#link)). On this machine the link is set up over CDP, and from another machine through the tray hub. So seven never connects to a port on this machine, and there is no proxy port, no key and no launch fragment. The only listener is the [kernel services](#kernel-services) one, which carries the browser's own connections to `*.kernel.localhost` into the page (`--no-kernel` turns it off).
 
 | slicc-node | `slicc` |
 | --- | --- |
 | `npx @ai-ecoverse/slicc-node`, which opens seven in the default browser | `npx sliccy@next`, or `slicc` from `curl -fsSL https://get.sliccy.ai/slicc \| sh` (see [Install with curl](#install-with-curl)). It launches or attaches to a Chromium browser over CDP and opens seven there (see [The default](#the-default-slicc)) |
 | `--page <url>`, `--origin <url>` | `--page <url>`, `--origin <origin>` |
-| `--port`, `--rotate-key`, `--ephemeral`, `--no-open` | not needed |
+| `--port`, `--rotate-key`, `--ephemeral`, `--no-open` | not needed: there is no proxy port and no key |
 | `--mount <path>[:<name>][:ro]` | the same `--mount` (see [Host folders](#host-folders)). In seven the folder is `<device>/<name>` (`mount -t hostfs lars-mbp/project /mnt/p`) rather than `<name>` |
 | `--kernel-port <n>`, `--no-kernel` | the same flags (see [Kernel services](#kernel-services)) |
 | `--cdp <url>`, the `/cdp` relay to a running browser | the [`cdp`](#cdp-browser-control) capability. The browser seven runs in is always listed. More come from `--browser` (with `--cdp <url>` for an endpoint) on `slicc`, `--cdp-extra <url>` on `attach`, and `--cdp <url>` on `follow`. `--cdp-extra` and `follow --cdp` must answer when they start |
