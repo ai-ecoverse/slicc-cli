@@ -14,6 +14,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/ebitengine/purego v0.11.1
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/gorilla/websocket v1.5.3
 	github.com/nlnwa/whatwg-url v0.6.2
 	github.com/pion/ice/v4 v4.4.7
 	github.com/pion/logging v0.2.4

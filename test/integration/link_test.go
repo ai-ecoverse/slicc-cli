@@ -156,7 +156,7 @@ func (e *linkEnv) testHello(t *testing.T) {
 	if h.V != 1 || h.Role != "node" || h.Name != "it-node" || h.Host != "it-node" || h.Version != "1.2.3-test" || h.Mode != "local" {
 		t.Fatalf("hello %+v", h)
 	}
-	if strings.Join(h.Caps, ",") != "net,http,credentialed,cdp" || !h.Routes.Exit || h.Policy.Summary == "" {
+	if strings.Join(h.Caps, ",") != "net,http,credentialed,ws,cdp" || !h.Routes.Exit || h.Policy.Summary == "" {
 		t.Fatalf("hello %+v", h)
 	}
 	if len(h.Browsers) != 1 || h.Browsers[0].ID != "chrome" || !h.Browsers[0].Seven {

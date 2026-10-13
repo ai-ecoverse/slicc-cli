@@ -195,7 +195,7 @@ func TestDefaultFlowMounts(t *testing.T) {
 	flow := startFlow(t, append(env, "NO_COLOR=1"), "--plain", "--cdp", b.endpoint, "--browser", id, "--page", pageURL, "--no-kernel", "--mount", f.folder, "--mount", f.missing)
 	flow.waitStderr(t, "--mount "+f.missing+": not an existing folder, skipping")
 	flow.waitStderr(t, `linked with "link test page" in `+pageURL)
-	if !strings.Contains(flow.stderr.String(), "offering net, http, credentialed, fs") {
+	if !strings.Contains(flow.stderr.String(), "offering net, http, credentialed, ws, fs") {
 		t.Fatalf("plain output does not offer fs:\n%s", flow.stderr.String())
 	}
 	p := dialPage(t, b.endpoint, pageURL)
