@@ -309,7 +309,16 @@ func TestLoopbackLinksSevenWithoutCDP(t *testing.T) {
 				t.Fatalf("policy deny %v lacks %s", h.Policy.Deny, want)
 			}
 		}
-		for _, port := range []int{pr.port, devPort} {
+		late := filepath.Join(e.config, "seven-profiles", "late")
+		latePort := freePort(t)
+		if err := os.MkdirAll(late, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(late, "DevToolsActivePort"), []byte(fmt.Sprintf("%d\n/devtools/browser/late\n", latePort)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		o.waitStderr(t, fmt.Sprintf("denied new DevToolsActivePort ports: [127.0.0.1:%d [::1]:%d]", latePort, latePort))
+		for _, port := range []int{pr.port, devPort, latePort} {
 			var res echoResult
 			p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "tcp", "host": "127.0.0.1", "port": port})+")", &res)
 			if res.Reset != "EACCES" {
@@ -696,6 +705,39 @@ func TestLoopbackOpenUsesTheDefaultBrowserHook(t *testing.T) {
 				t.Fatalf("the opener got %q, stdout had %q", got, u)
 			}
 		})
+	}
+}
+
+func TestLoopbackFirstRunsShareOneIdentity(t *testing.T) {
+	e := newLoopEnv(t)
+	a := startLoop(t, e, "pair", "--page", "https://seven.sliccy.ai/")
+	b := startLoop(t, e, "pair", "--page", "https://seven.sliccy.ai/")
+	pa, pb := parsePairing(t, a.url(t)), parsePairing(t, b.url(t))
+	if pa.fingerprint != pb.fingerprint || pa.port == pb.port {
+		t.Fatalf("two first runs: %+v and %+v", pa, pb)
+	}
+	a.stop(t)
+	b.stop(t)
+	c := startLoop(t, e, "pair", "--page", "https://seven.sliccy.ai/")
+	if pc := parsePairing(t, c.url(t)); pc.fingerprint != pa.fingerprint {
+		t.Fatalf("after a restart %s, before %s", pc.fingerprint, pa.fingerprint)
+	}
+}
+
+func TestDefaultBrowserFlagFollowsComputeArgv(t *testing.T) {
+	e := newLoopEnv(t)
+	o := startLoop(t, e, "", "--runner", "sh", "-c", "--", "--default-browser", "--page", "https://seven.sliccy.ai/")
+	if u := o.url(t); !strings.HasPrefix(u, "https://seven.sliccy.ai/#slicc-pair=") {
+		t.Fatalf("pairing URL %q", u)
+	}
+	o.waitStderr(t, "ssh: runner sh -c")
+	cmd := exec.Command(binary, "--runner", "echo", "--default-browser", "--", "--yes")
+	cmd.Env = e.env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	_ = cmd.Run()
+	if code := cmd.ProcessState.ExitCode(); code != 1 || pairingURL.MatchString(stdout.String()) || !strings.Contains(stderr.String(), "no browser to control") {
+		t.Fatalf("--default-browser inside the runner argv: %d %q %q", code, stdout.String(), stderr.String())
 	}
 }
 

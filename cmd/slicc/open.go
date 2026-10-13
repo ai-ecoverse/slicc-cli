@@ -142,11 +142,13 @@ func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags,
 }
 
 func defaultBrowserArgs(args []string) ([]string, bool) {
-	for i, a := range args {
-		if a == "--" {
-			break
+	for i := 0; i < len(args); i++ {
+		if name, ok := argvFlagName(args[i]); ok && !strings.HasSuffix(name, "=") {
+			for i++; i < len(args) && args[i] != "--"; i++ {
+			}
+			continue
 		}
-		if a == "--default-browser" || a == "-default-browser" {
+		if args[i] == "--default-browser" || args[i] == "-default-browser" {
 			return append(slices.Clone(args[:i]), args[i+1:]...), true
 		}
 	}
@@ -164,6 +166,7 @@ type openRun struct {
 	node   *node.Node
 	pol    *policy.Policy
 	host   string
+	ports  []uint16
 }
 
 func runOpen(verb string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -255,6 +258,9 @@ func (r *openRun) listen() error {
 }
 
 func (r *openRun) protectedPorts() []uint16 {
+	if r.ports != nil {
+		return r.ports
+	}
 	var ports []uint16
 	for p := uint16(9222); p <= 9229; p++ {
 		ports = append(ports, p)
@@ -264,6 +270,7 @@ func (r *openRun) protectedPorts() []uint16 {
 	if !r.f.noKernel {
 		ports = append(ports, uint16(r.f.kernelPort))
 	}
+	r.ports = ports
 	return ports
 }
 
