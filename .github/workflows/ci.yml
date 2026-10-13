@@ -62,3 +62,83 @@ jobs:
       - run: go build -trimpath -o bin/ ./cmd/slicc
         env:
           CGO_ENABLED: '0'
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - run: shellcheck -s sh install.sh test/integration/testdata/install/check.sh
+
+  installer-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+
+      - run: scripts/package.sh "0.0.0-ci.$GITHUB_RUN_NUMBER"
+        env:
+          SLICC_SIGN: '0'
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: installer-assets
+          path: artifacts/release/
+          retention-days: 1
+
+  installer:
+    needs: installer-assets
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-curl
+            runner: ubuntu-latest
+            container: ''
+          - name: macos-curl
+            runner: macos-latest
+            container: ''
+          - name: alpine-wget
+            runner: ubuntu-latest
+            container: alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
+    name: installer (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: installer-assets
+          path: ${{ runner.temp }}/installer/release
+
+      - name: Serve the assets
+        env:
+          ROOT: ${{ runner.temp }}/installer
+        run: |
+          nohup python3 -m http.server --bind 127.0.0.1 8765 --directory "$ROOT" > "$RUNNER_TEMP/http.log" 2>&1 &
+          for _ in $(seq 1 50); do
+            curl -fsS -o /dev/null http://127.0.0.1:8765/release/SHA256SUMS && exit 0
+            sleep 0.2
+          done
+          cat "$RUNNER_TEMP/http.log"
+          exit 1
+
+      - name: Run the installer checks
+        env:
+          ROOT: ${{ runner.temp }}/installer
+          IMAGE: ${{ matrix.container }}
+          CI_VERSION: 0.0.0-ci.${{ github.run_number }}
+        run: |
+          if [ -z "$IMAGE" ]; then
+            sh test/integration/testdata/install/check.sh "$ROOT" http://127.0.0.1:8765 "$CI_VERSION"
+          else
+            docker run --rm --network host -e SLICC_CHECK_WGET=1 \
+              -v "$PWD:/src:ro" -v "$ROOT:$ROOT" "$IMAGE" \
+              sh /src/test/integration/testdata/install/check.sh "$ROOT" http://127.0.0.1:8765 "$CI_VERSION"
+          fi
