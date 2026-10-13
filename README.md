@@ -560,7 +560,7 @@ HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode
 - `addresses: []` means "not mine": the name doesn't exist (NXDOMAIN, or any other failure but a timeout), has no address of that family, or every address was dropped.
 - RESET codes: `ETIMEDOUT` when the lookup times out (30 s at most), and `EPROTO` for an OPEN without a name or with another `family`.
 
-**`http`** (cap `http`), page → node. slicc-node's raw fetch (its README, *Request* and *Response*) carried on a stream:
+**`http`** (cap `http`), page → node. One HTTP request, fetched by the node without CORS, carried on a stream:
 - OPEN `{ "kind": "http" }`, answered OPENED `{}` at once.
 - The page sends a `u32` BE length, that many bytes of UTF-8 JSON `{ "url", "method", "headers": [[name, value], …] }` (at most 1 MiB), then the request body, then END.
 - The node sends a `u32` BE length, the JSON `{ "status", "statusText", "headers": [[name, value], …], "url" }`, then the body, then END. `url` is the request's.
@@ -652,7 +652,7 @@ Only browsers the user named are listed: the one seven runs in, `--cdp` and `--c
 - **OPENED:** `{ "product", "protocolVersion" }`, the `Browser` and `Protocol-Version` fields of `/json/version` (from `Browser.getVersion` for a `wsOnly` browser).
 - **RESET:** `ENOENT` for an id that isn't listed, `ECONNREFUSED` when the browser doesn't answer, `EPROTO` for an OPEN without `browser`.
 
-**Bytes**, both directions: a sequence of messages, each a `u32` BE length plus one UTF-8 CDP JSON message of at most 64 MiB (67 108 864 bytes). The node sends each page message as one WebSocket text message, and each text message from the browser as one stream message, after the filter below. A length over 64 MiB from the page, or a browser message over 64 MiB, is `RESET EMSGSIZE`, and a page END in the middle of a message is `RESET EPROTO`. Browser messages that start with `{"method":"Network.webSocketFrameReceived"` or `{"method":"Network.webSocketFrameSent"` are dropped: seven runs inside a browser it may debug, so those events would carry the CDP traffic itself and grow without bound (parity with slicc-node's `/cdp`).
+**Bytes**, both directions: a sequence of messages, each a `u32` BE length plus one UTF-8 CDP JSON message of at most 64 MiB (67 108 864 bytes). The node sends each page message as one WebSocket text message, and each text message from the browser as one stream message, after the filter below. A length over 64 MiB from the page, or a browser message over 64 MiB, is `RESET EMSGSIZE`, and a page END in the middle of a message is `RESET EPROTO`. Browser messages that start with `{"method":"Network.webSocketFrameReceived"` or `{"method":"Network.webSocketFrameSent"` are dropped: seven runs inside a browser it may debug, so those events would carry the CDP traffic itself and grow without bound.
 
 **Closing.**
 - The browser closes the socket with a normal close (1000): the node sends END, then discards whatever the page still sends until its END.
@@ -732,7 +732,7 @@ The browser's connection waits unread for `OPENED`.
 
 ## Host folders
 
-`--mount <path>[:<name>][:ro]` shares a folder of this machine with seven's kernel, which mounts it with its `hostfs` driver. It is repeatable and works on `slicc`, `slicc attach` and `slicc <join-url> follow`. This is slicc-node's hostfs (its README, *Host folders*), with the same operations and the same rules, carried on `fs` link streams instead of HTTP. There are no tokens: the link is the trust boundary, as for `ssh`, and seven decides which kernel mounts it creates. With `follow`, the folders go to the seven on the other machine.
+`--mount <path>[:<name>][:ro]` shares a folder of this machine with seven's kernel, which mounts it with its `hostfs` driver. It is repeatable and works on `slicc`, `slicc attach` and `slicc <join-url> follow`. Each operation is an `fs` link stream (below). There are no tokens: the link is the trust boundary, as for `ssh`, and seven decides which kernel mounts it creates. With `follow`, the folders go to the seven on the other machine.
 
 **Export.**
 - A trailing `:ro` makes the folder read-only. After that, the text after the last `:` is the name if it isn't empty and has no `/` or `\`, so `C:\work` is a path and `C:\work:proj` is named `proj`. The default name is the folder's own.
@@ -757,7 +757,7 @@ The paths are read from slicc's own environment at start. A `--mount` of one of 
                                "caseInsensitive": true, "normalization": "nfd-insensitive", "ranges": true } }]
 ```
 
-- `capabilities` is slicc-node's grant answer, so seven hands it to the driver unchanged.
+- `capabilities` is in the shape slicc-kernel's `hostfs` driver takes, so seven hands it to the driver unchanged.
 - `symlinks` and `chmod` are `false` on Windows and `true` elsewhere.
 - `caseInsensitive` is probed per folder on its own volume. The last component of the folder's path that has letters is looked up again with its case swapped, and the probe is `true` when that finds the same file. When no component has letters, it is `true` on macOS and Windows.
 - `normalization` is `nfd-insensitive` on macOS and `none` elsewhere.
@@ -775,7 +775,7 @@ The paths are read from slicc's own environment at start. A `--mount` of one of 
 - The last component gets lstat semantics. The kernel follows symlinks itself, so `stat` reports a symlink as one, `list` on a symlink is `ENOTDIR`, and `open` on a symlink is `ELOOP`.
 - Operations that change the namespace run one at a time, and no other operation runs alongside them. The lock covers every link and every folder of the node, so no page can swap a directory for a symlink between the check and the use.
 
-**Operations**, with slicc-node's arguments and answers:
+**Operations**, with their arguments and answers:
 
 | op | arguments | answer |
 | --- | --- | --- |
@@ -842,7 +842,7 @@ The watcher per OS:
 
 **Mount updates** (page cap `mounts`). When folders are added or removed while a link is up (`fs.Server.Add` and `Remove`, for the TUI), the node opens `OPEN { "kind": "mounts", "mounts": [ … ] }` on the control channel, with the full list in HELLO's shape. It replaces the previous list, and there are no deltas. The page answers OPENED `{}` and END, and the node sends END. Updates go one at a time per link, and one the page doesn't finish within 10 s is reset with `ETIMEDOUT`. A removed folder's handles close (`EBADF` if the name comes back), its operations are `ENOENT`, and a watch stream covering it ends with `RESET ENOENT: no such folder`. `--mount` alone never changes the set.
 
-**Errors.** The code is the POSIX name, `EIO` when there is none. The message is libuv's lower-case text for it (`no such file or directory`), or slicc-node's own for the cases it names (`path escapes the folder`, `read-only folder`, `file changed since it was opened`, `the folder root cannot be moved or removed`). It never contains a host path. Windows errors are mapped the way libuv maps them, for example `ERROR_ACCESS_DENIED` to `EPERM` and `ERROR_SHARING_VIOLATION` to `EBUSY`.
+**Errors.** The code is the POSIX name, `EIO` when there is none. The message is libuv's lower-case text for it (`no such file or directory`), or slicc's own for the cases it names (`path escapes the folder`, `read-only folder`, `file changed since it was opened`, `the folder root cannot be moved or removed`). It never contains a host path. Windows errors are mapped the way libuv maps them, for example `ERROR_ACCESS_DENIED` to `EPERM` and `ERROR_SHARING_VIOLATION` to `EBUSY`.
 
 **Windows.**
 - Paths go through `\\?\` and `GetFinalPathNameByHandle`, so device names (`CON`, `NUL`) and 8.3 short names are plain names inside the folder.
