@@ -60,8 +60,9 @@ flags for slicc with no command:
   --kernel-port <n>   serve http://<port>.kernel.localhost on this local
                       port instead of 80
   --no-kernel         don't serve <port>.kernel.localhost at all
-  --no-fallback       with no SLICC profile and no CDP endpoint, exit
-                      instead of linking seven in the default browser
+  --no-fallback       never fall back to the default browser: launch an
+                      installed browser in a new SLICC profile as before,
+                      or exit when nothing can host seven
   --open              when falling back without a terminal, open the
                       pairing URL in the default browser too
   --no-jerk           don't offer this machine's slicc-jerk to seven

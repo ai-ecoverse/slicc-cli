@@ -338,7 +338,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven. `--profile six` and `--profile six:<port>` use SLICC six's own Chrome profile instead, without the picker (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)).
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
-- `--no-fallback`: never fall back to the default browser; exit 1 instead (see above). `--open`: when falling back without a terminal, open the pairing URL in the default browser too.
+- `--no-fallback`: never fall back to the default browser. slicc then behaves as it did before the fallback: it launches an installed browser in a new SLICC profile, or exits 1 with `no browser to control` when nothing can host seven (see above). `--open`: when falling back without a terminal, open the pairing URL in the default browser too.
 - `--default-browser`: don't look for browsers; link a seven in the default browser instead, exactly as `slicc open` does (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)).
 - A flag of SLICC six's points back to six and exits 2 (see [Coming from SLICC six](#coming-from-slicc-six)). Any other flag, or an argument, is an error.
 
