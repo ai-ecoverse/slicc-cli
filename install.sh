@@ -157,7 +157,11 @@ main() {
   part="$(mktemp "$dir/.$bin.XXXXXX")"
   cp "$tmp/$asset" "$part"
   chmod 755 "$part"
-  installed="$("$part" --version 2>/dev/null)" || die "the downloaded $asset doesn't run on this machine; nothing was installed"
+  installed="$("$part" --version 2>/dev/null)" || installed=""
+  case "$installed" in
+    "$bin "?*) ;;
+    *) die "the downloaded $asset doesn't run as $bin on this machine; nothing was installed" ;;
+  esac
   if [ -n "$version" ] && [ "$installed" != "$bin $version" ]; then
     die "the downloaded $asset says \"$installed\", not $bin $version; nothing was installed"
   fi
