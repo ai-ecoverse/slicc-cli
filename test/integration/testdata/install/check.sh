@@ -61,6 +61,17 @@ stage "$root/tampered/latest/download"
 for f in "$root"/tampered/latest/download/slicc-*; do
   printf 'x' >>"$f"
 done
+stage "$root/broken/latest/download"
+stage "$root/wrong/download/v$version"
+for f in "$root"/broken/latest/download/slicc-*; do
+  printf '#!/bin/sh\nexit 3\n' >"$f"
+done
+for f in "$root"/wrong/download/v"$version"/slicc-*; do
+  printf '#!/bin/sh\necho "slicc 9.9.9"\n' >"$f"
+done
+for d in "$root/broken/latest/download" "$root/wrong/download/v$version"; do
+  (cd "$d" && for f in slicc-*; do printf '%s  %s\n' "$(hash_of "$f")" "$f"; done >SHA256SUMS)
+done
 stage "$root/missing/latest/download"
 grep -v ' slicc-' "$root/release/SHA256SUMS" >"$root/missing/latest/download/SHA256SUMS" || true
 
@@ -119,6 +130,20 @@ run "HOME=$home" "PATH=$cleanpath" "SLICC_INSTALL_BASE_URL=$base/missing" "INSTA
 [ "$code" != 0 ] || fail "asset without an entry was installed"
 has "SHA256SUMS has no entry for slicc-" || fail "no missing-entry message"
 [ -e "$root/never/slicc" ] && fail "missing entry left $root/never/slicc"
+
+echo "== an asset that doesn't run is refused"
+run "HOME=$home" "PATH=$cleanpath" "SLICC_INSTALL_BASE_URL=$base/broken" sh "$installer"
+[ "$code" != 0 ] || fail "broken asset was installed"
+has "doesn't run on this machine; nothing was installed" || fail "no broken-asset message"
+[ "$(hash_of "$bindir/slicc")" = "$first" ] || fail "broken asset replaced the binary"
+only_slicc "$bindir"
+
+echo "== an asset with the wrong version is refused"
+run "HOME=$home" "PATH=$cleanpath" "SLICC_INSTALL_BASE_URL=$base/wrong" sh "$installer" --version "$version"
+[ "$code" != 0 ] || fail "wrong-version asset was installed"
+has "says \"slicc 9.9.9\", not slicc $version" || fail "no wrong-version message"
+[ "$(hash_of "$bindir/slicc")" = "$first" ] || fail "wrong-version asset replaced the binary"
+only_slicc "$bindir"
 
 echo "== --help and unknown options"
 run "PATH=$cleanpath" sh "$installer" --help

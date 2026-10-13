@@ -35,8 +35,9 @@ This installs `slicc` on macOS and Linux; see [Install with curl](#install-with-
 - takes `VERSION` (default: the latest release; `1.2.3` or `v1.2.3`) and `INSTALL_DIR` (default: `$HOME/.local/bin`) from the environment, or `--version X` and `--dir D` as flags (`curl … | sh -s -- --version 1.2.3 --dir ~/bin`), and `--help`;
 - supports `Darwin` and `Linux` on `x86_64`/`amd64` and `arm64`/`aarch64` (an x86_64 shell under Rosetta gets `arm64`); anything else exits 1 and points to npm, or on Windows to the release's `.exe`;
 - downloads `slicc-<os>-<arch>` and `SHA256SUMS` from the release with `curl` or `wget`, checks the hash with `sha256sum` or `shasum -a 256`, and exits 1 without installing anything when the hash differs or `SHA256SUMS` has no line for the asset;
-- copies the binary to a temporary file in `INSTALL_DIR`, sets mode `755` and renames it to `slicc`, so a re-run upgrades or downgrades in place;
-- prints `installed slicc <version> at <path>` from the new binary's `--version`, and, when `INSTALL_DIR` isn't on `PATH`, one line with the `export PATH=…` to add.
+- copies the binary to a temporary file in `INSTALL_DIR` and sets mode `755`; it exits 1 and leaves any installed `slicc` alone when that file's `--version` fails or, with a version asked for, names another version;
+- renames it to `slicc`, so a re-run upgrades or downgrades in place;
+- prints `installed slicc <version> at <path>` from that `--version`, and, when `INSTALL_DIR` isn't on `PATH`, one line with the `export PATH=…` to add.
 
 It never uses `sudo`, never edits shell startup files and sends no telemetry. The Linux binaries are static (`CGO_ENABLED=0`), so the libc doesn't matter. The macOS binaries are the signed and notarized ones; `curl` sets no quarantine flag. `SLICC_INSTALL_BASE_URL` replaces `https://github.com/ai-ecoverse/slicc-cli/releases` (assets from `<base>/latest/download/` or `<base>/download/v<version>/`), for tests only. A curl-installed `slicc` updates itself in place with `slicc update` (see [Updates](#updates)), or by running the one-liner again.
 
