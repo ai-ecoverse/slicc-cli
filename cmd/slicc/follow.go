@@ -138,6 +138,9 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 		fmt.Fprintf(stderr, "slicc follow: %v\n\n%s", err, followUsage)
 		return f, 2
 	}
+	if code := f.compute.checkRunner(stderr); code >= 0 {
+		return f, code
+	}
 	if code := checkMounts(f.mounts, "slicc follow", stderr); code >= 0 {
 		return f, code
 	}

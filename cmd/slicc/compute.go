@@ -4,8 +4,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"os/exec"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/ssh"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
@@ -112,6 +115,23 @@ func (cf *computeFlags) validate() error {
 		return errors.New("--eval-quiet needs --eval")
 	}
 	return nil
+}
+
+func (cf *computeFlags) checkRunner(stderr io.Writer) int {
+	if len(cf.runner) == 0 {
+		return -1
+	}
+	prog := cf.runner[0]
+	if _, err := exec.LookPath(prog); err == nil {
+		return -1
+	}
+	if strings.ContainsFunc(prog, unicode.IsSpace) {
+		split := append(strings.Fields(prog), cf.runner[1:]...)
+		fmt.Fprintf(stderr, "slicc: --runner %q: no program %q; did you mean --runner %s?\n", prog, prog, strings.Join(split, " "))
+		return 2
+	}
+	fmt.Fprintf(stderr, "slicc: --runner %s: program not found\n", prog)
+	return 2
 }
 
 func (cf *computeFlags) sftpOn() bool {

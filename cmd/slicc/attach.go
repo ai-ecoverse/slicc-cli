@@ -125,6 +125,9 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 		fmt.Fprintf(stderr, "slicc attach: %v\n\n%s", err, attachUsage)
 		return f, 2
 	}
+	if code := f.compute.checkRunner(stderr); code >= 0 {
+		return f, code
+	}
 	if code := checkMounts(f.mounts, "slicc attach", stderr); code >= 0 {
 		return f, code
 	}
