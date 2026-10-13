@@ -2,9 +2,11 @@ package integration
 
 import (
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +40,9 @@ func setupFence(t *testing.T) *fenceEnv {
 	writeFile(t, filepath.Join(home, filepath.FromSlash(slicc), "vault-test.key"), "pairing key")
 	writeFile(t, filepath.Join(home, ".config", "fnox", "config.toml"), "[secrets]")
 	writeFile(t, filepath.Join(home, ".config", "fnox", "sub", "x.txt"), "x")
+	writeFile(t, filepath.Join(home, ".local", "state", "fnox", "leases", "l.json"), "lease")
+	writeFile(t, filepath.Join(home, ".local", "share", "fnox", "plugins", "p.lua"), "plugin")
+	writeFile(t, filepath.Join(home, "plugs", "q.lua"), "plugin")
 	writeFile(t, filepath.Join(home, filepath.FromSlash(jerk), "leases.toml"), "lease map")
 	writeFile(t, filepath.Join(home, ".config", "other", "ok.txt"), "ok")
 	writeFile(t, filepath.Join(home, "project", "readme.md"), "hi")
@@ -47,7 +52,8 @@ func setupFence(t *testing.T) *fenceEnv {
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"), "XDG_STATE_HOME=" + filepath.Join(home, ".local", "state"),
 		"XDG_DATA_HOME=" + filepath.Join(home, ".local", "share"), "XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
 		"FNOX_AGE_KEY_FILE=" + filepath.Join(home, "keys", "age.txt"),
-		"FNOX_CONFIG_DIR=", "FNOX_STATE_DIR=", "SLICC_JERK_CONFIG=",
+		"FNOX_CONFIG_DIR=", "FNOX_STATE_DIR=", "FNOX_DATA_DIR=", "SLICC_JERK_CONFIG=",
+		"FNOX_PLUGINS_DIR=" + filepath.Join(home, "plugs"),
 	}
 	e.linkEnv = setupLinkEnv(t, false, env,
 		"--mount", home+":home:ro",
@@ -99,6 +105,7 @@ func (e *fenceEnv) testFencePaths(t *testing.T) {
 		e.slicc, e.slicc + "/vault-test.key", e.slicc + "/missing",
 		e.jerk, e.jerk + "/leases.toml",
 		"keys/age.txt",
+		".local/state/fnox/leases/l.json", ".local/share/fnox", ".local/share/fnox/plugins/p.lua", "plugs/q.lua",
 	}
 	if runtime.GOOS != "linux" {
 		refused = append(refused, strings.ToUpper(e.fnox)+"/config.toml")
@@ -179,4 +186,40 @@ func (e *fenceEnv) testFenceShortNames(t *testing.T) {
 	c.errno(t, "stat", map[string]any{"path": parent + "/" + short + "/config.toml"}, "EACCES")
 	c.errno(t, "rename", map[string]any{"from": ".config/" + short, "to": "moved"}, "EACCES")
 	c.errno(t, "rename", map[string]any{"from": parent, "to": "moved"}, "EACCES")
+}
+
+func TestFSFenceFnoxSocketFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fnox's daemon sockets are Unix only")
+	}
+	home := t.TempDir()
+	env := []string{"HOME=" + home, "TMPDIR=" + t.TempDir(), "XDG_RUNTIME_DIR="}
+	base := "/tmp"
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("/usr/bin/getconf", "DARWIN_USER_TEMP_DIR").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		base, env[1] = strings.TrimSpace(string(out)), "TMPDIR="
+	}
+	dir := filepath.Join(base, "fnox-"+strconv.Itoa(os.Geteuid()))
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Skip(err)
+		}
+		t.Cleanup(func() { _ = os.Remove(dir) })
+	}
+	e := setupLinkEnv(t, false, env, "--mount", dir+":sock", "--mount", home+":home")
+	var h struct {
+		Mounts []struct {
+			Name string `json:"name"`
+		} `json:"mounts"`
+	}
+	e.p.eval("linkTest.ready()", &h)
+	if len(h.Mounts) != 1 || h.Mounts[0].Name != "home" {
+		t.Fatalf("mounts %v", h.Mounts)
+	}
+	if errs := e.a.stderr.String(); !strings.Contains(errs, ":sock: slicc never shares this folder") {
+		t.Fatalf("no warning for %s:\n%s", dir, errs)
+	}
 }

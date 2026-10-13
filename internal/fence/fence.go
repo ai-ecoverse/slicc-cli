@@ -1,11 +1,14 @@
 package fence
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 )
@@ -102,13 +105,17 @@ func fnoxPaths(home string) []string {
 	if home != "" {
 		configBase := filepath.Join(home, ".config")
 		stateBase := filepath.Join(home, ".local", "state")
+		dataBase := filepath.Join(home, ".local", "share")
 		if runtime.GOOS == "windows" {
 			configBase = filepath.Join(home, "AppData", "Local")
-			stateBase = configBase
+			stateBase, dataBase = configBase, configBase
 		}
+		data := xdg("FNOX_DATA_DIR", filepath.Join(xdg("XDG_DATA_HOME", dataBase), "fnox"))
 		out = append(out,
 			xdg("FNOX_CONFIG_DIR", filepath.Join(xdg("XDG_CONFIG_HOME", configBase), "fnox")),
 			xdg("FNOX_STATE_DIR", filepath.Join(xdg("XDG_STATE_HOME", stateBase), "fnox")),
+			data,
+			xdg("FNOX_PLUGINS_DIR", filepath.Join(data, "plugins")),
 		)
 	}
 	if key := os.Getenv("FNOX_AGE_KEY_FILE"); key != "" {
@@ -121,7 +128,24 @@ func fnoxPaths(home string) []string {
 		if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
 			out = append(out, filepath.Join(dir, "fnox"))
 		}
-		out = append(out, filepath.Join(os.TempDir(), "fnox-"+strconv.Itoa(os.Geteuid())))
+		user := "fnox-" + strconv.Itoa(os.Geteuid())
+		out = append(out, filepath.Join(os.TempDir(), user), filepath.Join("/tmp", user))
+		if tmp := darwinUserTemp(); tmp != "" {
+			out = append(out, filepath.Join(tmp, user))
+		}
 	}
 	return out
+}
+
+func darwinUserTemp() string {
+	if runtime.GOOS != "darwin" || os.Getenv("TMPDIR") != "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/usr/bin/getconf", "DARWIN_USER_TEMP_DIR").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
