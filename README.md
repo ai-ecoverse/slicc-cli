@@ -20,10 +20,16 @@
 ## Install
 
 ```
+curl -fsSL https://get.sliccy.ai/slicc | sh
+```
+
+This installs `slicc` on macOS and Linux; see [Install with curl](#install-with-curl). Options pass through to the script: `curl -fsSL https://get.sliccy.ai/slicc | sh -s -- --help`. If `get.sliccy.ai` can't be reached, use the GitHub release URL directly:
+
+```
 curl -fsSL https://github.com/ai-ecoverse/slicc-cli/releases/latest/download/install.sh | sh
 ```
 
-This installs `slicc` on macOS and Linux; see [Install with curl](#install-with-curl). The alternatives:
+The alternatives:
 
 - **npm:** `npm install -g @ai-ecoverse/slicc`, or `npx @ai-ecoverse/slicc`. The package is a small Node launcher; npm picks one of the platform packages `@ai-ecoverse/slicc-<os>-<arch>` (`darwin`, `linux`, `windows` × `amd64`, `arm64`) through `optionalDependencies` and their `os` and `cpu` fields. The launcher runs that binary with the same arguments, stdio and environment plus `SLICC_LAUNCHER=npm`, forwards `SIGTERM`, `SIGHUP`, `SIGQUIT` and `SIGUSR2` to it, and `SIGINT` too when stdin is not a terminal (a terminal's Ctrl-C already reaches the binary; on Windows the console delivers Ctrl-C and Ctrl-Break to both). It exits with the binary's exit code, or dies of the same signal. An install with `--omit=optional` has no binary, and the launcher says so. slicc-jerk comes the same way; fnox doesn't (see [Companion tools](#companion-tools)).
 - **GitHub releases:** every release of `ai-ecoverse/slicc-cli` carries `slicc-<os>-<arch>` (`.exe` on Windows) for all six targets, plus `install.sh` and `SHA256SUMS` (which lists `install.sh` too). See [Verifying a download](#verifying-a-download).
@@ -31,8 +37,15 @@ This installs `slicc` on macOS and Linux; see [Install with curl](#install-with-
 
 ### Install with curl
 
-`install.sh` is a POSIX `sh` script, attached to every release and kept in the repo root. It:
-- takes `VERSION` (default: the latest release; `1.2.3` or `v1.2.3`) and `INSTALL_DIR` (default: `$HOME/.local/bin`) from the environment, or `--version X` and `--dir D` as flags (`curl … | sh -s -- --version 1.2.3 --dir ~/bin`), and `--help`;
+`install.sh` is a POSIX `sh` script, attached to every release and kept in the repo root. `https://get.sliccy.ai/slicc` redirects (`302`) to the latest release's copy, `https://github.com/ai-ecoverse/slicc-cli/releases/latest/download/install.sh`, so both one-liners run the same script:
+
+```
+curl -fsSL https://get.sliccy.ai/slicc | sh
+curl -fsSL https://github.com/ai-ecoverse/slicc-cli/releases/latest/download/install.sh | sh
+```
+
+Options go after `sh -s --`, as in `curl -fsSL https://get.sliccy.ai/slicc | sh -s -- --help`. The script:
+- takes `VERSION` (default: the latest release; `1.2.3` or `v1.2.3`) and `INSTALL_DIR` (default: `$HOME/.local/bin`) from the environment, or `--version X` and `--dir D` as flags (`curl -fsSL https://get.sliccy.ai/slicc | sh -s -- --version 1.2.3 --dir ~/bin`), and `--help`;
 - supports `Darwin` and `Linux` on `x86_64`/`amd64` and `arm64`/`aarch64` (an x86_64 shell under Rosetta gets `arm64`); anything else exits 1 and points to npm, or on Windows to the release's `.exe`;
 - downloads `slicc-<os>-<arch>` and `SHA256SUMS` from the release with `curl` or `wget`, checks the hash with `sha256sum` or `shasum -a 256`, and exits 1 without installing anything when the hash differs or `SHA256SUMS` has no line for the asset;
 - copies the binary to a temporary file in `INSTALL_DIR` and sets mode `755`; it exits 1 and leaves any installed `slicc` alone when that file's `--version` fails, doesn't print `slicc <version>`, or, with a version asked for, names another version;
