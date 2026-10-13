@@ -38,7 +38,7 @@ const { values } = parseArgs({
   },
 });
 
-const COMPANIONS = ['@ai-ecoverse/slicc-jerk', '@ai-ecoverse/fnox'];
+const COMPANIONS = ['@ai-ecoverse/slicc-jerk'];
 
 function registryBase() {
   return (process.env.npm_config_registry || 'https://registry.npmjs.org/').replace(/\/+$/, '');

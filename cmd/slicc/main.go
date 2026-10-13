@@ -24,7 +24,7 @@ usage:
   slicc browsers            list CDP endpoints and installed browsers, ranked
   slicc launch              launch a browser with CDP in a separate SLICC profile
   slicc update [--check]    replace this binary with the latest release
-  slicc install jerk|fnox   install slicc-jerk or fnox into slicc's data folder
+  slicc install jerk        install slicc-jerk into slicc's data folder
   slicc --version           print the version
   slicc --help              print this help
 ` + defaultHelp

@@ -21,7 +21,7 @@ const guarded = {
   sliccy: { tag: 'next', version: /^7\.0\.0-next\./, gate: 'SLICCY_NEXT_PUBLISH' },
 };
 const defaultGate = 'SLICC_NPM_PUBLISH';
-const companions = new Set(['@ai-ecoverse/slicc-jerk', '@ai-ecoverse/fnox']);
+const companions = new Set(['@ai-ecoverse/slicc-jerk']);
 
 function fail(message) {
   process.stderr.write(`npm-publish: ${message}\n`);

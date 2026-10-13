@@ -8,9 +8,6 @@ import (
 
 func main() {
 	out := map[string]string{"launcher": os.Getenv("SLICC_LAUNCHER")}
-	for _, name := range []string{"jerk", "fnox"} {
-		p, _ := exec.LookPath(name)
-		out[name] = p
-	}
+	out["jerk"], _ = exec.LookPath("jerk")
 	_ = json.NewEncoder(os.Stdout).Encode(out)
 }
