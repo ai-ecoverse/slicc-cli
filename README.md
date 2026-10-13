@@ -1,6 +1,6 @@
 # slicc-cli
 
-`slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift.
+`slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift (see [Coming from slicc-node](#coming-from-slicc-node)).
 
 **Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
@@ -120,6 +120,37 @@ Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and
 - **Update cache:** six's Go follower caches its update check in `<user cache dir>/slicc/update-check.json`, and this binary uses `update-check-seven.json` next to it. Both files have the same shape, so with one shared file, each binary would show the other's version and hold back the other's check.
 - **Kept by this binary:** `<config>/slicc/` holds `ssh_host_ed25519_key`, `tray-certs.json`, `tray-join.json` and `seven-profiles/`.
 - **Profiles:** six's Chrome profiles are `~/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome[-<port>]` on macOS, `$XDG_STATE_HOME/slicc/profiles` on Linux and `%LOCALAPPDATA%\Slicc\profiles` on Windows (`chrome-launch.ts:119-148`). seven's live in `<config>/slicc/seven-profiles`, so a SLICC `--profile <name>` never opens six's logins. Only `--profile six` does, in place; see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile). Discovery lists six's Chrome marked `six: true`, last, and never chooses it.
+
+## Coming from slicc-node
+
+`npx @ai-ecoverse/slicc-node` and slicc-swift ran a local HTTP proxy, which seven reached on loopback with the URL and key from the launch URL's `#proxy=…&key=…` fragment. `slicc` links seven over WebRTC instead (see [Link](#link)). On this machine the link is set up over CDP, and from another machine through the tray hub. So nothing listens for seven, and there is no proxy port, no key and no launch fragment.
+
+| slicc-node | `slicc` |
+| --- | --- |
+| `npx @ai-ecoverse/slicc-node`, which opens seven in the default browser | `npx sliccy@next`, or `slicc` from `curl -fsSL https://get.sliccy.ai/slicc \| sh` (see [Install with curl](#install-with-curl)). It launches or attaches to a Chromium browser over CDP and opens seven there (see [The default](#the-default-slicc)) |
+| `--page <url>`, `--origin <url>` | `--page <url>`, `--origin <origin>` |
+| `--port`, `--rotate-key`, `--ephemeral`, `--no-open` | not needed |
+| `--mount <path>[:<name>][:ro]` | the same `--mount` (see [Host folders](#host-folders)). In seven the folder is `<device>/<name>` (`mount -t hostfs lars-mbp/project /mnt/p`) rather than `<name>` |
+| `--kernel-port <n>`, `--no-kernel` | the same flags (see [Kernel services](#kernel-services)) |
+| `--cdp <url>`, the `/cdp` relay to a running browser | the [`cdp`](#cdp-browser-control) capability. The browser seven runs in is always listed. More come from `--browser` (with `--cdp <url>` for an endpoint) on `slicc`, `--cdp-extra <url>` on `attach`, and `--cdp <url>` on `follow`. `--cdp-extra` and `follow --cdp` must answer when they start |
+| `--quiet` | no request log. `--plain` prints status lines, and `SLICC_DEBUG=1` logs each `http` stream's method, scheme and host |
+| `/api/fetch-proxy` | `http`, `tcp`, `resolve` and `ws` streams under the [local policy](#network-policy): the internet, this machine and the LAN, but not the browsers' debugging ports or `slicc`'s own ports |
+| `/api/hostfs/*`, tokens re-granted after a `403` | `fs` streams, with no tokens. In seven, a mount has no medium while the link is down, and fills in when the link is back |
+| `/api/kernel-tunnel` | `kernel` streams into the page |
+| `/auth/callback`, `/api/oauth-state`, `/api/oauth-result` | not needed on `https://<label>.sliccy.ai`, where seven signs in through the relay itself. A seven on another origin needs slicc-extension to sign in |
+| `startProxy`, `launchUrl`, `persistentKey` (JS) | no JS API |
+
+**Which browser.** slicc-node opened seven in the default browser, in any profile. `slicc` links only a seven it reaches over CDP:
+- **By default:** a browser in a SLICC profile (see [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)). Its seven is separate from the one in your everyday profile, since seven keeps its files per browser profile.
+- **A browser that is already running with CDP** (`--cdp`). That includes your everyday Chrome once its remote debugging is turned on at `chrome://inspect/#remote-debugging`. It is then listed as `wsOnly` (see [Browsers](#browsers)).
+- **Any other browser**, a non-Chromium one included, only through the tray hub: in seven's Network panel, *Link a device*, then run `slicc <join-url> follow` on this machine (see [Remote setup](#remote-setup-slicc-join-url-follow)). That link has the remote policy (public addresses only, unless `--allow`) and no kernel services.
+
+**Restarts.** slicc-node kept its key and port, so an open page reconnected after a restart. `slicc` sets the link up again instead:
+- A browser that `slicc` launched runs in its own process group. It outlives a `slicc` that crashes or is killed.
+- The next `slicc` finds that browser's seven tab and links it again, with `attached` and no `launched`. It finds the tab through the profile's `DevToolsActivePort`, or through `--cdp`. Given the same `--mount` and `--kernel-port`, the folders and kernel services come back too.
+- Quitting `slicc` normally (`q`, Ctrl-C, `SIGTERM`) closes the browsers that run launched.
+- Every new `slicc` process has a new `node` id, so seven sees a new link from the same machine.
+- `attach` sets up again on every new seven context, and `follow` reconnects by itself, with the same device certificate.
 
 ## Using SLICC six's Chrome profile
 
