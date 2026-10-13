@@ -53,31 +53,44 @@ type identityFile struct {
 	CreatedAt string `json:"createdAt"`
 }
 
-func readIdentity(path string) *Identity {
+func badIdentity(path string) error {
+	return fmt.Errorf("%s is not a loopback identity slicc can read; slicc leaves it alone, move it away to mint a new one (every paired seven then pairs again)", path)
+}
+
+func readIdentity(path string) (*Identity, error) {
 	var f identityFile
 	data, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(data, &f) != nil || f.Version != stateVersion || !certUsable(f.PEM) {
-		return nil
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if json.Unmarshal(data, &f) != nil || f.Version != stateVersion {
+		return nil, badIdentity(path)
 	}
 	id, err := identityFrom(path, f)
 	if err != nil {
-		return nil
+		return nil, badIdentity(path)
 	}
-	return id
+	if !certUsable(f.PEM) {
+		return nil, nil
+	}
+	return id, nil
 }
 
 func LoadIdentity(dir string) (*Identity, error) {
 	path := filepath.Join(dir, identityFileName)
-	if id := readIdentity(path); id != nil {
-		return id, nil
+	if id, err := readIdentity(path); id != nil || err != nil {
+		return id, err
 	}
 	unlock, err := lockFile(path + ".lock")
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
-	if id := readIdentity(path); id != nil {
-		return id, nil
+	if id, err := readIdentity(path); id != nil || err != nil {
+		return id, err
 	}
 	pemData, err := newCertPEM()
 	if err != nil {
@@ -125,7 +138,7 @@ func (id *Identity) RememberPort(port int) error {
 		return err
 	}
 	defer unlock()
-	if cur := readIdentity(id.path); cur == nil || cur.Fingerprint != id.Fingerprint {
+	if cur, _ := readIdentity(id.path); cur == nil || cur.Fingerprint != id.Fingerprint {
 		return nil
 	}
 	if err := writePrivateJSON(id.path, identityFile{Version: stateVersion, PEM: id.pem, Port: port, CreatedAt: id.createdAt}); err != nil {

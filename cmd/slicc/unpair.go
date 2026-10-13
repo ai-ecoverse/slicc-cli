@@ -54,7 +54,11 @@ func runUnpair(args []string, stdout, stderr io.Writer) int {
 	case fs.NArg() == 1:
 		return unpairOne(peers, fs.Arg(0), stdout, stderr)
 	}
-	list := peers.List()
+	list, err := peers.List()
+	if err != nil {
+		fmt.Fprintf(stderr, "slicc unpair: %v\n", err)
+		return 1
+	}
 	if len(list) == 0 {
 		fmt.Fprintln(stdout, "no paired sevens")
 		return 0
