@@ -36,7 +36,10 @@ var commands = map[string]bool{
 	"follow":   true,
 	"install":  true,
 	"launch":   true,
+	"open":     true,
+	"pair":     true,
 	"prompt":   true,
+	"unpair":   true,
 	"update":   true,
 	"watch":    true,
 }

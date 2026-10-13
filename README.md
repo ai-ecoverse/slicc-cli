@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift (see [Coming from slicc-node](#coming-from-slicc-node)).
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
 ## Commands (planned)
 
@@ -10,6 +10,8 @@
 | --- | --- |
 | `slicc` | pick browsers in a small TUI; Enter launches or attaches to the best match, opens seven and links it (works now; see [The default](#the-default-slicc)) |
 | `slicc attach --cdp <url>` | link a seven that is open in an already-running CDP browser (works now; see [Local setup](#local-setup-slicc-attach)) |
+| `slicc open`, `slicc --default-browser`, `slicc pair` | link a seven in your everyday browser, without CDP: open or print a pairing URL (works now; see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)) |
+| `slicc unpair [<fingerprint> \| --all]` | list or forget the sevens paired with `open` or `pair` |
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)) |
 | `slicc <join-url> prompt <text>`, `watch`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-and-abort)) |
@@ -131,7 +133,7 @@ Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and
 - **Not read:** `~/.slicc/secrets.env`, `~/.slicc/session-id`, `~/.slicc/logs/` and `~/.slicc/cloud-sessions.json`.
 - **Moved into seven:** `~/.slicc/crontab` and `~/.slicc/webhooks/` now live inside seven's kernel, not on the host.
 - **Update cache:** six's Go follower caches its update check in `<user cache dir>/slicc/update-check.json`, and this binary uses `update-check-seven.json` next to it. Both files have the same shape, so with one shared file, each binary would show the other's version and hold back the other's check.
-- **Kept by this binary:** `<config>/slicc/` holds `ssh_host_ed25519_key`, `tray-certs.json`, `tray-join.json` and `seven-profiles/`.
+- **Kept by this binary:** `<config>/slicc/` holds `ssh_host_ed25519_key`, `tray-certs.json`, `tray-join.json`, `loopback-identity.json`, `loopback-peers.json` and `seven-profiles/`.
 - **Profiles:** six's Chrome profiles are `~/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome[-<port>]` on macOS, `$XDG_STATE_HOME/slicc/profiles` on Linux and `%LOCALAPPDATA%\Slicc\profiles` on Windows (`chrome-launch.ts:119-148`). seven's live in `<config>/slicc/seven-profiles`, so a SLICC `--profile <name>` never opens six's logins. Only `--profile six` does, in place; see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile). Discovery lists six's Chrome marked `six: true`, last, and never chooses it.
 
 ## Coming from slicc-node
@@ -274,7 +276,7 @@ Release builds outside npm and app bundles print a notice on stderr when a newer
 ## Telemetry
 
 Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from the module version) send operational telemetry through [go-optel](https://github.com/ai-ecoverse/go-optel) with the app id `slicc-cli`, sampled once per process (1 in 100 by default):
-- `enter`, with the subcommand as `source`, from a fixed list (`abort`, `attach`, `browsers`, `follow`, `launch`, `prompt`, `update`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
+- `enter`, with the subcommand as `source`, from a fixed list (`abort`, `attach`, `browsers`, `follow`, `install`, `launch`, `open`, `pair`, `prompt`, `unpair`, `update`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
 - `error`, for operational failures, from a fixed set of sources (`update`, `signal`, `link`, `browser`, `ssh`, `cdp`). Messages pass through go-optel's sanitizer, which strips URLs and paths.
 
 `--version`, and any command line with `--help`, `-h` or `-help` (such as `slicc update --help`), send nothing, and development builds never configure a client.
@@ -291,6 +293,8 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 | `OPTEL_RATE`, `OPTEL_DEBUG` | go-optel's sampling rate and beacon logging |
 | `SLICC_LAUNCHER` | set to `npm` by the npm launcher; removed from the environment that `slicc` passes on |
 | `SLICC_DISCOVERY` | test-only: limits browser discovery, see [Development](#development) |
+| `SLICC_OPEN_COMMAND` | test-only: `slicc open` runs this program with the pairing URL as its only argument instead of opening the default browser; the integration tests always set it |
+| `SLICC_LOOPBACK_PORTS` | test-only: `<first>-<last>`, the port range of the [loopback listener](#linking-seven-in-your-everyday-browser) instead of 17117-17126 |
 | `SLICC_USER_DATA_DIR`, `XDG_STATE_HOME` | read, as SLICC six reads them, only to find six's Chrome profile (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)) |
 
 ## The default: `slicc`
@@ -302,7 +306,7 @@ slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]...
       [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
 ```
 
-`slicc` with no command (`npx sliccy`) finds browsers, launches or attaches to the best one, opens seven in it and links it. It serves the link until it is told to stop: `q` or Ctrl-C in the dashboard, or `SIGINT` or `SIGTERM`. Then it says `bye` to seven, closes the browsers this run launched (as `slicc launch` does), leaves the browsers it attached to running, and exits 0. If the browser that hosts seven goes away, `slicc` closes the rest and exits 0 too. Setup failures (no browser, a launch or attach that fails) exit 1, and bad flags exit 2.
+`slicc` with no command (`npx sliccy`) finds browsers, launches or attaches to the best one, opens seven in it and links it. It serves the link until it is told to stop: `q` or Ctrl-C in the dashboard, or `SIGINT` or `SIGTERM`. Then it says `bye` to seven, closes the browsers this run launched (as `slicc launch` does), leaves the browsers it attached to running, and exits 0. If the browser that hosts seven goes away, `slicc` closes the rest and exits 0 too. Setup failures (no browser, a launch or attach that fails) exit 1, and bad flags exit 2. When nothing can host seven (no running CDP endpoint, and no installed Chromium browser to launch in a SLICC profile), it says ``no browser to control: run `slicc open` to link seven in your everyday browser``.
 
 **Discovery** is `slicc browsers`' discovery and ranking (see [Browsers](#browsers)), with each `--cdp` URL added and the `--page` origin counted as a seven origin.
 
@@ -325,6 +329,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven. `--profile six` and `--profile six:<port>` use SLICC six's own Chrome profile instead, without the picker (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)).
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
+- `--default-browser`: don't look for browsers; link a seven in the default browser instead, exactly as `slicc open` does (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)).
 - A flag of SLICC six's points back to six and exits 2 (see [Coming from SLICC six](#coming-from-slicc-six)). Any other flag, or an argument, is an error.
 
 **The picker** comes up when stdin and stdout are both terminals and none of `--yes`, `--browser`, `--plain` or `--json` is given. It lists the ranking best first, one row each, with its state: `CDP :<port>` and `seven open` for a running endpoint, `installed · profile <name>` (or `new SLICC profile <name>` when the profile doesn't exist yet) for a browser slicc would launch, and `installed · Electron` for an Electron app. The first row is marked `best match`. A list longer than the terminal scrolls with the cursor.
@@ -526,6 +531,78 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - Chrome's `<uuid>.local` candidates are resolved with mDNS in query-only mode.
 - The link is declared failed after 15 s without connectivity.
 
+## Linking seven in your everyday browser
+
+```
+slicc open [--page <url>] [--origin <origin>]... [--name <name>] [--allow <rule>]... [--deny <rule>]...
+           [--kernel-port <n>] [--no-kernel] [--no-jerk] [--mount <path>[:<name>][:ro]]...
+           [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
+slicc pair [the same flags]
+slicc --default-browser [the same flags]
+slicc unpair [<fingerprint> | --all]
+```
+
+Link spec §1.3. These commands link a seven that runs in the browser you use every day, any vendor's, without CDP or remote debugging, as slicc-node could. Only the setup is new: once the peer connection is up, the link is the same as for `slicc attach` (see [Link](#link)).
+
+- **`slicc open`**, and `slicc --default-browser` (the same command), print the pairing URL on stdout and open it in the default browser: `open` on macOS, `xdg-open` on Linux, and `rundll32 url.dll,FileProtocolHandler` on Windows. If that fails, slicc says `could not open the default browser (…); open the URL above yourself` and goes on.
+- **`slicc pair`** only prints the pairing URL, for a seven that's already open. Paste it into seven's address bar, or into its *Link this computer* field.
+- Both serve links until `SIGINT` or `SIGTERM`, then exit 0. A listener that can't bind, or a missing config directory, exits 1, and bad flags exit 2. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics.
+- **Flags** are as for `slicc attach`: `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and the compute flags. `--page <url>` is the seven page to pair (default `https://seven.sliccy.ai/`), and its origin is accepted as a seven origin. `--default-browser` takes these flags too. The flags of `slicc` that pick or launch browsers (`--browser`, `--cdp`, `--profile`, `--headless`, `--yes`, `--plain`, `--json`) are errors here. A flag of SLICC six's points back to six, as for `slicc`.
+
+**Identity.** The node's DTLS certificate (ECDSA P-256, valid for 20 years) lives in `<config>/slicc/loopback-identity.json` (mode `0600`, directory `0700`). The same file holds the port the node last listened on. It is minted on first use, and slicc says `new loopback identity for this computer: <name> (ab12…ef), fingerprint sha-256 AB:12:…`, or `this computer: …` on later runs. It is separate from the tray hub's certificates and survives restarts and updates. `<name>` is `--name`, or this machine's short host name in lower case.
+
+**The pairing URL** is `<page>#slicc-pair=<port>.<token>.<node-fp>`:
+- `<port>` is the listener's port;
+- `<token>` is 128 random bits in base64url (22 characters). It is good once, for 10 minutes;
+- `<node-fp>` is the SHA-256 fingerprint of the node's certificate, in lower-case hex without colons.
+
+The URL is the secret, and it carries the node's fingerprint, so a process that squats on the port can't pass for the node. slicc prints a new pairing URL each time a line arrives on stdin, so press Enter for a new one. A URL that expires unused gets `the pairing URL expired; press Enter for a new one`. Pairing URLs only go to stdout; telemetry and logs never get them.
+
+**The listener** binds `127.0.0.1:<port>`, plus `[::1]:<port>` when this machine has IPv6 loopback, and never `0.0.0.0`. The port is the one it used last time if that's still free, otherwise the first port in 17117–17126 where both addresses bind. With none free, it says `no free port in 17117-17126 on 127.0.0.1` and exits 1. It serves exactly two requests:
+
+| request | body | answer |
+| --- | --- | --- |
+| `POST /slicc/v1/pair` | `{ "token", "offer": "<sdp>" }` | `200` `{ "answer": "<sdp>", "node": "<per-process id>", "name": "<name>" }` |
+| `POST /slicc/v1/signal` | `{ "offer": "<sdp>" }` | the same |
+
+**The gate**, on every request, in this order. Anything that fails it gets `403` with an empty body:
+1. `Host` is `127.0.0.1:<port>`, `[::1]:<port>` or `localhost:<port>`, ignoring case, so DNS rebinding can't reach it.
+2. The request target is exactly `/slicc/v1/pair` or `/slicc/v1/signal`: no query, no trailing slash, no absolute form.
+3. There is exactly one `Origin`, and it is a seven origin under the same rule as CDP setup (`browser.IsSevenOrigin`): `https://<label>.sliccy.ai`, unless slicc-browsers' catalog lists the label in `seven.excludedLabels` or it starts with an entry of `seven.excludedLabelPrefixes`. The `--page` origin and each `--origin` count as seven origins too. `null` and missing origins fail.
+4. The method is `OPTIONS` (the preflight) or `POST`.
+5. A `POST` body is a JSON object of at most 64 KiB (65 536 bytes), and its `offer` holds exactly one SHA-256 fingerprint (one value, at the session or media level).
+
+- **Preflight:** an `OPTIONS` that passes 1–3, asks for `Access-Control-Request-Method: POST`, and asks for no request header other than `Content-Type` gets `204` with `Access-Control-Allow-Origin: <that origin>` (never `*`), `Access-Control-Allow-Methods: POST`, `Access-Control-Allow-Headers: Content-Type`, `Access-Control-Allow-Private-Network: true`, `Access-Control-Max-Age: 600` and `Vary: Origin`. It never sends `Access-Control-Allow-Credentials`.
+- **CORS on refusals:** a refusal after step 3 (a wrong method, body, token or pin) carries `Access-Control-Allow-Origin` and `Vary: Origin` as well, so seven can tell a `403` from a closed port. Earlier refusals carry no CORS headers. Every answer has `Cache-Control: no-store`.
+- `Origin` can be forged by a process that isn't a browser, so the gate only filters browsers. Trust comes from the token or the pinned fingerprint.
+
+**Pairing.**
+- **Rate limit:** at most 10 pairing attempts a minute pass the gate. Past that, `/pair` is refused before the body is read, and slicc logs `refused a pairing: more than 10 a minute` (debug). Signals don't count.
+- **The token:** the node checks it in constant time. A wrong, used or expired token burns nothing, still counts toward the limit, and gets `refused a pairing request from <origin>: the token is wrong, used or expired`. A matching token is burned at once, before the answer, even when the answer then fails.
+- **The pin:** the node pins the offer's fingerprint with the request's `Origin` in `<config>/slicc/loopback-peers.json` (mode `0600`), as `{ "version": 1, "peers": { "<page-fp>": { "origin", "firstSeen" } } }`. A new pairing of the same fingerprint replaces its origin. slicc says `paired with seven on <origin> (ab12…ef)`.
+- **Signals:** `/signal` is answered only for a pinned fingerprint whose origin equals the request's `Origin` (both normalized).
+- **The answer:** non-trickled. The node answers through its link stack, waits until ICE gathering is complete (10 s at most, after which it refuses), and returns its SDP with every host candidate and `a=end-of-candidates`. The page checks that the answer's fingerprint is the one it pinned before it uses the answer.
+
+**The link in this mode** is local (HELLO `mode: "local"`), with the node's loopback certificate:
+- **Caps:** `net`, `http`, `credentialed`, `ws`, `unlink-loopback`, `fs` with `--mount`, `ssh` with `--runner`, `jerk` and `jerk-seal` unless `--no-jerk`, and kernel services on `--kernel-port` for a page that offers `kernel-in` (see [Kernel services](#kernel-services)). There is no `cdp`, since the node controls no browser, so a `cdp` OPEN gets `EOPNOTSUPP`. `jerk`'s `--seven-origin` is the pinned origin.
+- **Policy:** the local default (see [Network policy](#network-policy)). The protected ports are 9222–9229, every port in a `DevToolsActivePort` file that browser discovery would read (default user-data dirs, SLICC profiles and six's profiles; files are only read, nothing is probed), the listener's port and the kernel port. Those files are read again every 5 s, and a new port is denied on `127.0.0.1` and `[::1]` from then on. So a kernel program can't reach a debugging port the user turned on.
+- **ICE:** host candidates, loopback included, as for `slicc attach`.
+- **Several sevens:** the node keeps one link per paired page fingerprint. A new offer for a fingerprint replaces that fingerprint's link only. Each link is an exit of its own, and kernel connections go to the page that linked last, as for `slicc attach`.
+- **Restarts:** the node keeps its certificate and its port, and the page keeps its certificate and its pin. A restarted `slicc open` or `slicc pair` is reachable again at once, and a paired page signals again without a new token. Each process has a new `node` id, so seven keys the device on the fingerprint.
+
+**Unlinking.**
+- **From seven:** on a live link, seven opens `OPEN { "kind": "unlink" }` (cap `unlink-loopback`). The node answers OPENED `{}` and END, deletes that page's pin, closes that link only, and says `unlinked by seven on <origin> (ab12…ef); it must pair again to link`. It keeps running and keeps its certificate.
+- **On the node:** `slicc unpair` lists the pins, one line each: `<page-fp>  <origin>  paired <time>`, or `no paired sevens`. `slicc unpair <fingerprint>` forgets one. A unique prefix works, ignoring colons and case. It says `forgot ab12…ef (<origin>)`, and exits 1 when nothing matches or more than one pin does. `slicc unpair --all` forgets every pin (`forgot <n> paired sevens`). A link that is up stays up until it drops, and a forgotten page gets `403` on its next signal.
+
+**The page side**, as the test harness implements it (`test/integration/testdata/link/loopback.js`, the reference for seven):
+1. `RTCPeerConnection.generateCertificate({ name: "ECDSA", namedCurve: "P-256" })` once per origin, kept in IndexedDB (`slicc-loopback`, store `keys`, key `certificate`) and passed as `certificates` to every loopback `RTCPeerConnection`.
+2. On load, the page reads `#slicc-pair=<port>.<token>.<node-fp>`, strips it with `history.replaceState`, and asks the user to confirm. Only the confirmation sends the first loopback request.
+3. It creates the `slicc.link.v1` channel, sets the local offer, and waits for ICE gathering to complete.
+4. It posts `{ token, offer }` to `http://127.0.0.1:<port>/slicc/v1/pair` with `Content-Type: application/json`, `mode: "cors"` and `credentials: "omit"`.
+5. It accepts the answer only if its SHA-256 fingerprint is `<node-fp>`; otherwise it refuses the link (a squatter). Then it pins `{ fingerprint: <node-fp>, port, name }`.
+6. To link again, it posts `{ offer }` to `/slicc/v1/signal`, first on the remembered port, then on 17117–17126, and accepts only an answer with the pinned fingerprint. After a link loss it retries with backoff, from 1 s up to 30 s.
+7. To unlink, it opens `unlink` on the live link when HELLO lists `unlink-loopback`, then forgets its pin.
+
 ## Link
 
 One WebRTC peer connection. seven offers and the node answers. The node:
@@ -694,7 +771,7 @@ Only browsers the user named are listed: the one seven runs in, `--cdp` and `--c
 
 **`browsers` updates** (page cap `browsers`), node → page. When the list changes while a link is up and the page's HELLO has `browsers` in `caps`, the node opens `OPEN { "kind": "browsers", "browsers": [ … ] }` on the control channel with the full current list in HELLO's shape. It replaces the previous list; there are no deltas. The page answers OPENED `{}` and END, and the node sends END. Updates are sent one at a time per link, a change that comes while one is in flight is sent after it, with the list as it is then, and an update the page doesn't finish within 10 s is reset with `ETIMEDOUT`. A change between the HELLO and the link coming up is sent as an update right away.
 
-`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`. `cdp.js` next to it is a CDP client over `cdp` streams, `protect.js` probes the filter that keeps seven's origin out of reach, `fs.js` an op-shaped client for `fs` streams (`call`, `list`, `read`, `write`, `watch`), and `page.js` answers `browsers` and `mounts` updates. `page.js` keeps one link per `node` id from the hello. For tray links (no hello `node`) it replaces an older link with the same fingerprint only when HELLO's `node` matches, as seven does. `agent.js` is a fake agent behind the page's `agent` cap: the tests queue scripted runs, emit transcript events, hold and release a run, reset watch streams, and turn the cap off. Loaded with `?kernel`, the test page lists `kernel-in` and answers `kernel` OPENs with `kernel.js`, a small HTTP and WebSocket echo server in the page.
+`test/integration/testdata/link/link.js` is a page-side implementation of the link (framing, credit, both channel layouts, the violation rules, and `resolve` and raw-fetch helpers) that the integration tests run in Chrome against `slicc attach`. `cdp.js` next to it is a CDP client over `cdp` streams, `protect.js` probes the filter that keeps seven's origin out of reach, `fs.js` an op-shaped client for `fs` streams (`call`, `list`, `read`, `write`, `watch`), `loopback.js` is the page side of [loopback signalling](#linking-seven-in-your-everyday-browser), and `page.js` answers `browsers` and `mounts` updates. Through `linkTest.loopback`, `page.js` pairs from the fragment (`confirm`), signals again (`signal`, `reconnect`), unlinks in-band (`unlink`) and posts raw requests (`post`), with an optional `?ports=<first>-<last>` scan range. `page.js` keeps one link per `node` id from the hello. For tray links (no hello `node`) it replaces an older link with the same fingerprint only when HELLO's `node` matches, as seven does. `agent.js` is a fake agent behind the page's `agent` cap: the tests queue scripted runs, emit transcript events, hold and release a run, reset watch streams, and turn the cap off. Loaded with `?kernel`, the test page lists `kernel-in` and answers `kernel` OPENs with `kernel.js`, a small HTTP and WebSocket echo server in the page.
 
 ### Kernel services
 
@@ -1080,7 +1157,7 @@ A node on another machine sets up its link through the tray hub, the `slicc-tray
 
 Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`. `npm run lint` runs the slicc lint tools, `gofmt`, `go mod tidy -diff`, `go vet` and golangci-lint. `npm test` runs the integration tests in `test/integration/`, which build the binary and drive it. Unit tests stay next to the code and out of git (`npm run test:unit`). `go build` and `npm run build` link no version, so these binaries report `dev`. `npm run dist` cross-builds all six targets into `artifacts/release/` with `SHA256SUMS`, unsigned. `npm run npm:stage` then stages the npm packages into `dist/npm/`, and `npm run npm:check` packs them with `npm publish --dry-run`.
 
-**Test names: `--hosts <file>`** (test-only, left out of `--help`). `slicc attach` and `slicc <join-url> follow` take a hosts file, so tests get deterministic names without public DNS. Each line is `<ip> <name> [<name>…]`, and `#` starts a comment. Names match case-insensitively, with or without a trailing dot, and a name on several lines gets every address, in file order. Wherever the node resolves a name (`resolve`, `tcp` by name, `http`, and the policy's [browser endpoints](#network-policy)), a name in the file gets the file's addresses of the requested family, possibly none, and never the system resolver's. Other names go to the system resolver. The policy applies afterwards as usual: `resolve` drops refused addresses, and a dial to a refused address is `EACCES`. `tcp` and `http` try the addresses in file order. A file that can't be read or parsed exits 2. A name mapped to a loopback address only helps the node's own dials, `http` and `tcp` by name: a seven kernel that gets a loopback address from `resolve` dials its own loopback, because loopback never goes out through an exit. For end-to-end exit tests, map test names to a non-loopback address of the machine.
+**Test names: `--hosts <file>`** (test-only, left out of `--help`). `slicc attach`, `slicc open`, `slicc pair` and `slicc <join-url> follow` take a hosts file, so tests get deterministic names without public DNS. Each line is `<ip> <name> [<name>…]`, and `#` starts a comment. Names match case-insensitively, with or without a trailing dot, and a name on several lines gets every address, in file order. Wherever the node resolves a name (`resolve`, `tcp` by name, `http`, and the policy's [browser endpoints](#network-policy)), a name in the file gets the file's addresses of the requested family, possibly none, and never the system resolver's. Other names go to the system resolver. The policy applies afterwards as usual: `resolve` drops refused addresses, and a dial to a refused address is `EACCES`. `tcp` and `http` try the addresses in file order. A file that can't be read or parsed exits 2. A name mapped to a loopback address only helps the node's own dials, `http` and `tcp` by name: a seven kernel that gets a loopback address from `resolve` dials its own loopback, because loopback never goes out through an exit. For end-to-end exit tests, map test names to a non-loopback address of the machine.
 
 Front ends and capabilities follow a node's links with `node.Node.Subscribe(func(node.Event)) (unsubscribe func())`. Events: `connecting` (an offer was answered), `linked` (the peer's HELLO arrived, in `Peer`), `link-down` (`Reason` when the node closed the link: seven's `bye` reason, `replaced by a new offer` or `slicc is exiting`; otherwise `Err` for a failure; a failed answer has no `Link`), and `stream-open` and `stream-close` for each page-opened stream, with its kind. Every event but a failed answer carries its `*link.Link`. A link's `link-down` comes before the next link's `connecting`, but its streams' `stream-close` can come after its `link-down`. Events are delivered synchronously on the node's and the link's goroutines, so a subscriber must return quickly and never block; one that needs to wait hands the event to its own goroutine.
 
