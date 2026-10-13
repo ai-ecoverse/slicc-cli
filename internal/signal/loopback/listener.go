@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ const (
 )
 
 type Config struct {
+	Avoid         []int
 	Identity      *Identity
 	Peers         *Peers
 	Origins       *signal.Origins
@@ -77,7 +79,7 @@ func Listen(cfg Config) (*Listener, error) {
 	if cfg.Identity != nil {
 		preferred = cfg.Identity.Port
 	}
-	lns, port, err := bind(preferred, cfg.FirstPort, cfg.LastPort)
+	lns, port, err := bind(preferred, cfg.FirstPort, cfg.LastPort, cfg.Avoid)
 	if err != nil {
 		return nil, err
 	}
@@ -90,14 +92,14 @@ func Listen(cfg Config) (*Listener, error) {
 	return l, nil
 }
 
-func bind(preferred, first, last int) ([]net.Listener, int, error) {
+func bind(preferred, first, last int, avoid []int) ([]net.Listener, int, error) {
 	six := ipv6Loopback()
 	var ports []int
-	if preferred >= first && preferred <= last {
+	if preferred >= first && preferred <= last && !slices.Contains(avoid, preferred) {
 		ports = append(ports, preferred)
 	}
 	for p := first; p <= last; p++ {
-		if p != preferred {
+		if p != preferred && !slices.Contains(avoid, p) {
 			ports = append(ports, p)
 		}
 	}

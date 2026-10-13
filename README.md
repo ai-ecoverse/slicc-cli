@@ -569,9 +569,9 @@ Link spec §1.3. These commands link a seven that runs in the browser you use ev
 - `<token>` is 128 random bits in base64url (22 characters). It is good once, for 10 minutes;
 - `<node-fp>` is the SHA-256 fingerprint of the node's certificate, in lower-case hex without colons.
 
-The URL is the secret, and it carries the node's fingerprint, so a process that squats on the port can't pass for the node. slicc prints a new pairing URL each time a line arrives on stdin, so press Enter for a new one. A URL that expires unused gets `the pairing URL expired; press Enter for a new one`. Pairing URLs only go to stdout; telemetry and logs never get them.
+The URL is the secret, and it carries the node's fingerprint, so a process that squats on the port can't pass for the node. slicc prints a new pairing URL each time a line arrives on stdin, so press Enter for a new one. When the newest URL expires unused, slicc says `the pairing URL expired; press Enter for a new one`. Older URLs stay good until their own 10 minutes are up. Pairing URLs only go to stdout; telemetry and logs never get them.
 
-**The listener** binds `127.0.0.1:<port>`, plus `[::1]:<port>` when this machine has IPv6 loopback, and never `0.0.0.0`. The port is the one it used last time if that's still free, otherwise the first port in 17117–17126 where both addresses bind. With none free, it says `no free port in 17117-17126 on 127.0.0.1` and exits 1. It serves exactly two requests:
+**The listener** binds `127.0.0.1:<port>`, plus `[::1]:<port>` when this machine has IPv6 loopback, and never `0.0.0.0`. The port is the one it used last time if that's still free, otherwise the first port in 17117–17126 where both addresses bind. The kernel port (`--kernel-port`, unless `--no-kernel`) is skipped. With none free, it says `no free port in 17117-17126 on 127.0.0.1` and exits 1. It serves exactly two requests:
 
 | request | body | answer |
 | --- | --- | --- |

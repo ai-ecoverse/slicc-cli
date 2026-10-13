@@ -180,15 +180,10 @@ type openRun struct {
 	pol    *policy.Policy
 	host   string
 	ports  []uint16
+	token  string
 }
 
 func runOpen(verb string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	for _, a := range args {
-		if a == "--help" || a == "-h" || a == "-help" {
-			fmt.Fprint(stdout, openUsage)
-			return 0
-		}
-	}
 	f, code := parseOpen(verb, args, stdout, stderr)
 	if code >= 0 {
 		return code
@@ -262,8 +257,12 @@ func (r *openRun) listen() error {
 		r.host = node.DefaultHost()
 	}
 	first, last := loopbackPorts()
+	var avoid []int
+	if !r.f.noKernel {
+		avoid = append(avoid, r.f.kernelPort)
+	}
 	r.ln, err = loopback.Listen(loopback.Config{
-		Identity: r.id, Peers: loopback.OpenPeers(dir), Origins: allowed, FirstPort: first, LastPort: last,
+		Avoid: avoid, Identity: r.id, Peers: loopback.OpenPeers(dir), Origins: allowed, FirstPort: first, LastPort: last,
 		Name: r.host, NodeID: signal.NodeID(), Logf: r.logf, Status: r.status,
 	})
 	if err != nil {
@@ -361,9 +360,28 @@ func (r *openRun) watchActivePorts(ctx context.Context) {
 	}
 }
 
-func (r *openRun) pair() error {
+func (r *openRun) mint() (string, error) {
 	tok := r.ln.Mint()
 	u, err := r.ln.PairingURL(r.f.page, tok)
+	if err != nil {
+		return "", err
+	}
+	r.outMu.Lock()
+	r.token = tok
+	r.outMu.Unlock()
+	time.AfterFunc(loopback.TokenLifetime, func() {
+		r.outMu.Lock()
+		current := r.token == tok
+		r.outMu.Unlock()
+		if current && r.ln.Valid(tok) {
+			r.status("the pairing URL expired; press Enter for a new one")
+		}
+	})
+	return u, nil
+}
+
+func (r *openRun) pair() error {
+	u, err := r.mint()
 	if err != nil {
 		return err
 	}
@@ -376,12 +394,6 @@ func (r *openRun) pair() error {
 			r.status("opened the pairing URL in the default browser")
 		}
 	}
-	go func() {
-		time.Sleep(loopback.TokenLifetime)
-		if r.ln.Valid(tok) {
-			r.status("the pairing URL expired; press Enter for a new one")
-		}
-	}()
 	return nil
 }
 
@@ -391,8 +403,7 @@ func (r *openRun) readStdin(stdin io.Reader) {
 	}
 	sc := bufio.NewScanner(stdin)
 	for sc.Scan() {
-		tok := r.ln.Mint()
-		u, err := r.ln.PairingURL(r.f.page, tok)
+		u, err := r.mint()
 		if err != nil {
 			return
 		}
