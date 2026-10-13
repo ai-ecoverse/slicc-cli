@@ -3,7 +3,9 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -48,6 +50,22 @@ func isolateProcess(root string) {
 	_ = os.Unsetenv("SLICC_USER_DATA_DIR")
 	_ = os.Setenv(browser.DiscoveryEnv, "isolated")
 	_ = os.Setenv("SLICC_OPEN_COMMAND", filepath.Join(root, "no-browser-opener"))
+	_ = os.Setenv("SLICC_LOOPBACK_PORTS", harnessLoopbackPorts())
+}
+
+func harnessLoopbackPorts() string {
+	for try := 0; try < 50; try++ {
+		ln, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			break
+		}
+		base := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+		if base+9 <= 65535 {
+			return fmt.Sprintf("%d-%d", base, base+9)
+		}
+	}
+	return "47117-47126"
 }
 
 func withDiscovery(env []string, mode string) []string {
@@ -75,7 +93,7 @@ func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
 		_, _ = io.WriteString(w, `{"Browser":"Chrome/150.0.0.0","webSocketDebuggerUrl":"ws://127.0.0.1:`+strconv.Itoa(port)+`/devtools/browser/x"}`)
 	}))
 
-	cmd := exec.Command(binary, "--plain")
+	cmd := exec.Command(binary, "--plain", "--no-fallback")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	done := make(chan error, 1)

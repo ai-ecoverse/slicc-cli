@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -83,6 +85,13 @@ type openFlags struct {
 	noJerk     bool
 	compute    computeFlags
 	hosts      hostsFlag
+	loaded     []hostfs.Mount
+}
+
+type openOptions struct {
+	open   bool
+	json   bool
+	notice string
 }
 
 func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags, int) {
@@ -159,8 +168,9 @@ func defaultBrowserArgs(args []string) ([]string, bool) {
 }
 
 type openRun struct {
-	verb   string
+	opts   openOptions
 	f      openFlags
+	outMu  sync.Mutex
 	status func(string, ...any)
 	logf   func(string, ...any)
 	stdout io.Writer
@@ -183,7 +193,11 @@ func runOpen(verb string, args []string, stdin io.Reader, stdout, stderr io.Writ
 	if code >= 0 {
 		return code
 	}
-	r := &openRun{verb: verb, f: f, stdout: stdout}
+	return serveOpen(f, openOptions{open: verb == "open"}, stdin, stdout, stderr)
+}
+
+func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io.Writer) int {
+	r := &openRun{opts: opts, f: f, stdout: stdout}
 	r.status = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) }
 	r.logf = func(string, ...any) {}
 	if os.Getenv("SLICC_DEBUG") != "" {
@@ -191,6 +205,10 @@ func runOpen(verb string, args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 	ctx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if opts.notice != "" {
+		r.status("%s", opts.notice)
+		r.event(map[string]any{"schema": flow.Schema, "event": "mode", "mode": "loopback", "reason": "no-browser"})
+	}
 	if err := r.listen(); err != nil {
 		telemetry.ReportError(telemetry.Signal, err)
 		r.status("%v", err)
@@ -295,7 +313,11 @@ func (r *openRun) serveCaps() (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	closeMounts := serveMounts(n, hostfs.Load(r.f.mounts, r.status), r.status)
+	mounts := r.f.loaded
+	if mounts == nil {
+		mounts = hostfs.Load(r.f.mounts, r.status)
+	}
+	closeMounts := serveMounts(n, mounts, r.status)
 	closeKernel := func() {}
 	if !r.f.noKernel {
 		kern := kernelin.New(kernelin.Config{Port: r.f.kernelPort, Logf: r.logf, Status: r.status})
@@ -346,8 +368,8 @@ func (r *openRun) pair() error {
 		return err
 	}
 	r.status("to link seven, open the pairing URL below; seven asks to link %s (%s). It works once, for 10 minutes; press Enter for a new one", r.host, loopback.ShortFingerprint(r.id.Fingerprint))
-	fmt.Fprintln(r.stdout, u)
-	if r.verb == "open" {
+	r.printURL(u)
+	if r.opts.open {
 		if err := openBrowser(u); err != nil {
 			r.status("could not open the default browser (%v); open the URL above yourself", err)
 		} else {
@@ -375,8 +397,28 @@ func (r *openRun) readStdin(stdin io.Reader) {
 			return
 		}
 		r.status("a new pairing URL, good once for 10 minutes:")
-		fmt.Fprintln(r.stdout, u)
+		r.printURL(u)
 	}
+}
+
+func (r *openRun) event(e map[string]any) {
+	if !r.opts.json {
+		return
+	}
+	b, _ := json.Marshal(e)
+	r.outMu.Lock()
+	defer r.outMu.Unlock()
+	fmt.Fprintf(r.stdout, "%s\n", b)
+}
+
+func (r *openRun) printURL(u string) {
+	if r.opts.json {
+		r.event(map[string]any{"schema": flow.Schema, "event": "pairing", "url": u})
+		return
+	}
+	r.outMu.Lock()
+	defer r.outMu.Unlock()
+	fmt.Fprintln(r.stdout, u)
 }
 
 func openBrowser(u string) error {

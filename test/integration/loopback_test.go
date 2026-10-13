@@ -731,7 +731,7 @@ func TestDefaultBrowserFlagFollowsComputeArgv(t *testing.T) {
 		t.Fatalf("pairing URL %q", u)
 	}
 	o.waitStderr(t, "ssh: runner sh -c")
-	cmd := exec.Command(binary, "--runner", "echo", "--default-browser", "--", "--yes")
+	cmd := exec.Command(binary, "--runner", "echo", "--default-browser", "--", "--yes", "--no-fallback")
 	cmd.Env = e.env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -830,5 +830,40 @@ func TestLoopbackPinsAreLockedAcrossProcesses(t *testing.T) {
 	}
 	if _, err := os.Stat(lock); !os.IsNotExist(err) {
 		t.Fatalf("the lock is left behind: %v", err)
+	}
+}
+
+func TestLoopbackLeavesUnreadableStateAlone(t *testing.T) {
+	e := newLoopEnv(t)
+	if err := os.MkdirAll(e.config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identity := filepath.Join(e.config, "loopback-identity.json")
+	peers := filepath.Join(e.config, "loopback-peers.json")
+	for _, path := range []string{identity, peers} {
+		if err := os.WriteFile(path, []byte("{\"version\": 99}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(args ...string) (string, int) {
+		cmd := exec.Command(binary, args...)
+		cmd.Env = e.env
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		_ = cmd.Run()
+		return stdout.String() + stderr.String(), cmd.ProcessState.ExitCode()
+	}
+	if out, code := run("pair", "--page", "https://seven.sliccy.ai/"); code != 1 || !strings.Contains(out, "is not a loopback identity slicc can read") || pairingURL.MatchString(out) {
+		t.Fatalf("pair with an unreadable identity: %d %q", code, out)
+	}
+	for _, args := range [][]string{{"unpair"}, {"unpair", "--all"}, {"unpair", "abcd"}} {
+		if out, code := run(args...); code != 1 || !strings.Contains(out, "is not a list of paired sevens slicc can read") {
+			t.Fatalf("%v with unreadable pins: %d %q", args, code, out)
+		}
+	}
+	for _, path := range []string{identity, peers} {
+		if got, _ := os.ReadFile(path); string(got) != "{\"version\": 99}\n" {
+			t.Fatalf("%s was rewritten: %q", path, got)
+		}
 	}
 }

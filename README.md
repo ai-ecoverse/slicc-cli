@@ -8,7 +8,7 @@
 
 | command | what it does |
 | --- | --- |
-| `slicc` | pick browsers in a small TUI; Enter launches or attaches to the best match, opens seven and links it (works now; see [The default](#the-default-slicc)) |
+| `slicc` | pick browsers in a small TUI; Enter launches or attaches to the best match, opens seven and links it. With no SLICC profile and no CDP endpoint, it links seven in the default browser instead (works now; see [The default](#the-default-slicc)) |
 | `slicc attach --cdp <url>` | link a seven that is open in an already-running CDP browser (works now; see [Local setup](#local-setup-slicc-attach)) |
 | `slicc open`, `slicc --default-browser`, `slicc pair` | link a seven in your everyday browser, without CDP: open or print a pairing URL (works now; see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)) |
 | `slicc unpair [<fingerprint> \| --all]` | list or forget the sevens paired with `open` or `pair` |
@@ -155,7 +155,7 @@ Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and
 | `/auth/callback`, `/api/oauth-state`, `/api/oauth-result` | not needed on `https://<label>.sliccy.ai`, where seven signs in through the relay itself. A seven on another origin needs slicc-extension to sign in |
 | `startProxy`, `launchUrl`, `persistentKey` (JS) | no JS API |
 
-**Which browser.** slicc-node opened seven in the default browser, in any profile. `slicc` links seven in one of three ways:
+**Which browser.** slicc-node opened seven in the default browser, in any profile. `slicc` does that too when it finds no SLICC profile and no CDP endpoint: plain `slicc` then falls back to the first way below by itself, and `--no-fallback` turns that off (see [The default](#the-default-slicc)). `slicc` links seven in one of three ways:
 - **Your everyday browser, any vendor:** `slicc open` (or `slicc --default-browser`) opens seven in the default browser and pairs it over loopback, with no CDP and no remote debugging. `slicc pair` prints the pairing URL for a seven that's already open. Once paired, that seven links again by itself after a reload or a restart of `slicc`. The link has the local policy, folders, kernel services and compute, but no `cdp`, since slicc controls no browser there (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)).
 - **A browser `slicc` controls over CDP**, with `slicc` itself or `slicc attach`, which also offers seven `cdp` for that browser:
   - **by default,** a browser in a SLICC profile (see [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)). Its seven is separate from the one in your everyday profile, since seven keeps its files per browser profile.
@@ -305,11 +305,17 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 ```
 slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]... [--profile <name> | --profile six[:<port>]] [--headless]
       [--name <name>] [--kernel-port <n>] [--no-kernel] [--allow <rule>]... [--deny <rule>]... [--mount <path>[:<name>][:ro]]...
-      [--yes] [--plain] [--json]
+      [--yes] [--plain] [--json] [--no-fallback] [--open] [--default-browser]
       [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
 ```
 
-`slicc` with no command (`npx sliccy`) finds browsers, launches or attaches to the best one, opens seven in it and links it. It serves the link until it is told to stop: `q` or Ctrl-C in the dashboard, or `SIGINT` or `SIGTERM`. Then it says `bye` to seven, closes the browsers this run launched (as `slicc launch` does), leaves the browsers it attached to running, and exits 0. If the browser that hosts seven goes away, `slicc` closes the rest and exits 0 too. Setup failures (no browser, a launch or attach that fails) exit 1, and bad flags exit 2. When nothing can host seven (no running CDP endpoint, and no installed Chromium browser to launch in a SLICC profile), it says ``no browser to control: run `slicc open` to link seven in your everyday browser``.
+`slicc` with no command (`npx sliccy`) finds browsers, launches or attaches to the best one, opens seven in it and links it. It serves the link until it is told to stop: `q` or Ctrl-C in the dashboard, or `SIGINT` or `SIGTERM`. Then it says `bye` to seven, closes the browsers this run launched (as `slicc launch` does), leaves the browsers it attached to running, and exits 0. If the browser that hosts seven goes away, `slicc` closes the rest and exits 0 too. Setup failures (no browser, a launch or attach that fails) exit 1, and bad flags exit 2. With `--no-fallback`, a run where nothing can host seven says ``no browser to control: run `slicc open` to link seven in your everyday browser`` and exits 1.
+
+**The fallback to your default browser.** Plain `slicc` with no SLICC profile and no CDP endpoint falls back to [linking seven in your everyday browser](#linking-seven-in-your-everyday-browser), as `slicc pair` does:
+- **When:** no `--browser`, `--cdp` or `--profile` was given and `--no-fallback` wasn't, and discovery found no running CDP endpoint (SLICC six's Chrome doesn't count) and no installed Chromium browser with a profile in the SLICC profiles dir. A profile or endpoint, found or given, always wins, so the flow above runs instead.
+- **What it says:** `No SLICC browser or debugging endpoint found, so seven opens in your default browser for pairing. Use --profile or --cdp to choose.` on stderr, in place of the picker and the dashboard. With `--json` it adds `{"schema":1,"event":"mode","mode":"loopback","reason":"no-browser"}` after `discovered`.
+- **The pairing URL:** when stdin and stdout are both terminals, slicc opens it in the default browser. Otherwise it only prints it, unless `--open` is given. Without `--json` it goes to stdout. With `--json` it comes as `{"schema":1,"event":"pairing","url":"<pairing URL>"}`, and so does each new one.
+- **Then** it serves loopback links with this run's `--page`, `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and compute flags, until `SIGINT` or `SIGTERM`.
 
 **Discovery** is `slicc browsers`' discovery and ranking (see [Browsers](#browsers)), with each `--cdp` URL added and the `--page` origin counted as a seven origin.
 
@@ -332,6 +338,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven. `--profile six` and `--profile six:<port>` use SLICC six's own Chrome profile instead, without the picker (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)).
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
+- `--no-fallback`: never fall back to the default browser; exit 1 instead (see above). `--open`: when falling back without a terminal, open the pairing URL in the default browser too.
 - `--default-browser`: don't look for browsers; link a seven in the default browser instead, exactly as `slicc open` does (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)).
 - A flag of SLICC six's points back to six and exits 2 (see [Coming from SLICC six](#coming-from-slicc-six)). Any other flag, or an argument, is an error.
 
@@ -360,6 +367,8 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `browser-gone`, `browser-back`: `browser`, `name`, `role`. A browser stopped answering and left the cdp list, or answers again and is back on it.
 - `closed`: `browsers`, the ids slicc closed (always a list). It is the last event of every run that got past choosing its browsers.
 - `error`: `message`, and `browser?` when closing that browser failed. A setup error ends the run with exit 1.
+- `mode`: `mode` (`loopback`) and `reason` (`no-browser`), when the run [falls back](#the-default-slicc) to the default browser. Only `pairing` events follow, and the run has no `closed`.
+- `pairing`: `url`, a pairing URL, after `mode`.
 
 ```
 {"schema":1,"event":"discovered","entries":[…]}
@@ -549,10 +558,11 @@ Link spec §1.3. These commands link a seven that runs in the browser you use ev
 
 - **`slicc open`**, and `slicc --default-browser` (the same command), print the pairing URL on stdout and open it in the default browser: `open` on macOS, `xdg-open` on Linux, and `rundll32 url.dll,FileProtocolHandler` on Windows. If that fails, slicc says `could not open the default browser (…); open the URL above yourself` and goes on.
 - **`slicc pair`** only prints the pairing URL, for a seven that's already open. Paste it into seven's address bar, or into its *Link this computer* field.
+- **Plain `slicc`** falls back to this mode by itself when it finds no SLICC profile and no CDP endpoint (see [The default](#the-default-slicc)).
 - Both serve links until `SIGINT` or `SIGTERM`, then exit 0. A listener that can't bind, or a missing config directory, exits 1, and bad flags exit 2. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics.
 - **Flags** are as for `slicc attach`: `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and the compute flags. `--page <url>` is the seven page to pair (default `https://seven.sliccy.ai/`), and its origin is accepted as a seven origin. `--default-browser` takes these flags too. The flags of `slicc` that pick or launch browsers (`--browser`, `--cdp`, `--profile`, `--headless`, `--yes`, `--plain`, `--json`) are errors here. A flag of SLICC six's points back to six, as for `slicc`.
 
-**Identity.** The node's DTLS certificate (ECDSA P-256, valid for 20 years) lives in `<config>/slicc/loopback-identity.json` (mode `0600`, directory `0700`). The same file holds the port the node last listened on. It is minted on first use, and slicc says `new loopback identity for this computer: <name> (ab12…ef), fingerprint sha-256 AB:12:…`, or `this computer: …` on later runs. It is separate from the tray hub's certificates and survives restarts and updates. `<name>` is `--name`, or this machine's short host name in lower case.
+**Identity.** The node's DTLS certificate (ECDSA P-256, valid for 20 years) lives in `<config>/slicc/loopback-identity.json` (mode `0600`, directory `0700`). The same file holds the port the node last listened on. It is minted on first use, and slicc says `new loopback identity for this computer: <name> (ab12…ef), fingerprint sha-256 AB:12:…`, or `this computer: …` on later runs. It is separate from the tray hub's certificates and survives restarts and updates. A file that exists but can't be read as an identity (another version, broken JSON or PEM) is left alone: slicc says ``<path> is not a loopback identity slicc can read; …`` and exits 1. Only a certificate within a day of expiring is replaced. A `loopback-peers.json` that can't be read is left alone the same way: pairings and `slicc unpair` fail with ``<path> is not a list of paired sevens slicc can read; …``, and signals are refused. `<name>` is `--name`, or this machine's short host name in lower case.
 
 **The pairing URL** is `<page>#slicc-pair=<port>.<token>.<node-fp>`:
 - `<port>` is the listener's port;
