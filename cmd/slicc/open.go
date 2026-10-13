@@ -328,6 +328,11 @@ func (r *openRun) serveCaps() (func(), error) {
 		})
 	}
 	n.Handle(loopback.CapUnlink, loopback.KindUnlink, r.ln.Unlink)
+	n.Subscribe(func(e node.Event) {
+		if e.Kind == node.EventLinkDown && e.Link != nil {
+			go r.ln.LinkDown(e.Link)
+		}
+	})
 	n.API()
 	r.status("offering %s; policy: %s", strings.Join(n.Caps(), ", "), r.pol.Summary())
 	return func() { closeKernel(); closeMounts(); closeSSH() }, nil
