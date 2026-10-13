@@ -131,6 +131,9 @@ func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags,
 		fmt.Fprintf(stderr, "%s: %v\n\n%s", prog, err, openUsage)
 		return f, 2
 	}
+	if code := f.compute.checkRunner(stderr); code >= 0 {
+		return f, code
+	}
 	if code := checkMounts(f.mounts, prog, stderr); code >= 0 {
 		return f, code
 	}
