@@ -174,7 +174,9 @@ sign_windows() {
 }
 
 checksums() {
-  (cd "$out" && sha256 slicc-* > "$work/SHA256SUMS" && mv "$work/SHA256SUMS" SHA256SUMS)
+  cp install.sh "$out/install.sh"
+  chmod 755 "$out/install.sh"
+  (cd "$out" && sha256 slicc-* install.sh > "$work/SHA256SUMS" && mv "$work/SHA256SUMS" SHA256SUMS)
   cat "$out/SHA256SUMS"
 }
 

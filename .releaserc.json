@@ -14,6 +14,7 @@
       {
         "assets": [
           { "path": "artifacts/release/slicc-*" },
+          { "path": "artifacts/release/install.sh", "label": "install.sh" },
           { "path": "artifacts/release/SHA256SUMS", "label": "SHA256SUMS" }
         ]
       }

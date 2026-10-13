@@ -19,9 +19,26 @@
 
 ## Install
 
+```
+curl -fsSL https://github.com/ai-ecoverse/slicc-cli/releases/latest/download/install.sh | sh
+```
+
+This installs `slicc` on macOS and Linux; see [Install with curl](#install-with-curl). The alternatives:
+
 - **npm:** `npm install -g @ai-ecoverse/slicc`, or `npx @ai-ecoverse/slicc`. The package is a small Node launcher; npm picks one of the platform packages `@ai-ecoverse/slicc-<os>-<arch>` (`darwin`, `linux`, `windows` × `amd64`, `arm64`) through `optionalDependencies` and their `os` and `cpu` fields. The launcher runs that binary with the same arguments, stdio and environment plus `SLICC_LAUNCHER=npm`, forwards `SIGTERM`, `SIGHUP`, `SIGQUIT` and `SIGUSR2` to it, and `SIGINT` too when stdin is not a terminal (a terminal's Ctrl-C already reaches the binary; on Windows the console delivers Ctrl-C and Ctrl-Break to both). It exits with the binary's exit code, or dies of the same signal. An install with `--omit=optional` has no binary, and the launcher says so. The companion tools come the same way (see [Companion tools](#companion-tools)).
-- **GitHub releases:** every release of `ai-ecoverse/slicc-cli` carries `slicc-<os>-<arch>` (`.exe` on Windows) for all six targets, plus `SHA256SUMS`. See [Verifying a download](#verifying-a-download).
+- **GitHub releases:** every release of `ai-ecoverse/slicc-cli` carries `slicc-<os>-<arch>` (`.exe` on Windows) for all six targets, plus `install.sh` and `SHA256SUMS` (which lists `install.sh` too). See [Verifying a download](#verifying-a-download).
 - **Go:** `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest`. See [Install with Go](#install-with-go).
+
+### Install with curl
+
+`install.sh` is a POSIX `sh` script, attached to every release and kept in the repo root. It:
+- takes `VERSION` (default: the latest release; `1.2.3` or `v1.2.3`) and `INSTALL_DIR` (default: `$HOME/.local/bin`) from the environment, or `--version X` and `--dir D` as flags (`curl … | sh -s -- --version 1.2.3 --dir ~/bin`), and `--help`;
+- supports `Darwin` and `Linux` on `x86_64`/`amd64` and `arm64`/`aarch64` (an x86_64 shell under Rosetta gets `arm64`); anything else exits 1 and points to npm, or on Windows to the release's `.exe`;
+- downloads `slicc-<os>-<arch>` and `SHA256SUMS` from the release with `curl` or `wget`, checks the hash with `sha256sum` or `shasum -a 256`, and exits 1 without installing anything when the hash differs or `SHA256SUMS` has no line for the asset;
+- copies the binary to a temporary file in `INSTALL_DIR`, sets mode `755` and renames it to `slicc`, so a re-run upgrades or downgrades in place;
+- prints `installed slicc <version> at <path>` from the new binary's `--version`, and, when `INSTALL_DIR` isn't on `PATH`, one line with the `export PATH=…` to add.
+
+It never uses `sudo`, never edits shell startup files and sends no telemetry. The Linux binaries are static (`CGO_ENABLED=0`), so the libc doesn't matter. The macOS binaries are the signed and notarized ones; `curl` sets no quarantine flag. `SLICC_INSTALL_BASE_URL` replaces `https://github.com/ai-ecoverse/slicc-cli/releases` (assets from `<base>/latest/download/` or `<base>/download/v<version>/`), for tests only. A curl-installed `slicc` updates itself in place with `slicc update` (see [Updates](#updates)), or by running the one-liner again.
 
 ### Install with Go
 
@@ -193,7 +210,7 @@ Errors name the step that failed (`attestation identity: …`). A bundle from a 
 
 ## Updates
 
-`slicc update [--check] [--checksum-only]` replaces the running binary (symlinks resolved) with the latest GitHub release of `ai-ecoverse/slicc-cli`. It downloads the asset for this OS and CPU, checks it against the release's `SHA256SUMS`, and verifies its build provenance attestation (see [Attestations](#attestations)); `--checksum-only` skips the attestation, with a warning. The new binary has to answer `--version` with the release's version before anything is replaced. The swap is a rename next to the old binary; on Windows the running binary is first moved aside to `<name>.old`, which the next run deletes. `slicc update --check` only reports.
+`slicc update [--check] [--checksum-only]` replaces the running binary (symlinks resolved), wherever it is, such as `~/.local/bin/slicc` from `install.sh`, with the latest GitHub release of `ai-ecoverse/slicc-cli`. It downloads the asset for this OS and CPU, checks it against the release's `SHA256SUMS`, and verifies its build provenance attestation (see [Attestations](#attestations)); `--checksum-only` skips the attestation, with a warning. The new binary has to answer `--version` with the release's version before anything is replaced. The swap is a rename next to the old binary; on Windows the running binary is first moved aside to `<name>.old`, which the next run deletes. `slicc update --check` only reports.
 
 **The version.** A release build has its version linked in (`-X main.version=<version>`). Without one, `slicc` reads its Go build info: a binary built by `go install …@<version>` (or `go run`) from a downloaded module, with a checksum in the build info, reports that module version without the leading `v`. Anything else built from a checkout reports `dev`.
 

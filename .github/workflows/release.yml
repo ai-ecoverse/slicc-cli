@@ -198,3 +198,38 @@ jobs:
           out="$("./$ASSET" --version)"
           echo "$out"
           test "$out" = "slicc $VERSION"
+
+  install-smoke:
+    needs: release
+    if: needs.release.outputs.version != '' && github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-curl
+            runner: ubuntu-latest
+            container: ''
+          - name: macos-curl
+            runner: macos-latest
+            container: ''
+          - name: alpine-wget
+            runner: ubuntu-latest
+            container: alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
+    name: install-smoke (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Run the documented one-liner against releases/latest
+        env:
+          IMAGE: ${{ matrix.container }}
+          WANT: slicc ${{ needs.release.outputs.version }}
+        run: |
+          url=https://github.com/ai-ecoverse/slicc-cli/releases/latest/download/install.sh
+          if [ -z "$IMAGE" ]; then
+            curl -fsSL "$url" | sh
+            got="$("$HOME/.local/bin/slicc" --version)"
+          else
+            got="$(docker run --rm -e URL="$url" "$IMAGE" sh -c 'wget -qO- "$URL" | sh >&2 && "$HOME/.local/bin/slicc" --version')"
+          fi
+          echo "$got"
+          test "$got" = "$WANT"
