@@ -1,6 +1,7 @@
 package loopback
 
 import (
+	"context"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
@@ -48,22 +49,62 @@ func (l *Listener) Unlink(s *link.Stream) {
 	_ = s.Link().Close()
 }
 
+const sweepEvery = 5 * time.Second
+
+func (l *Listener) LinkUp(lk *link.Link) {
+	if fp := PeerFingerprint(lk); fp != "" {
+		l.mu.Lock()
+		l.live[fp] = lk
+		l.mu.Unlock()
+	}
+}
+
 func (l *Listener) LinkDown(lk *link.Link) {
 	fp := PeerFingerprint(lk)
 	if fp == "" {
 		return
 	}
+	l.mu.Lock()
+	if l.live[fp] == lk {
+		delete(l.live, fp)
+	}
+	l.mu.Unlock()
+	l.release(fp)
+}
+
+func (l *Listener) release(fp string) {
 	if _, pinned := l.cfg.Peers.Origin(fp); pinned {
 		return
 	}
 	l.mu.Lock()
 	c := l.conns[fp]
-	if c != nil {
-		delete(l.conns, fp)
+	if c == nil || l.live[fp] != nil {
+		l.mu.Unlock()
+		return
 	}
+	delete(l.conns, fp)
 	l.mu.Unlock()
-	if c != nil {
-		_ = c.Close()
-		l.cfg.Logf("loopback: released %s, which is no longer paired", ShortFingerprint(fp))
+	_ = c.Close()
+	l.cfg.Logf("loopback: released %s, which is no longer paired", ShortFingerprint(fp))
+}
+
+func (l *Listener) sweep(ctx context.Context) {
+	t := time.NewTicker(sweepEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		l.mu.Lock()
+		fps := make([]string, 0, len(l.conns))
+		for fp := range l.conns {
+			fps = append(fps, fp)
+		}
+		l.mu.Unlock()
+		for _, fp := range fps {
+			l.release(fp)
+		}
 	}
 }

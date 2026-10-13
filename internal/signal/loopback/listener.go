@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/signal"
 )
 
@@ -53,6 +54,7 @@ type Listener struct {
 
 	mu      sync.Mutex
 	conns   map[string]*peerConn
+	live    map[string]*link.Link
 	serve   func(context.Context, signal.Conn) error
 	ctx     context.Context
 	closing bool
@@ -83,7 +85,7 @@ func Listen(cfg Config) (*Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Listener{cfg: cfg, port: port, lns: lns, rate: limiter{max: PairLimit, per: PairWindow}, conns: map[string]*peerConn{}}
+	l := &Listener{cfg: cfg, port: port, lns: lns, rate: limiter{max: PairLimit, per: PairWindow}, conns: map[string]*peerConn{}, live: map[string]*link.Link{}}
 	if cfg.Identity != nil {
 		if err := cfg.Identity.RememberPort(port); err != nil {
 			cfg.Logf("loopback: remember port: %v", err)
@@ -145,6 +147,8 @@ func (l *Listener) Mint() string { return l.tokens.mint(time.Now()) }
 
 func (l *Listener) Valid(tok string) bool { return l.tokens.valid(tok, time.Now()) }
 
+func (l *Listener) Used(tok string) bool { return l.tokens.used(tok) }
+
 func (l *Listener) PairingURL(page, token string) (string, error) {
 	u, err := url.Parse(page)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -175,6 +179,7 @@ func (l *Listener) Serve(ctx context.Context, serve func(context.Context, signal
 	for _, ln := range l.lns {
 		go func() { _ = srv.Serve(ln) }()
 	}
+	go l.sweep(ctx)
 	<-ctx.Done()
 	_ = srv.Close()
 	l.mu.Lock()

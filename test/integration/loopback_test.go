@@ -614,9 +614,12 @@ func TestLoopbackSeveralSevensAndUnpair(t *testing.T) {
 	if code != 0 || !strings.Contains(out, fp1+"  "+one.URL) || !strings.Contains(out, fp2+"  "+two.URL) {
 		t.Fatalf("unpair lists: %d %q", code, out)
 	}
+	var closedRes map[string]any
+	p2.eval("linkTest.loopback.close()", &closedRes)
 	if out, code := run(fp2[:12]); code != 0 || !strings.Contains(out, "forgot "+fp2[:4]) {
 		t.Fatalf("unpair %s: %d %q", fp2[:12], code, out)
 	}
+	o.waitStderr(t, "loopback: released "+fp2[:4])
 	if _, code := run("ffff" + fp2[:12]); code != 1 {
 		t.Fatalf("unpair of an unknown fingerprint exits %d", code)
 	}

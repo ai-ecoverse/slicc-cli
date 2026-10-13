@@ -329,7 +329,11 @@ func (r *openRun) serveCaps() (func(), error) {
 	}
 	n.Handle(loopback.CapUnlink, loopback.KindUnlink, r.ln.Unlink)
 	n.Subscribe(func(e node.Event) {
-		if e.Kind == node.EventLinkDown && e.Link != nil {
+		switch {
+		case e.Link == nil:
+		case e.Kind == node.EventConnecting:
+			r.ln.LinkUp(e.Link)
+		case e.Kind == node.EventLinkDown:
 			go r.ln.LinkDown(e.Link)
 		}
 	})
@@ -378,7 +382,7 @@ func (r *openRun) mint() (string, error) {
 		r.outMu.Lock()
 		current := r.token == tok
 		r.outMu.Unlock()
-		if current && r.ln.Valid(tok) {
+		if current && !r.ln.Used(tok) {
 			r.status("the pairing URL expired; press Enter for a new one")
 		}
 	})

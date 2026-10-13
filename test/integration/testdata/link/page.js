@@ -274,6 +274,13 @@ const loopbackTest = {
   pins() {
     return loadPins();
   },
+  close() {
+    const entry = state.current;
+    if (!entry?.loopback) return { error: 'not linked over loopback' };
+    entry.link.close('closed by the test');
+    entry.pc.close();
+    return { closed: true };
+  },
   forget() {
     localStorage.removeItem(PINS);
     return { forgot: true };
