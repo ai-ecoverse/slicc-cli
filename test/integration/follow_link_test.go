@@ -226,8 +226,14 @@ type followProc struct {
 
 func startFollow(t *testing.T, env []string, joinURL string, args ...string) *followProc {
 	t.Helper()
+	return startFollowIn(t, "", env, joinURL, args...)
+}
+
+func startFollowIn(t *testing.T, dir string, env []string, joinURL string, args ...string) *followProc {
+	t.Helper()
 	cmd := exec.Command(binary, append([]string{joinURL, "follow"}, args...)...)
 	cmd.Env = env
+	cmd.Dir = dir
 	fp := &followProc{attachProc: &attachProc{cmd: cmd, stderr: &syncBuffer{}}, exited: make(chan int, 1)}
 	cmd.Stderr = fp.stderr
 	cmd.Stdout = fp.stderr
