@@ -47,6 +47,7 @@ func isolateProcess(root string) {
 	}
 	_ = os.Unsetenv("SLICC_USER_DATA_DIR")
 	_ = os.Setenv(browser.DiscoveryEnv, "isolated")
+	_ = os.Setenv("SLICC_OPEN_COMMAND", filepath.Join(root, "no-browser-opener"))
 }
 
 func withDiscovery(env []string, mode string) []string {
@@ -88,7 +89,7 @@ func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
 		_ = cmd.Process.Kill()
 		t.Fatalf("bare slicc --plain kept running under the harness: %s", stderr.String())
 	}
-	if code := cmd.ProcessState.ExitCode(); code != 1 || !strings.Contains(stderr.String(), "no browser that can host seven") {
+	if code := cmd.ProcessState.ExitCode(); code != 1 || !strings.Contains(stderr.String(), "no browser to control: run `slicc open` to link seven in your everyday browser") {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 

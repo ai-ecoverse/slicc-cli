@@ -11,7 +11,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 )
 
-var ErrNoBrowser = errors.New("no browser that can host seven was found; install Chrome or pass --cdp <url>")
+var ErrNoBrowser = errors.New("no browser to control: run `slicc open` to link seven in your everyday browser")
 
 func CanHost(e browser.Entry) error {
 	if e.Kind == browser.KindEndpoint || e.Kind == browser.KindSix {

@@ -1,13 +1,38 @@
 package browser
 
 import (
+	"encoding/json"
 	"net/url"
 	"regexp"
 	"slices"
 	"strings"
+
+	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
 var sevenHost = regexp.MustCompile("^" + regexp.QuoteMeta(catalog.Seven.OriginScheme+"://") + strings.TrimPrefix(catalog.Seven.OriginHostPattern, "^"))
+
+var excludedLabelPrefixes = func() []string {
+	var c struct {
+		Seven struct {
+			ExcludedLabelPrefixes []string `json:"excludedLabelPrefixes"`
+		} `json:"seven"`
+	}
+	_ = json.Unmarshal(sliccbrowsers.CatalogJSON(), &c)
+	return c.Seven.ExcludedLabelPrefixes
+}()
+
+func excludedLabel(label string) bool {
+	if slices.Contains(catalog.Seven.ExcludedLabels, label) {
+		return true
+	}
+	for _, p := range excludedLabelPrefixes {
+		if p != "" && strings.HasPrefix(label, p) {
+			return true
+		}
+	}
+	return false
+}
 
 func NormalizeOrigin(raw string) string {
 	trimmed := strings.TrimRight(strings.ToLower(strings.TrimSpace(raw)), "/")
@@ -29,7 +54,7 @@ func withoutDefaultPort(u *url.URL) string {
 }
 
 func IsSevenOrigin(origin string, extra []string) bool {
-	if m := sevenHost.FindStringSubmatch(origin); m != nil && !slices.Contains(catalog.Seven.ExcludedLabels, m[1]) {
+	if m := sevenHost.FindStringSubmatch(origin); m != nil && !excludedLabel(m[1]) {
 		return true
 	}
 	n := NormalizeOrigin(origin)

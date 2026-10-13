@@ -14,6 +14,11 @@ usage:
   slicc [flags]             find browsers, open seven in the best one and link
                             it; flags below
   slicc attach --cdp <url>  link a seven open in a running CDP browser
+  slicc open                link seven in your everyday browser, without CDP:
+                            open a pairing URL in the default browser
+                            (also slicc --default-browser)
+  slicc pair                the same, but only print the pairing URL
+  slicc unpair [--all]      list or forget sevens paired with open or pair
   slicc <join-url> follow   follow a seven's tray from this machine
   slicc <join-url> prompt <text>
                             send a prompt to seven's agent and stream the answer
@@ -52,6 +57,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runUpdate(args[1:], stdout, stderr)
 	case "install":
 		return runInstall(args[1:], stdout, stderr)
+	case "open", "pair":
+		return runOpen(args[0], args[1:], os.Stdin, stdout, stderr)
+	case "unpair":
+		return runUnpair(args[1:], stdout, stderr)
 	case "prompt", "watch", "abort":
 		return runAgent(args[0], "", args[1:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
 	default:

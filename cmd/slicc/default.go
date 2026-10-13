@@ -39,6 +39,8 @@ it takes the best match and prints status lines on stderr. q, Ctrl-C or
 SIGTERM says bye to seven, closes the browsers this run launched and exits.
 
 flags for slicc with no command:
+  --default-browser   link seven in your everyday browser instead, without
+                      CDP: the same as slicc open (see slicc open --help)
   --browser <id>      use this browser from "slicc browsers" (repeatable;
                       the first one hosts seven)
   --cdp <url>         also consider this CDP endpoint (repeatable)
@@ -243,6 +245,9 @@ func isTerminal(w any) bool {
 }
 
 func runDefault(args []string, stdout, stderr io.Writer) int {
+	if rest, ok := defaultBrowserArgs(args); ok {
+		return runOpen("open", rest, os.Stdin, stdout, stderr)
+	}
 	f, code := parseDefault(args, stderr)
 	if code >= 0 {
 		return code

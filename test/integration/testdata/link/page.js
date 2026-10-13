@@ -5,8 +5,11 @@ import { protectTest } from './protect.js';
 import { fsTest } from './fs-test.js';
 import { agentTest, onAgent } from './agent.js';
 import { wsTest } from './ws.js';
+import { LoopbackError, backoff, certificateFingerprint, loadCertificate, pair as loopbackPair, post as loopbackPost, signal as loopbackSignal, takePairing, unlink as loopbackUnlink } from './loopback.js';
 
-const kernelIn = new URLSearchParams(location.search).has('kernel');
+const params = new URLSearchParams(location.search);
+const kernelIn = params.has('kernel');
+const pendingPairing = takePairing();
 
 const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null, browserUpdates: [], mountUpdates: [], entries: new Map(), current: null };
 
@@ -158,6 +161,7 @@ function equal(a, b) {
 
 function describe(error) {
   if (error instanceof ResetError) return { reset: error.code, detail: error.detail };
+  if (error instanceof LoopbackError) return { error: error.message, code: error.code, status: error.status };
   return { error: String(error?.message ?? error) };
 }
 
@@ -198,6 +202,130 @@ async function* prng(size, seed) {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const PINS = 'slicc-loopback-pins';
+
+function loadPins() {
+  try {
+    return JSON.parse(localStorage.getItem(PINS) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+function savePin(pin) {
+  const pins = loadPins();
+  pins[pin.fingerprint] = pin;
+  localStorage.setItem(PINS, JSON.stringify(pins));
+}
+
+function scanPorts(pin) {
+  const range = /^(\d+)-(\d+)$/.exec(params.get('ports') ?? '');
+  if (!range) return undefined;
+  const ports = [pin.port];
+  for (let p = Number(range[1]); p <= Number(range[2]); p += 1) if (p !== pin.port) ports.push(p);
+  return ports;
+}
+
+let certificate = null;
+
+async function loopbackLink(run) {
+  certificate ??= await loadCertificate();
+  const pc = new RTCPeerConnection({ certificates: [certificate] });
+  const caps = pageCaps().filter((c) => c !== 'agent' || agentTest.state().allow);
+  const link = new Link(pc, { hello: { name: 'link test page', caps }, handlers: pageHandlers() });
+  let info;
+  try {
+    info = await run(pc);
+  } catch (error) {
+    link.close('setup failed');
+    pc.close();
+    return describe(error);
+  }
+  const key = `loopback:${info.fingerprint}`;
+  remove(state.entries.get(key));
+  const entry = { key, node: null, nonce: null, pc, link, loopback: info };
+  freshReady(entry);
+  state.hellos += 1;
+  state.entries.set(key, entry);
+  select(entry);
+  link.closed.then(() => closed(entry), () => closed(entry));
+  link.peerHello.then((hello) => {
+    entry.hello = hello;
+    entry.resolveReady(hello);
+  }, () => {});
+  return { ...info, linked: true };
+}
+
+const loopbackTest = {
+  pending() {
+    return pendingPairing;
+  },
+  async fingerprint() {
+    certificate ??= await loadCertificate();
+    return certificateFingerprint(certificate);
+  },
+  async confirm(pairing = pendingPairing) {
+    if (!pairing) return { error: 'no pairing' };
+    const res = await loopbackLink((pc) => loopbackPair(pc, pairing));
+    if (res.linked) savePin({ fingerprint: pairing.fingerprint, port: res.port, name: res.name });
+    return res;
+  },
+  pins() {
+    return loadPins();
+  },
+  forget() {
+    localStorage.removeItem(PINS);
+    return { forgot: true };
+  },
+  async unlink() {
+    const entry = state.current;
+    const fp = entry?.loopback?.fingerprint;
+    if (!fp) return { error: 'not linked over loopback' };
+    const pins = loadPins();
+    delete pins[fp];
+    localStorage.setItem(PINS, JSON.stringify(pins));
+    try {
+      const sent = await loopbackUnlink(entry.link, await entry.ready);
+      const reason = await Promise.race([entry.link.closed.then(() => 'closed', () => 'closed'), sleep(10000).then(() => 'still open')]);
+      return { sent, reason };
+    } catch (error) {
+      return describe(error);
+    }
+  },
+  async signal(fingerprint) {
+    const pins = loadPins();
+    const pin = fingerprint ? pins[fingerprint] : Object.values(pins).pop();
+    if (!pin) return { error: 'not paired' };
+    const res = await loopbackLink((pc) => loopbackSignal(pc, pin, { ports: scanPorts(pin) }));
+    if (res.linked) savePin({ ...pin, port: res.port, name: res.name });
+    return res;
+  },
+  async reconnect(fingerprint, deadline = 60000) {
+    const until = Date.now() + deadline;
+    for (let attempt = 0; ; attempt += 1) {
+      const res = await this.signal(fingerprint);
+      if (res.linked || Date.now() > until) return { ...res, attempts: attempt + 1 };
+      await sleep(Math.min(backoff(attempt), 2000));
+    }
+  },
+  async post(port, path, body) {
+    try {
+      return { ok: true, body: await loopbackPost(port, path, body) };
+    } catch (error) {
+      return describe(error);
+    }
+  },
+  async offerSdp() {
+    certificate ??= await loadCertificate();
+    const pc = new RTCPeerConnection({ certificates: [certificate] });
+    pc.createDataChannel('slicc.link.v1');
+    await pc.setLocalDescription(await pc.createOffer());
+    const sdp = pc.localDescription.sdp;
+    pc.close();
+    return sdp;
+  },
+};
 
 globalThis.linkTest = {
   status() {
@@ -403,6 +531,7 @@ globalThis.linkTest = {
     }));
   },
   agent: agentTest,
+  loopback: loopbackTest,
   cdp: cdpTest(() => state.link, describe),
   protect: protectTest(() => state.link, describe),
   fs: fsTest(() => state.link, describe, { sha256, toBase64, fromBase64, prng }),
