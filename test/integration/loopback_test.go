@@ -867,3 +867,16 @@ func TestLoopbackLeavesUnreadableStateAlone(t *testing.T) {
 		}
 	}
 }
+
+func TestLoopbackKeepsTheKernelPortAndRunnerHelp(t *testing.T) {
+	e := newLoopEnv(t)
+	o := startLoop(t, e, "pair", "--page", "https://seven.sliccy.ai/", "--kernel-port", strconv.Itoa(e.first), "--runner", "sh", "--help")
+	pr := parsePairing(t, o.url(t))
+	if pr.port == e.first {
+		t.Fatalf("the listener took the kernel port %d", e.first)
+	}
+	o.waitStderr(t, "ssh: runner sh --help")
+	if strings.Contains(o.lines.String(), "usage:") {
+		t.Fatalf("--help inside the runner argv printed the usage:\n%s", o.lines.String())
+	}
+}
