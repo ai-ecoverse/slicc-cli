@@ -21,8 +21,12 @@ usage() {
   cat <<EOF
 Install slicc from the GitHub releases of $repo.
 
+  curl -fsSL https://get.sliccy.ai/slicc | sh
+  curl -fsSL https://get.sliccy.ai/slicc | sh -s -- [options]
+
+If get.sliccy.ai can't be reached, use the release URL directly:
+
   curl -fsSL https://github.com/$repo/releases/latest/download/install.sh | sh
-  curl -fsSL https://github.com/$repo/releases/latest/download/install.sh | sh -s -- [options]
 
 Options:
   --version X   install release X (default: the latest release; env VERSION)

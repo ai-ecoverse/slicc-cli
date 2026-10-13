@@ -116,3 +116,16 @@ func TestInstallScriptUpgradesDowngradesAndSliccUpdatesInPlace(t *testing.T) {
 		t.Fatalf("left files behind in %s: %v", filepath.Dir(bin), entries)
 	}
 }
+
+func TestInstallScriptHelpNamesTheShortURLFirst(t *testing.T) {
+	r := runInstaller(t, isolatedEnv(t), "--help")
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	short := strings.Index(r.stdout, "curl -fsSL https://get.sliccy.ai/slicc | sh\n")
+	options := strings.Index(r.stdout, "curl -fsSL https://get.sliccy.ai/slicc | sh -s -- [options]\n")
+	long := strings.Index(r.stdout, "curl -fsSL https://github.com/ai-ecoverse/slicc-cli/releases/latest/download/install.sh | sh\n")
+	if short < 0 || options < short || long < options {
+		t.Fatalf("help:\n%s", r.stdout)
+	}
+}
