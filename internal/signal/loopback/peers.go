@@ -29,7 +29,7 @@ type Peers struct {
 
 var (
 	ErrAmbiguous = errors.New("more than one paired seven matches")
-	ErrLocked    = errors.New("the paired sevens are being changed by another slicc; try again")
+	ErrLocked    = errors.New("the loopback state is being changed by another slicc; try again")
 )
 
 const (
@@ -37,8 +37,9 @@ const (
 	lockStale = 30 * time.Second
 )
 
-func (p *Peers) lock() (func(), error) {
-	path := p.path + ".lock"
+func (p *Peers) lock() (func(), error) { return lockFile(p.path + ".lock") }
+
+func lockFile(path string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}

@@ -53,20 +53,37 @@ type identityFile struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+func readIdentity(path string) *Identity {
+	var f identityFile
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &f) != nil || f.Version != stateVersion || !certUsable(f.PEM) {
+		return nil
+	}
+	id, err := identityFrom(path, f)
+	if err != nil {
+		return nil
+	}
+	return id
+}
+
 func LoadIdentity(dir string) (*Identity, error) {
 	path := filepath.Join(dir, identityFileName)
-	var f identityFile
-	if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &f) == nil && f.Version == stateVersion && certUsable(f.PEM) {
-		id, err := identityFrom(path, f)
-		if err == nil {
-			return id, nil
-		}
+	if id := readIdentity(path); id != nil {
+		return id, nil
+	}
+	unlock, err := lockFile(path + ".lock")
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if id := readIdentity(path); id != nil {
+		return id, nil
 	}
 	pemData, err := newCertPEM()
 	if err != nil {
 		return nil, err
 	}
-	f = identityFile{Version: stateVersion, PEM: pemData, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	f := identityFile{Version: stateVersion, PEM: pemData, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 	if err := writePrivateJSON(path, f); err != nil {
 		return nil, err
 	}
@@ -101,6 +118,14 @@ func identityFrom(path string, f identityFile) (*Identity, error) {
 
 func (id *Identity) RememberPort(port int) error {
 	if id.Port == port {
+		return nil
+	}
+	unlock, err := lockFile(id.path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if cur := readIdentity(id.path); cur == nil || cur.Fingerprint != id.Fingerprint {
 		return nil
 	}
 	if err := writePrivateJSON(id.path, identityFile{Version: stateVersion, PEM: id.pem, Port: port, CreatedAt: id.createdAt}); err != nil {
