@@ -758,3 +758,35 @@ func TestLoopbackWithNoFreePortExitsOne(t *testing.T) {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, stdout.String(), stderr.String())
 	}
 }
+
+func TestLoopbackPinsAreLockedAcrossProcesses(t *testing.T) {
+	e := newLoopEnv(t)
+	if err := os.MkdirAll(e.config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(e.config, "loopback-peers.json.lock")
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unpair := func() (string, string, int) {
+		cmd := exec.Command(binary, "unpair", "--all")
+		cmd.Env = e.env
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		_ = cmd.Run()
+		return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
+	}
+	if _, errOut, code := unpair(); code != 1 || !strings.Contains(errOut, "being changed by another slicc") {
+		t.Fatalf("unpair while another slicc holds the lock: %d %q", code, errOut)
+	}
+	old := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if out, errOut, code := unpair(); code != 0 || out != "forgot 0 paired sevens\n" {
+		t.Fatalf("unpair with a stale lock: %d %q %q", code, out, errOut)
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Fatalf("the lock is left behind: %v", err)
+	}
+}

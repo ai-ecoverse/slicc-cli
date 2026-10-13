@@ -27,7 +27,55 @@ type Peers struct {
 	mu   sync.Mutex
 }
 
-var ErrAmbiguous = errors.New("more than one paired seven matches")
+var (
+	ErrAmbiguous = errors.New("more than one paired seven matches")
+	ErrLocked    = errors.New("the paired sevens are being changed by another slicc; try again")
+)
+
+const (
+	lockWait  = 5 * time.Second
+	lockStale = 30 * time.Second
+)
+
+func (p *Peers) lock() (func(), error) {
+	path := p.path + ".lock"
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(lockWait)
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_ = f.Close()
+			return func() { _ = os.Remove(path) }, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		if fi, serr := os.Stat(path); serr == nil && time.Since(fi.ModTime()) > lockStale {
+			_ = os.Remove(path)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, ErrLocked
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func (p *Peers) update(f func(*peersFile) (bool, error)) error {
+	unlock, err := p.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	pf := p.load()
+	changed, err := f(&pf)
+	if err != nil || !changed {
+		return err
+	}
+	return writePrivateJSON(p.path, pf)
+}
 
 func OpenPeers(dir string) *Peers { return &Peers{path: filepath.Join(dir, peersFileName)} }
 
@@ -49,12 +97,13 @@ func (p *Peers) load() peersFile {
 func (p *Peers) Pin(fp, origin string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	f := p.load()
-	if old, ok := f.Peers[fp]; ok && old.Origin == origin {
-		return nil
-	}
-	f.Peers[fp] = Peer{Origin: origin, FirstSeen: time.Now().UTC().Format(time.RFC3339)}
-	return writePrivateJSON(p.path, f)
+	return p.update(func(f *peersFile) (bool, error) {
+		if old, ok := f.Peers[fp]; ok && old.Origin == origin {
+			return false, nil
+		}
+		f.Peers[fp] = Peer{Origin: origin, FirstSeen: time.Now().UTC().Format(time.RFC3339)}
+		return true, nil
+	})
 }
 
 func (p *Peers) Origin(fp string) (string, bool) {
@@ -89,46 +138,54 @@ func (p *Peers) Remove(prefix string) (Peer, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	prefix = NormalizeFingerprint(strings.ReplaceAll(prefix, "…", ""))
-	f := p.load()
-	var hit []string
-	for fp := range f.Peers {
-		if prefix != "" && strings.HasPrefix(fp, prefix) {
-			hit = append(hit, fp)
+	var e Peer
+	err := p.update(func(f *peersFile) (bool, error) {
+		var hit []string
+		for fp := range f.Peers {
+			if prefix != "" && strings.HasPrefix(fp, prefix) {
+				hit = append(hit, fp)
+			}
 		}
-	}
-	switch len(hit) {
-	case 0:
-		return Peer{}, os.ErrNotExist
-	case 1:
-	default:
-		return Peer{}, ErrAmbiguous
-	}
-	e := f.Peers[hit[0]]
-	e.Fingerprint = hit[0]
-	delete(f.Peers, hit[0])
-	return e, writePrivateJSON(p.path, f)
+		switch len(hit) {
+		case 0:
+			return false, os.ErrNotExist
+		case 1:
+		default:
+			return false, ErrAmbiguous
+		}
+		e = f.Peers[hit[0]]
+		e.Fingerprint = hit[0]
+		delete(f.Peers, hit[0])
+		return true, nil
+	})
+	return e, err
 }
 
 func (p *Peers) RemoveAll() ([]Peer, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	f := p.load()
-	gone := sorted(f.Peers)
-	if len(gone) == 0 {
-		return nil, nil
-	}
-	return gone, writePrivateJSON(p.path, peersFile{Version: stateVersion, Peers: map[string]Peer{}})
+	var gone []Peer
+	err := p.update(func(f *peersFile) (bool, error) {
+		gone = sorted(f.Peers)
+		f.Peers = map[string]Peer{}
+		return len(gone) > 0, nil
+	})
+	return gone, err
 }
 
 func (p *Peers) Forget(fp string) (Peer, bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	f := p.load()
-	e, ok := f.Peers[fp]
-	if !ok {
-		return Peer{}, false, nil
-	}
-	e.Fingerprint = fp
-	delete(f.Peers, fp)
-	return e, true, writePrivateJSON(p.path, f)
+	var e Peer
+	var ok bool
+	err := p.update(func(f *peersFile) (bool, error) {
+		e, ok = f.Peers[fp]
+		if !ok {
+			return false, nil
+		}
+		e.Fingerprint = fp
+		delete(f.Peers, fp)
+		return true, nil
+	})
+	return e, ok, err
 }
