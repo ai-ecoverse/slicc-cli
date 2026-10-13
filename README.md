@@ -155,10 +155,12 @@ Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and
 | `/auth/callback`, `/api/oauth-state`, `/api/oauth-result` | not needed on `https://<label>.sliccy.ai`, where seven signs in through the relay itself. A seven on another origin needs slicc-extension to sign in |
 | `startProxy`, `launchUrl`, `persistentKey` (JS) | no JS API |
 
-**Which browser.** slicc-node opened seven in the default browser, in any profile. `slicc open` and `slicc pair` do the same, without CDP. `slicc` itself links only a seven it reaches over CDP:
-- **By default:** a browser in a SLICC profile (see [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)). Its seven is separate from the one in your everyday profile, since seven keeps its files per browser profile.
-- **A browser that is already running with CDP** (`--cdp`). That includes your everyday Chrome once its remote debugging is turned on at `chrome://inspect/#remote-debugging`. It is then listed as `wsOnly` (see [Browsers](#browsers)).
-- **Any other browser**, a non-Chromium one included: with `slicc open` or `slicc pair` (the local policy and kernel services, but no `cdp`). Or through the tray hub: in seven's Network panel, *Link a device*, then run `slicc <join-url> follow` on this machine (see [Remote setup](#remote-setup-slicc-join-url-follow)). That link has the remote policy (public addresses only, unless `--allow`) and no kernel services.
+**Which browser.** slicc-node opened seven in the default browser, in any profile. `slicc` links seven in one of three ways:
+- **Your everyday browser, any vendor:** `slicc open` (or `slicc --default-browser`) opens seven in the default browser and pairs it over loopback, with no CDP and no remote debugging. `slicc pair` prints the pairing URL for a seven that's already open. Once paired, that seven links again by itself after a reload or a restart of `slicc`. The link has the local policy, folders, kernel services and compute, but no `cdp`, since slicc controls no browser there (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)).
+- **A browser `slicc` controls over CDP**, with `slicc` itself or `slicc attach`, which also offers seven `cdp` for that browser:
+  - **by default,** a browser in a SLICC profile (see [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)). Its seven is separate from the one in your everyday profile, since seven keeps its files per browser profile.
+  - **or a browser that is already running with CDP** (`--cdp`). That includes your everyday Chrome once its remote debugging is turned on at `chrome://inspect/#remote-debugging`. It is then listed as `wsOnly` (see [Browsers](#browsers)).
+- **A seven on another machine**, in any browser, through the tray hub: in seven's Network panel, *Link a device*, then run `slicc <join-url> follow` on this machine (see [Remote setup](#remote-setup-slicc-join-url-follow)). That link has the remote policy (public addresses only, unless `--allow`) and no kernel services.
 
 **Restarts.** slicc-node kept its key and port, so an open page reconnected after a restart. `slicc` sets the link up again instead:
 - A browser that `slicc` launched runs in its own process group. It outlives a `slicc` that crashes or is killed.
