@@ -154,6 +154,9 @@ main() {
   mkdir -p "$dir" || die "can't create $dir"
   given="$dir"
   dir="$(cd "$dir" && pwd -P)"
+  if [ -d "$dir/$bin" ]; then
+    die "$dir/$bin is a directory; nothing was installed"
+  fi
   part="$(mktemp "$dir/.$bin.XXXXXX")"
   cp "$tmp/$asset" "$part"
   chmod 755 "$part"

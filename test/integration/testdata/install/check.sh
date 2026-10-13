@@ -151,6 +151,14 @@ has "says \"slicc 9.9.9\", not slicc $version" || fail "no wrong-version message
 [ "$(hash_of "$bindir/slicc")" = "$first" ] || fail "wrong-version asset replaced the binary"
 only_slicc "$bindir"
 
+echo "== a directory at the install path is refused"
+mkdir -p "$root/clash/slicc"
+run "HOME=$home" "PATH=$cleanpath" "SLICC_INSTALL_BASE_URL=$base" "INSTALL_DIR=$root/clash" sh "$installer"
+[ "$code" != 0 ] || fail "installed over a directory"
+has "slicc is a directory; nothing was installed" || fail "no directory message"
+[ -z "$(ls -A "$root/clash/slicc")" ] || fail "the directory at the install path isn't empty"
+only_slicc "$root/clash"
+
 echo "== --help and unknown options"
 run "PATH=$cleanpath" sh "$installer" --help
 [ "$code" = 0 ] || fail "--help exited $code"
