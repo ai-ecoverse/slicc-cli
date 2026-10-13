@@ -19,6 +19,8 @@ func TestRunnerQuotedAsOneWordIsRefusedBeforeLinking(t *testing.T) {
 		{join, "follow", "--exit", "--runner", "bash -c", "--", "--name", "box"},
 		{"attach", "--signal", "stdio", "--runner", "bash -c"},
 		{"--plain", "--runner", "bash -c"},
+		{"pair", "--runner", "bash -c"},
+		{"--default-browser", "--runner", "bash -c"},
 	} {
 		out, errOut, code := sliccEnv(t, env, args...)
 		if code != 2 || errOut != want || out != "" {
@@ -45,6 +47,8 @@ func TestRunnerNotFoundIsRefusedBeforeLinking(t *testing.T) {
 			{join, "follow", "--runner", prog, "-c"},
 			{"attach", "--signal", "stdio", "--runner", prog, "-c"},
 			{"--plain", "--runner", prog, "-c"},
+			{"open", "--runner", prog, "-c"},
+			{"--default-browser", "--runner", prog, "-c"},
 		} {
 			out, errOut, code := sliccEnv(t, env, args...)
 			if code != 2 || errOut != "slicc: --runner "+prog+": program not found\n" || out != "" {
