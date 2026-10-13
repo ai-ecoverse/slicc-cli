@@ -33,10 +33,7 @@ var (
 	ErrLocked    = errors.New("the loopback state is being changed by another slicc; try again")
 )
 
-const (
-	lockWait  = 5 * time.Second
-	lockStale = 30 * time.Second
-)
+const lockWait = 5 * time.Second
 
 func (p *Peers) lock() (func(), error) { return lockFile(p.path + ".lock") }
 
@@ -44,22 +41,22 @@ func lockFile(path string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
 	deadline := time.Now().Add(lockWait)
 	for {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
+		ok, err := tryLock(f)
+		if ok {
+			return func() { unlock(f); _ = f.Close() }, nil
+		}
+		if err != nil || time.Now().After(deadline) {
 			_ = f.Close()
-			return func() { _ = os.Remove(path) }, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
+			if err == nil {
+				err = ErrLocked
+			}
 			return nil, err
-		}
-		if fi, serr := os.Stat(path); serr == nil && time.Since(fi.ModTime()) > lockStale {
-			_ = os.Remove(path)
-			continue
-		}
-		if time.Now().After(deadline) {
-			return nil, ErrLocked
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
