@@ -157,10 +157,13 @@ main() {
   part="$(mktemp "$dir/.$bin.XXXXXX")"
   cp "$tmp/$asset" "$part"
   chmod 755 "$part"
+  installed="$("$part" --version 2>/dev/null)" || die "the downloaded $asset doesn't run on this machine; nothing was installed"
+  if [ -n "$version" ] && [ "$installed" != "$bin $version" ]; then
+    die "the downloaded $asset says \"$installed\", not $bin $version; nothing was installed"
+  fi
   mv -f "$part" "$dir/$bin"
   part=""
 
-  installed="$("$dir/$bin" --version)" || die "$dir/$bin doesn't run"
   say "installed $installed at $dir/$bin"
   if ! on_path "$dir" && ! on_path "$given" && ! on_path "${given%/}"; then
     say "$dir isn't on PATH; add it with: export PATH=\"$dir:\$PATH\""
