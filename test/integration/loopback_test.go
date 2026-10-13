@@ -639,6 +639,7 @@ func TestLoopbackSeveralSevensAndUnpair(t *testing.T) {
 		t.Fatalf("unlink in-band: %+v", ul)
 	}
 	o.waitStderr(t, "unlinked by seven on "+one.URL+" ("+fp1[:4])
+	o.waitStderr(t, "loopback: released "+fp1[:4])
 	if out, _ := run(); out != "no paired sevens\n" {
 		t.Fatalf("unpair after the in-band unlink: %q", out)
 	}

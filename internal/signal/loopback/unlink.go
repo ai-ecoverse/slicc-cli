@@ -47,3 +47,23 @@ func (l *Listener) Unlink(s *link.Stream) {
 	}
 	_ = s.Link().Close()
 }
+
+func (l *Listener) LinkDown(lk *link.Link) {
+	fp := PeerFingerprint(lk)
+	if fp == "" {
+		return
+	}
+	if _, pinned := l.cfg.Peers.Origin(fp); pinned {
+		return
+	}
+	l.mu.Lock()
+	c := l.conns[fp]
+	if c != nil {
+		delete(l.conns, fp)
+	}
+	l.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+		l.cfg.Logf("loopback: released %s, which is no longer paired", ShortFingerprint(fp))
+	}
+}
