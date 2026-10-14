@@ -32,6 +32,7 @@ type Peers struct {
 var (
 	ErrAmbiguous = errors.New("more than one paired seven matches")
 	ErrLocked    = errors.New("the loopback state is being changed by another slicc; try again")
+	ErrReplaced  = errors.New("this slicc's loopback identity was replaced by another slicc; restart it")
 )
 
 const lockWait = 5 * time.Second
@@ -84,6 +85,17 @@ func OpenPeers(dir string) *Peers { return &Peers{path: filepath.Join(dir, peers
 
 func (p *Peers) Path() string { return p.path }
 
+func (p *Peers) current(node string) error {
+	id, err := readIdentity(filepath.Join(filepath.Dir(p.path), identityFileName))
+	if err != nil {
+		return err
+	}
+	if id == nil || id.Fingerprint != node {
+		return ErrReplaced
+	}
+	return nil
+}
+
 func (p *Peers) load() (peersFile, error) {
 	f := peersFile{Version: stateVersion, Peers: map[string]Peer{}}
 	data, err := os.ReadFile(p.path)
@@ -107,6 +119,9 @@ func (p *Peers) Pin(fp, origin, node string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.update(func(f *peersFile) (bool, error) {
+		if err := p.current(node); err != nil {
+			return false, err
+		}
 		if old, ok := f.Peers[fp]; ok && old.Origin == origin && old.Node == node {
 			return false, nil
 		}
@@ -196,6 +211,9 @@ func (p *Peers) Forget(fp, node string) (Peer, bool, error) {
 	var e Peer
 	var ok bool
 	err := p.update(func(f *peersFile) (bool, error) {
+		if err := p.current(node); err != nil {
+			return false, err
+		}
 		e, ok = f.Peers[fp]
 		if !ok || e.Node != node {
 			ok = false
