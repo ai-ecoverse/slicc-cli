@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -229,25 +228,22 @@ func echoOverLink(t *testing.T, p *page) {
 func TestDefaultJSONLaunchesLinksAndCloses(t *testing.T) {
 	env, _ := launchEnv(t)
 	profile := "it-default-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	if runtime.GOOS == "darwin" {
-		env = withDiscovery(realEnv, "installed")
-	}
-	requireChrome(t, env)
+	env, id := testChrome(t, env)
 	srv := pageServer(t)
 	pageURL := srv.URL + "/"
-	f := startFlow(t, env, "--json", "--browser", "chrome", "--profile", profile, "--headless", "--page", pageURL, "--name", "it-default")
+	f := startFlow(t, env, "--json", "--browser", id, "--profile", profile, "--headless", "--page", pageURL, "--name", "it-default")
 
 	d := f.next(t, "discovered")
 	if len(d.Entries) == 0 || !strings.Contains(d.raw, `"entries":[`) {
 		t.Fatalf("discovered %s", d.raw)
 	}
 	l := f.next(t, "launched")
-	if l.Browser != "chrome" || l.Role != "seven" || l.PID <= 0 || !strings.HasPrefix(l.CDP, "http://127.0.0.1:") || filepath.Base(l.ProfileDir) != profile {
+	if l.Browser != id || l.Role != "seven" || l.PID <= 0 || !strings.HasPrefix(l.CDP, "http://127.0.0.1:") || filepath.Base(l.ProfileDir) != profile {
 		t.Fatalf("launched %s", l.raw)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(l.ProfileDir) })
 	a := f.next(t, "attached")
-	if a.Browser != "chrome" || a.Role != "seven" || !a.Launched || a.CDP != l.CDP {
+	if a.Browser != id || a.Role != "seven" || !a.Launched || a.CDP != l.CDP {
 		t.Fatalf("attached %s", a.raw)
 	}
 	up := f.next(t, "linked")
@@ -277,7 +273,7 @@ func TestDefaultJSONLaunchesLinksAndCloses(t *testing.T) {
 		t.Fatalf("link-lost %s", lost.raw)
 	}
 	c := f.next(t, "closed")
-	if len(c.Browsers) != 1 || c.Browsers[0] != "chrome" {
+	if len(c.Browsers) != 1 || c.Browsers[0] != id {
 		t.Fatalf("closed %s", c.raw)
 	}
 	if code := f.wait(t); code != 0 {

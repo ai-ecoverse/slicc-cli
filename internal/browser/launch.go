@@ -73,9 +73,12 @@ var SevenDisabledFeatures = slices.Clone(catalog.Seven.DisabledFeatures)
 var disableFeatures = catalog.Launch.DisableFeaturesFlag
 
 func ChromiumArgs(profileDir, startURL string, headless, sevenFlags bool, extra []string) []string {
-	args := make([]string, 0, len(catalog.Launch.ChromiumArgs)+len(SevenSwitches)+len(extra)+3)
+	args := make([]string, 0, len(catalog.Launch.ChromiumArgs)+len(ThrowawaySwitches)+len(SevenSwitches)+len(extra)+3)
 	for _, a := range catalog.Launch.ChromiumArgs {
 		args = append(args, strings.ReplaceAll(a, "{profile}", profileDir))
+	}
+	if Throwaway(profileDir) {
+		args = append(args, ThrowawaySwitches...)
 	}
 	if sevenFlags {
 		args = append(args, SevenSwitches...)

@@ -155,6 +155,9 @@ func TestFallbackLinksSevenInTheDefaultBrowserWhenNothingElseIsFound(t *testing.
 	})
 
 	t.Run("an existing SLICC profile wins", func(t *testing.T) {
+		if os.Getenv("CI") == "" {
+			t.Skip(testChromeNotice)
+		}
 		h := newFakeHome(t)
 		env := overrideEnv(h.env, map[string]string{"SLICC_OPEN_COMMAND": tool, "SLICC_FAKEOPEN_OUT": filepath.Join(t.TempDir(), "opened")})
 		out, _, code := runWithEnv(t, env, "browsers", "--json")
