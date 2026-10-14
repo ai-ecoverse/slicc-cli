@@ -15,6 +15,7 @@ import (
 type Peer struct {
 	Fingerprint string `json:"-"`
 	Origin      string `json:"origin"`
+	Node        string `json:"node"`
 	FirstSeen   string `json:"firstSeen"`
 }
 
@@ -102,19 +103,19 @@ func (p *Peers) load() (peersFile, error) {
 	return got, nil
 }
 
-func (p *Peers) Pin(fp, origin string) error {
+func (p *Peers) Pin(fp, origin, node string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.update(func(f *peersFile) (bool, error) {
-		if old, ok := f.Peers[fp]; ok && old.Origin == origin {
+		if old, ok := f.Peers[fp]; ok && old.Origin == origin && old.Node == node {
 			return false, nil
 		}
-		f.Peers[fp] = Peer{Origin: origin, FirstSeen: time.Now().UTC().Format(time.RFC3339)}
+		f.Peers[fp] = Peer{Origin: origin, Node: node, FirstSeen: time.Now().UTC().Format(time.RFC3339)}
 		return true, nil
 	})
 }
 
-func (p *Peers) Origin(fp string) (string, bool) {
+func (p *Peers) Origin(fp, node string) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	f, err := p.load()
@@ -122,7 +123,10 @@ func (p *Peers) Origin(fp string) (string, bool) {
 		return "", false
 	}
 	e, ok := f.Peers[fp]
-	return e.Origin, ok
+	if !ok || e.Node != node {
+		return "", false
+	}
+	return e.Origin, true
 }
 
 func (p *Peers) List() ([]Peer, error) {

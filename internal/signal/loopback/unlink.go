@@ -73,7 +73,7 @@ func (l *Listener) LinkDown(lk *link.Link) {
 }
 
 func (l *Listener) release(fp string) {
-	if _, pinned := l.cfg.Peers.Origin(fp); pinned {
+	if _, pinned := l.cfg.Peers.Origin(fp, l.nodeFingerprint()); pinned {
 		return
 	}
 	l.mu.Lock()

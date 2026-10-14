@@ -135,6 +135,13 @@ func ipv6Loopback() bool {
 
 func (l *Listener) Port() int { return l.port }
 
+func (l *Listener) nodeFingerprint() string {
+	if l.cfg.Identity == nil {
+		return ""
+	}
+	return l.cfg.Identity.Fingerprint
+}
+
 func (l *Listener) Addrs() []string {
 	out := make([]string, 0, len(l.lns))
 	for _, ln := range l.lns {
@@ -343,13 +350,13 @@ func (l *Listener) post(w http.ResponseWriter, r *http.Request, origin string) {
 			forbid(w, origin)
 			return
 		}
-		if err := l.cfg.Peers.Pin(fp, norm); err != nil {
+		if err := l.cfg.Peers.Pin(fp, norm, l.nodeFingerprint()); err != nil {
 			l.cfg.Status("could not save the pairing: %v", err)
 			forbid(w, origin)
 			return
 		}
 		l.cfg.Status("paired with seven on %s (%s)", norm, ShortFingerprint(fp))
-	} else if pinned, ok := l.cfg.Peers.Origin(fp); !ok || pinned != norm {
+	} else if pinned, ok := l.cfg.Peers.Origin(fp, l.nodeFingerprint()); !ok || pinned != norm {
 		l.cfg.Logf("loopback: refused a signal from %s (%s): not paired from there", norm, ShortFingerprint(fp))
 		forbid(w, origin)
 		return
