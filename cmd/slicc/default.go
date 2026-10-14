@@ -135,6 +135,7 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
 	fs.BoolVar(&f.open, "open", false, "")
 	fs.BoolVar(&f.noFallback, "no-fallback", false, "")
+	fs.Bool("default-browser", false, "")
 	var six string
 	registerSix(fs, &six)
 	err = fs.Parse(args)

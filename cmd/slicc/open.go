@@ -160,7 +160,22 @@ func defaultBrowserArgs(args []string) ([]string, bool) {
 			}
 			continue
 		}
-		if args[i] == "--default-browser" || args[i] == "-default-browser" {
+		if args[i] == "--" {
+			return nil, false
+		}
+		name, value, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(args[i], "-"), "-"), "=")
+		if name != "default-browser" || !strings.HasPrefix(args[i], "-") {
+			continue
+		}
+		on := true
+		if hasValue {
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return nil, false
+			}
+			on = b
+		}
+		if on {
 			return append(slices.Clone(args[:i]), args[i+1:]...), true
 		}
 	}
