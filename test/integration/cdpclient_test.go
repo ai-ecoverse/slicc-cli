@@ -3,9 +3,11 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -195,5 +197,67 @@ func TestDefaultNoNoticeForItsOwnOrANamedBrowser(t *testing.T) {
 				t.Fatalf("stderr:\n%s", f.stderr.String())
 			}
 		})
+	}
+}
+
+func TestAnExpiredCallLeavesTheSharedCDPConnectionUp(t *testing.T) {
+	b := launchBrowser(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c, err := cdp.Dial(ctx, b.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	var created struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := c.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}, &created); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { b.closeTarget(created.TargetID) })
+	s, err := c.Attach(ctx, created.TargetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow := make(chan error, 1)
+	var got int
+	go func() {
+		slow <- s.Evaluate(ctx, "new Promise((r) => setTimeout(() => r(7), 1000))", cdp.EvaluateOptions{AwaitPromise: true, ReturnByValue: true}, &got)
+	}()
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if err := c.Call(cancelled, "", "Browser.getVersion", nil, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a call with a cancelled context: %v", err)
+	}
+	expired, stopExpired := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer stopExpired()
+	if err := s.Call(expired, "Runtime.evaluate", map[string]any{"expression": "1"}, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a call with an expired deadline: %v", err)
+	}
+	var wg sync.WaitGroup
+	for i := range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			racing, stopRacing := context.WithTimeout(ctx, time.Duration(i%8)*50*time.Microsecond)
+			defer stopRacing()
+			_ = c.Call(racing, "", "Browser.getVersion", nil, nil)
+		}()
+	}
+	wg.Wait()
+	if err := <-slow; err != nil || got != 7 {
+		t.Fatalf("the concurrent call: %v, %d", err, got)
+	}
+	select {
+	case <-c.Done():
+		t.Fatalf("the shared connection closed: %v", c.Err())
+	default:
+	}
+	var version struct {
+		Product string `json:"product"`
+	}
+	if err := c.Call(ctx, "", "Browser.getVersion", nil, &version); err != nil || version.Product == "" {
+		t.Fatalf("a call after the expired ones: %v, %+v", err, version)
 	}
 }
