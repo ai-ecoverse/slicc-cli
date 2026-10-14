@@ -48,9 +48,29 @@ func isolateProcess(root string) {
 		_ = os.Setenv(k, v)
 	}
 	_ = os.Unsetenv("SLICC_USER_DATA_DIR")
+	_ = os.Setenv("PATH", pathWithoutJerk(os.Getenv("PATH")))
 	_ = os.Setenv(browser.DiscoveryEnv, "isolated")
 	_ = os.Setenv("SLICC_OPEN_COMMAND", filepath.Join(root, "no-browser-opener"))
 	_ = os.Setenv("SLICC_LOOPBACK_PORTS", harnessLoopbackPorts())
+}
+
+func pathWithoutJerk(path string) string {
+	var keep []string
+	for _, dir := range filepath.SplitList(path) {
+		if dir != "" && !holdsJerk(dir) {
+			keep = append(keep, dir)
+		}
+	}
+	return strings.Join(keep, string(os.PathListSeparator))
+}
+
+func holdsJerk(dir string) bool {
+	for _, name := range []string{"jerk", "jerk.exe"} {
+		if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && !fi.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func harnessLoopbackPorts() string {
@@ -127,5 +147,20 @@ func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
 	eps, _ = browser.DiscoverEndpoints(context.Background(), browser.Options{ProbePorts: []int{port}})
 	if len(eps) != 1 || hits.Load() == 0 {
 		t.Fatalf("an injected probe port is still probed: %v", eps)
+	}
+}
+
+func TestTheHarnessHidesThisMachinesJerk(t *testing.T) {
+	if p, err := exec.LookPath("jerk"); err == nil {
+		t.Fatalf("a jerk is on the tests' PATH: %s", p)
+	}
+	with := t.TempDir()
+	without := t.TempDir()
+	if err := os.WriteFile(filepath.Join(with, exeName("jerk")), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sep := string(os.PathListSeparator)
+	if got, want := pathWithoutJerk(without+sep+with+sep+sep+without), without+sep+without; got != want {
+		t.Fatalf("PATH %q, want %q", got, want)
 	}
 }
