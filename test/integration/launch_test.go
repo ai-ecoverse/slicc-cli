@@ -309,7 +309,10 @@ func TestLaunchWithoutSevenFlags(t *testing.T) {
 
 func TestLaunchPackageAPIClosesBrowser(t *testing.T) {
 	env, root := launchEnv(t)
-	_, id := testChrome(t, env)
+	env, id := testChrome(t, env)
+	if runtime.GOOS == "windows" {
+		t.Setenv("LOCALAPPDATA", envMap(env)["LOCALAPPDATA"])
+	}
 	t.Setenv(browser.DiscoveryEnv, "installed")
 	installed := browser.DiscoverInstalled(context.Background(), browser.Options{Home: root})
 	chrome, ok := browser.FindInstalled(installed, id)
