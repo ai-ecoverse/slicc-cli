@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 )
 
 type kernelEnv struct {
@@ -95,8 +97,10 @@ func (e *kernelEnv) raw(t *testing.T, request string) rawAnswer {
 		t.Fatal(err)
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
-	if err != nil {
+	if err != nil || resp.StatusCode == http.StatusGatewayTimeout {
 		e.logTransport(t)
+	}
+	if err != nil {
 		t.Fatalf("reading the answer to %q: %v", request[:min(len(request), 80)], err)
 	}
 	body, _ := io.ReadAll(resp.Body)
@@ -108,10 +112,12 @@ func (e *kernelEnv) logTransport(t *testing.T) {
 	if e.linkEnv == nil || e.p == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	var k, tr any
-	e.p.eval("linkTest.kernel()", &k)
-	e.p.eval("linkTest.transport()", &tr)
-	t.Logf("the page's kernel streams %+v; its transport %+v", k, tr)
+	kerr := e.p.session.Evaluate(ctx, "linkTest.kernel()", cdp.EvaluateOptions{ReturnByValue: true}, &k)
+	terr := e.p.session.Evaluate(ctx, "linkTest.transport()", cdp.EvaluateOptions{AwaitPromise: true, ReturnByValue: true}, &tr)
+	t.Logf("the page's kernel streams %+v (%v); its transport %+v (%v)", k, kerr, tr, terr)
 }
 
 func (e *kernelEnv) get(t *testing.T, host, path string) rawAnswer {
