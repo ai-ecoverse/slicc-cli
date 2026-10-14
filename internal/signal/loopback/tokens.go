@@ -57,6 +57,13 @@ func (t *tokens) burn(tok string, now time.Time) bool {
 	return true
 }
 
+func (t *tokens) forget(tok string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.m, tok)
+	delete(t.burned, tok)
+}
+
 func (t *tokens) used(tok string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()

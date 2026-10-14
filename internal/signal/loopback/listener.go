@@ -149,6 +149,12 @@ func (l *Listener) Valid(tok string) bool { return l.tokens.valid(tok, time.Now(
 
 func (l *Listener) Used(tok string) bool { return l.tokens.used(tok) }
 
+func (l *Listener) Expire(tok string) bool {
+	unused := !l.tokens.used(tok)
+	l.tokens.forget(tok)
+	return unused
+}
+
 func (l *Listener) PairingURL(page, token string) (string, error) {
 	u, err := url.Parse(page)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
