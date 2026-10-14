@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -73,11 +75,15 @@ func testChrome(t *testing.T, env []string) ([]string, string) {
 }
 
 func jerkIn(dir string) []string {
-	entries, _ := os.ReadDir(dir)
 	var found []string
-	for _, e := range entries {
-		if strings.HasPrefix(strings.ToLower(e.Name()), "jerk") {
-			found = append(found, filepath.Join(dir, e.Name()))
+	for _, name := range []string{"jerk", "jerk.exe"} {
+		p := filepath.Join(dir, name)
+		fi, err := os.Stat(p)
+		switch {
+		case err == nil && !fi.IsDir():
+			found = append(found, p)
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			found = append(found, p+" (can't tell: "+err.Error()+")")
 		}
 	}
 	return found
