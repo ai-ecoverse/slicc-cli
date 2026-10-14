@@ -208,10 +208,15 @@ function popupRedirectVector(id, codes) {
   };
 }
 
-async function autoAttachRound(c, waitForDebuggerOnStart) {
+async function autoAttachRound(c, targetId, waitForDebuggerOnStart) {
+  const mine = (e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.targetId === targetId;
+  for (const e of c.events.filter(mine)) await outcome(c.send('Target.detachFromTarget', { sessionId: e.params.sessionId }));
   await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+  const before = c.events.filter(mine).length;
   await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart, flatten: true });
-  await sleep(1500);
+  const ev = await c.waitEvent((e) => mine(e) && c.events.filter(mine).indexOf(e) >= before, 2000).catch(() => null);
+  if (ev?.params.waitingForDebugger) await outcome(c.send('Runtime.runIfWaitingForDebugger', {}, ev.params.sessionId));
+  return Boolean(ev);
 }
 
 function staysOutVector(id, viaRedirect) {
@@ -224,7 +229,7 @@ function staysOutVector(id, viaRedirect) {
       ctx.targets.push(targetId);
       await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
       const later = `${ctx.dest}/doc?n=${tag}-later`;
-      const page = `${ctx.dest}/selfnav?n=${tag}&ms=6000&to=${encodeURIComponent(later)}`;
+      const page = `${ctx.dest}/selfnav?n=${tag}&ms=8000&to=${encodeURIComponent(later)}`;
       const url = viaRedirect ? hop([[env.allowed, 302], [env.cross, 307]], page) : page;
       await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(url)}))`, userGesture: true }, sessionId);
       let p = await popupOf(c, targetId);
@@ -232,41 +237,49 @@ function staysOutVector(id, viaRedirect) {
       if (!p) return { opened: false };
       ctx.targets.push(p.targetId);
       const mine = (e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.targetId === p.targetId;
-      await sleep(1500);
-      await autoAttachRound(c, false);
-      const early = c.events.filter(mine).length;
+      const atOpen = await c.waitEvent(mine, 2000).then(() => true, () => false);
+      const noWait = await autoAttachRound(c, p.targetId, false);
       const attach = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
+      if (attach.ok) await outcome(c.send('Target.detachFromTarget', { sessionId: attach.result.sessionId }));
       const activate = await outcome(c.send('Target.activateTarget', { targetId: p.targetId }));
       const info = await outcome(c.send('Target.getTargetInfo', { targetId: p.targetId }));
-      const navigatedLater = await until(async () => hit(await vlog(env, tag), ctx.dest, `/doc?n=${tag}-later`), 12000);
+      const navigatedLater = await until(async () => hit(await vlog(env, tag), ctx.dest, `/doc?n=${tag}-later`), 15000);
       await sleep(500);
-      await autoAttachRound(c, true);
-      await autoAttachRound(c, false);
+      const laterWait = await autoAttachRound(c, p.targetId, true);
+      const laterNoWait = await autoAttachRound(c, p.targetId, false);
       const attachLater = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
       const infoLater = await outcome(c.send('Target.getTargetInfo', { targetId: p.targetId }));
-      const autoAttachedLater = c.events.filter(mine).length > early;
       await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
       const close = await outcome(c.send('Target.closeTarget', { targetId: p.targetId }));
-      const masked = (r) => r.ok && !r.result.targetInfo.url.includes(tag);
+      const masked = (r) => r.ok && [originOf(ctx.dest), `${originOf(ctx.dest)}/`].includes(r.result.targetInfo.url);
       return {
         opened: true,
-        autoAttached: c.events.some(mine),
-        autoAttachedLater,
+        autoAttachedAtOpen: atOpen,
+        autoAttachedNoWait: noWait,
         attach: attach.ok,
         activate: activate.ok,
         infoMasked: masked(info),
         navigatedLater: Boolean(navigatedLater),
+        autoAttachedLaterWait: laterWait,
+        autoAttachedLaterNoWait: laterNoWait,
         attachLater: attachLater.ok,
         infoMaskedLater: masked(infoLater),
         close: close.ok,
         refused: [attach, activate, attachLater, close].every(isRefused),
+        url: info.ok ? info.result.targetInfo.url : '',
       };
     },
     control: {
       origin: 'ordinary',
-      expected: { opened: true, autoAttached: true, attach: true, activate: true, infoMasked: false, navigatedLater: true, attachLater: true, infoMaskedLater: false, close: true, refused: false },
+      expected: {
+        opened: true, autoAttachedAtOpen: true, autoAttachedNoWait: true, attach: true, activate: true, infoMasked: false, navigatedLater: true,
+        autoAttachedLaterWait: true, autoAttachedLaterNoWait: true, attachLater: true, infoMaskedLater: false, close: true, refused: false,
+      },
     },
-    expected: { opened: true, autoAttached: false, autoAttachedLater: false, attach: false, activate: false, infoMasked: true, navigatedLater: true, attachLater: false, infoMaskedLater: true, close: false, refused: true },
+    expected: {
+      opened: true, autoAttachedAtOpen: false, autoAttachedNoWait: false, attach: false, activate: false, infoMasked: true, navigatedLater: true,
+      autoAttachedLaterWait: false, autoAttachedLaterNoWait: false, attachLater: false, infoMaskedLater: true, close: false, refused: true,
+    },
   };
 }
 
