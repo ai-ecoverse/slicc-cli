@@ -29,6 +29,7 @@ type trayLeader struct {
 	h      *fakeHub
 	p      *page
 	toPage chan string
+	done   chan struct{}
 
 	mu         sync.Mutex
 	swallow    int
@@ -39,7 +40,8 @@ type trayLeader struct {
 
 func newTrayLeader(t *testing.T, h *fakeHub, p *page, trays ...*fakeTray) *trayLeader {
 	t.Helper()
-	l := &trayLeader{t: t, h: h, p: p, toPage: make(chan string, 1024)}
+	l := &trayLeader{t: t, h: h, p: p, toPage: make(chan string, 1024), done: make(chan struct{})}
+	t.Cleanup(func() { close(l.done) })
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	sub := p.b.client.Subscribe()
@@ -64,7 +66,10 @@ func newTrayLeader(t *testing.T, h *fakeHub, p *page, trays ...*fakeTray) *trayL
 
 func (l *trayLeader) push(m map[string]any) {
 	b, _ := json.Marshal(m)
-	l.toPage <- string(b)
+	select {
+	case l.toPage <- string(b):
+	case <-l.done:
+	}
 }
 
 func (l *trayLeader) onJoin(b *hubBootstrap) {
@@ -172,18 +177,33 @@ func (l *trayLeader) fromPage(sub *cdp.Subscription, trays []*fakeTray) {
 }
 
 func (l *trayLeader) deliver() {
-	for line := range l.toPage {
-		expr := "typeof globalThis.sliccLinkReceive === 'function' ? (globalThis.sliccLinkReceive(" + line + "), true) : false"
-		for i := 0; i < 300; i++ {
-			var ok bool
-			c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err := l.p.session.Evaluate(c, expr, cdp.EvaluateOptions{ReturnByValue: true}, &ok)
-			cancel()
-			if err == nil && ok {
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
+	for {
+		var line string
+		select {
+		case line = <-l.toPage:
+		case <-l.done:
+			return
 		}
+		l.deliverLine(line)
+	}
+}
+
+func (l *trayLeader) deliverLine(line string) {
+	expr := "typeof globalThis.sliccLinkReceive === 'function' ? (globalThis.sliccLinkReceive(" + line + "), true) : false"
+	for i := 0; i < 300; i++ {
+		select {
+		case <-l.done:
+			return
+		default:
+		}
+		var ok bool
+		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := l.p.session.Evaluate(c, expr, cdp.EvaluateOptions{ReturnByValue: true}, &ok)
+		cancel()
+		if err == nil && ok {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
