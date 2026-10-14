@@ -38,7 +38,7 @@ func (l *Listener) Unlink(s *link.Stream) {
 	case <-time.After(2 * time.Second):
 	}
 	if fp != "" {
-		p, ok, err := l.cfg.Peers.Forget(fp)
+		p, ok, err := l.cfg.Peers.Forget(fp, l.nodeFingerprint())
 		switch {
 		case err != nil:
 			l.cfg.Status("could not forget the pairing: %v", err)
