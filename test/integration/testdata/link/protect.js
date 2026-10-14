@@ -208,6 +208,68 @@ function popupRedirectVector(id, codes) {
   };
 }
 
+async function autoAttachRound(c, waitForDebuggerOnStart) {
+  await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+  await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart, flatten: true });
+  await sleep(1500);
+}
+
+function staysOutVector(id, viaRedirect) {
+  return {
+    id,
+    setup: `an allowed opener with auto-attach opens a popup ${viaRedirect ? 'on a redirect chain that ends' : 'straight'} on a page that later navigates itself to another path of its origin`,
+    trigger: async (ctx) => {
+      const { c, env, tag } = ctx;
+      const { targetId, sessionId } = await c.attachTo(`${env.allowed}/doc?n=opener`);
+      ctx.targets.push(targetId);
+      await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+      const later = `${ctx.dest}/doc?n=${tag}-later`;
+      const page = `${ctx.dest}/selfnav?n=${tag}&ms=6000&to=${encodeURIComponent(later)}`;
+      const url = viaRedirect ? hop([[env.allowed, 302], [env.cross, 307]], page) : page;
+      await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(url)}))`, userGesture: true }, sessionId);
+      let p = await popupOf(c, targetId);
+      for (const end = Date.now() + 10000; p && !p.url.startsWith(originOf(ctx.dest)) && Date.now() < end; p = await popupOf(c, targetId)) await sleep(100);
+      if (!p) return { opened: false };
+      ctx.targets.push(p.targetId);
+      const mine = (e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.targetId === p.targetId;
+      await sleep(1500);
+      await autoAttachRound(c, false);
+      const early = c.events.filter(mine).length;
+      const attach = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
+      const activate = await outcome(c.send('Target.activateTarget', { targetId: p.targetId }));
+      const info = await outcome(c.send('Target.getTargetInfo', { targetId: p.targetId }));
+      const navigatedLater = await until(async () => hit(await vlog(env, tag), ctx.dest, `/doc?n=${tag}-later`), 12000);
+      await sleep(500);
+      await autoAttachRound(c, true);
+      await autoAttachRound(c, false);
+      const attachLater = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
+      const infoLater = await outcome(c.send('Target.getTargetInfo', { targetId: p.targetId }));
+      const autoAttachedLater = c.events.filter(mine).length > early;
+      await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+      const close = await outcome(c.send('Target.closeTarget', { targetId: p.targetId }));
+      const masked = (r) => r.ok && !r.result.targetInfo.url.includes(tag);
+      return {
+        opened: true,
+        autoAttached: c.events.some(mine),
+        autoAttachedLater,
+        attach: attach.ok,
+        activate: activate.ok,
+        infoMasked: masked(info),
+        navigatedLater: Boolean(navigatedLater),
+        attachLater: attachLater.ok,
+        infoMaskedLater: masked(infoLater),
+        close: close.ok,
+        refused: [attach, activate, attachLater, close].every(isRefused),
+      };
+    },
+    control: {
+      origin: 'ordinary',
+      expected: { opened: true, autoAttached: true, attach: true, activate: true, infoMasked: false, navigatedLater: true, attachLater: true, infoMaskedLater: false, close: true, refused: false },
+    },
+    expected: { opened: true, autoAttached: false, autoAttachedLater: false, attach: false, activate: false, infoMasked: true, navigatedLater: true, attachLater: false, infoMaskedLater: true, close: false, refused: true },
+  };
+}
+
 function frameVector(id, mode, sameSite) {
   return {
     id,
@@ -380,6 +442,8 @@ const vectors = [
   },
   popupRedirectVector('C3.popup-on-redirect-302', [302]),
   popupRedirectVector('C3.popup-on-redirect-chain', [301, 307, 303]),
+  staysOutVector('C3.redirect-popup-stays-out', true),
+  staysOutVector('C3.direct-popup-stays-out', false),
   frameVector('C4.static-cross-site', 'static', false),
   frameVector('C4.script-cross-site', 'script', false),
   frameVector('C4.static-same-site', 'static', true),

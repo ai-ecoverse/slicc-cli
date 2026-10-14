@@ -55,6 +55,12 @@ func vectorRoutes(mux *http.ServeMux, log *navLog) {
 		src := strings.NewReplacer(`"`, "&quot;", "<", "&lt;").Replace(r.URL.Query().Get("src"))
 		_, _ = w.Write([]byte(`<!doctype html><title>framed</title><iframe id="v" src="` + src + `"></iframe>`))
 	})
+	mux.HandleFunc("/selfnav", func(w http.ResponseWriter, r *http.Request) {
+		ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
+		to, _ := json.Marshal(r.URL.Query().Get("to"))
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><title>selfnav</title><script>setTimeout(() => { location.href = ` + string(to) + `; }, ` + strconv.Itoa(ms) + `);</script>`))
+	})
 	mux.HandleFunc("/log", func(w http.ResponseWriter, r *http.Request) {
 		cors(w, r)
 		n := r.URL.Query().Get("n")
