@@ -263,9 +263,7 @@ func (e *protectEnv) testHistory(t *testing.T) {
 	if err := e.b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": e.seven + "/nowhere?n=history"}, &res); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		_ = e.b.client.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": res.TargetID}, nil)
-	}()
+	defer e.b.closeTarget(res.TargetID)
 	s, err := e.b.client.Attach(ctx, res.TargetID)
 	if err != nil {
 		t.Fatal(err)

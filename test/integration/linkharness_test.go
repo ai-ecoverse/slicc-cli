@@ -59,6 +59,7 @@ type chromeProc struct {
 	port     int
 	client   *cdp.Client
 	cmd      *exec.Cmd
+	stderr   string
 }
 
 func launchBrowser(t *testing.T) *chromeProc {
@@ -90,7 +91,15 @@ func launchBrowserOn(t *testing.T, debugPort int, extra ...string) *chromeProc {
 	}
 	cmd := exec.Command(chrome, args...)
 	cmd.Env = realEnv
-	if err := cmd.Start(); err != nil {
+	stderr := filepath.Join(dir, "slicc-it-chrome.log")
+	logFile, err := os.Create(stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	err = cmd.Start()
+	_ = logFile.Close()
+	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -112,7 +121,7 @@ func launchBrowserOn(t *testing.T, debugPort int, extra ...string) *chromeProc {
 	if port == 0 {
 		t.Fatal("Chrome did not write DevToolsActivePort")
 	}
-	b := &chromeProc{endpoint: fmt.Sprintf("http://127.0.0.1:%d", port), port: port, cmd: cmd}
+	b := &chromeProc{endpoint: fmt.Sprintf("http://127.0.0.1:%d", port), port: port, cmd: cmd, stderr: stderr}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	b.client, err = cdp.Dial(ctx, b.endpoint)
@@ -145,9 +154,7 @@ func (b *chromeProc) openPage(t *testing.T, url string) *page {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = b.client.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": res.TargetID}, nil)
-	})
+	t.Cleanup(func() { b.closeTarget(res.TargetID) })
 	p := &page{t: t, b: b, target: res.TargetID, session: s}
 	p.waitLoaded(url, 15*time.Second)
 	return p
@@ -164,7 +171,49 @@ func (p *page) waitLoaded(url string, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	serr := p.session.Evaluate(ctx, `({ href: location.href, readyState: document.readyState, resources: performance.getEntriesByType('resource').map((e) => e.name + ' ' + Math.round(e.duration) + 'ms') })`, cdp.EvaluateOptions{ReturnByValue: true}, &state)
-	p.t.Fatalf("%s did not load in %s (%v); page state %v (%v); page server since %s:\n%s", url, timeout, err, state, serr, start.Format("15:04:05.000"), pageRequests.since(start.Add(-time.Second)))
+	p.t.Fatalf("%s did not load in %s (%v); page state %v (%v); page server since %s:\n%s%s", url, timeout, err, state, serr, start.Format("15:04:05.000"), pageRequests.since(start.Add(-time.Second)), p.b.report())
+}
+
+const closeTargetTimeout = 5 * time.Second
+
+func (b *chromeProc) closeTarget(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), closeTargetTimeout)
+	defer cancel()
+	_ = b.client.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": id}, nil)
+}
+
+func (b *chromeProc) report() string {
+	var out strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	var version struct {
+		Product string `json:"product"`
+	}
+	stuck := b.client.Call(ctx, "", "Browser.getVersion", nil, &version)
+	fmt.Fprintf(&out, "Browser.getVersion over CDP: %q (%v) after %s\n", version.Product, stuck, time.Since(start).Round(time.Millisecond))
+	var targets struct {
+		TargetInfos []struct {
+			Type     string `json:"type"`
+			URL      string `json:"url"`
+			Attached bool   `json:"attached"`
+		} `json:"targetInfos"`
+	}
+	tctx, tcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer tcancel()
+	err := b.client.Call(tctx, "", "Target.getTargets", nil, &targets)
+	fmt.Fprintf(&out, "Target.getTargets: %+v (%v)\n", targets.TargetInfos, err)
+	log, err := os.ReadFile(b.stderr)
+	lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
+	if len(lines) > 60 {
+		lines = lines[len(lines)-60:]
+	}
+	fmt.Fprintf(&out, "Chrome output (%v):\n  %s\n", err, strings.Join(lines, "\n  "))
+	out.WriteString(chromeTree(b.cmd.Process.Pid))
+	if stuck != nil && runtime.GOOS == "darwin" {
+		out.WriteString(chromeSample(b.cmd.Process.Pid))
+	}
+	return out.String()
 }
 
 func (p *page) eval(expr string, out any) {

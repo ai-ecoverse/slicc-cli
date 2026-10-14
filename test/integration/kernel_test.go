@@ -329,9 +329,7 @@ func (b *chromeProc) openTarget(t *testing.T, url string) *page {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = b.client.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": res.TargetID}, nil)
-	})
+	t.Cleanup(func() { b.closeTarget(res.TargetID) })
 	return &page{t: t, b: b, target: res.TargetID, session: s}
 }
 
