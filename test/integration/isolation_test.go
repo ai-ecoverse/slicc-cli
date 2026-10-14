@@ -77,7 +77,7 @@ func jerkNames() map[string]bool {
 		exts = ".com;.exe;.bat;.cmd"
 	}
 	for _, ext := range strings.Split(exts, ";") {
-		if ext = strings.ToLower(strings.TrimSpace(ext)); ext != "" {
+		if ext = strings.ToLower(ext); ext != "" {
 			if !strings.HasPrefix(ext, ".") {
 				ext = "." + ext
 			}
@@ -198,7 +198,7 @@ func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
 func TestTheHarnessReadsDotlessPATHEXT(t *testing.T) {
 	t.Setenv("PATHEXT", "EXE; cmd;.Bat")
 	names := jerkNames()
-	for _, n := range []string{"jerk", "jerk.exe", "jerk.cmd", "jerk.bat"} {
+	for _, n := range []string{"jerk", "jerk.exe", "jerk. cmd", "jerk.bat"} {
 		if !names[n] {
 			t.Fatalf("%s missing from %v", n, names)
 		}
