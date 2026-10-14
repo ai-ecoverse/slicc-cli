@@ -148,9 +148,8 @@ type localSeven struct {
 
 func newLocalSeven(t *testing.T) *localSeven {
 	t.Helper()
-	b := launchBrowser(t)
 	srv := pageServer(t)
-	p := b.openPage(t, srv.URL+"/index.html")
+	b, p := launchWithPage(t, srv.URL+"/index.html")
 	return &localSeven{b: b, p: p, origin: srv.URL}
 }
 

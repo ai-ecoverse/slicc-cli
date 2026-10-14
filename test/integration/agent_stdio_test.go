@@ -119,8 +119,7 @@ func eventKinds(t *testing.T, ndjson string) string {
 }
 
 func TestAgentOverStdio(t *testing.T) {
-	b := launchBrowser(t)
-	p := b.openPage(t, pageServer(t).URL+"/index.html")
+	_, p := launchWithPage(t, pageServer(t).URL+"/index.html")
 	p.agentDo(`queue({steps: [{event: {t: 'text', id: 'a1', delta: 'Hi'}}, {event: {t: 'tool', id: 't1', call: 'c1', name: 'bash', summary: 'pwd'}}]})`)
 	pr := startStdioAgent(t, p, "prompt", "--signal", "stdio", "hello", "there")
 	if code := pr.wait(t, 60*time.Second); code != 0 {

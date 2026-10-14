@@ -15,9 +15,8 @@ import (
 
 func setupInProcess(t *testing.T, pol *policy.Policy, register func(n *node.Node)) *linkEnv {
 	t.Helper()
-	b := launchBrowser(t)
 	srv := pageServer(t)
-	p := b.openPage(t, srv.URL+"/index.html")
+	b, p := launchWithPage(t, srv.URL+"/index.html")
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	logs := &syncBuffer{}

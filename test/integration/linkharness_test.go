@@ -144,36 +144,72 @@ type page struct {
 
 func (b *chromeProc) openPage(t *testing.T, url string) *page {
 	t.Helper()
+	p, err := b.tryOpenPage(t, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func launchWithPage(t *testing.T, url string) (*chromeProc, *page) {
+	t.Helper()
+	b := launchBrowser(t)
+	p, err := b.tryOpenPage(t, url)
+	if err == nil {
+		return b, p
+	}
+	if b.answers() {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(os.Stderr, "%s: the fresh Chrome stopped answering CDP before anything but this harness touched it; relaunching it once:\n%v\n", t.Name(), err)
+	reap(t, b.cmd, "Chrome")
+	b = launchBrowser(t)
+	return b, b.openPage(t, url)
+}
+
+func (b *chromeProc) answers() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return b.client.Call(ctx, "", "Browser.getVersion", nil, nil) == nil
+}
+
+func (b *chromeProc) tryOpenPage(t *testing.T, url string) (*page, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var res struct {
 		TargetID string `json:"targetId"`
 	}
 	if err := b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": url}, &res); err != nil {
-		t.Fatal(err)
+		return nil, fmt.Errorf("Target.createTarget %s: %w", url, err)
 	}
 	s, err := b.client.Attach(ctx, res.TargetID)
 	if err != nil {
-		t.Fatal(err)
+		return nil, fmt.Errorf("attach to %s: %w", url, err)
 	}
 	t.Cleanup(func() { b.closeTarget(res.TargetID) })
 	p := &page{t: t, b: b, target: res.TargetID, session: s}
-	p.waitLoaded(url, 15*time.Second)
-	return p
+	return p, p.loaded(url, 15*time.Second)
 }
 
 func (p *page) waitLoaded(url string, timeout time.Duration) {
 	p.t.Helper()
+	if err := p.loaded(url, timeout); err != nil {
+		p.t.Fatal(err)
+	}
+}
+
+func (p *page) loaded(url string, timeout time.Duration) error {
 	start := time.Now()
 	err := p.until("typeof globalThis.linkTest === 'object'", timeout)
 	if err == nil {
-		return
+		return nil
 	}
 	var state any
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	serr := p.session.Evaluate(ctx, `({ href: location.href, readyState: document.readyState, resources: performance.getEntriesByType('resource').map((e) => e.name + ' ' + Math.round(e.duration) + 'ms') })`, cdp.EvaluateOptions{ReturnByValue: true}, &state)
-	p.t.Fatalf("%s did not load in %s (%v); page state %v (%v); page server since %s:\n%s%s", url, timeout, err, state, serr, start.Format("15:04:05.000"), pageRequests.since(start.Add(-time.Second)), p.b.report())
+	return fmt.Errorf("%s did not load in %s (%v); page state %v (%v); page server since %s:\n%s%s", url, timeout, err, state, serr, start.Format("15:04:05.000"), pageRequests.since(start.Add(-time.Second)), p.b.report())
 }
 
 const closeTargetTimeout = 5 * time.Second
