@@ -12,8 +12,6 @@ fi
 version="${version#v}"
 out="artifacts/release"
 targets="darwin/arm64 darwin/amd64 linux/arm64 linux/amd64 windows/arm64 windows/amd64"
-jsign_version="7.5"
-jsign_sha256="602a51c3545a6dc4fb99bd2ea7152b26d1345916d0c93ddfbd5936cb735af91c"
 work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/slicc-package.XXXXXX")"
 keychain=""
 
@@ -126,53 +124,6 @@ sign_macos() {
   notarize
 }
 
-azure_token() {
-  if [ -n "${AZURE_CLIENT_SECRET:-}" ]; then
-    printf '%s|%s|%s' "$AZURE_TENANT_ID" "$AZURE_CLIENT_ID" "$AZURE_CLIENT_SECRET"
-    return
-  fi
-  if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-    echo "::error::no AZURE_CLIENT_SECRET and no GitHub OIDC token (id-token: write)" >&2
-    exit 1
-  fi
-  local assertion
-  assertion="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-    "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).value')"
-  curl -fsS -X POST "https://login.microsoftonline.com/$AZURE_TENANT_ID/oauth2/v2.0/token" \
-    --data-urlencode "client_id=$AZURE_CLIENT_ID" \
-    --data-urlencode "scope=https://codesigning.azure.net/.default" \
-    --data-urlencode "grant_type=client_credentials" \
-    --data-urlencode "client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" \
-    --data-urlencode "client_assertion=$assertion" | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).access_token'
-}
-
-sign_windows() {
-  local missing=""
-  for name in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_TRUSTED_SIGNING_ENDPOINT AZURE_TRUSTED_SIGNING_ACCOUNT AZURE_TRUSTED_SIGNING_PROFILE; do
-    [ -z "${!name:-}" ] && missing="$missing $name"
-  done
-  if [ -n "$missing" ]; then
-    echo "::warning::no Azure Trusted Signing configuration ($missing ); the windows binaries stay unsigned"
-    return
-  fi
-  local jar="$work/jsign.jar"
-  curl -fsSL -o "$jar" "https://github.com/ebourg/jsign/releases/download/$jsign_version/jsign-$jsign_version.jar"
-  if [ "$(sha256 "$jar" | awk '{print $1}')" != "$jsign_sha256" ]; then
-    echo "::error::jsign-$jsign_version.jar does not match its pinned SHA-256"
-    exit 1
-  fi
-  local token endpoint="${AZURE_TRUSTED_SIGNING_ENDPOINT#https://}"
-  token="$(azure_token)"
-  echo "::add-mask::$token"
-  echo "signing the windows binaries with Azure Trusted Signing"
-  java -jar "$jar" --storetype TRUSTEDSIGNING --keystore "${endpoint%/}" \
-    --storepass "$token" \
-    --alias "$AZURE_TRUSTED_SIGNING_ACCOUNT/$AZURE_TRUSTED_SIGNING_PROFILE" \
-    --tsaurl http://timestamp.acs.microsoft.com --tsmode RFC3161 \
-    --name slicc --url https://github.com/ai-ecoverse/slicc-cli \
-    "$out/slicc-windows-arm64.exe" "$out/slicc-windows-amd64.exe"
-}
-
 checksums() {
   cp install.sh "$out/install.sh"
   chmod 755 "$out/install.sh"
@@ -183,7 +134,6 @@ checksums() {
 build
 if [ "${SLICC_SIGN:-1}" = "1" ]; then
   sign_macos
-  sign_windows
 else
   echo "signing skipped (SLICC_SIGN=$SLICC_SIGN)"
 fi

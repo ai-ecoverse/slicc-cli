@@ -47,11 +47,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
-        with:
-          distribution: temurin
-          java-version: '21'
-
       - run: npm ci
 
       - run: npm test -- -v
@@ -83,12 +78,6 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_KEY_ISSUER_ID: ${{ secrets.APPLE_API_KEY_ISSUER_ID }}
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
-          AZURE_TRUSTED_SIGNING_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
         run: scripts/package.sh "$VERSION"
 
       - name: Stage npm packages

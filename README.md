@@ -211,7 +211,7 @@ Put the binary and the release's `SHA256SUMS` in one folder, then check:
 
 Signing:
 - **macOS:** the binaries are signed with a Developer ID, with the hardened runtime, and notarized. A bare binary can't carry a stapled ticket (only apps, disk images and installer packages can), so Gatekeeper checks the notarization online the first time it runs. Inside Sliccstart.app the binary is stapled with the app.
-- **Windows:** the binaries are unsigned for now. Authenticode signing through Azure Trusted Signing comes before general availability. Until then a browser download gets a SmartScreen warning, and AppLocker, WDAC or Intune policies can block the binary.
+- **Windows:** Windows binaries are unsigned; SmartScreen may warn on first run. AppLocker, WDAC or Intune policies can block them.
 
 ## Companion tools
 
@@ -1199,7 +1199,7 @@ The real-Chrome tests in `test/integration/` launch headless, so they run the ex
 
 semantic-release cuts releases from `main` in `.github/workflows/release.yml`, on a macOS runner:
 1. `scripts/release-plan.mjs` asks semantic-release (dry run) for the next version, and stops when there is none.
-2. `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath` and `-X main.version=<version>`. It signs and notarizes the darwin binaries and writes `SHA256SUMS`. It would sign the windows binaries with jsign against Azure Trusted Signing, but that configuration isn't complete yet, so releases ship them unsigned for now. Without a group's signing secrets (forks, pull requests, Windows today) it warns and leaves those binaries unsigned.
+2. `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath` and `-X main.version=<version>`. It signs and notarizes the darwin binaries and writes `SHA256SUMS`. The windows and linux binaries are not signed. Without the Apple signing secrets (forks, pull requests) it warns and leaves the darwin binaries unsigned.
 3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`. It also stages the same launcher as `sliccy` (with two bins, `sliccy` and `slicc`, and a short preview README) into `dist/npm-next/`, as version `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages. `npx sliccy@next` runs the bin named after the package, `sliccy`, and both bins run the same launcher. `--bin <name>` (repeatable) overrides the bins of any staged launcher.
 4. `actions/attest-build-provenance` attests every binary.
 5. semantic-release checks the version again (`dist/VERSION`, and `scripts/go-major.mjs`, see below), tags, creates the GitHub release with every binary and `SHA256SUMS`, then `scripts/npm-publish.mjs` publishes the platform packages and the launcher through npm trusted publishing (OIDC, with provenance), and then `sliccy` with `--tag next`. Versions already on npm are skipped. Before publishing `sliccy`, the script checks that every exact-pinned `optionalDependencies` version is on the registry, waits up to `SLICC_REGISTRY_WAIT_SECONDS` (default 900) for freshly published ones to appear, and fails otherwise, so a `sliccy` version never points at missing platform packages.
@@ -1213,10 +1213,9 @@ semantic-release cuts releases from `main` in `.github/workflows/release.yml`, o
 
 On pull requests the same workflow runs as a dry run: an unsigned build of all six targets, the npm packages and `sliccy` (with `--tag next`) packed with `--dry-run`, `scripts/sliccy-next.mjs --dry-run` (the recovery path against the latest real release, registry check included), and each binary run with `--version` on its own OS and CPU.
 
-The workflow reads these repository secrets. Each group is optional, and a missing group leaves its binaries unsigned:
+The workflow reads these repository secrets. Each group is optional: without the first the darwin binaries stay unsigned, without the second they are signed but not notarized:
 - macOS signing: `APPLE_CERTIFICATE_BASE64`, `APPLE_DEVELOPER_CERTIFICATE_PASSWORD`;
-- notarization: `APPLE_API_KEY_ID`, `APPLE_API_KEY_ISSUER_ID`, `APPLE_API_KEY_P8_BASE64`;
-- Windows signing: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_TRUSTED_SIGNING_ENDPOINT`, `AZURE_TRUSTED_SIGNING_ACCOUNT`, `AZURE_TRUSTED_SIGNING_PROFILE`, and `AZURE_CLIENT_SECRET` unless the app registration trusts this workflow through a federated credential (OIDC).
+- notarization: `APPLE_API_KEY_ID`, `APPLE_API_KEY_ISSUER_ID`, `APPLE_API_KEY_P8_BASE64`.
 
 npm needs no token. `npm run trust` (fledgling) configures trusted publishing for the seven packages listed under `fledgling.include` in `package.json`. Publishing to npm is off until the repository variable `SLICC_NPM_PUBLISH` is `true`, and `sliccy` stays off until `SLICCY_NEXT_PUBLISH` is `true`; until then a release skips them with a notice.
 
