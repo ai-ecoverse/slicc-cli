@@ -1,0 +1,74 @@
+name: stress
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [before, after]
+        load: [idle, busy]
+    name: watch (${{ matrix.variant }}, ${{ matrix.load }})
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - if: matrix.variant == 'before'
+        shell: bash
+        run: git checkout 5489d04a7397fee4be1d52e52a9e9537dde34c98 -- test/integration/agent_watch_test.go
+
+      - if: matrix.load == 'busy'
+        shell: pwsh
+        run: |
+          1..4 | ForEach-Object { Start-Process -WindowStyle Hidden pwsh -ArgumentList '-NoProfile', '-Command', 'while ($true) { $x = 1 }' }
+
+      - shell: bash
+        run: |
+          go test -race -count=50 -timeout 35m -run '^TestWatchLocalResumesWithoutDuplicates$' -v ./test/integration/ 2>&1 | tee "$RUNNER_TEMP/out.txt" | grep -E '^(--- FAIL|ok|FAIL)|agent_watch_test' ; echo "pass $(grep -c -- '--- PASS' "$RUNNER_TEMP/out.txt") fail $(grep -c -- '--- FAIL' "$RUNNER_TEMP/out.txt")"
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+
+  credentialed:
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2]
+    name: credentialed macOS (${{ matrix.run }})
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: |
+          go test -race -count=60 -timeout 35m -run '^TestCredentialedHTTP$' ./test/integration/ 2>&1 | tee "$RUNNER_TEMP/out.txt" | grep -E '^(--- FAIL|ok|FAIL)|did not load|DevToolsActivePort|getVersion' ; echo "fail $(grep -c -- '--- FAIL: TestCredentialedHTTP ' "$RUNNER_TEMP/out.txt") wedged $(grep -c 'did not load' "$RUNNER_TEMP/out.txt")"
