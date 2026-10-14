@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -36,7 +37,7 @@ var ErrClosed = errors.New("cdp: connection closed")
 
 type Client struct {
 	conn    *websocket.Conn
-	writeMu sync.Mutex
+	writing chan struct{}
 
 	mu      sync.Mutex
 	nextID  int64
@@ -120,6 +121,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	conn.SetReadLimit(-1)
 	c := &Client{
 		conn:    conn,
+		writing: make(chan struct{}, 1),
 		pending: map[int64]chan reply{},
 		subs:    map[*subscription]struct{}{},
 		done:    make(chan struct{}),
@@ -197,7 +199,12 @@ func (c *Client) dispatch(ev Event) {
 	}
 }
 
+const writeTimeout = 10 * time.Second
+
 func (c *Client) Call(ctx context.Context, sessionID, method string, params, result any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	if c.err != nil {
 		err := c.err
@@ -214,10 +221,7 @@ func (c *Client) Call(ctx context.Context, sessionID, method string, params, res
 		c.forget(id)
 		return err
 	}
-	c.writeMu.Lock()
-	err = c.conn.Write(ctx, websocket.MessageText, data)
-	c.writeMu.Unlock()
-	if err != nil {
+	if err := c.send(ctx, data); err != nil {
 		c.forget(id)
 		return fmt.Errorf("cdp: %s: %w", method, err)
 	}
@@ -234,6 +238,23 @@ func (c *Client) Call(ctx context.Context, sessionID, method string, params, res
 		c.forget(id)
 		return ctx.Err()
 	}
+}
+
+func (c *Client) send(ctx context.Context, data []byte) error {
+	select {
+	case c.writing <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.done:
+		return c.Err()
+	}
+	defer func() { <-c.writing }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	wctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+	return c.conn.Write(wctx, websocket.MessageText, data)
 }
 
 func (c *Client) forget(id int64) {
