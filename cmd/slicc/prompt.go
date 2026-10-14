@@ -8,24 +8,17 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/agentctl"
-	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
 const promptUsage = `usage: slicc <join-url> prompt [flags] <text>|@file|-
-       slicc prompt --cdp <url> [--origin <origin>]... [flags] <text>|@file|-
-       slicc prompt --signal stdio [flags] <text>|@file
-
+` + promptSynopsis + `
 Send a prompt to seven's agent and stream its answer. The assistant's text
 goes to stdout as it streams; tool calls, results, notices and errors go to
 stderr, styled on a terminal and plain otherwise. @file reads the prompt from
 a file, and - (or @-) from stdin. The words after the flags are joined with
 spaces.
 
-With a join URL, slicc links to that seven through the tray hub as this
-device; seven must allow remote control from it (Linked devices). With --cdp,
-slicc links to the seven tab in that CDP browser, as slicc attach does. The
-link offers nothing to seven.
-
+` + promptHow + `
 flags:
   --steer               if seven is busy, steer the running turn with it
                         (default: queue it as a follow-up)
@@ -33,17 +26,10 @@ flags:
   --thinking            also show the agent's thinking, on stderr
   --json                print the raw NDJSON events on stdout instead
   --plain               no styling, even on a terminal
-  --abort-on-interrupt  abort the run on Ctrl-C (by default it goes on)
-  --cdp <url>           link over CDP instead of a join URL
-  --origin <origin>     with --cdp, also accept seven on this origin
-  --signal stdio        carry the local setup messages as NDJSON on stdin
-                        and stdout instead of CDP (for a test harness);
-                        stdout also carries the events, as with --json
-
+` + promptFlags + `
 Exit status: 0 when the run ends normally, 1 on an error, an aborted run or a
 lost link, 2 for bad usage, 3 when seven doesn't allow remote control from
-this device, 130 on Ctrl-C.
-`
+` + promptExit
 
 func runPrompt(ctx context.Context, f agentFlags, aio agentIO) int {
 	text, err := readTextArg(f.args, aio.stdin)
@@ -69,7 +55,7 @@ func runPrompt(ctx context.Context, f agentFlags, aio agentIO) int {
 	if err != nil {
 		return setupFailed(ctx, aio, "prompt", err)
 	}
-	if !agentctl.Allowed(l) {
+	if !l.Allowed() {
 		fmt.Fprintf(aio.stderr, "slicc prompt: %s\n", noControlMessage)
 		return exitNoControl
 	}
@@ -93,7 +79,7 @@ func runPrompt(ctx context.Context, f agentFlags, aio agentIO) int {
 func promptOpenFailed(aio agentIO, err error) int {
 	switch {
 	case errors.Is(err, agentctl.ErrNotAllowed):
-		fmt.Fprintf(aio.stderr, "slicc prompt: %s\n", noControlMessage)
+		fmt.Fprintf(aio.stderr, "slicc prompt: %s\n", refusedMessage(err))
 		return exitNoControl
 	case errors.Is(err, agentctl.ErrBusy):
 		fmt.Fprint(aio.stderr, "slicc prompt: seven is busy, so the prompt wasn't sent (leave out --reject to queue it)\n")
@@ -107,7 +93,7 @@ type promptResult struct {
 	msg  string
 }
 
-func streamPrompt(ctx context.Context, f agentFlags, aio agentIO, r *agentctl.Renderer, l *link.Link, st *agentctl.Stream) int {
+func streamPrompt(ctx context.Context, f agentFlags, aio agentIO, r *agentctl.Renderer, l agentctl.Link, st *agentctl.Stream) int {
 	done := make(chan promptResult, 1)
 	go func() { done <- readPrompt(f, aio, r, st) }()
 	select {

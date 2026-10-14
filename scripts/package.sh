@@ -42,6 +42,10 @@ build() {
       -ldflags "-s -w -X main.version=$version" \
       -o "$out/slicc-$goos-$goarch$ext" ./cmd/slicc
   done
+  echo "building slicc-wasip1-wasm.wasm ($version)"
+  CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -trimpath \
+    -ldflags "-s -w -X main.version=$version" \
+    -o "$out/slicc-wasip1-wasm.wasm" ./cmd/slicc
   printf '%s\n' "$version" > dist/VERSION
 }
 

@@ -1,3 +1,5 @@
+//go:build !wasip1
+
 package main
 
 import (
@@ -10,7 +12,6 @@ import (
 	"os"
 	ossignal "os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -80,11 +81,6 @@ type attachFlags struct {
 	mounts     stringList
 	noJerk     bool
 }
-
-type multi []string
-
-func (m *multi) String() string     { return strings.Join(*m, ",") }
-func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
 
 func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	var f attachFlags

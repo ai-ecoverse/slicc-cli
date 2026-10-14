@@ -85,7 +85,7 @@ jobs:
         env:
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
-          node scripts/npm-stage.mjs --version "$VERSION" --companions
+          node scripts/npm-stage.mjs --version "$VERSION" --companions --wasi
           node scripts/npm-stage.mjs --name sliccy --launcher-only --out dist/npm-next \
             --version "7.0.0-next.$VERSION" --deps-version "$VERSION" --companions
 
@@ -117,6 +117,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLICC_NPM_PUBLISH: ${{ vars.SLICC_NPM_PUBLISH }}
           SLICCY_NEXT_PUBLISH: ${{ vars.SLICCY_NEXT_PUBLISH }}
+          WASI_SLICC_PUBLISH: ${{ vars.WASI_SLICC_PUBLISH }}
         run: npx semantic-release
 
       - name: Warm the Go module proxy

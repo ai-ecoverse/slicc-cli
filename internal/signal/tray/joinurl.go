@@ -2,54 +2,23 @@ package tray
 
 import (
 	"errors"
-	"net"
 	"net/url"
 	"strings"
 	"sync"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/joinurl"
 )
 
-var ErrInvalidJoinURL = errors.New("not a tray join URL: want https://<host>/join/<token>")
+var ErrInvalidJoinURL = joinurl.ErrInvalid
 
-func ParseJoinURL(raw string) (*url.URL, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
-		return nil, ErrInvalidJoinURL
-	}
-	switch u.Scheme {
-	case "https":
-	case "http":
-		if !isLoopbackHost(u.Hostname()) {
-			return nil, ErrInvalidJoinURL
-		}
-	default:
-		return nil, ErrInvalidJoinURL
-	}
-	if JoinToken(u) == "" {
-		return nil, ErrInvalidJoinURL
-	}
-	return u, nil
-}
+func ParseJoinURL(raw string) (*url.URL, error) { return joinurl.Parse(raw) }
 
 func IsJoinURL(raw string) bool {
-	_, err := ParseJoinURL(raw)
+	_, err := joinurl.Parse(raw)
 	return err == nil
 }
 
-func JoinToken(u *url.URL) string {
-	rest, ok := strings.CutPrefix(u.EscapedPath(), "/join/")
-	if !ok || rest == "" || strings.Contains(rest, "/") {
-		return ""
-	}
-	return rest
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
+func JoinToken(u *url.URL) string { return joinurl.Token(u) }
 
 type redactor struct {
 	mu      sync.Mutex

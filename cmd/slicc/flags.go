@@ -17,6 +17,11 @@ func (s *stringList) Set(v string) error {
 	return nil
 }
 
+type multi []string
+
+func (m *multi) String() string     { return strings.Join(*m, ",") }
+func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
+
 func newFlagSet(name string, stderr io.Writer, usage string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)

@@ -1,3 +1,5 @@
+//go:build !wasip1
+
 package main
 
 import (
@@ -7,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"os"
 	ossignal "os/signal"
 	"strings"
@@ -31,8 +32,6 @@ import (
 
 const (
 	defaultSignalOnlyTimeout = 2 * time.Minute
-	followBackoffBase        = time.Second
-	followBackoffMax         = 30 * time.Second
 	followSetupTimeout       = 45 * time.Second
 	followDropGrace          = 3 * time.Second
 	capJoin                  = "join"
@@ -77,10 +76,6 @@ type followFlags struct {
 	mounts     stringList
 	jerk       bool
 	jerkSeal   bool
-}
-
-func looksLikeURL(arg string) bool {
-	return strings.Contains(arg, "://")
 }
 
 func joinCommand(args []string, stdout, stderr io.Writer) int {
@@ -419,10 +414,6 @@ func (r *followRun) run(ctx context.Context) int {
 			backoff = min(backoff*2, followBackoffMax)
 		}
 	}
-}
-
-func jitter(d time.Duration) time.Duration {
-	return d*3/4 + time.Duration(rand.Int64N(int64(d)/2+1))
 }
 
 func (r *followRun) once(ctx context.Context) (int, followOutcome) {

@@ -1,0 +1,6 @@
+{
+  "name": "slicc-fake-facade",
+  "version": "0.0.0",
+  "private": true,
+  "slicc": { "commands": { "slicc-fake-facade": { "abi": "js", "module": "facade.mjs" } } }
+}

@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"unicode/utf8"
-
-	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
 const (
@@ -18,6 +16,7 @@ const (
 
 	MaxPrompt    = 16 << 20
 	InlinePrompt = 60 << 10
+	maxOpen      = 62 << 10
 	maxLine      = 4 << 20
 )
 
@@ -37,11 +36,6 @@ var (
 	ErrNotUTF8     = errors.New("the prompt is not UTF-8 text")
 	errLineTooLong = errors.New("an event line is too long")
 )
-
-func Allowed(l *link.Link) bool {
-	h, ok := l.PeerHello()
-	return ok && h.HasCap(Cap)
-}
 
 type PromptOptions struct {
 	Text     string
@@ -76,7 +70,7 @@ type opOpen struct {
 }
 
 type Stream struct {
-	s         *link.Stream
+	s         Pipe
 	r         *bufio.Reader
 	Delivered string
 	Head      string
@@ -95,25 +89,32 @@ func CheckPrompt(text string) error {
 	return nil
 }
 
-func Prompt(ctx context.Context, l *link.Link, opts PromptOptions) (*Stream, error) {
+func promptOpening(opts PromptOptions) (promptOpen, bool) {
+	open := promptOpen{Kind: Kind, Op: "prompt", WhenBusy: opts.WhenBusy, Thinking: opts.Thinking}
+	if len(opts.Text) <= InlinePrompt {
+		open.Text = &opts.Text
+		if b, err := json.Marshal(open); err == nil && len(b) <= maxOpen {
+			return open, true
+		}
+		open.Text = nil
+	}
+	n := len(opts.Text)
+	open.Length = &n
+	return open, false
+}
+
+func Prompt(ctx context.Context, l Link, opts PromptOptions) (*Stream, error) {
 	if err := CheckPrompt(opts.Text); err != nil {
 		return nil, err
 	}
-	if !Allowed(l) {
+	if !l.Allowed() {
 		return nil, ErrNotAllowed
 	}
 	if opts.WhenBusy == "" {
 		opts.WhenBusy = FollowUp
 	}
-	open := promptOpen{Kind: Kind, Op: "prompt", WhenBusy: opts.WhenBusy, Thinking: opts.Thinking}
-	inline := len(opts.Text) <= InlinePrompt
-	if inline {
-		open.Text = &opts.Text
-	} else {
-		n := len(opts.Text)
-		open.Length = &n
-	}
-	s, err := l.Open(ctx, open, link.OpenOptions{})
+	open, inline := promptOpening(opts)
+	s, err := l.Open(ctx, open)
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -121,7 +122,7 @@ func Prompt(ctx context.Context, l *link.Link, opts PromptOptions) (*Stream, err
 	var opened struct {
 		Delivered string `json:"delivered"`
 	}
-	_ = json.Unmarshal(s.OpenedPayload(), &opened)
+	_ = json.Unmarshal(s.Opened(), &opened)
 	st.Delivered = opened.Delivered
 	if !inline {
 		if _, err := io.WriteString(s, opts.Text); err != nil {
@@ -135,11 +136,11 @@ func Prompt(ctx context.Context, l *link.Link, opts PromptOptions) (*Stream, err
 	return st, nil
 }
 
-func Watch(ctx context.Context, l *link.Link, opts WatchOptions) (*Stream, error) {
-	if !Allowed(l) {
+func Watch(ctx context.Context, l Link, opts WatchOptions) (*Stream, error) {
+	if !l.Allowed() {
 		return nil, ErrNotAllowed
 	}
-	s, err := l.Open(ctx, watchOpen{Kind: Kind, Op: "watch", Since: opts.Since, Thinking: opts.Thinking}, link.OpenOptions{})
+	s, err := l.Open(ctx, watchOpen{Kind: Kind, Op: "watch", Since: opts.Since, Thinking: opts.Thinking})
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -148,30 +149,30 @@ func Watch(ctx context.Context, l *link.Link, opts WatchOptions) (*Stream, error
 		Head string `json:"head"`
 		Gap  bool   `json:"gap"`
 	}
-	_ = json.Unmarshal(s.OpenedPayload(), &opened)
+	_ = json.Unmarshal(s.Opened(), &opened)
 	st.Head, st.Gap = opened.Head, opened.Gap
 	_ = s.CloseWrite()
 	return st, nil
 }
 
-func Abort(ctx context.Context, l *link.Link) (bool, error) {
-	if !Allowed(l) {
+func Abort(ctx context.Context, l Link) (bool, error) {
+	if !l.Allowed() {
 		return false, ErrNotAllowed
 	}
-	s, err := l.Open(ctx, opOpen{Kind: Kind, Op: "abort"}, link.OpenOptions{})
+	s, err := l.Open(ctx, opOpen{Kind: Kind, Op: "abort"})
 	if err != nil {
 		return false, mapErr(err)
 	}
 	var opened struct {
 		Aborted bool `json:"aborted"`
 	}
-	_ = json.Unmarshal(s.OpenedPayload(), &opened)
+	_ = json.Unmarshal(s.Opened(), &opened)
 	_ = s.CloseWrite()
 	_, _ = io.Copy(io.Discard, s)
 	return opened.Aborted, nil
 }
 
-func newStream(s *link.Stream) *Stream {
+func newStream(s Pipe) *Stream {
 	return &Stream{s: s, r: bufio.NewReaderSize(s, 64*1024)}
 }
 
@@ -232,14 +233,18 @@ func (st *Stream) Close() error {
 func (st *Stream) Done() <-chan struct{} { return st.s.Done() }
 
 func mapErr(err error) error {
-	var re *link.ResetError
-	if errors.As(err, &re) && re.Remote {
-		switch re.Code {
-		case "EBUSY":
-			return ErrBusy
-		case "EACCES", "EOPNOTSUPP":
-			return ErrNotAllowed
+	code, msg, remote := remoteCode(err)
+	if !remote {
+		return err
+	}
+	switch code {
+	case "EBUSY":
+		return ErrBusy
+	case "EACCES", "EOPNOTSUPP":
+		if msg != "" {
+			return &RefusedError{Message: msg}
 		}
+		return ErrNotAllowed
 	}
 	return err
 }
