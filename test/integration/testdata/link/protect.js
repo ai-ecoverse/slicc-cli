@@ -265,6 +265,7 @@ function staysOutVector(id, viaRedirect) {
         attachLater: attachLater.ok,
         infoMaskedLater: masked(infoLater),
         close: close.ok,
+        everAttached: c.events.some(mine),
         refused: [attach, activate, attachLater, close].every(isRefused),
         url: info.ok ? info.result.targetInfo.url : '',
       };
@@ -273,12 +274,12 @@ function staysOutVector(id, viaRedirect) {
       origin: 'ordinary',
       expected: {
         opened: true, autoAttachedAtOpen: true, autoAttachedNoWait: true, attach: true, activate: true, infoMasked: false, navigatedLater: true,
-        autoAttachedLaterWait: true, autoAttachedLaterNoWait: true, attachLater: true, infoMaskedLater: false, close: true, refused: false,
+        autoAttachedLaterWait: true, autoAttachedLaterNoWait: true, attachLater: true, infoMaskedLater: false, close: true, everAttached: true, refused: false,
       },
     },
     expected: {
       opened: true, autoAttachedAtOpen: false, autoAttachedNoWait: false, attach: false, activate: false, infoMasked: true, navigatedLater: true,
-      autoAttachedLaterWait: false, autoAttachedLaterNoWait: false, attachLater: false, infoMaskedLater: true, close: false, refused: true,
+      autoAttachedLaterWait: false, autoAttachedLaterNoWait: false, attachLater: false, infoMaskedLater: true, close: false, everAttached: false, refused: true,
     },
   };
 }
