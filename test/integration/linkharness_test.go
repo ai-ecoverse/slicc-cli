@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 )
 
@@ -85,6 +86,7 @@ func launchBrowserOn(t *testing.T, debugPort int, extra ...string) *chromeProc {
 		"--no-first-run", "--no-default-browser-check", "--disable-background-networking",
 		"--disable-component-update", "--disable-sync",
 	}
+	args = append(args, browser.ThrowawaySwitches...)
 	args = append(append(args, extra...), "about:blank")
 	if runtime.GOOS == "linux" {
 		args = append([]string{"--no-sandbox"}, args...)

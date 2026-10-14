@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,18 +44,55 @@ func launchEnv(t *testing.T) ([]string, string) {
 	return overrideEnv(os.Environ(), set), root
 }
 
-func requireChrome(t *testing.T, env []string) {
+const testChromeNotice = "slicc's own Chrome launches never use this machine's Chrome off CI: set SLICC_TEST_CHROME to a Chrome for Testing (macOS) to run them"
+
+func testChrome(t *testing.T, env []string) ([]string, string) {
 	t.Helper()
+	exe := os.Getenv("SLICC_TEST_CHROME")
+	if exe != "" && runtime.GOOS == "darwin" {
+		return env, linkTestChrome(t, env, exe)
+	}
+	if os.Getenv("CI") == "" {
+		t.Skip(testChromeNotice)
+	}
 	r, _ := browsersJSON(t, env)
 	for _, e := range r.Entries {
 		if e.Kind == browser.KindInstalled && e.ID == "chrome" {
-			return
+			return env, "chrome"
 		}
 	}
-	if os.Getenv("CI") != "" {
-		t.Fatal("no Google Chrome found, and CI images have it")
+	t.Fatal("no Google Chrome found, and CI images have it")
+	return nil, ""
+}
+
+func linkTestChrome(t *testing.T, env []string, exe string) string {
+	t.Helper()
+	app := exe
+	for !strings.HasSuffix(app, ".app") {
+		parent := filepath.Dir(app)
+		if parent == app {
+			t.Fatalf("SLICC_TEST_CHROME=%s is not inside an .app bundle", exe)
+		}
+		app = parent
 	}
-	t.Skip("no Google Chrome found on this machine; skipping the real launch")
+	apps := filepath.Join(envMap(env)["HOME"], "Applications")
+	if err := os.MkdirAll(apps, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(apps, filepath.Base(app))
+	if _, err := os.Lstat(link); err != nil {
+		if err := os.Symlink(app, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, _ := browsersJSON(t, env)
+	for _, e := range r.Entries {
+		if e.Kind == browser.KindInstalled && e.Installed != nil && e.Installed.Path == link {
+			return e.ID
+		}
+	}
+	t.Fatalf("slicc browsers did not find SLICC_TEST_CHROME at %s", link)
+	return ""
 }
 
 type launched struct {
@@ -138,14 +176,14 @@ func getVersion(base string) (map[string]any, error) {
 
 func TestLaunchRealChromeAndCloseOnInterrupt(t *testing.T) {
 	env, root := launchEnv(t)
-	requireChrome(t, env)
+	env, id := testChrome(t, env)
 	profile := "it-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	l := startLaunch(t, env, "--browser", "chrome", "--profile", profile, "--headless", "--url", "about:blank")
+	l := startLaunch(t, env, "--browser", id, "--profile", profile, "--headless", "--url", "about:blank")
 	ev := l.next(t)
 	if ev.Event != "launched" {
 		t.Fatalf("first event %+v; stderr %s", ev, l.stderr.String())
 	}
-	if ev.ID != "chrome" || ev.Profile != profile || !strings.HasPrefix(ev.ProfileDir, root) || filepath.Base(ev.ProfileDir) != profile {
+	if ev.ID != id || ev.Profile != profile || !strings.HasPrefix(ev.ProfileDir, root) || filepath.Base(ev.ProfileDir) != profile {
 		t.Errorf("launched event %+v outside %s", ev, root)
 	}
 	if !strings.HasPrefix(ev.CDP, "http://127.0.0.1:") || !strings.HasPrefix(ev.WebSocketURL, "ws://127.0.0.1:") || ev.PID <= 0 {
@@ -155,13 +193,19 @@ func TestLaunchRealChromeAndCloseOnInterrupt(t *testing.T) {
 	if err != nil || v["webSocketDebuggerUrl"] != ev.WebSocketURL {
 		t.Fatalf("/json/version: %v %v", v, err)
 	}
-	assertSevenFlags(t, chromeCommandLine(t, ev.CDP), true)
+	cmdline := chromeCommandLine(t, ev.CDP)
+	assertSevenFlags(t, cmdline, true)
+	for _, s := range browser.ThrowawaySwitches {
+		if !slices.Contains(strings.Fields(cmdline), s) {
+			t.Errorf("%s missing for a profile in a temporary home:\n%s", s, cmdline)
+		}
+	}
 	port, ws, err := browser.ReadActivePort(ev.ProfileDir)
 	if err != nil || !strings.HasSuffix(ev.CDP, ":"+strconv.Itoa(port)) || !strings.HasSuffix(ev.WebSocketURL, ws) {
 		t.Errorf("DevToolsActivePort %d %q %v", port, ws, err)
 	}
 
-	second := startLaunch(t, env, "--browser", "chrome", "--profile", profile, "--headless")
+	second := startLaunch(t, env, "--browser", id, "--profile", profile, "--headless")
 	if e := second.next(t); e.Event != "error" || !strings.Contains(e.Message, "in use") {
 		t.Errorf("second launch on the same profile: %+v", e)
 	}
@@ -219,8 +263,8 @@ func assertSevenFlags(t *testing.T, cmdline string, want bool) {
 
 func TestLaunchWithoutSevenFlags(t *testing.T) {
 	env, _ := launchEnv(t)
-	requireChrome(t, env)
-	l := startLaunch(t, env, "--browser", "chrome", "--profile", "plain", "--headless", "--no-seven-flags")
+	env, id := testChrome(t, env)
+	l := startLaunch(t, env, "--browser", id, "--profile", "plain", "--headless", "--no-seven-flags")
 	ev := l.next(t)
 	if ev.Event != "launched" {
 		t.Fatalf("%+v; stderr %s", ev, l.stderr.String())
@@ -241,10 +285,10 @@ func TestLaunchWithoutSevenFlags(t *testing.T) {
 
 func TestLaunchPackageAPIClosesBrowser(t *testing.T) {
 	env, root := launchEnv(t)
-	requireChrome(t, env)
+	_, id := testChrome(t, env)
 	t.Setenv(browser.DiscoveryEnv, "installed")
-	installed := browser.DiscoverInstalled(context.Background(), browser.Options{})
-	chrome, ok := browser.FindInstalled(installed, "chrome")
+	installed := browser.DiscoverInstalled(context.Background(), browser.Options{Home: root})
+	chrome, ok := browser.FindInstalled(installed, id)
 	if !ok {
 		t.Fatal("slicc browsers found Google Chrome but DiscoverInstalled did not")
 	}
@@ -290,8 +334,8 @@ func TestLaunchRejectsBadInput(t *testing.T) {
 
 func TestLaunchReportsBrowserExit(t *testing.T) {
 	env, _ := launchEnv(t)
-	requireChrome(t, env)
-	l := startLaunch(t, env, "--browser", "chrome", "--profile", "exit", "--headless")
+	env, id := testChrome(t, env)
+	l := startLaunch(t, env, "--browser", id, "--profile", "exit", "--headless")
 	ev := l.next(t)
 	if ev.Event != "launched" {
 		t.Fatalf("%+v; stderr %s", ev, l.stderr.String())
@@ -416,12 +460,12 @@ func settingsPref(t *testing.T, base, key string) string {
 
 func TestLaunchMergesSevenPrefsIntoExistingProfile(t *testing.T) {
 	env, root := launchEnv(t)
-	requireChrome(t, env)
+	env, id := testChrome(t, env)
 	profileDir := filepath.Join(launchProfilesDir(root), "merge")
 	writeFile(t, filepath.Join(profileDir, "Default", "Preferences"),
 		`{"slicc_test":{"keep":"untouched"},"profile":{"name":"Mine","exit_type":"Crashed"},"performance_tuning":{"tab_discarding":{"exceptions":["mine.example"],"exceptions_with_time":{"mine.example":"13400000000000000"}}}}`)
 	for round := 0; round < 2; round++ {
-		l := startLaunch(t, env, "--browser", "chrome", "--profile", "merge", "--headless")
+		l := startLaunch(t, env, "--browser", id, "--profile", "merge", "--headless")
 		ev := l.next(t)
 		if ev.Event != "launched" || ev.ProfileDir != profileDir {
 			t.Fatalf("%+v want %s; stderr %s", ev, profileDir, l.stderr.String())

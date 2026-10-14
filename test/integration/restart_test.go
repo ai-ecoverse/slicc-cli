@@ -112,17 +112,14 @@ func closeLeftBrowser(t *testing.T, endpoint string, pid int, dir string) {
 func TestDefaultRelinksAfterACrash(t *testing.T) {
 	env, _ := launchEnv(t)
 	profile := "it-restart-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	if runtime.GOOS == "darwin" {
-		env = withDiscovery(realEnv, "installed")
-	}
-	requireChrome(t, env)
+	env, chromeID := testChrome(t, env)
 	fx := newFSFixture(t)
 	srv := pageServer(t)
 	pageURL := srv.URL + "/?kernel"
 	port := freePort(t)
 	common := []string{"--json", "--page", pageURL, "--name", "it-restart", "--mount", fx.folder, "--kernel-port", strconv.Itoa(port)}
 
-	first := startFlow(t, env, append([]string{"--browser", "chrome", "--profile", profile, "--headless"}, common...)...)
+	first := startFlow(t, env, append([]string{"--browser", chromeID, "--profile", profile, "--headless"}, common...)...)
 	first.next(t, "discovered")
 	l := first.next(t, "launched")
 	t.Cleanup(func() { closeLeftBrowser(t, l.CDP, l.PID, l.ProfileDir) })

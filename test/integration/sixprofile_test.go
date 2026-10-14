@@ -691,12 +691,16 @@ func TestSixLaunchesRealChromeWithoutSeedingTheProfile(t *testing.T) {
 		dir = filepath.Join(t.TempDir(), "six-user-data-dir")
 		env = overrideEnv(real, map[string]string{"SLICC_USER_DATA_DIR": dir, "SLICC_NO_UPDATE_CHECK": "1", "SLICC_NO_TELEMETRY": "1"})
 	}
-	requireChrome(t, env)
+	env, id := testChrome(t, env)
 	makeSixTree(t, dir, staleActivePort(t))
 	staleSixLock(t, dir)
-	l := startLaunch(t, env, "--profile", "six", "--headless")
+	args := []string{"--profile", "six", "--headless"}
+	if id != "chrome" {
+		args = append(args, "--browser", id)
+	}
+	l := startLaunch(t, env, args...)
 	e := l.next(t)
-	if e.Event != "launched" || e.ID != "chrome" || e.Profile != "six" || e.ProfileDir != dir || !strings.HasPrefix(e.CDP, "http://127.0.0.1:") {
+	if e.Event != "launched" || e.ID != id || e.Profile != "six" || e.ProfileDir != dir || !strings.HasPrefix(e.CDP, "http://127.0.0.1:") {
 		t.Fatalf("event %+v; stderr %s", e, l.stderr.String())
 	}
 	if _, err := getVersion(e.CDP); err != nil {
