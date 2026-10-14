@@ -700,7 +700,7 @@ func TestFollowCDP(t *testing.T) {
 	if !targetIDs(t, p.b)[r.TargetID] {
 		t.Fatalf("target %s is not in the followed browser", r.TargetID)
 	}
-	_ = p.b.client.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": r.TargetID}, nil)
+	p.b.closeTarget(r.TargetID)
 }
 
 func TestFollowExitProtectsTheCDPPort(t *testing.T) {

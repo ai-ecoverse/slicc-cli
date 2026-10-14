@@ -64,3 +64,46 @@ func processReport(pid int) string {
 	}
 	return b.String()
 }
+
+func chromeTree(pid int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if runtime.GOOS == "windows" {
+		out, err := exec.CommandContext(ctx, "tasklist", "/fi", "IMAGENAME eq chrome.exe").CombinedOutput()
+		return fmt.Sprintf("$ tasklist (%v)\n%s\n", err, out)
+	}
+	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=,stat=,%cpu=,rss=,etime=,command=").CombinedOutput()
+	tree := map[string]bool{strconv.Itoa(pid): true}
+	rows := strings.Split(string(out), "\n")
+	for grew := true; grew; {
+		grew = false
+		for _, row := range rows {
+			f := strings.Fields(row)
+			if len(f) > 1 && tree[f[1]] && !tree[f[0]] {
+				tree[f[0]], grew = true, true
+			}
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Chrome process tree (%v):\n", err)
+	for _, row := range rows {
+		if f := strings.Fields(row); len(f) > 0 && tree[f[0]] {
+			if len(row) > 240 {
+				row = row[:240]
+			}
+			b.WriteString("  " + row + "\n")
+		}
+	}
+	return b.String()
+}
+
+func chromeSample(pid int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "sample", strconv.Itoa(pid), "2").CombinedOutput()
+	lines := strings.Split(string(out), "\n")
+	if len(lines) > 300 {
+		lines = lines[:300]
+	}
+	return fmt.Sprintf("$ sample %d 2 (%v)\n%s\n", pid, err, strings.Join(lines, "\n"))
+}

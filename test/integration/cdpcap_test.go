@@ -184,9 +184,7 @@ func (e *cdpEnv) testScreenshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		_ = e.b.client.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": r.TargetID}, nil)
-	}()
+	defer e.b.closeTarget(r.TargetID)
 	var shot struct {
 		Data string `json:"data"`
 	}
@@ -231,9 +229,7 @@ func (e *cdpEnv) directFrameEvents(t *testing.T) int {
 	if err := e.b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}, &res); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		_ = e.b.client.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": res.TargetID}, nil)
-	}()
+	defer e.b.closeTarget(res.TargetID)
 	s, err := e.b.client.Attach(ctx, res.TargetID)
 	if err != nil {
 		t.Fatal(err)
