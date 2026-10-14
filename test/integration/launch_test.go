@@ -40,8 +40,6 @@ func launchEnv(t *testing.T) ([]string, string) {
 	}
 	if runtime.GOOS != "windows" {
 		set["HOME"] = root
-	} else {
-		set["LOCALAPPDATA"] = realGetenv("LOCALAPPDATA")
 	}
 	return overrideEnv(os.Environ(), set), root
 }
@@ -60,6 +58,9 @@ func testChrome(t *testing.T, env []string) ([]string, string) {
 	r, _ := browsersJSON(t, env)
 	for _, e := range r.Entries {
 		if e.Kind == browser.KindInstalled && e.ID == "chrome" {
+			if runtime.GOOS == "windows" {
+				env = overrideEnv(env, map[string]string{"LOCALAPPDATA": realGetenv("LOCALAPPDATA")})
+			}
 			return env, "chrome"
 		}
 	}
