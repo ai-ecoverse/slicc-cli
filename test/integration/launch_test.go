@@ -60,8 +60,8 @@ func testChrome(t *testing.T, env []string) ([]string, string) {
 		if e.Kind == browser.KindInstalled && e.ID == "chrome" {
 			if runtime.GOOS == "windows" {
 				local := realGetenv("LOCALAPPDATA")
-				if matches, _ := filepath.Glob(filepath.Join(local, "slicc", "bin", "jerk*")); len(matches) > 0 {
-					t.Fatalf("%v would leak into this test through the real LOCALAPPDATA it needs for Chrome", matches)
+				if found := jerkIn(filepath.Join(local, "slicc", "bin")); len(found) > 0 {
+					t.Fatalf("%v would leak into this test through the real LOCALAPPDATA it needs for Chrome", found)
 				}
 				env = overrideEnv(env, map[string]string{"LOCALAPPDATA": local})
 			}
@@ -70,6 +70,17 @@ func testChrome(t *testing.T, env []string) ([]string, string) {
 	}
 	t.Fatal("no Google Chrome found, and CI images have it")
 	return nil, ""
+}
+
+func jerkIn(dir string) []string {
+	entries, _ := os.ReadDir(dir)
+	var found []string
+	for _, e := range entries {
+		if strings.HasPrefix(strings.ToLower(e.Name()), "jerk") {
+			found = append(found, filepath.Join(dir, e.Name()))
+		}
+	}
+	return found
 }
 
 func linkTestChrome(t *testing.T, env []string, exe string) string {

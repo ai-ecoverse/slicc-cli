@@ -48,6 +48,7 @@ func isolateProcess(root string) {
 	}
 	_ = os.Unsetenv("SLICC_USER_DATA_DIR")
 	_ = os.Setenv("PATH", shadowJerk(filepath.Join(filepath.Dir(root), "no-jerk")))
+	_ = os.Setenv("NoDefaultCurrentDirectoryInExePath", "1")
 	_ = os.Setenv(browser.DiscoveryEnv, "isolated")
 	_ = os.Setenv("SLICC_OPEN_COMMAND", filepath.Join(root, "no-browser-opener"))
 	_ = os.Setenv("SLICC_LOOPBACK_PORTS", harnessLoopbackPorts())
