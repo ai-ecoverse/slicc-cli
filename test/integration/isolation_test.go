@@ -85,13 +85,8 @@ func jerkNames() map[string]bool {
 }
 
 func holdsJerk(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	names := jerkNames()
-	for _, e := range entries {
-		if names[strings.ToLower(e.Name())] && !e.IsDir() {
+	for name := range jerkNames() {
+		if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && !fi.IsDir() {
 			return true
 		}
 	}
@@ -99,6 +94,10 @@ func holdsJerk(dir string) bool {
 }
 
 func mirrorWithoutJerk(dir, mirror string) string {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil || os.MkdirAll(mirror, 0o700) != nil {
 		return ""
@@ -193,6 +192,26 @@ func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
 	}
 }
 
+func TestTheHarnessHidesAJerkInADirItCannotList(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no search-only directories on Windows")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "jerk"), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o311); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("this user can list a search-only directory")
+	}
+	if got := pathWithoutJerk(dir, t.TempDir()); got != "" {
+		t.Fatalf("PATH %q keeps a search-only dir with a jerk", got)
+	}
+}
+
 func TestTheHarnessHidesThisMachinesJerk(t *testing.T) {
 	if p, err := exec.LookPath("jerk"); err == nil {
 		t.Fatalf("a jerk is on the tests' PATH: %s", p)
@@ -206,17 +225,19 @@ func TestTheHarnessHidesThisMachinesJerk(t *testing.T) {
 		}
 	}
 	sep := string(os.PathListSeparator)
-	got := filepath.SplitList(pathWithoutJerk(without+sep+with+sep+sep+without, t.TempDir()))
+	t.Chdir(filepath.Dir(with))
+	got := filepath.SplitList(pathWithoutJerk(without+sep+filepath.Base(with)+sep+sep+without, t.TempDir()))
 	if len(got) == 2 && runtime.GOOS == "windows" {
 		t.Logf("no symlinks here, so the dir with a jerk was dropped: %q", got)
 		got = append(got[:1], "", got[1])
 	}
-	if len(got) != 3 || got[0] != without || got[2] != without || got[1] == with {
+	if len(got) != 3 || got[0] != without || got[2] != without || got[1] == with || got[1] == filepath.Base(with) {
 		t.Fatalf("PATH %q", got)
 	}
 	if got[1] != "" {
+		t.Chdir(t.TempDir())
 		if _, err := os.Stat(filepath.Join(got[1], tool)); err != nil {
-			t.Fatalf("the mirror lost the other tool: %v", err)
+			t.Fatalf("the mirror of a relative PATH entry lost the other tool: %v", err)
 		}
 		if holdsJerk(got[1]) {
 			t.Fatalf("the mirror %s still holds a jerk", got[1])
