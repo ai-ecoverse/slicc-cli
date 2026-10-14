@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/netip"
 	"os"
 	"os/exec"
 	ossignal "os/signal"
@@ -38,7 +37,6 @@ import (
 const (
 	openCommandEnv   = "SLICC_OPEN_COMMAND"
 	loopbackPortsEnv = "SLICC_LOOPBACK_PORTS"
-	activePortsID    = "devtools-active-port"
 )
 
 const openUsage = `usage: slicc open [flags]
@@ -386,16 +384,12 @@ func (r *openRun) watchActivePorts(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		var add []netip.AddrPort
 		for _, p := range browser.ActivePorts(browser.Options{}) {
 			if !known[p] {
 				known[p] = true
-				add = append(add, netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), p), netip.AddrPortFrom(netip.IPv6Loopback(), p))
+				r.pol.ProtectPort(p)
+				r.logf("loopback: denied new DevToolsActivePort port %d on every address of this machine", p)
 			}
-		}
-		if len(add) > 0 {
-			r.pol.AddProtectedEndpoints(activePortsID, add)
-			r.logf("loopback: denied new DevToolsActivePort ports: %v", add)
 		}
 	}
 }

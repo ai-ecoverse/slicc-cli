@@ -23,6 +23,7 @@ type Policy struct {
 	hostPorts []uint16
 	hosts     *addrCache
 	endpoints *endpoints
+	late      *latePorts
 }
 
 var remoteDeny = []string{
@@ -46,11 +47,11 @@ var localAllows = []string{
 var loopbackHosts = []string{"127.0.0.0/8", "127.0.0.1/32", "::1/128"}
 
 func New() *Policy {
-	return &Policy{base: "every address", endpoints: newEndpoints()}
+	return &Policy{base: "every address", endpoints: newEndpoints(), late: &latePorts{}, hosts: hostAddrs}
 }
 
 func Remote(protectedPorts ...uint16) *Policy {
-	p := &Policy{base: "every public address", endpoints: newEndpoints()}
+	p := &Policy{base: "every public address", endpoints: newEndpoints(), late: &latePorts{}, hosts: hostAddrs}
 	for _, s := range remoteDeny {
 		p.entries = append(p.entries, entry{rule: mustRule(s), deny: true})
 	}
@@ -59,7 +60,7 @@ func Remote(protectedPorts ...uint16) *Policy {
 }
 
 func Local(protectedPorts ...uint16) *Policy {
-	p := &Policy{base: "every public address, this machine, and the local network", endpoints: newEndpoints()}
+	p := &Policy{base: "every public address, this machine, and the local network", endpoints: newEndpoints(), late: &latePorts{}, hosts: hostAddrs}
 	for _, s := range remoteDeny {
 		p.entries = append(p.entries, entry{rule: mustRule(s), deny: !slices.Contains(localAllows, s)})
 	}
@@ -102,6 +103,7 @@ func (p *Policy) With(allow, deny []Rule) *Policy {
 		hostPorts: slices.Clone(p.hostPorts),
 		hosts:     p.hosts,
 		endpoints: p.endpoints,
+		late:      p.late,
 	}
 	for _, r := range allow {
 		q.entries = append(q.entries, entry{rule: r, user: true})
@@ -151,6 +153,9 @@ func (p *Policy) decide(addr netip.Addr, port uint16) (entry, bool) {
 	for _, e := range p.entries {
 		consider(e)
 	}
+	for _, e := range p.lateEntries(addr, port) {
+		consider(e)
+	}
 	if e, ok := p.hostEntry(addr, port); ok {
 		consider(e)
 	}
@@ -161,7 +166,7 @@ func (p *Policy) decide(addr netip.Addr, port uint16) (entry, bool) {
 }
 
 func (p *Policy) hostEntry(addr netip.Addr, port uint16) (entry, bool) {
-	if port == 0 || p.hosts == nil || !slices.Contains(p.hostPorts, port) {
+	if port == 0 || p.hosts == nil || (!slices.Contains(p.hostPorts, port) && !p.late.has(port)) {
 		return entry{}, false
 	}
 	why := "a protected port on an address of this machine"
@@ -197,6 +202,7 @@ func (p *Policy) AllowsAny(addr netip.Addr) bool {
 		return false
 	}
 	ports := append([]uint16{0}, p.hostPorts...)
+	ports = append(ports, p.late.list()...)
 	ports = append(ports, p.endpoints.ports(checked)...)
 	for _, e := range p.entries {
 		if e.rule.Port != 0 && e.rule.Prefix.Contains(checked) {
