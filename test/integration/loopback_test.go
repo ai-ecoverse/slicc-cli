@@ -899,6 +899,28 @@ func TestLoopbackNewIdentityForgetsThePins(t *testing.T) {
 	}
 }
 
+func TestLoopbackReplacedIdentityCantPin(t *testing.T) {
+	e := newLoopEnv(t)
+	old := startLoop(t, e, "pair", "--page", "https://seven.sliccy.ai/")
+	pr := parsePairing(t, old.url(t))
+	if err := os.Remove(filepath.Join(e.config, "loopback-identity.json")); err != nil {
+		t.Fatal(err)
+	}
+	fresh := startLoop(t, e, "pair", "--page", "https://seven.sliccy.ai/")
+	if p2 := parsePairing(t, fresh.url(t)); p2.fingerprint == pr.fingerprint {
+		t.Fatal("no new identity")
+	}
+	offer := "v=0\r\na=fingerprint:sha-256 " + colons(strings.Repeat("cd", 32)) + "\r\n"
+	host := fmt.Sprintf("127.0.0.1:%d", pr.port)
+	wantForbidden(t, "a pairing on the replaced identity", gateDo(t, pr.port, "POST", "/slicc/v1/pair", host, map[string]string{"Origin": "https://seven.sliccy.ai"}, jsonBody(t, map[string]string{"token": pr.token, "offer": offer})), "https://seven.sliccy.ai")
+	old.waitStderr(t, "could not save the pairing: this slicc's loopback identity was replaced by another slicc; restart it")
+	cmd := exec.Command(binary, "unpair")
+	cmd.Env = e.env
+	if out, _ := cmd.Output(); string(out) != "no paired sevens\n" {
+		t.Fatalf("pins after the stale pairing: %q", out)
+	}
+}
+
 func TestLoopbackLeavesUnreadableStateAlone(t *testing.T) {
 	e := newLoopEnv(t)
 	if err := os.MkdirAll(e.config, 0o700); err != nil {
