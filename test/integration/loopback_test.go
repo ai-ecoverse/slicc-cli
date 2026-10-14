@@ -372,10 +372,11 @@ func TestLoopbackLinksSevenWithoutCDP(t *testing.T) {
 			Version int `json:"version"`
 			Peers   map[string]struct {
 				Origin    string `json:"origin"`
+				Node      string `json:"node"`
 				FirstSeen string `json:"firstSeen"`
 			} `json:"peers"`
 		}
-		if json.Unmarshal(data, &f) != nil || f.Version != 1 || f.Peers[pageFP].Origin != srv.URL || f.Peers[pageFP].FirstSeen == "" {
+		if json.Unmarshal(data, &f) != nil || f.Version != 1 || f.Peers[pageFP].Origin != srv.URL || f.Peers[pageFP].Node != pr.fingerprint || f.Peers[pageFP].FirstSeen == "" {
 			t.Fatalf("%s: %s (page %s)", path, data, pageFP)
 		}
 		for _, name := range []string{"loopback-peers.json", "loopback-identity.json"} {
@@ -546,6 +547,26 @@ func TestLoopbackGateRefuses(t *testing.T) {
 		q.eval("linkTest.loopback.post("+jsArgs(pr.port, "/slicc/v1/signal", map[string]string{"offer": sdp})+")", &res)
 		if res.Status != 403 || res.Code != "refused" {
 			t.Fatalf("signal from an unpaired page: %+v", res)
+		}
+	})
+
+	t.Run("a pin made under another node identity", func(t *testing.T) {
+		path := filepath.Join(e.config, "loopback-peers.json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, bytes.ReplaceAll(data, []byte(pr.fingerprint), []byte(strings.Repeat("0", 64))), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if res := loopSignal(t, p); res.Linked || res.Status != 403 {
+			t.Fatalf("signal with a pin from another identity: %+v", res)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if res := loopSignal(t, p); !res.Linked {
+			t.Fatalf("signal with the pin restored: %+v", res)
 		}
 	})
 
