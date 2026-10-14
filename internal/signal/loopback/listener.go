@@ -221,9 +221,11 @@ func (l *Listener) conn(fp string) *peerConn {
 		return nil
 	}
 	if c, ok := l.conns[fp]; ok {
+		c.busy++
 		return c
 	}
 	c := newPeerConn()
+	c.busy++
 	l.conns[fp] = c
 	l.wg.Add(1)
 	serve, ctx := l.serve, l.ctx
@@ -370,6 +372,11 @@ func (l *Listener) answer(w http.ResponseWriter, r *http.Request, origin, norm, 
 		forbid(w, origin)
 		return
 	}
+	defer func() {
+		l.mu.Lock()
+		c.busy--
+		l.mu.Unlock()
+	}()
 	sdp, err := c.offer(r.Context(), norm, offer, l.cfg.AnswerTimeout)
 	if err != nil {
 		l.cfg.Status("could not answer seven on %s (%s): %v", norm, ShortFingerprint(fp), err)

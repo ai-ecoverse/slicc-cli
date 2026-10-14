@@ -26,6 +26,7 @@ type peerConn struct {
 
 	mu    sync.Mutex
 	waits map[string]*pending
+	busy  int
 }
 
 func newPeerConn() *peerConn {

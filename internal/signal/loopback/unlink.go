@@ -78,7 +78,7 @@ func (l *Listener) release(fp string) {
 	}
 	l.mu.Lock()
 	c := l.conns[fp]
-	if c == nil || l.live[fp] != nil {
+	if c == nil || l.live[fp] != nil || c.busy > 0 {
 		l.mu.Unlock()
 		return
 	}
