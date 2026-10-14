@@ -48,77 +48,22 @@ func isolateProcess(root string) {
 		_ = os.Setenv(k, v)
 	}
 	_ = os.Unsetenv("SLICC_USER_DATA_DIR")
-	_ = os.Setenv("PATH", pathWithoutJerk(os.Getenv("PATH"), filepath.Dir(root)))
+	_ = os.Setenv("PATH", shadowJerk(filepath.Join(filepath.Dir(root), "no-jerk")))
 	_ = os.Setenv(browser.DiscoveryEnv, "isolated")
 	_ = os.Setenv("SLICC_OPEN_COMMAND", filepath.Join(root, "no-browser-opener"))
 	_ = os.Setenv("SLICC_LOOPBACK_PORTS", harnessLoopbackPorts())
 }
 
-func pathWithoutJerk(path, scratch string) string {
-	var keep []string
-	for i, dir := range filepath.SplitList(path) {
-		switch {
-		case dir == "":
-		case !holdsJerk(dir):
-			keep = append(keep, dir)
-		default:
-			if mirror := mirrorWithoutJerk(dir, filepath.Join(scratch, "path-"+strconv.Itoa(i))); mirror != "" {
-				keep = append(keep, mirror)
-			}
+func shadowJerk(dir string) string {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		panic(err)
+	}
+	for name, body := range map[string]string{"jerk": "#!/bin/sh\nexit 1\n", "jerk.bat": "@exit /b 1\r\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			panic(err)
 		}
 	}
-	return strings.Join(keep, string(os.PathListSeparator))
-}
-
-func jerkNames() map[string]bool {
-	if runtime.GOOS != "windows" {
-		return map[string]bool{"jerk": true}
-	}
-	names := map[string]bool{}
-	exts := os.Getenv("PATHEXT")
-	if exts == "" {
-		exts = ".com;.exe;.bat;.cmd"
-	}
-	for _, ext := range strings.Split(exts, ";") {
-		if ext = strings.ToLower(ext); ext != "" {
-			if !strings.HasPrefix(ext, ".") {
-				ext = "." + ext
-			}
-			names["jerk"+ext] = true
-		}
-	}
-	return names
-}
-
-func holdsJerk(dir string) bool {
-	for name := range jerkNames() {
-		if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && !fi.IsDir() {
-			return true
-		}
-	}
-	return false
-}
-
-func mirrorWithoutJerk(dir, mirror string) string {
-	dir, err := filepath.Abs(dir)
-	if err != nil {
-		return ""
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil || os.MkdirAll(mirror, 0o700) != nil {
-		return ""
-	}
-	names := jerkNames()
-	for _, e := range entries {
-		if names[strings.ToLower(e.Name())] {
-			continue
-		}
-		if os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(mirror, e.Name())) != nil {
-			_ = os.RemoveAll(mirror)
-			return ""
-		}
-	}
-	return mirror
+	return dir + string(os.PathListSeparator) + os.Getenv("PATH")
 }
 
 func harnessLoopbackPorts() string {
@@ -198,74 +143,16 @@ func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
 	}
 }
 
-func TestTheHarnessReadsDotlessPATHEXT(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		if names := jerkNames(); len(names) != 1 || !names["jerk"] {
-			t.Fatalf("names %v, want only jerk", names)
-		}
-		return
-	}
-	t.Setenv("PATHEXT", "EXE; cmd;.Bat")
-	names := jerkNames()
-	if names["jerk"] {
-		t.Fatalf("a bare jerk counts on Windows, where LookPath never runs one: %v", names)
-	}
-	for _, n := range []string{"jerk.exe", "jerk. cmd", "jerk.bat"} {
-		if !names[n] {
-			t.Fatalf("%s missing from %v", n, names)
-		}
-	}
-}
-
-func TestTheHarnessHidesAJerkInADirItCannotList(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no search-only directories on Windows")
-	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "jerk"), []byte("x"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dir, 0o311); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-	if _, err := os.ReadDir(dir); err == nil {
-		t.Skip("this user can list a search-only directory")
-	}
-	if got := pathWithoutJerk(dir, t.TempDir()); got != "" {
-		t.Fatalf("PATH %q keeps a search-only dir with a jerk", got)
-	}
-}
-
 func TestTheHarnessHidesThisMachinesJerk(t *testing.T) {
-	if p, err := exec.LookPath("jerk"); err == nil {
-		t.Fatalf("a jerk is on the tests' PATH: %s", p)
+	p, err := exec.LookPath("jerk")
+	if err != nil {
+		t.Fatalf("no jerk on the tests' PATH, not even the harness's stand-in: %v", err)
 	}
-	with := t.TempDir()
-	without := t.TempDir()
-	tool := exeName("some-tool")
-	for _, name := range []string{exeName("jerk"), "jerk.cmd", tool} {
-		if err := os.WriteFile(filepath.Join(with, name), []byte("x"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+	if filepath.Base(filepath.Dir(p)) != "no-jerk" {
+		t.Fatalf("the first jerk on the tests' PATH is %s, not the harness's stand-in", p)
 	}
-	sep := string(os.PathListSeparator)
-	t.Chdir(filepath.Dir(with))
-	got := filepath.SplitList(pathWithoutJerk(without+sep+filepath.Base(with)+sep+sep+without, t.TempDir()))
-	if len(got) == 2 && runtime.GOOS == "windows" {
-		t.Logf("no symlinks here, so the dir with a jerk was dropped: %q", got)
-		got = append(got[:1], "", got[1])
-	}
-	if len(got) != 3 || got[0] != without || got[2] != without || got[1] == with || got[1] == filepath.Base(with) {
-		t.Fatalf("PATH %q", got)
-	}
-	if got[1] != "" {
-		t.Chdir(t.TempDir())
-		if _, err := os.Stat(filepath.Join(got[1], tool)); err != nil {
-			t.Fatalf("the mirror of a relative PATH entry lost the other tool: %v", err)
-		}
-		if holdsJerk(got[1]) {
-			t.Fatalf("the mirror %s still holds a jerk", got[1])
-		}
+	out, err := exec.Command(p, "--version").Output()
+	if err == nil || len(out) != 0 {
+		t.Fatalf("the stand-in jerk answered --version: %q %v", out, err)
 	}
 }
