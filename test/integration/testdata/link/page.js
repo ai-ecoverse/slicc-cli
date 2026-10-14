@@ -548,6 +548,21 @@ globalThis.linkTest = {
   protect: protectTest(() => state.link, describe),
   fs: fsTest(() => state.link, describe, { sha256, toBase64, fromBase64, prng }),
   ws: wsTest(() => state.link, describe, { sha256, fromBase64, prng }),
+  async transport() {
+    const out = { dropped: state.link?.dropped ?? [], streams: state.link?.streamCount ?? 0, channels: [], pairs: [] };
+    const stats = await state.pc?.getStats();
+    stats?.forEach((r) => {
+      if (r.type === 'data-channel') {
+        out.channels.push({ id: r.dataChannelIdentifier, label: r.label, state: r.state, sent: r.messagesSent, received: r.messagesReceived });
+      } else if (r.type === 'candidate-pair' && (r.nominated || r.state === 'succeeded')) {
+        out.pairs.push({ id: r.id, state: r.state, nominated: r.nominated, sent: r.packetsSent, received: r.packetsReceived, rtt: r.currentRoundTripTime, lastSent: r.lastPacketSentTimestamp, lastReceived: r.lastPacketReceivedTimestamp });
+      } else if (r.type === 'transport') {
+        out.pairChanges = r.selectedCandidatePairChanges;
+        out.pair = r.selectedCandidatePairId;
+      }
+    });
+    return out;
+  },
   kernel() {
     return { opens: kernel.opens, hanging: kernel.hanging.length, requests: kernel.requests };
   },

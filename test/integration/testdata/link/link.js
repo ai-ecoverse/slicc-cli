@@ -261,6 +261,7 @@ export class Link {
     this.#hello = { v: 1, role: 'page', caps: [], ...hello };
     this.#handlers = handlers;
     this.helloReceived = false;
+    this.dropped = [];
     this.#peerHello.promise.catch(() => {});
     this.control = pc.createDataChannel(CONTROL_LABEL);
     this.#wireControl(this.control);
@@ -302,7 +303,10 @@ export class Link {
   }
 
   sendFrame(channel, bytes) {
-    if (channel.readyState !== 'open') return;
+    if (channel.readyState !== 'open') {
+      this.dropped.push({ channel: channel.id, state: channel.readyState, frame: bytes[0] });
+      return;
+    }
     channel.send(bytes);
   }
 
