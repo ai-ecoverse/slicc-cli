@@ -79,6 +79,7 @@ func navServer(t *testing.T, log *navLog) *httptest.Server {
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, r.URL.Query().Get("to"), http.StatusFound)
 	})
+	vectorRoutes(mux, log)
 	mux.HandleFunc("/beacon", func(w http.ResponseWriter, r *http.Request) {
 		log.beacon(r.URL.Query().Get("tag"), r.URL.Query().Get("origin"))
 		w.WriteHeader(http.StatusNoContent)
@@ -115,6 +116,7 @@ type navEnv struct {
 	cross   string
 	seven   string
 	vault   string
+	handler http.Handler
 	n       int
 }
 
@@ -133,6 +135,7 @@ func setupNav(t *testing.T) *navEnv {
 		cross:   "http://other.test:" + port,
 		seven:   nav.URL,
 		vault:   "http://vault.sliccy.ai:" + port,
+		handler: nav.Config.Handler,
 	}
 	env.a = startAttach(t, "--cdp", b.endpoint, "--origin", srv.URL, "--origin", nav.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
