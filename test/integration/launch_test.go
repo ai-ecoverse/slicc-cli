@@ -40,6 +40,8 @@ func launchEnv(t *testing.T) ([]string, string) {
 	}
 	if runtime.GOOS != "windows" {
 		set["HOME"] = root
+	} else {
+		set["LOCALAPPDATA"] = realGetenv("LOCALAPPDATA")
 	}
 	return overrideEnv(os.Environ(), set), root
 }
