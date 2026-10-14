@@ -77,8 +77,11 @@ func jerkNames() map[string]bool {
 		exts = ".com;.exe;.bat;.cmd"
 	}
 	for _, ext := range strings.Split(exts, ";") {
-		if ext != "" {
-			names["jerk"+strings.ToLower(ext)] = true
+		if ext = strings.ToLower(strings.TrimSpace(ext)); ext != "" {
+			if !strings.HasPrefix(ext, ".") {
+				ext = "." + ext
+			}
+			names["jerk"+ext] = true
 		}
 	}
 	return names
@@ -189,6 +192,16 @@ func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
 	eps, _ = browser.DiscoverEndpoints(context.Background(), browser.Options{ProbePorts: []int{port}})
 	if len(eps) != 1 || hits.Load() == 0 {
 		t.Fatalf("an injected probe port is still probed: %v", eps)
+	}
+}
+
+func TestTheHarnessReadsDotlessPATHEXT(t *testing.T) {
+	t.Setenv("PATHEXT", "EXE; cmd;.Bat")
+	names := jerkNames()
+	for _, n := range []string{"jerk", "jerk.exe", "jerk.cmd", "jerk.bat"} {
+		if !names[n] {
+			t.Fatalf("%s missing from %v", n, names)
+		}
 	}
 }
 
