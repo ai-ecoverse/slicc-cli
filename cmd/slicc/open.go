@@ -252,7 +252,34 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 	}
 	go r.readStdin(stdin)
 	_ = r.ln.Serve(ctx, r.node.Serve)
+	r.event(map[string]any{"schema": flow.Schema, "event": flow.Closed, "browsers": []string{}})
 	return 0
+}
+
+func (r *openRun) linkEvent(e node.Event) {
+	if !r.opts.json || e.Link == nil {
+		return
+	}
+	base := map[string]any{"schema": flow.Schema, "mode": "loopback", "device": loopback.PeerFingerprint(e.Link)}
+	switch e.Kind {
+	case node.EventLinked:
+		base["event"] = flow.Linked
+		if e.Peer.Name != "" {
+			base["peer"] = e.Peer.Name
+		}
+		base["caps"] = r.node.Caps()
+		base["policy"] = r.pol.Summary()
+	case node.EventLinkDown:
+		base["event"] = flow.LinkLost
+		if e.Reason != "" {
+			base["reason"] = e.Reason
+		} else if e.Err != nil {
+			base["message"] = e.Err.Error()
+		}
+	default:
+		return
+	}
+	r.event(base)
 }
 
 func loopbackPorts() (int, int) {
@@ -358,6 +385,7 @@ func (r *openRun) serveCaps() (func(), error) {
 	}
 	n.Handle(loopback.CapUnlink, loopback.KindUnlink, r.ln.Unlink)
 	n.Subscribe(func(e node.Event) {
+		r.linkEvent(e)
 		switch {
 		case e.Link == nil:
 		case e.Kind == node.EventConnecting:

@@ -71,9 +71,12 @@ func TestFallbackLinksSevenInTheDefaultBrowserWhenNothingElseIsFound(t *testing.
 		}
 	})
 
-	t.Run("--json reports the mode and the pairing URL", func(t *testing.T) {
+	t.Run("--json reports the mode, the pairing URL, the link and the end", func(t *testing.T) {
 		e, _ := setup(t)
-		f := startFlow(t, e.env, "--json", "--page", page)
+		b := launchBrowser(t)
+		srv := pageServer(t)
+		page := srv.URL + "/index.html?ports=" + e.ports()
+		f := startFlow(t, e.env, "--json", "--page", page, "--name", "it-fallback")
 		f.next(t, "discovered")
 		m := f.next(t, "mode")
 		var mode map[string]any
@@ -88,6 +91,36 @@ func TestFallbackLinksSevenInTheDefaultBrowserWhenNothingElseIsFound(t *testing.
 			t.Fatalf("pairing event %s", pe.raw)
 		}
 		f.waitStderr(t, flow.FallbackNotice)
+		p := b.openPage(t, pairingEvent.URL)
+		if r := confirm(t, p, ""); !r.Linked {
+			t.Fatalf("pairing: %+v", r)
+		}
+		var pageFP string
+		p.eval("linkTest.loopback.fingerprint()", &pageFP)
+		var linked struct {
+			Mode   string   `json:"mode"`
+			Device string   `json:"device"`
+			Peer   string   `json:"peer"`
+			Caps   []string `json:"caps"`
+			Policy string   `json:"policy"`
+		}
+		le := f.next(t, "linked")
+		if json.Unmarshal([]byte(le.raw), &linked) != nil || linked.Mode != "loopback" || linked.Device != pageFP || linked.Peer != "link test page" || len(linked.Caps) == 0 || linked.Policy == "" {
+			t.Fatalf("linked event %s (page %s)", le.raw, pageFP)
+		}
+		if err := interrupt(f.cmd); err != nil {
+			t.Fatal(err)
+		}
+		lost := f.next(t, "link-lost")
+		if !strings.Contains(lost.raw, `"device":"`+pageFP+`"`) || !strings.Contains(lost.raw, `"mode":"loopback"`) {
+			t.Fatalf("link-lost event %s", lost.raw)
+		}
+		if c := f.next(t, "closed"); !strings.Contains(c.raw, `"browsers":[]`) {
+			t.Fatalf("closed event %s", c.raw)
+		}
+		if code := f.wait(t); code != 0 {
+			t.Fatalf("exit %d", code)
+		}
 	})
 
 	t.Run("--no-fallback exits as before", func(t *testing.T) {

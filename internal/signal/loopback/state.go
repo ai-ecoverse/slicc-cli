@@ -92,6 +92,9 @@ func LoadIdentity(dir string) (*Identity, error) {
 	if id, err := readIdentity(path); id != nil || err != nil {
 		return id, err
 	}
+	if _, err := OpenPeers(dir).RemoveAll(); err != nil {
+		return nil, err
+	}
 	pemData, err := newCertPEM()
 	if err != nil {
 		return nil, err

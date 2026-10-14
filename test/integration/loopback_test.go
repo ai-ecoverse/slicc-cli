@@ -858,6 +858,26 @@ func TestLoopbackPinsAreLockedAcrossProcesses(t *testing.T) {
 	}
 }
 
+func TestLoopbackNewIdentityForgetsThePins(t *testing.T) {
+	e := newLoopEnv(t)
+	if err := os.MkdirAll(e.config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	peers := filepath.Join(e.config, "loopback-peers.json")
+	pin := fmt.Sprintf(`{"version":1,"peers":{%q:{"origin":"https://seven.sliccy.ai","firstSeen":"2026-10-13T00:00:00Z"}}}`, strings.Repeat("ab", 32))
+	if err := os.WriteFile(peers, []byte(pin), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := startLoop(t, e, "pair", "--page", "https://seven.sliccy.ai/")
+	o.url(t)
+	o.waitStderr(t, "new loopback identity for this computer")
+	cmd := exec.Command(binary, "unpair")
+	cmd.Env = e.env
+	if out, _ := cmd.Output(); string(out) != "no paired sevens\n" {
+		t.Fatalf("pins after a new identity: %q", out)
+	}
+}
+
 func TestLoopbackLeavesUnreadableStateAlone(t *testing.T) {
 	e := newLoopEnv(t)
 	if err := os.MkdirAll(e.config, 0o700); err != nil {
