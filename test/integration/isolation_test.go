@@ -71,7 +71,10 @@ func pathWithoutJerk(path, scratch string) string {
 }
 
 func jerkNames() map[string]bool {
-	names := map[string]bool{"jerk": true}
+	if runtime.GOOS != "windows" {
+		return map[string]bool{"jerk": true}
+	}
+	names := map[string]bool{}
 	exts := os.Getenv("PATHEXT")
 	if exts == "" {
 		exts = ".com;.exe;.bat;.cmd"
@@ -196,9 +199,18 @@ func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
 }
 
 func TestTheHarnessReadsDotlessPATHEXT(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		if names := jerkNames(); len(names) != 1 || !names["jerk"] {
+			t.Fatalf("names %v, want only jerk", names)
+		}
+		return
+	}
 	t.Setenv("PATHEXT", "EXE; cmd;.Bat")
 	names := jerkNames()
-	for _, n := range []string{"jerk", "jerk.exe", "jerk. cmd", "jerk.bat"} {
+	if names["jerk"] {
+		t.Fatalf("a bare jerk counts on Windows, where LookPath never runs one: %v", names)
+	}
+	for _, n := range []string{"jerk.exe", "jerk. cmd", "jerk.bat"} {
 		if !names[n] {
 			t.Fatalf("%s missing from %v", n, names)
 		}
