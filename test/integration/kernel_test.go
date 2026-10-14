@@ -41,14 +41,39 @@ func startKernel(t *testing.T, extra ...string) *kernelEnv {
 	t.Helper()
 	b := launchBrowser(t)
 	srv := pageServer(t)
-	port := freePort(t)
-	args := append([]string{"--cdp", b.endpoint, "--name", "it-node", "--origin", srv.URL, "--kernel-port", strconv.Itoa(port)}, extra...)
-	env := &kernelEnv{linkEnv: &linkEnv{t: t, b: b, origin: srv.URL}, port: port, addr: fmt.Sprintf("127.0.0.1:%d", port)}
-	env.echo = serveTCP(t, func(c net.Conn) { _, _ = io.Copy(c, c) })
-	env.a = startAttach(t, args...)
-	env.p = b.openPage(t, srv.URL+"/index.html?kernel")
-	env.waitUp("")
-	return env
+	for attempt := 1; ; attempt++ {
+		port := freePort(t)
+		args := append([]string{"--cdp", b.endpoint, "--name", "it-node", "--origin", srv.URL, "--kernel-port", strconv.Itoa(port)}, extra...)
+		env := &kernelEnv{linkEnv: &linkEnv{t: t, b: b, origin: srv.URL}, port: port, addr: fmt.Sprintf("127.0.0.1:%d", port)}
+		env.echo = serveTCP(t, func(c net.Conn) { _, _ = io.Copy(c, c) })
+		env.a = startAttach(t, args...)
+		env.p = b.openPage(t, srv.URL+"/index.html?kernel")
+		env.waitUp("")
+		if !env.lostThePort(attempt) {
+			return env
+		}
+		reap(t, env.a.cmd, "slicc attach")
+		b.closeTarget(env.p.target)
+	}
+}
+
+func (e *kernelEnv) lostThePort(attempt int) bool {
+	e.t.Helper()
+	on := fmt.Sprintf("kernel services on http://<port>.kernel.localhost:%d/", e.port)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out := e.a.stderr.String()
+		switch {
+		case strings.Contains(out, on):
+			return false
+		case strings.Contains(out, "kernel services are off: cannot listen on") && attempt < 3:
+			e.t.Logf("kernel port %d was taken before slicc bound it; trying another", e.port)
+			return true
+		case time.Now().After(deadline) || strings.Contains(out, "kernel services are off"):
+			e.t.Fatalf("stderr never said %q:\n%s", on, out)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 type rawAnswer struct {
@@ -71,10 +96,22 @@ func (e *kernelEnv) raw(t *testing.T, request string) rawAnswer {
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
 	if err != nil {
+		e.logTransport(t)
 		t.Fatalf("reading the answer to %q: %v", request[:min(len(request), 80)], err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	return rawAnswer{status: resp.StatusCode, header: resp.Header, close: resp.Close, body: string(body)}
+}
+
+func (e *kernelEnv) logTransport(t *testing.T) {
+	t.Helper()
+	if e.linkEnv == nil || e.p == nil {
+		return
+	}
+	var k, tr any
+	e.p.eval("linkTest.kernel()", &k)
+	e.p.eval("linkTest.transport()", &tr)
+	t.Logf("the page's kernel streams %+v; its transport %+v", k, tr)
 }
 
 func (e *kernelEnv) get(t *testing.T, host, path string) rawAnswer {
@@ -98,7 +135,6 @@ func wantProxyError(t *testing.T, a rawAnswer, status int, body string) {
 
 func TestKernelListener(t *testing.T) {
 	e := startKernel(t)
-	e.a.waitStderr(t, fmt.Sprintf("kernel services on http://<port>.kernel.localhost:%d/", e.port), 10*time.Second)
 	t.Run("policy protects the kernel port", e.testKernelPolicy)
 	t.Run("http request", e.testKernelHTTP)
 	t.Run("keep-alive and half-close", e.testKernelKeepAlive)
@@ -179,6 +215,9 @@ func (e *kernelEnv) testKernelKeepAlive(t *testing.T) {
 			t.Fatal(err)
 		}
 		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			e.logTransport(t)
+		}
 		r := decodeReply(t, rawAnswer{status: resp.StatusCode, body: string(b)})
 		if i == 1 {
 			first = r
