@@ -215,16 +215,14 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 		id, other := pausedIDs(m.Method, p)
 		req, _ := p["request"].(map[string]any)
 		u, _ := req["url"].(string)
-		if rt, _ := p["resourceType"].(string); m.Method == "Fetch.requestPaused" && rt == "Document" && g.o.URL(u) {
-			g.logf("cdp: failed a document request into a protected origin that a page session paused")
+		if g.o.URL(u) {
 			g.markRequestLocked(m.SessionID, id)
 			g.markRequestLocked(m.SessionID, other)
-			msg, _ := g.newCallLocked(m.SessionID, "Fetch.failRequest", map[string]any{"requestId": id, "errorReason": "BlockedByClient"}, false)
-			return false, false, [][]byte{msg}
+			return false, false, [][]byte{g.settlePausedLocked(m, p, id)}
 		}
-		if g.o.URL(u) || g.requestMarkedLocked(m.SessionID, other) {
+		g.handOutLocked(requestKey{m.SessionID, id})
+		if g.requestMarkedLocked(m.SessionID, other) {
 			g.markRequestLocked(m.SessionID, id)
-			g.markRequestLocked(m.SessionID, other)
 		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
 			return true, false, nil
@@ -234,4 +232,49 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 		changed = stripHeaders(req["headers"], "cookie") || changed
 		return true, changed, nil
 	})
+}
+
+func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) []byte {
+	defaultAuth := map[string]any{"response": "Default"}
+	document := p["resourceType"] == "Document"
+	var method string
+	params := map[string]any{"requestId": id}
+	switch m.Method {
+	case "Network.requestIntercepted":
+		g.logf("cdp: settled an intercepted request into a protected origin without showing it to the page")
+		method = "Network.continueInterceptedRequest"
+		params = map[string]any{"interceptionId": id}
+		if _, ok := p["authChallenge"]; ok {
+			params["authChallengeResponse"] = defaultAuth
+		} else if document {
+			params["errorReason"] = "BlockedByClient"
+		}
+	case "Fetch.authRequired":
+		g.logf("cdp: answered an auth challenge from a protected origin without showing it to the page")
+		method = "Fetch.continueWithAuth"
+		params["authChallengeResponse"] = defaultAuth
+	default:
+		if document {
+			g.logf("cdp: failed a document request into a protected origin that a page session paused")
+			method = "Fetch.failRequest"
+			params["errorReason"] = "BlockedByClient"
+		} else {
+			g.logf("cdp: continued a request into a protected origin without showing it to the page")
+			method = "Fetch.continueRequest"
+		}
+	}
+	msg, _ := g.newCallLocked(m.SessionID, method, params, false)
+	return msg
+}
+
+func (g *guard) handOutLocked(k requestKey) {
+	if k.request == "" || g.handed[k] {
+		return
+	}
+	g.handed[k] = true
+	g.handedOrder = append(g.handedOrder, k)
+	for len(g.handedOrder) > maxSettled {
+		delete(g.handed, g.handedOrder[0])
+		g.handedOrder = g.handedOrder[1:]
+	}
 }

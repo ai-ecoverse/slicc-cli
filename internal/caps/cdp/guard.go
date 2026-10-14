@@ -14,6 +14,7 @@ const (
 	refusedTarget  = "target is on seven's origin"
 	refusedCookies = "cookies on seven's origin"
 	refusedLost    = "slicc lost track of the browser's targets"
+	refusedPaused  = "slicc didn't pass this paused request to the page, so it could be seven's"
 	LostGrace      = 2 * time.Second
 	maxTombstones  = 4096
 	maxRefused     = 4096
@@ -96,6 +97,8 @@ type guard struct {
 	heldExtraCount  int
 	seen            map[requestKey]reqLevel
 	seenOrder       []requestKey
+	handed          map[requestKey]bool
+	handedOrder     []requestKey
 	bodyCalls       map[callKey]bodyCall
 	heldAnswers     map[callKey]*heldAnswer
 	streams         map[string]bool
@@ -128,6 +131,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		attachCalls:     map[callKey]string{},
 		heldExtras:      map[requestKey][]heldExtra{},
 		seen:            map[requestKey]reqLevel{},
+		handed:          map[requestKey]bool{},
 		bodyCalls:       map[callKey]bodyCall{},
 		heldAnswers:     map[callKey]*heldAnswer{},
 		streams:         map[string]bool{},

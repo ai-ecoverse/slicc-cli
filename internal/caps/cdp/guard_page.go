@@ -379,8 +379,18 @@ func (g *guard) scanString(k, s string, c *command) string {
 		return refusedTarget
 	case (k == "versionId" || k == "registrationId") && g.swProtected[s]:
 		return refusedTarget
-	case requestKeys[k] && !continueOK[c.method] && g.requestMarkedLocked(c.session, s):
-		return "the response came from seven's origin"
+	case requestKeys[k]:
+		return g.requestRule(s, c)
+	}
+	return ""
+}
+
+func (g *guard) requestRule(id string, c *command) string {
+	switch {
+	case continueOK[c.method] && !g.handed[requestKey{c.session, id}]:
+		return refusedPaused
+	case !continueOK[c.method] && g.requestMarkedLocked(c.session, id):
+		return refusedBody
 	}
 	return ""
 }
