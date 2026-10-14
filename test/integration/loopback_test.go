@@ -735,9 +735,15 @@ func TestDefaultBrowserFlagFollowsComputeArgv(t *testing.T) {
 		t.Fatalf("pairing URL %q", u)
 	}
 	o.waitStderr(t, "ssh: runner sh -c")
-	o2 := startLoop(t, e, "", "--default-browser=true", "--page", "https://seven.sliccy.ai/")
-	if u := o2.url(t); !pairingURL.MatchString(u) {
-		t.Fatalf("--default-browser=true: %q", u)
+	for _, args := range [][]string{{"--default-browser=true"}, {"--default-browser=false", "--default-browser=true"}, {"--default-browser", "-default-browser"}} {
+		o2 := startLoop(t, e, "", append(args, "--page", "https://seven.sliccy.ai/")...)
+		if u := o2.url(t); !pairingURL.MatchString(u) {
+			t.Fatalf("%v: %q", args, u)
+		}
+		o2.stop(t)
+	}
+	if out, errOut, code := runWithEnv(t, e.env, "--default-browser", "--default-browser=false", "--no-fallback"); code != 1 || !strings.Contains(errOut, "no browser to control") || pairingURL.MatchString(out) {
+		t.Fatalf("--default-browser then =false: %d %q %q", code, out, errOut)
 	}
 	for _, args := range [][]string{{"--no-fallback", "--", "--default-browser"}, {"--no-fallback", "--default-browser=nope"}} {
 		out, errOut, code := runWithEnv(t, e.env, args...)

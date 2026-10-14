@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	ossignal "os/signal"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -153,33 +152,50 @@ func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags,
 	return f, -1
 }
 
+func defaultBrowserValue(arg string) (on, isFlag, ok bool) {
+	if !strings.HasPrefix(arg, "-") {
+		return false, false, true
+	}
+	name, value, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+	if name != "default-browser" {
+		return false, false, true
+	}
+	if !hasValue {
+		return true, true, true
+	}
+	b, err := strconv.ParseBool(value)
+	return b, true, err == nil
+}
+
 func defaultBrowserArgs(args []string) ([]string, bool) {
+	rest := make([]string, 0, len(args))
+	on := false
 	for i := 0; i < len(args); i++ {
 		if name, ok := argvFlagName(args[i]); ok && !strings.HasSuffix(name, "=") {
-			for i++; i < len(args) && args[i] != "--"; i++ {
+			j := i + 1
+			for j < len(args) && args[j] != "--" {
+				j++
 			}
+			end := min(j+1, len(args))
+			rest = append(rest, args[i:end]...)
+			i = end - 1
 			continue
 		}
 		if args[i] == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		v, isFlag, ok := defaultBrowserValue(args[i])
+		if !ok {
 			return nil, false
 		}
-		name, value, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(args[i], "-"), "-"), "=")
-		if name != "default-browser" || !strings.HasPrefix(args[i], "-") {
+		if isFlag {
+			on = v
 			continue
 		}
-		on := true
-		if hasValue {
-			b, err := strconv.ParseBool(value)
-			if err != nil {
-				return nil, false
-			}
-			on = b
-		}
-		if on {
-			return append(slices.Clone(args[:i]), args[i+1:]...), true
-		}
+		rest = append(rest, args[i])
 	}
-	return nil, false
+	return rest, on
 }
 
 type openRun struct {
