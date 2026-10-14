@@ -7,13 +7,10 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/agentctl"
-	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
 const watchUsage = `usage: slicc <join-url> watch [--plain] [--json] [--thinking]
-       slicc watch --cdp <url> [--origin <origin>]... [--plain] [--json] [--thinking]
-       slicc watch --signal stdio [--thinking]
-
+` + watchSynopsis + `
 Follow seven's agent as it works, until Ctrl-C. Prompts and the assistant's
 text go to stdout; tool calls, results, notices and errors go to stderr,
 styled on a terminal and plain otherwise. When the stream or the link drops,
@@ -24,15 +21,8 @@ flags:
   --thinking         also show the agent's thinking, on stderr
   --json             print the raw NDJSON events on stdout instead
   --plain            no styling, even on a terminal
-  --cdp <url>        link over CDP instead of a join URL
-  --origin <origin>  with --cdp, also accept seven on this origin
-  --signal stdio     carry the local setup messages as NDJSON on stdin
-                     and stdout instead of CDP (for a test harness);
-                     stdout also carries the events, as with --json
-
-Exit status: 0 on Ctrl-C, 1 when the link can't be set up for good, 2 for bad
-usage, 3 when seven doesn't allow remote control from this device.
-`
+` + watchFlags + `
+Exit status: ` + watchExit
 
 type watcher struct {
 	f       agentFlags
@@ -59,7 +49,7 @@ func runWatch(ctx context.Context, f agentFlags, aio agentIO) int {
 		if err != nil {
 			return agentFail(aio, "watch", err)
 		}
-		if !agentctl.Allowed(l) {
+		if !l.Allowed() {
 			fmt.Fprintf(aio.stderr, "slicc watch: %s\n", noControlMessage)
 			return exitNoControl
 		}
@@ -72,20 +62,20 @@ func runWatch(ctx context.Context, f agentFlags, aio agentIO) int {
 	}
 }
 
-func (w *watcher) onLink(ctx context.Context, l *link.Link) (int, bool) {
-	w.r.Status("watching %s", peerName(l))
+func (w *watcher) onLink(ctx context.Context, l agentctl.Link) (int, bool) {
+	w.r.Status("watching %s", l.Name())
 	for {
 		err := w.once(ctx, l)
 		if ctx.Err() != nil {
 			return 0, true
 		}
 		if errors.Is(err, agentctl.ErrNotAllowed) {
-			fmt.Fprintf(w.aio.stderr, "slicc watch: %s\n", noControlMessage)
+			fmt.Fprintf(w.aio.stderr, "slicc watch: %s\n", refusedMessage(err))
 			return exitNoControl, true
 		}
 		select {
 		case <-l.Done():
-			w.r.Status("lost the link to %s; reconnecting", peerName(l))
+			w.r.Status("lost the link to %s; reconnecting", l.Name())
 			return 0, false
 		default:
 		}
@@ -109,7 +99,7 @@ func (w *watcher) sleep(ctx context.Context) bool {
 	}
 }
 
-func (w *watcher) once(ctx context.Context, l *link.Link) error {
+func (w *watcher) once(ctx context.Context, l agentctl.Link) error {
 	st, err := agentctl.Watch(ctx, l, agentctl.WatchOptions{Since: w.tracker.Since(), Thinking: w.f.thinking})
 	if err != nil {
 		return err

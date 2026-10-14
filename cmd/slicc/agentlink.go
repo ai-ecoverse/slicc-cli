@@ -1,3 +1,5 @@
+//go:build !wasip1
+
 package main
 
 import (
@@ -8,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/agentctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
@@ -16,11 +19,6 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/telemetry"
 	"github.com/pion/webrtc/v4"
 )
-
-type agentLinks interface {
-	next(ctx context.Context) (*link.Link, error)
-	close()
-}
 
 type fatalError struct{ msg string }
 
@@ -92,13 +90,13 @@ func serveLocal(conn signal.Conn, client *cdp.Client, what string, logf func(str
 	return ll
 }
 
-func (ll *localLinks) next(ctx context.Context) (*link.Link, error) {
+func (ll *localLinks) next(ctx context.Context) (agentctl.Link, error) {
 	if l, ok := freshLink(ll.links); ok {
-		return l, nil
+		return agentLink(l), nil
 	}
 	select {
 	case l := <-ll.links:
-		return l, nil
+		return agentLink(l), nil
 	case err := <-ll.served:
 		ll.served <- err
 		if err == nil {
@@ -157,14 +155,14 @@ func newRemoteLinks(joinURL string, logf, status func(string, ...any)) (*remoteL
 	return &remoteLinks{f: f, node: n, links: linkedEvents(n), logf: logf, status: status, stop: func() {}}, nil
 }
 
-func (rl *remoteLinks) next(ctx context.Context) (*link.Link, error) {
+func (rl *remoteLinks) next(ctx context.Context) (agentctl.Link, error) {
 	rl.stop()
 	rl.stop = func() {}
 	backoff := followBackoffBase
 	for {
 		l, err := rl.once(ctx)
 		if err == nil {
-			return l, nil
+			return agentLink(l), nil
 		}
 		var fe *fatalError
 		if ctx.Err() != nil || errors.As(err, &fe) {
@@ -253,4 +251,8 @@ func (rl *remoteLinks) close() {
 func peerName(l *link.Link) string {
 	h, _ := l.PeerHello()
 	return strings.TrimSpace(leaderName(h))
+}
+
+func agentLink(l *link.Link) agentctl.Link {
+	return agentctl.FromLink(l, peerName(l))
 }

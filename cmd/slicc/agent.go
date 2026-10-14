@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/agentctl"
-	"github.com/ai-ecoverse/slicc-cli/internal/signal"
 )
 
 const (
@@ -37,6 +36,11 @@ type agentFlags struct {
 	reject           bool
 	abortOnInterrupt bool
 	args             []string
+}
+
+type agentLinks interface {
+	next(ctx context.Context) (agentctl.Link, error)
+	close()
 }
 
 type agentIO struct {
@@ -74,7 +78,9 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 	if verb == "prompt" {
 		fs.BoolVar(&f.steer, "steer", false, "")
 		fs.BoolVar(&f.reject, "reject", false, "")
-		fs.BoolVar(&f.abortOnInterrupt, "abort-on-interrupt", false, "")
+		if interruptAborts {
+			fs.BoolVar(&f.abortOnInterrupt, "abort-on-interrupt", false, "")
+		}
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -172,21 +178,6 @@ func agentLogf(stderr io.Writer) func(string, ...any) {
 	return func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 }
 
-func (f agentFlags) links(ctx context.Context, aio agentIO, status func(string, ...any)) (agentLinks, error) {
-	logf := agentLogf(aio.stderr)
-	if f.joinURL != "" {
-		return newRemoteLinks(f.joinURL, logf, status)
-	}
-	origins, err := signal.NewOrigins(f.origins)
-	if err != nil {
-		return nil, err
-	}
-	if f.signal == "stdio" {
-		return newStdioLinks(aio.stdin, aio.stdout, logf)
-	}
-	return newLocalLinks(ctx, f.cdp, origins, logf)
-}
-
 type lineWriter struct {
 	mu sync.Mutex
 	w  io.Writer
@@ -221,6 +212,13 @@ func runAgent(verb, joinURL string, args []string, aio agentIO) int {
 func agentFail(aio agentIO, verb string, err error) int {
 	fmt.Fprintf(aio.stderr, "slicc %s: %v\n", verb, err)
 	return 1
+}
+
+func refusedMessage(err error) string {
+	if msg := agentctl.Refusal(err); msg != "" {
+		return msg
+	}
+	return noControlMessage
 }
 
 func setupFailed(ctx context.Context, aio agentIO, verb string, err error) int {

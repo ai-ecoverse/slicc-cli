@@ -9,18 +9,9 @@ import (
 )
 
 const abortUsage = `usage: slicc <join-url> abort
-       slicc abort --cdp <url> [--origin <origin>]...
-       slicc abort --signal stdio
-
+` + abortSynopsis + `
 Abort the run seven's agent is working on, if any.
-
-flags:
-  --cdp <url>        link over CDP instead of a join URL
-  --origin <origin>  with --cdp, also accept seven on this origin
-  --signal stdio     carry the local setup messages as NDJSON on stdin
-                     and stdout instead of CDP (for a test harness);
-                     --cdp is then not needed
-
+` + abortFlags + `
 Exit status: 0 when the run was aborted or nothing was running, 1 on an
 error, 2 for bad usage, 3 when seven doesn't allow remote control from this
 device, 130 on Ctrl-C.
@@ -46,7 +37,7 @@ func runAbort(ctx context.Context, f agentFlags, aio agentIO) int {
 	case ctx.Err() != nil:
 		return exitInterrupted
 	case errors.Is(err, agentctl.ErrNotAllowed):
-		fmt.Fprintf(aio.stderr, "slicc abort: %s\n", noControlMessage)
+		fmt.Fprintf(aio.stderr, "slicc abort: %s\n", refusedMessage(err))
 		return exitNoControl
 	case err != nil:
 		return setupFailed(ctx, aio, "abort", err)

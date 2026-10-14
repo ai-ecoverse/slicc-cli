@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -35,8 +35,14 @@ const { values } = parseArgs({
     'launcher-only': { type: 'boolean', default: false },
     launcher: { type: 'string', default: join(root, 'npm', 'slicc.js') },
     companions: { type: 'boolean', default: false },
+    wasi: { type: 'boolean', default: false },
+    'wasi-only': { type: 'boolean', default: false },
   },
 });
+
+const WASI_ASSET = 'slicc-wasip1-wasm.wasm';
+const WASI_NAME = `${SCOPE}/wasi-slicc`;
+const WASI_KERNEL = '>=1.81.0';
 
 const COMPANIONS = ['@ai-ecoverse/slicc-jerk'];
 
@@ -70,7 +76,7 @@ async function companionDeps() {
 }
 
 if (!values.version) {
-  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name]... [--only os-arch] [--deps-version semver] [--launcher-only] [--launcher file] [--companions]\n');
+  process.stderr.write('usage: npm-stage.mjs --version <semver> [--from dir] [--out dir] [--name pkg] [--bin name]... [--only os-arch] [--deps-version semver] [--launcher-only] [--launcher file] [--companions] [--wasi | --wasi-only]\n');
   process.exit(2);
 }
 const version = values.version.replace(/^v/, '');
@@ -141,9 +147,46 @@ function stageLauncher(platforms, companions) {
   });
 }
 
+function insideSeven() {
+  const readme = readFileSync(join(root, 'README.md'), 'utf8').replaceAll('\r\n', '\n');
+  const match = readme.match(/^## Inside seven\n([\s\S]*?)(?=^## )/m);
+  if (!match) throw new Error('README.md has no "## Inside seven" section');
+  return match[1].trim().replaceAll('](#', '](https://github.com/ai-ecoverse/slicc-cli#');
+}
+
+function stageWasi() {
+  const source = join(values.from, WASI_ASSET);
+  if (!existsSync(source)) throw new Error(`missing ${source}`);
+  const dir = join(values.out, 'wasi-slicc');
+  mkdirSync(join(dir, 'bin'), { recursive: true });
+  mkdirSync(join(dir, 'host'), { recursive: true });
+  copyFileSync(source, join(dir, 'bin', 'slicc.wasm'));
+  chmodSync(join(dir, 'bin', 'slicc.wasm'), 0o755);
+  copyFileSync(join(root, 'npm', 'wasi-slicc', 'host', 'slicc-host.mjs'), join(dir, 'host', 'slicc-host.mjs'));
+  copyFileSync(join(root, 'LICENSE'), join(dir, 'LICENSE'));
+  write(dir, 'README.md', `# ${WASI_NAME}\n\n\`slicc\` for seven's kernel, built from [ai-ecoverse/slicc-cli](https://github.com/ai-ecoverse/slicc-cli) at the same version.\n\n${insideSeven()}\n`);
+  write(dir, 'package.json', {
+    name: WASI_NAME,
+    version,
+    description: "slicc's prompt, watch and abort for seven's kernel: slicc.wasm (WASI preview1) and its host module",
+    ...common,
+    keywords: ['slicc', 'wasm', 'wasi'],
+    files: ['README.md', 'LICENSE', 'bin', 'host'],
+    engines: { 'slicc-kernel': WASI_KERNEL },
+    slicc: { abi: 'wasi', commands: { slicc: { wasm: 'bin/slicc.wasm', imports: 'host/slicc-host.mjs' } } },
+  });
+  return WASI_NAME;
+}
+
 rmSync(values.out, { recursive: true, force: true });
+if (values['wasi-only']) {
+  stageWasi();
+  process.stdout.write(`staged ${WASI_NAME}@${version} in ${values.out}\n`);
+  process.exit(0);
+}
 const platformName = (t) => `${SCOPE}/slicc-${t.goos}-${t.goarch}`;
 const platforms = values['launcher-only'] ? selected.map(platformName) : selected.map(stagePlatform);
 stageLauncher(platforms, await companionDeps());
+const wasi = values.wasi ? `, ${stageWasi()}` : '';
 const staged = values['launcher-only'] ? 'no platform packages' : `${platforms.length} platform packages`;
-process.stdout.write(`staged ${values.name}@${version} (platform packages at ${depsVersion}) and ${staged} in ${values.out}\n`);
+process.stdout.write(`staged ${values.name}@${version} (platform packages at ${depsVersion}) and ${staged}${wasi} in ${values.out}\n`);

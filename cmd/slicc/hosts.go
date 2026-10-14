@@ -1,3 +1,5 @@
+//go:build !wasip1
+
 package main
 
 import "github.com/ai-ecoverse/slicc-cli/internal/policy"

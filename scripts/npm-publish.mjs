@@ -19,6 +19,7 @@ const tag = values.tag;
 
 const guarded = {
   sliccy: { tag: 'next', version: /^7\.0\.0-next\./, gate: 'SLICCY_NEXT_PUBLISH' },
+  '@ai-ecoverse/wasi-slicc': { gate: 'WASI_SLICC_PUBLISH' },
 };
 const defaultGate = 'SLICC_NPM_PUBLISH';
 const companions = new Set(['@ai-ecoverse/slicc-jerk']);
@@ -63,7 +64,7 @@ async function onRegistry(base, name, version, timeoutMs) {
 
 async function requireDependencies(pkg) {
   const deps = Object.entries(pkg.optionalDependencies || {}).filter(([name]) => !companions.has(name));
-  if (!guarded[pkg.name] || !deps.length) return;
+  if (!guarded[pkg.name]?.tag || !deps.length) return;
   const base = registry();
   const waitMs = Number(process.env.SLICC_REGISTRY_WAIT_SECONDS ?? 900) * 1000;
   const deadline = Date.now() + waitMs;
@@ -83,13 +84,13 @@ async function requireDependencies(pkg) {
 
 function check(pkg) {
   const rule = guarded[pkg.name];
-  if (!rule) return;
+  if (!rule?.tag) return;
   if (tag !== rule.tag) fail(`refusing to publish ${pkg.name} with the tag ${tag}; it only goes to ${rule.tag}`);
   if (!rule.version.test(pkg.version)) fail(`refusing to publish ${pkg.name}@${pkg.version}; its version must match ${rule.version}`);
 }
 
 function npmTag(pkg) {
-  if (dryRun && !guarded[pkg.name] && tag === 'latest' && pkg.version.includes('-')) return 'dry-run';
+  if (dryRun && !guarded[pkg.name]?.tag && tag === 'latest' && pkg.version.includes('-')) return 'dry-run';
   return tag;
 }
 

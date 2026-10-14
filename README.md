@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift (see [Coming from slicc-node](#coming-from-slicc-node)).
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
 
 ## Commands (planned)
 
@@ -15,6 +15,7 @@
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)) |
 | `slicc <join-url> prompt <text>`, `watch`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-and-abort)) |
+| `slicc <join-url> prompt`, `watch`, `abort` inside seven | the same commands from seven's kernel, as `@ai-ecoverse/wasi-slicc` (works now; see [Inside seven](#inside-seven)) |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
 | `slicc update [--check]` | replace this binary with the latest release (works now; see [Updates](#updates)) |
 | `slicc install jerk` | install slicc-jerk into slicc's data folder (works now; see [Companion tools](#companion-tools)) |
@@ -34,7 +35,7 @@ curl -fsSL https://github.com/ai-ecoverse/slicc-cli/releases/latest/download/ins
 The alternatives:
 
 - **npm:** `npm install -g @ai-ecoverse/slicc`, or `npx @ai-ecoverse/slicc`. The package is a small Node launcher; npm picks one of the platform packages `@ai-ecoverse/slicc-<os>-<arch>` (`darwin`, `linux`, `windows` × `amd64`, `arm64`) through `optionalDependencies` and their `os` and `cpu` fields. The launcher runs that binary with the same arguments, stdio and environment plus `SLICC_LAUNCHER=npm`, forwards `SIGTERM`, `SIGHUP`, `SIGQUIT` and `SIGUSR2` to it, and `SIGINT` too when stdin is not a terminal (a terminal's Ctrl-C already reaches the binary; on Windows the console delivers Ctrl-C and Ctrl-Break to both). It exits with the binary's exit code, or dies of the same signal. An install with `--omit=optional` has no binary, and the launcher says so. slicc-jerk comes the same way; fnox doesn't (see [Companion tools](#companion-tools)).
-- **GitHub releases:** every release of `ai-ecoverse/slicc-cli` carries `slicc-<os>-<arch>` (`.exe` on Windows) for all six targets, plus `install.sh` and `SHA256SUMS` (which lists `install.sh` too). See [Verifying a download](#verifying-a-download).
+- **GitHub releases:** every release of `ai-ecoverse/slicc-cli` carries `slicc-<os>-<arch>` (`.exe` on Windows) for all six targets, `slicc-wasip1-wasm.wasm` for seven's kernel (see [Inside seven](#inside-seven)), plus `install.sh` and `SHA256SUMS` (which lists `install.sh` and the `.wasm` too). See [Verifying a download](#verifying-a-download).
 - **Go:** `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest`. See [Install with Go](#install-with-go).
 
 ### Install with curl
@@ -298,6 +299,7 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 | `SLICC_DISCOVERY` | test-only: limits browser discovery, see [Development](#development) |
 | `SLICC_OPEN_COMMAND` | test-only: `slicc open` runs this program with the pairing URL as its only argument instead of opening the default browser; the integration tests always set it |
 | `SLICC_LOOPBACK_PORTS` | test-only: `<first>-<last>`, the port range of the [loopback listener](#linking-seven-in-your-everyday-browser) instead of 17117-17126 |
+| `SLICC_LINK_URL` | inside seven only: the link facade's address, `tcp://127.0.0.1:<port>` (see [Inside seven](#inside-seven)) |
 | `SLICC_USER_DATA_DIR`, `XDG_STATE_HOME` | read, as SLICC six reads them, only to find six's Chrome profile (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)) |
 
 ## The default: `slicc`
@@ -1158,6 +1160,40 @@ Summaries are one line of at most 200 characters. Escape sequences and control c
 - **Limits:** `summary` is at most 200 characters. Credentials and tool output beyond the summary are never sent.
 - **Unknown events:** the node ignores events and fields it doesn't know.
 
+## Inside seven
+
+`slicc` also runs inside seven's kernel, so that one seven's agent or user can prompt, watch and abort another seven's agent. That build is `slicc.wasm`, slicc-cli's client commands compiled with `GOOS=wasip1 GOARCH=wasm` and `CGO_ENABLED=0`, and it ships as the npm package `@ai-ecoverse/wasi-slicc`, at slicc-cli's own version. seven's page holds the WebRTC link; slicc only reaches the page's link facade.
+
+```
+slicc <join-url> prompt [--steer | --reject] [--thinking] [--json] [--plain] <text>|@file|-
+slicc <join-url> watch [--thinking] [--json] [--plain]
+slicc <join-url> abort
+slicc --version
+slicc --help
+```
+
+- **Commands:** `prompt`, `watch` and `abort` with a join URL behave as in [Remote control](#remote-control-slicc-prompt-watch-and-abort): the same flags, output, styling, `--json` events, resuming and exit codes, from the same code. The differences:
+  - **Ctrl-C** ends slicc with 130 (the kernel's default for `SIGINT`), `watch` included, and a running prompt goes on in the other seven. `--abort-on-interrupt` isn't offered.
+  - **Exit 3** covers the facade's own refusals too. When the facade gives a message (`unlock the vault to continue`, or the other seven's refusal), slicc prints it instead of the Linked devices hint.
+  - **A terminal** is a standard stream that is a character device. Styling then follows `TERM`, `NO_COLOR` and `--plain` as usual.
+- **Everything else** exits 2 with `slicc: <command> isn't available inside seven`: `follow`, `attach`, `open`, `browsers`, the default flow, `update`, `install`, and `prompt`, `watch` or `abort` without a join URL. `--help` lists only what works there.
+- **What the build leaves out** (build constraints): pion and the link, CDP, SSH, mounts, the kernel listener, the policy, browser discovery, telemetry and updates.
+
+**The link facade.** slicc reads its address from `SLICC_LINK_URL` only, as `tcp://127.0.0.1:<port>` on the kernel's loopback (any `127.x` address, or `localhost`). Without it, or with another shape, slicc exits 1. Each `agent` stream (see [`agent`](#agent-page-cap-agent-node--page)) is one connection, carrying records of a `u8` type, a `u32` big-endian length and the payload, both ways:
+- **`1`, control:** JSON, at most 64 KiB.
+  - slicc's first record is `{ "v": 1, "join": "<join-url>", "open": { "kind": "agent", "op": … } }`, where `open` is the stream's OPEN, `length` for long prompts included. The join URL goes only there, never in an address, a log or an error.
+  - The page answers `{ "opened": { … } }` (the OPENED) or `{ "reset": "ERRNO: message" }`. A `reset` may also come later, as the stream's RESET.
+  - Without an answer within 1 minute, slicc gives up: `seven's link facade didn't answer within 1m0s`, exit 1 (`watch` reconnects).
+- **`2`, data:** the stream's DATA: a long prompt's bytes up, and NDJSON events down. slicc sends records of at most 64 KiB, and takes records of up to 16 MiB; record boundaries carry no meaning.
+- **`3`, end:** that side's END. slicc closes the connection after both ends or a reset.
+- **Errors:** an unknown type, a control record over 64 KiB, any record over 16 MiB, a control record that isn't JSON, or a later control record that isn't a `reset` makes slicc send `{ "reset": "EPROTO" }` and fail the stream. `ENOTCONN` (the tray can't be reached) fails `prompt` and `abort` with exit 1; `watch` says `lost the link to seven; reconnecting` and retries with its usual backoff, as it does when a connection drops.
+
+**The host module.** Go on `wasip1` can't open sockets, so the package's `host/slicc-host.mjs` gives `slicc.wasm` the `slicc_host` imports, on the kernel's loopback sockets (the calls the JS program API's `net.connect` uses): `probe`, `connect(host, port)` (loopback only, non-blocking), `connected(fd, timeout)`, `read(fd, buffer, timeout)`, `write(fd, buffer, timeout)` (non-blocking) and `close(fd)`. Connects, reads and writes wait at most 100 ms at a time, so signals, timeouts and a reset that arrives while a long prompt uploads get through. Without the module, slicc exits 1 with `this runtime has no slicc_host module`.
+
+**The package.** `@ai-ecoverse/wasi-slicc` holds `bin/slicc.wasm`, `host/slicc-host.mjs`, this section as its README, and the LICENSE. Its `package.json` has `"slicc": { "abi": "wasi", "commands": { "slicc": { "wasm": "bin/slicc.wasm", "imports": "host/slicc-host.mjs" } } }` and `engines.slicc-kernel`. The release attaches `slicc.wasm` as `slicc-wasip1-wasm.wasm`, in `SHA256SUMS` and its attestation (see [Releases](#releases)).
+
+**Tests.** `test/integration/wasi_test.go` builds `slicc.wasm`, stages the package with `npm-stage.mjs --wasi-only`, and runs it in `@ai-ecoverse/slicc-kernel`'s Node kernel (an exact-pinned devDependency, so `npm ci` first) against a fake facade, a kernel JS program in `testdata/wasi/fakefacade/`. `cmd/slicc` builds for both: a file there that needs a native-only package carries `//go:build !wasip1`, and `wasi_test.go` fails when the `wasip1` build breaks or links one of the left-out packages.
+
 ## Tray hub signaling (remote setup)
 
 A node on another machine sets up its link through the tray hub, the `slicc-tray-hub` worker on `www.sliccy.ai`. seven is the tray leader and the node is a follower. The wire contract is six's `packages/shared-ts/src/tray-signaling.ts`. The node only signals over it and never speaks six's tray-sync messages.
@@ -1178,7 +1214,7 @@ A node on another machine sets up its link through the tray hub, the `slicc-tray
 
 ## Development
 
-Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`. `npm run lint` runs the slicc lint tools, `gofmt`, `go mod tidy -diff`, `go vet` and golangci-lint. `npm test` runs the integration tests in `test/integration/`, which build the binary and drive it. Unit tests stay next to the code and out of git (`npm run test:unit`). `go build` and `npm run build` link no version, so these binaries report `dev`. `npm run dist` cross-builds all six targets into `artifacts/release/` with `SHA256SUMS`, unsigned. `npm run npm:stage` then stages the npm packages into `dist/npm/`, and `npm run npm:check` packs them with `npm publish --dry-run`.
+Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`. `npm run lint` runs the slicc lint tools, `gofmt`, `go mod tidy -diff`, `go vet` and golangci-lint. `npm test` runs the integration tests in `test/integration/`, which build the binary and drive it; run `npm ci` first, since the [Inside seven](#inside-seven) tests need the pinned `@ai-ecoverse/slicc-kernel`. Unit tests stay next to the code and out of git (`npm run test:unit`). `go build` and `npm run build` link no version, so these binaries report `dev`. `npm run dist` cross-builds all six targets into `artifacts/release/` with `SHA256SUMS`, unsigned. `npm run npm:stage` then stages the npm packages into `dist/npm/`, and `npm run npm:check` packs them with `npm publish --dry-run`.
 
 **Test names: `--hosts <file>`** (test-only, left out of `--help`). `slicc attach`, `slicc open`, `slicc pair` and `slicc <join-url> follow` take a hosts file, so tests get deterministic names without public DNS. Each line is `<ip> <name> [<name>…]`, and `#` starts a comment. Names match case-insensitively, with or without a trailing dot, and a name on several lines gets every address, in file order. Wherever the node resolves a name (`resolve`, `tcp` by name, `http`, and the policy's [browser endpoints](#network-policy)), a name in the file gets the file's addresses of the requested family, possibly none, and never the system resolver's. Other names go to the system resolver. The policy applies afterwards as usual: `resolve` drops refused addresses, and a dial to a refused address is `EACCES`. `tcp` and `http` try the addresses in file order. A file that can't be read or parsed exits 2. A name mapped to a loopback address only helps the node's own dials, `http` and `tcp` by name: a seven kernel that gets a loopback address from `resolve` dials its own loopback, because loopback never goes out through an exit. For end-to-end exit tests, map test names to a non-loopback address of the machine.
 
@@ -1215,9 +1251,9 @@ The real-Chrome tests in `test/integration/` launch headless, so they run the ex
 
 semantic-release cuts releases from `main` in `.github/workflows/release.yml`, on a macOS runner:
 1. `scripts/release-plan.mjs` asks semantic-release (dry run) for the next version, and stops when there is none.
-2. `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath` and `-X main.version=<version>`. It signs and notarizes the darwin binaries and writes `SHA256SUMS`. The windows and linux binaries are not signed. Without the Apple signing secrets (forks, pull requests) it warns and leaves the darwin binaries unsigned.
-3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`. It also stages the same launcher as `sliccy` (with two bins, `sliccy` and `slicc`, and a short preview README) into `dist/npm-next/`, as version `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages. `npx sliccy@next` runs the bin named after the package, `sliccy`, and both bins run the same launcher. `--bin <name>` (repeatable) overrides the bins of any staged launcher.
-4. `actions/attest-build-provenance` attests every binary.
+2. `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath` and `-X main.version=<version>`, and `slicc-wasip1-wasm.wasm` (`GOOS=wasip1 GOARCH=wasm`) the same way. It signs and notarizes the darwin binaries and writes `SHA256SUMS`. The windows and linux binaries are not signed. Without the Apple signing secrets (forks, pull requests) it warns and leaves the darwin binaries unsigned.
+3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`. It also stages the same launcher as `sliccy` (with two bins, `sliccy` and `slicc`, and a short preview README) into `dist/npm-next/`, as version `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages. `npx sliccy@next` runs the bin named after the package, `sliccy`, and both bins run the same launcher. `--bin <name>` (repeatable) overrides the bins of any staged launcher. `--wasi` also stages `@ai-ecoverse/wasi-slicc` into `dist/npm/wasi-slicc/` from `slicc-wasip1-wasm.wasm` and `npm/wasi-slicc/host/slicc-host.mjs`, with README.md's [Inside seven](#inside-seven) section as its README; `--wasi-only` stages only that package.
+4. `actions/attest-build-provenance` attests every binary, the `.wasm` included, through `SHA256SUMS`.
 5. semantic-release checks the version again (`dist/VERSION`, and `scripts/go-major.mjs`, see below), tags, creates the GitHub release with every binary and `SHA256SUMS`, then `scripts/npm-publish.mjs` publishes the platform packages and the launcher through npm trusted publishing (OIDC, with provenance), and then `sliccy` with `--tag next`. Versions already on npm are skipped. Before publishing `sliccy`, the script checks that every exact-pinned `optionalDependencies` version is on the registry, waits up to `SLICC_REGISTRY_WAIT_SECONDS` (default 900) for freshly published ones to appear, and fails otherwise, so a `sliccy` version never points at missing platform packages.
 6. `scripts/go-warm.sh <version>`, once the tag is on `origin`, asks `proxy.golang.org` for the module at `v<version>` (`go list -m` with a scratch module cache) and asks `pkg.go.dev` to fetch it. The proxy fetch is retried briefly; the `pkg.go.dev` fetch is one attempt of at most 10 s, since the proxy fetch already gets the version indexed. Both only warn, and the step can't fail the release.
 
@@ -1233,6 +1269,6 @@ The workflow reads these repository secrets. Each group is optional: without the
 - macOS signing: `APPLE_CERTIFICATE_BASE64`, `APPLE_DEVELOPER_CERTIFICATE_PASSWORD`;
 - notarization: `APPLE_API_KEY_ID`, `APPLE_API_KEY_ISSUER_ID`, `APPLE_API_KEY_P8_BASE64`.
 
-npm needs no token. `npm run trust` (fledgling) configures trusted publishing for the seven packages listed under `fledgling.include` in `package.json`. Publishing to npm is off until the repository variable `SLICC_NPM_PUBLISH` is `true`, and `sliccy` stays off until `SLICCY_NEXT_PUBLISH` is `true`; until then a release skips them with a notice.
+npm needs no token. `npm run trust` (fledgling) configures trusted publishing for the seven packages listed under `fledgling.include` in `package.json`. Publishing to npm is off until the repository variable `SLICC_NPM_PUBLISH` is `true`, `sliccy` stays off until `SLICCY_NEXT_PUBLISH` is `true`, and `@ai-ecoverse/wasi-slicc` until `WASI_SLICC_PUBLISH` is `true` (the facade's kernel side, slicc-kernel#526, comes first); until then a release skips them with a notice. `@ai-ecoverse/wasi-slicc` isn't under `fledgling.include` yet, so its trusted publishing needs setting up before that variable is turned on.
 
 `sliccy` only ever goes to the `next` dist-tag, so `npx sliccy` keeps running SLICC six and `npx sliccy@next` runs this binary. `npm-publish.mjs` refuses, even in a dry run, to publish `sliccy` with any tag but `next` or with a version that doesn't match `^7\.0\.0-next\.`. Nothing here changes `sliccy`'s other dist-tags.
