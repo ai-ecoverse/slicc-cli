@@ -130,7 +130,10 @@ func TestPromptOverTheTrayNextToFollow(t *testing.T) {
 		t.Fatalf("prompts %q", st.Prompts)
 	}
 	deadline := time.Now().Add(15 * time.Second)
-	for len(upLinks(p.links())) != 1 && time.Now().Before(deadline) {
+	for up := upLinks(p.links()); len(up) != 1 || !up[0].Current; up = upLinks(p.links()) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the page did not fall back to follow's link after the prompt: links %+v", p.links())
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	var res struct {

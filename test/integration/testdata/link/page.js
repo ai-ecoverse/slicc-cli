@@ -53,15 +53,20 @@ function live() {
   return [...state.entries.values()].filter((e) => !e.link?.error);
 }
 
+function successor(entry) {
+  const others = live().filter((e) => e !== entry);
+  return others.filter((e) => e.link?.helloReceived).pop() ?? others.pop() ?? null;
+}
+
 function remove(entry) {
   if (!entry) return;
   entry.link?.close('replaced');
   if (state.entries.get(entry.key) === entry) state.entries.delete(entry.key);
-  if (state.current === entry) select(live().pop() ?? null);
+  if (state.current === entry) select(successor(entry));
 }
 
 function closed(entry) {
-  const fallback = live().filter((e) => e !== entry).pop();
+  const fallback = successor(entry);
   if (state.current === entry && !fallback) return;
   if (state.entries.get(entry.key) === entry) state.entries.delete(entry.key);
   if (state.current === entry) select(fallback);
