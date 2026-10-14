@@ -190,14 +190,15 @@ func (p *Peers) RemoveAll() ([]Peer, error) {
 	return gone, err
 }
 
-func (p *Peers) Forget(fp string) (Peer, bool, error) {
+func (p *Peers) Forget(fp, node string) (Peer, bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var e Peer
 	var ok bool
 	err := p.update(func(f *peersFile) (bool, error) {
 		e, ok = f.Peers[fp]
-		if !ok {
+		if !ok || e.Node != node {
+			ok = false
 			return false, nil
 		}
 		e.Fingerprint = fp
