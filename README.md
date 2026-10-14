@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift (see [Coming from slicc-node](#coming-from-slicc-node)).
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is drafted alongside seven's link exit and moves into this README once both sides pass a shared test.
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
 
 ## Commands (planned)
 
@@ -1211,6 +1211,654 @@ A node on another machine sets up its link through the tray hub, the `slicc-tray
 **Requests.** Each HTTP attempt has a 30 s timeout. A logical request gets 8 s and up to four attempts. Network errors, HTTP 5xx and non-JSON bodies are retried with a backoff of 1 s, 2 s, then 4 s. JSON refusals below 500 are not retried.
 
 **Join URL state.** The node remembers the current join URL for each join URL it was given, so it reconnects after a network change or restart without walking the supersede chain again. The state lives in `<config>/slicc/tray-join.json`, where `<config>` is `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux, and `%AppData%` on Windows. The directory is mode `0700` and the file `0600`, written atomically. Entries are keyed by the SHA-256 of the given join URL, and at most 16 are kept.
+
+## Link protocol
+
+The wire protocol between seven (the page) and `slicc` (the node), v1. seven's side is the `link` exit in [slicc-bios](https://github.com/ai-ecoverse/slicc-bios), and both sides must stay in step with this section, the same way [slicc-node's README](https://github.com/ai-ecoverse/slicc-node#protocol) holds the local-proxy protocol.
+
+**Decisions:**
+- **WebRTC is the only link layer, local and remote.** CDP only carries the setup messages for a local link ([§1.1](#11-local-setup-over-cdp)). For a remote link, the tray hub carries them, using six's normal join and follow URL ([§1.2](#12-remote-setup-over-the-tray-hub)).
+- **No Tailscale in the CLI.** It would need an account, so it feels less owned. The rendezvous and TURN are sliccy.ai's own.
+- **Go** for the CLI, in `ai-ecoverse/slicc-cli`. [`go-optel`](https://github.com/ai-ecoverse/go-optel) gets its own repo.
+- **No six compatibility.** The CLI doesn't speak six's tray-sync messages inside the data channel. It reuses only the tray hub's signaling.
+- **Compute goes over SSH** on the link ([§5.5](#55-ssh-cap-ssh-page--node)), not a hand-rolled exec protocol. The kernel has an `ssh` client.
+
+### 1. Peers and setup
+
+- **page**: seven. It owns the `RTCPeerConnection` and always sends the **offer**.
+- **node**: the `slicc` binary (pion). It always sends the **answer**.
+- A **link** is one peer connection. A page can hold several links, one exit each.
+
+#### 1.1 Local setup over CDP
+
+Used when the node already holds a CDP connection to the browser that runs seven. No key in a URL, and nothing listening on loopback.
+
+1. The node finds the seven target. That's a page target whose main-frame origin is allowed, using the same origin rule as slicc-node's gate: `https://<label>.sliccy.ai` other than `www`, plus any `--origin`.
+2. It attaches (`flatten: true`), calls `Runtime.enable` and `Runtime.addBinding { name: "sliccLinkSend" }`.
+3. It sends `{ "t": "hello", "v": 1, "nonce": "<base64url 16 bytes>", "node": "<random per-process id>" }` (see [§5.11](#511-agent-page-cap-agent-node--page-remote-control) for how the page uses `node`) by calling `Runtime.evaluate` on `globalThis.sliccLinkReceive?.(<json>)`.
+4. The page answers through the binding, `sliccLinkSend(<json>)`, with:
+   - `{ "t": "offer", "nonce", "sdp" }`
+   - `{ "t": "candidate", "nonce", "candidate" }` (trickled; `null` at the end)
+5. The node sends the following through `sliccLinkReceive`:
+   - `{ "t": "answer", "nonce", "sdp" }`
+   - its own `candidate` messages
+6. Either side can send `{ "t": "bye", "nonce", "reason" }`.
+
+Rules:
+- **The node checks where a binding call came from.** It accepts one only when `Runtime.bindingCalled.executionContextId` is the main frame's default context and that context's origin is allowed (from `Runtime.executionContextCreated`). It ignores calls from iframes, workers, other origins, or with a stale `nonce`.
+- **Hello delivery** is retried until both `globalThis.sliccLinkReceive` and the `sliccLinkSend` binding exist in the main frame's context. The node calls `addBinding` again when the binding is missing (seen on macOS around the about:blank → page swap). The page should also check that `sliccLinkSend` exists before calling it.
+- **On exit** the node sends `bye`.
+- **Navigating or reloading seven drops the link.** The node runs the setup again when a new allowed context appears.
+- **ICE:** host candidates only. There's no STUN or TURN, since both peers are on the same machine.
+  - Chrome hides host candidates behind mDNS (`<uuid>.local`), so the node resolves them (pion `MulticastDNSMode` query-only).
+- **Candidates:** a `candidate` message carries `RTCIceCandidateInit` JSON (`candidate.toJSON()`: `candidate`, `sdpMid`, `sdpMLineIndex`, `usernameFragment`), and `null` once gathering ends.
+- **Local Network Access:** Chrome 154 stable doesn't gate WebRTC with it yet. The check exists behind `--enable-features=LocalNetworkAccessChecksWebRTC` and will ship.
+  - So before setup, the node grants the permission for the seven origin over CDP, best effort: `Browser.setPermission` with `local-network-access`, `local-network` and `loopback-network` set to `granted`. Errors are ignored on Chromes without them.
+  - `Browser.grantPermissions` would replace the origin's other grants, so it isn't used.
+  - Measured on Chrome 154 and macOS: the link comes up in 0.3–0.9 s. Loopback throughput is about 40–45 MB/s Chrome→pion and about 70–80 MB/s pion↔pion; the CPU limits it, not the window.
+- **No data fallback.** CDP carries only the setup, never link data.
+- **HELLO timeout:** each side closes the link if the peer's HELLO hasn't arrived 10 s after the control channel opens.
+- **`--signal stdio`** (tests): the same messages as NDJSON on stdin and stdout. Each `offer` starts a new link and replaces the current one. A harness may write `{"t":"hello"}` to get a fresh `hello` and nonce, for example after it reloaded the page.
+
+#### 1.2 Remote setup over the tray hub
+
+The scenario: `slicc` on a laptop launches Chrome there. seven runs on a desktop, in a browser no CDP client controls. After the CLI follows the desktop's tray, seven drives the laptop's Chrome and uses the laptop's network.
+
+- **Rendezvous: the tray hub.** seven is a **tray leader** on the existing tray hub (six's `slicc-tray-hub` worker), and every linked CLI is a **follower**.
+  - The wire contract is [`packages/shared-ts/src/tray-signaling.ts`](https://github.com/ai-ecoverse/slicc/blob/main/packages/shared-ts/src/tray-signaling.ts). The leader creates the tray with `POST /tray` (joinToken + controllerToken) and handles the bootstrap over its control WebSocket.
+  - Followers attach at `/join/<token>` and run the bootstrap poll, answer and candidate exchange.
+  - TURN credentials come from the hub. Media is peer-to-peer when ICE allows it, else through TURN. The hub sees only SDP and candidates.
+- **Pairing:** seven's Network panel → *Link a device* shows the normal join URL and the command, `npx sliccy <join-url> follow`, in six's grammar. One join URL serves any number of devices, as in six.
+- **The join URL is the secret**, long-lived like six's. Rotating the tray replaces it.
+  - **Supersede:** the deployed hub answers with HTTP `308`, a `Location` header, `Link: <…>; rel="successor-version"` and `result.action: "redirect"`. The CLI never lets its HTTP client follow it. It reads `Link`, then `Location`, then the body, accepts the legacy `409 TRAY_SUPERSEDED` shape too, and follows at most five hops per dial.
+  - **State:** the CLI keeps the current URL in `<config>/slicc/tray-join.json` (mode `0600`). Entries are keyed by the SHA-256 of the URL the user gave, so that URL itself isn't stored. That way `follow` reconnects after a network change or restart.
+- **Runtime tag:** link followers attach with `runtime: "slicc-link/1"`, so the leader can tell them from six's followers (`slicc-cli`, iOS).
+- **Identity is the DTLS certificate.** Each CLI install keeps one persistent DTLS certificate per hub origin in `<config>/slicc/` (mode `0600`). It survives restarts and updates.
+  - The page identifies a device by the certificate's SHA-256 fingerprint from the follower's answer SDP (lower-case hex, no colons). The Network panel, the default-exit choice (`link:<fp>`) and the unlink list are all keyed on it.
+  - A reconnect under a new `controllerId` replaces the old link and keeps its address.
+  - An answer without a SHA-256 fingerprint gets `bootstrap.failed` `NO_FINGERPRINT`.
+  - A new user account, machine or config dir is a new device.
+- **`controllerId` is only a per-dial routing id.** The CLI mints a fresh one for every dial, as six does. A stable one would make the hub hand back a stale `connected` bootstrap on a quick reconnect (`BootstrapCoordinator.ensure()`).
+- **Unlinked devices:** when an answer carries a fingerprint the leader has unlinked, the leader fails that bootstrap with `bootstrap.failed { code: "UNLINKED", retryable: false }` ([§5.7](#57-unlink-cap-join-or-unlink-loopback-on-13-links-page--node)), then closes the peer connection.
+  - The hub allows a failure even after `connected`, so the follower keeps polling the bootstrap after posting its answer, at least until HELLO arrives. Over the tray the page drops its `null` end-of-candidates, which pion doesn't need.
+
+#### 1.3 Local setup without CDP: loopback signalling
+
+The scenario: seven is open in the user's **everyday browser** (any vendor, no CDP, no remote debugging), on the same machine as `slicc`, as slicc-node allowed. Only the signalling and trust setup are new. Once the peer connection is up, the link is [§2](#2-channels)–[§5](#5-stream-kinds) unchanged.
+
+**Pairing and trust**
+- **What anchors trust:** two pinned certificates.
+  - **The node's** persistent DTLS certificate. It gets a loopback identity of its own in `<config>/slicc/` (mode `0600`), as for the tray hub ([§1.2](#12-remote-setup-over-the-tray-hub)).
+  - **The page's** persistent `RTCCertificate`: seven generates it once per origin with `RTCPeerConnection.generateCertificate`, keeps it in IndexedDB, and uses it for every loopback link.
+  - Each side pins the other's SHA-256 fingerprint at pairing. After that, the node answers only offers whose SDP fingerprint it has paired, and the page accepts only an answer whose fingerprint it pinned. This replaces [§1.1](#11-local-setup-over-cdp)'s CDP binding and per-context nonce.
+- **Pairing URL:** `slicc open` (or `slicc --default-browser`) opens `https://seven.sliccy.ai/#slicc-pair=<port>.<token>.<node-fp>` in the default browser. `slicc pair` only prints it, for a seven that's already open (the user pastes it into seven's address bar, or seven's *Link this computer* field).
+  - **The token:** 128 random bits, base64url, one-time, and valid for 10 minutes.
+  - **The URL is the secret**, as slicc-node's fragment was. It carries the node's fingerprint, so a process squatting the port can't pass as the node.
+  - **On the page:** seven reads and strips the fragment at once (`history.replaceState`), then shows a tray confirmation: "Link **<hostname>** (`ab12…ef`)? This computer's network, folders and kernel services become available to seven." [Link] [Cancel]. slicc prints the same hostname and short fingerprint. Only [Link] (a user gesture) starts the first loopback request, which also satisfies Chrome's Local Network Access prompt (below).
+- **Pairing exchange** (one request): `POST http://127.0.0.1:<port>/slicc/v1/pair` with `{ "token", "offer": "<sdp>" }`. The offer is non-trickled: the page waits for ICE gathering to complete. The node checks the token, burns it, and pins the offer's fingerprint together with the request's `Origin`. It answers `{ "answer": "<sdp>", "node": "<per-process id>", "name": "<hostname>" }`, and the page checks that the answer's fingerprint equals `<node-fp>` from the URL.
+- **Reconnect** (no token): `POST /slicc/v1/signal` with `{ "offer" }`. The node answers only for a paired page fingerprint whose pinned origin equals the request's `Origin`; otherwise it returns `403`. The page checks the answer against its pin. There's no other endpoint.
+- **Unpairing:** seven's Network panel *Unlink* forgets the pin and, if it's linked, first opens an **`unlink` stream** ([§5.7](#57-unlink-cap-join-or-unlink-loopback-on-13-links-page--node)) on the live link. A loopback node advertises cap `unlink-loopback` for this. The node answers OPENED `{}` then END, deletes that page's pin, and closes that link; unlike [§5.7](#57-unlink-cap-join-or-unlink-loopback-on-13-links-page--node) it keeps running and keeps its certificate. A page that unlinks while not linked just forgets its pin, and the node's stale pin is harmless (the page won't signal again) until `slicc unpair`. `slicc unpair [--all]` removes pins on the node. Pins live in `<config>/slicc/loopback-peers.json` (mode `0600`), keyed by page fingerprint, with origin and first-seen time.
+
+**The listener**
+- **Address:** `127.0.0.1` only (and `[::1]`), never `0.0.0.0`. Port **17117** (slicc-node's), or the first free port in 17117–17126. The pairing URL carries the actual port; on reconnect the page tries the remembered port, then the range.
+- **Gate, on every request:**
+  - `Host` must be `127.0.0.1:<port>`, `[::1]:<port>` or `localhost:<port>` (against DNS rebinding);
+  - the method and the two paths are exact;
+  - `Origin` must pass exactly the same rule as CDP setup ([§1.1](#11-local-setup-over-cdp)): slicc-cli's `IsSevenOrigin` with slicc-browsers' catalog `ExcludedLabels` (so `www`, `vault`, `mcpcat`, `get` and every other service label never pair or signal), plus `--origin`;
+  - the body is JSON, at most 64 KiB;
+  - **preflight:** `OPTIONS` answers only for allowed origins, with `Access-Control-Allow-Private-Network: true`, `Access-Control-Allow-Origin: <that origin>` (never `*`), no credentials, and `Vary: Origin`.
+  - Everything else gets `403` with no body. The listener isn't a proxy and serves nothing else. `Origin` can be forged by non-browser processes, but the gate only filters browsers; trust is the token or the pinned fingerprint.
+- **Rate limit:** at most 10 pairing attempts a minute; a wrong token burns nothing and counts.
+
+**Local Network Access**
+- Chrome's LNA prompt appears on seven's first request to `127.0.0.1`. seven only makes loopback requests after a pairing [Link] click, or on load when it has a pin, so users who never pair are never prompted.
+- If the permission is denied, the page says how to allow it in site settings.
+- **Mixed content:** `http://127.0.0.1` is potentially trustworthy, so Chrome, Edge, Firefox and Safari allow it from https pages. bios CI tests Chrome and Firefox; Safari is checked by hand before release. Where a browser blocks it, the page offers the tray path ([§1.2](#12-remote-setup-over-the-tray-hub)).
+
+**The link in this mode**
+- **ICE:** host candidates on loopback only, as in [§1.1](#11-local-setup-over-cdp).
+- **Caps:** `net`, `http`, `ws`, `credentialed`, `fs` (with `--mount`), `kernel-in` services ([§5.9](#59-kernel-listener-on-the-node-local-only), listener on `--kernel-port`), `ssh` with `--runner`, `jerk`/`jerk-seal`, and `agent`. **No `cdp`:** the node controls no browser.
+- **Policy:** the local default ([§6.4](#64-local-default-slicc-the-bridge-to-the-browser-it-controls)). Its protected ports have no served browser here, so they become 9222–9229 plus every port in a `DevToolsActivePort` file the node finds read-only, plus the node's own listeners. A kernel program can't reach a debugging port the user enabled.
+- **PRE-1** ([§5.8](#58-cdp-cap-cdp-page--node)) protects seven's origin from seven's own browser control. In this mode there's none, so PRE-1 doesn't apply. The `http` cap is the node's own client and carries no browser cookies or storage, so fetching a `*.sliccy.ai` URL through it exposes nothing of the user's session.
+- **Restarts:** the node keeps its certificate and port, and the page keeps its certificate and pin. On link loss the page retries `/signal` with backoff (1 s up to 30 s, and on `online` or `visibilitychange`). A restarted `slicc` is reachable again with no new pairing. The `node` id changes, and the page keys the device on the fingerprint, so the name stays.
+- **Several sevens:** the node holds one link per paired page fingerprint, and each is an exit on its own.
+
+**Entry points** (automatic fallback):
+- **Plain `slicc`** with no SLICC profile and no CDP endpoint (none launched, none found, none given) falls back to this mode by itself: it opens the pairing URL in the default browser and links over loopback.
+  - The dashboard (and a plain-mode status line, plus a `--json` event `{"event":"mode","mode":"loopback","reason":"no-browser"}`, then `{"event":"pairing","url"}` for each pairing URL, and the same `linked` and `closed` events as other modes) says: "No SLICC browser or debugging endpoint found, so seven opens in your default browser for pairing. Use --profile or --cdp to choose."
+- **`--no-fallback`** keeps the pre-fallback behaviour, for scripts: launch an installed Chromium into a new SLICC profile when one exists, and exit with "no browser to control" only when nothing can host seven. Non-interactive runs (no TTY) still fall back, but print the pairing URL instead of opening a browser unless `--open` is given.
+- **`slicc open`, `slicc --default-browser` and `slicc pair`** stay as the explicit forms.
+- **A found or given profile or CDP endpoint always wins;** the fallback only triggers when both are absent.
+
+#### 1.4 A seven as follower: leader to leader
+
+One seven (A) follows another seven's (B) tray, so that a program in A's kernel, the in-kernel `slicc` ([§5.16](#516-the-link-facade-page-side-not-on-the-wire-the-in-kernel-slicc)), can prompt, watch and abort B's agent. A's page plays the node's part of [§1.2](#12-remote-setup-over-the-tray-hub) and of the link; B needs no change.
+
+- **Signalling:** A's page joins B's tray at `/join/<token>` as a follower, exactly as the CLI does ([§1.2](#12-remote-setup-over-the-tray-hub)): bootstrap poll, answer, candidates, TURN from the hub.
+  - **The runtime tag:** `slicc-link/1`.
+  - **The answer:** A's `RTCPeerConnection` answers B's offer.
+- **Identity:** one persistent `RTCCertificate` per (A's origin, hub origin), kept in IndexedDB and passed to every `RTCPeerConnection` A opens toward that hub.
+  - **How B sees A:** B identifies and gates A by its fingerprint, as any device.
+  - **On `unlink` from B ([§5.7](#57-unlink-cap-join-or-unlink-loopback-on-13-links-page--node)):** A deletes that certificate and its follower state for the hub.
+- **Follower state:** keyed by the SHA-256 of the join URL the program gave (as the CLI's `tray-join.json`). It follows hub supersedes ([§1.2](#12-remote-setup-over-the-tray-hub)). The URL itself is never stored in the clear and never logged.
+- **HELLO:** A sends `caps: []` (control-only, [§5.11](#511-agent-page-cap-agent-node--page-remote-control)), a per-link `node` id, and its name: the seven's own name, or its origin's label.
+- **Streams:** A opens only `agent` streams ([§5.11](#511-agent-page-cap-agent-node--page-remote-control)), and refuses every stream B opens with `RESET EACCES`.
+- **Lifetime:** one link per join URL, opened on demand, kept while a facade stream uses it, and closed 10 minutes after the last one ends.
+- **Only under kernel users `enforce`:** A's page follows trays and serves the facade only when its kernel runs users `enforce`. Under `off` or `report`, every process is effectively root.
+
+### 2. Channels
+
+- **Control channel:** label `slicc.link.v1`. The page creates it, ordered and reliable. Each side's **first message on it is HELLO** (text, JSON, [§4](#4-hello)). Every later message on any channel is a binary frame ([§3](#3-frames)). A text message after HELLO closes the link.
+- **Stream channels:** label `slicc.link.v1.stream`, ordered and reliable. A stream's opener may create a new channel for it. That channel then carries exactly that stream and is closed once the stream has ended in both directions or been reset.
+- **Shared streams:** an opener may instead put a stream on the control channel, for short streams like `resolve` or once it has 256 stream channels open. Chrome caps SCTP stream ids at 1023, so about 512 per side.
+- **A stream lives on the channel its OPEN arrived on.** Receivers must handle both layouts. Closing a stream channel resets any stream that hasn't ended.
+  - A second OPEN on a stream channel closes the link.
+  - Frames for a stream that arrive on any other channel are ignored.
+- **Message size:** at most 65 541 bytes (5-byte header plus 65 536). That's below what Chrome and pion advertise for `max-message-size`.
+- **Keep reading.** A receiver reads every channel all the time and buffers up to the stream's window ([§3.3](#33-flow-control)). It never applies backpressure by not reading. SCTP has one receive window per association, so one unread channel would stall every channel. The node raises pion's SCTP receive buffer to 4 MiB.
+
+### 3. Frames
+
+slicc-node's kernel-tunnel framing, unchanged on the wire:
+
+| byte 0 | bytes 1–4 | rest |
+|---|---|---|
+| type (`u8`) | stream id (`u32` BE) | payload |
+
+| type | name | payload |
+|---|---|---|
+| 1 | OPEN | UTF-8 JSON `{ "kind", … }` ([§5](#5-stream-kinds)) |
+| 2 | OPENED | UTF-8 JSON, `{}` when there is nothing to say |
+| 3 | DATA | 1 to 65 536 bytes |
+| 4 | END | empty: the sender half-closes (`SHUT_WR`) |
+| 5 | RESET | UTF-8 `ERRNO` or `ERRNO: message`, aborts both directions |
+| 6 | CREDIT | `u32` BE bytes consumed, at least 1 |
+
+#### 3.1 Stream ids
+Page-opened streams are odd and node-opened streams even, never 0, and never reused on a link.
+
+#### 3.2 Lifecycle
+- The receiver of OPEN answers OPENED or RESET. DATA and END flow only after OPENED, in both directions.
+- A stream is over after END in both directions, or a RESET from either side.
+- Frames for an unknown id are ignored, because they may cross a RESET.
+
+#### 3.3 Flow control
+- **Window:** at most 256 KiB of DATA per stream and direction that hasn't been credited.
+- **Credit:** the receiver credits bytes once it has handed them on (a socket write returned, `writer.write()` resolved).
+- **Stopping:** a sender that's out of window stops reading its source.
+
+#### 3.4 Violations
+- **Reset the stream with `EPROTO`:**
+  - DATA or END before OPENED, or after the peer's END;
+  - empty DATA;
+  - DATA past the window, CREDIT of 0, or CREDIT past what was sent;
+  - an OPEN whose payload isn't JSON with a `kind`.
+- **Close the link:** an unknown type, a short or malformed frame, a duplicate id, or an id with the wrong parity.
+
+### 4. HELLO
+
+```json
+{
+  "v": 1,
+  "role": "node",
+  "name": "slicc on laptop",
+  "host": "laptop",
+  "version": "1.4.0",
+  "mode": "local",
+  "caps": ["net", "http"],
+  "routes": { "prefixes": [], "exit": true },
+  "policy": { "allow": [], "deny": ["127.0.0.1/32:9222"], "summary": "every public address, this machine, and the local network" }
+}
+```
+
+- **`role`:** `page` or `node`.
+- **`name`:** for display. **`host`** (node only): the machine's short hostname, lower-cased, as a hint for the DNS label. The page makes it DNS-safe and unique per link (`laptop-2`) and serves it as `<host>.slicc.internal` on a synthetic address in `198.18.57.0/24`. `--name` overrides both.
+- **`mode`:** `local` (CDP setup) or `remote` (hub).
+- **`caps`:** what this side accepts OPENs for.
+  - node: `net` (`tcp` and `resolve`), `http`, `ssh`, `cdp`, `fs`, `join`, `jerk` and `jerk-seal` ([§5.14](#514-jerk-caps-jerk-and-jerk-seal-page--node-j1)).
+  - node, without a kind: `credentialed` ([§5.13](#513-credentialed-node-cap-http-streams-that-carry-a-value)), a promise about how the node handles `http` streams.
+  - page: `kernel-in` ([§5.4](#54-kernel-page-cap-kernel-in-node--page)).
+- **`routes`** (node only): the prefixes it offers as specific routes, plus `exit: true` when it's willing to be a default exit.
+- **`policy`:** for display only; the node enforces it ([§6](#6-policy-node)).
+- **Versions:** each side ignores fields it doesn't know. If `v` differs, the side with the lower `v` decides, or closes the link when it can't.
+- **Before HELLO:** neither side sends OPEN until it has received the peer's HELLO.
+- **Unsupported kinds:** OPEN for a kind the receiver didn't advertise gets RESET `EOPNOTSUPP`.
+
+### 5. Stream kinds
+
+#### 5.1 `tcp` (cap `net`), page → node
+- **OPEN:** `{ "kind": "tcp", "host": "example.com", "port": 443 }`. `host` is an IP literal or a name, and a name is resolved by the node with the system resolver.
+- **OPENED:** `{ "localAddr": "192.168.1.20:53122", "remoteAddr": "93.184.215.14:443" }` once `connect()` succeeded.
+- **RESET codes:**
+  - `ECONNREFUSED`, `ENETUNREACH`, `EHOSTUNREACH`, `ETIMEDOUT` (connect timeout 30 s), `ECONNRESET`;
+  - `EACCES` for a policy refusal;
+  - `ENOTFOUND` when a name doesn't resolve (the page maps it to whatever the kernel uplink wants).
+- **During the stream:** END maps to `closeWrite()` on both sides, and a socket error mid-stream is `RESET ECONNRESET`.
+
+#### 5.2 `resolve` (cap `net`), page → node
+- **OPEN:** `{ "kind": "resolve", "name": "example.com", "family": 0 }`, where `family` is `4`, `6` or `0` for both.
+- **OPENED:** `{ "addresses": ["93.184.215.14", "2606:2800:21f:cb07:6820:80da:af6b:8b2c"], "ttl": 30 }`, immediately followed by END from the node. The page then sends END too.
+- **Filtering:** addresses the node's policy would refuse are dropped before answering.
+- **Empty list:** `addresses: []` means "not mine", whether the name doesn't exist or every address was filtered, so the page can try another exit.
+- **TTL:** Go's resolver doesn't report TTLs, so v1 always sends `30`.
+- **Details:**
+  - IP literals come back as themselves when allowed, and `::ffff:a.b.c.d` as `a.b.c.d`.
+  - Results are deduplicated and filtered to the requested family.
+  - A lookup **timeout** is `RESET ETIMEDOUT`, so the page doesn't cache a transient failure as "not mine".
+  - Other failures (e.g. SERVFAIL) are `[]`.
+  - A missing name or a bad family is `RESET EPROTO`.
+  - **Loopback answers:** a `resolve` answer with a loopback address is useless to the page. The kernel never sends loopback out through an exit, so it would dial its own loopback. Test names in `--hosts` should map to a non-loopback address of the node's machine. For `http` by name, the node resolves it itself, so loopback works there.
+
+#### 5.3 `http` (cap `http`), page → node
+- **OPEN:** `{ "kind": "http" }`. The node answers OPENED `{}` at once.
+- **Bytes page → node:** slicc-node's raw-fetch request, a `u32` BE length, the JSON head `{ "url", "method", "headers" }`, then the body, then END.
+- **Bytes node → page:** a `u32` BE length, the JSON head `{ "status", "statusText", "headers", "url" }`, then the decoded body, then END.
+- **Same rules as slicc-node's `fetch-proxy`:**
+  - the header drop and fold rules, and `Accept-Encoding`;
+  - redirects not followed;
+  - decoding, and the `206`-with-a-decoded-coding refusal, which becomes `RESET EPROTO`.
+- **Differences from slicc-node:**
+  - The request body streams under the window, so there's no 256 MiB buffer.
+  - Errors before the response head are RESETs: `ECONNREFUSED: fetch failed: …`, `EACCES` for policy, `EPROTO` for a malformed head.
+- **Policy and TLS:** the node's HTTP client dials through the same policy-checked dialer as `tcp` and verifies TLS with the system roots.
+- **Details** ([slicc-cli#21](https://github.com/ai-ecoverse/slicc-cli/pull/21)):
+  - Header bytes are Latin-1 both ways, as fetch's ByteString is.
+  - The request head is at most 1 MiB.
+  - A body that ends within 1 MiB is sent with its exact `Content-Length`. A longer one uses the page head's `Content-Length` when that is one valid number, and is otherwise sent chunked.
+  - Methods are upper-cased the way fetch does it.
+  - `CONNECT`, `TRACE`, `TRACK`, URLs with credentials, and header values past U+00FF or with control characters are `RESET EPROTO`.
+  - No default `User-Agent` is added.
+  - A TLS failure is `ECONNREFUSED: fetch failed: x509…`.
+  - An upstream error mid-body, or a broken coding, is `RESET ECONNRESET`.
+- **Credentialed streams:** `{ "kind": "http", "credentialed": true }`, only to nodes with the `credentialed` cap ([§5.13](#513-credentialed-node-cap-http-streams-that-carry-a-value)).
+
+#### 5.4 `kernel` (page cap `kernel-in`), node → page
+- **OPEN:** `{ "kind": "kernel", "port": 5173 }`. This is how the node carries `<port>.kernel.localhost` navigations and WebSockets into the page, as slicc-node's kernel tunnel does today.
+- **Answer:** the page calls `kernel.dial({ port })` and answers OPENED or `RESET ECONNREFUSED`.
+- **The page refuses port 9222** (the CDP facade) with `EACCES`, and so does any port the kernel reserves.
+- **Nothing else comes in.** The page refuses every other node-opened kind with `EOPNOTSUPP`.
+
+#### 5.5 `ssh` (cap `ssh`), page → node
+- **OPEN:** `{ "kind": "ssh" }`. The stream is a raw byte stream into the node's embedded SSH server (`golang.org/x/crypto/ssh`). That server never listens on a real port.
+- **Addressing** (page router): each link gets `<host>.slicc.internal` and a synthetic address in `198.18.57.0/24`. A kernel connect to port 22 there becomes this stream kind. Any other port becomes `OPEN { kind: 'tcp', host: '127.0.0.1', port }` under the node's policy. So `ssh laptop.slicc.internal` and `git` over ssh work unchanged.
+- **Auth:** the link is the trust boundary, so the server accepts `none` authentication on link streams, and ignores the user name (`$USER` in the kernel). Commands run as the user who started `slicc`.
+- **Host key:** one ed25519 key per node, kept `0600` in its config directory so it survives restarts. HELLO carries it as `"sshHostKey": "ssh-ed25519 AAAA…"`. The page writes `<host>.slicc.internal <key>` into the kernel's **system-wide `/etc/ssh/ssh_known_hosts`**, because seven manages those keys and wasix-openssh's per-user file sits under the passwd home, not `$HOME`. So `ssh` never has to trust a first-seen key.
+- **Client limits** (wasix-openssh 10.6.0-1): no ControlMaster, so each `ssh` is its own stream. Interactive `^C` may stop the local client until [slicc-kernel#247](https://github.com/ai-ecoverse/slicc-kernel/issues/247); exec mode is unaffected.
+- **What a session can do:**
+  - `exec` and `shell` run through the node's runner, the first `--runner` argv (for example `bash -c`) as a forced command, with PTYs: `creack/pty`, ConPTY on Windows.
+  - The `sftp` subsystem serves files.
+  - `direct-tcpip` forwarding is checked against the same policy as `tcp`.
+  - The persistent REPL from six's `follow --eval` is the `slicc-eval` subsystem: one REPL per node, started on first use and shared by every session. Each eval ends after a quiet window (default 500 ms). Its framing is in [SSH server](#ssh-server).
+  - `sftp` is on by default only when the runner is a plain local shell (`bash`, `sh`, `zsh`, `fish`, `pwsh`, `powershell`, `cmd`). Otherwise it is off, because sftp serves the host's files as the user and would get around a sandboxing runner such as `docker exec …`. `--sftp` / `--no-sftp` override.
+  - A refused `direct-tcpip` is answered `administratively prohibited`, with the policy message.
+- **Off by default:** a node without `--runner` doesn't advertise `ssh`, and refuses the OPEN with `EOPNOTSUPP`. If a session reaches the server anyway, it is refused the same way as a direct-tcpip.
+
+#### 5.6 `join` (cap `join`), page → node, remote links only
+- **Why:** "New join URL" in seven creates a fresh tray and does **not** supersede the old one, so a leaked URL stops working. Devices linked at that moment learn the new URL over the link.
+- **OPEN:** `{ "kind": "join", "url": "https://www.sliccy.ai/join/<token>" }`, on the control channel.
+- **The node:**
+  - It accepts only a join URL on the **same hub origin** as the one it followed. Anything else gets `RESET EACCES`.
+  - It stores the URL as its current one (`tray-join.json`, mode `0600`), replacing the old one.
+  - It answers OPENED `{}`, then END.
+  - It keeps the current link, and uses the new URL on its next reconnect.
+  - It never prints the URL.
+- **Advertised:** only by nodes that set up through the tray hub. A local (CDP) node doesn't advertise `join`, and refuses the OPEN with `EOPNOTSUPP`.
+- **The page:** it sends `join` to every linked device advertising the cap, waits for OPENED (or a RESET or timeout) from each, then retires the old tray. A device that was offline at that moment must be linked again, and that is the point of revocation.
+
+#### 5.7 `unlink` (cap `join`, or `unlink-loopback` on §1.3 links), page → node
+On a [§1.3](#13-local-setup-without-cdp-loopback-signalling) loopback link, `unlink` removes that page's pin and closes the link only ([§1.3](#13-local-setup-without-cdp-loopback-signalling) *Unpairing*). The rest of this section is for remote links.
+- **OPEN:** `{ "kind": "unlink" }` on the control channel. The node answers OPENED `{}`, then END.
+- **Then the node:**
+  - deletes its join state and DTLS certificate for that hub origin;
+  - closes the link;
+  - stops following, printing `unlinked by <leader name>`, and exits 0.
+- **A node offline at the time:** it gets `bootstrap.failed` `UNLINKED` once its next answer reveals the unlinked fingerprint, and does the same.
+- **Re-linking:** running `slicc <join-url> follow` again then mints a new certificate and shows up as a new device, which is what the user asked for by running it. The leader keeps refusing the old fingerprint.
+
+#### 5.8 `cdp` (cap `cdp`), page → node
+- **HELLO:** a node with `cdp` lists its browsers: `"browsers": [{ "id": "chrome", "name": "Google Chrome", "version": "154.0.8037.98", "seven": true }]`.
+  - `id` is stable for the life of the node: the browser kind, with `-2`, `-3`… for a second or third of the same kind.
+  - `seven: true` marks the browser that hosts this seven tab (local setup only).
+- **OPEN:** `{ "kind": "cdp", "browser": "<id>" }`. The node opens a **fresh** WebSocket to that browser's `webSocketDebuggerUrl` for each stream, so every stream is its own CDP client.
+  - **OPENED:** `{ "product", "protocolVersion" }` from `/json/version`.
+  - **RESET:** `ENOENT` for an unknown id; `ECONNREFUSED` when the browser doesn't answer.
+- **Bytes, both directions:** a sequence of messages. Each is a `u32` BE length plus one UTF-8 CDP JSON message, at most 64 MiB, otherwise `RESET EMSGSIZE`. The node relays each one as a WebSocket text message.
+- **Filtered:** the node doesn't relay `Network.webSocketFrameReceived` or `Network.webSocketFrameSent` (parity with slicc-node's `/cdp`).
+- **Errors:**
+  - An OPEN without `browser`, or a page END in the middle of a message, is `RESET EPROTO`.
+  - `EMSGSIZE` applies in both directions, including a browser message over 64 MiB.
+- **Chrome's opt-in debugging of a running browser** (`wsOnly`, no `/json/version`): OPENED comes from `Browser.getVersion`.
+- **Closing:**
+  - A **clean** browser close (close frame 1000) gives END. After it, the node discards page bytes until the page's END.
+  - Any other browser close gives `RESET ECONNRESET`.
+  - A page END closes the socket with 1000, then the node sends END. A page RESET closes it at once.
+- **Kernel side:** seven maps its port-9222 facade to these streams. `playwright-cli --runtime <id>` (slicc-cdp) picks the browser.
+- **Which browsers:**
+  - **`attach`:** the browser it set up through (`--cdp <url>`, single-valued, `seven: true`), plus every `--cdp-extra <url>` (repeatable); the TUI's multi-select passes those. A second `--cdp` is an error that points to `--cdp-extra`.
+  - **`follow`:** only the browsers named with `--cdp <url>`. Without one, `follow` doesn't advertise `cdp`, because a remote seven gets full control of every browser listed. `follow` never marks a browser `seven: true`.
+  - **Protected ports:** every listed browser's debugging port is protected in the policy on both commands, so a `tcp` stream can't reach the raw port even under `--allow`.
+
+- **Protected origins (PRE-1):** the node filters every `cdp` stream against `protectedOrigins` from slicc-browsers (≥ 1.4.0: `*.sliccy.ai` at any depth, any port, http and https; `vault.sliccy.ai` by name; plus the setup's extra origins). It refuses navigating to, attaching to, or driving targets on those origins, and storage, cookie and permission access for them, as **CDP errors** `{"error":{"code":-32000,"message":"slicc: refused: …"}}`, not RESETs. It detaches sessions that land on them and redacts their `url`/`title` in listings to the origin.
+  - **In targets the stream touched** (attached to or created): the node fails every protected document load with `net::ERR_BLOCKED_BY_CLIENT`, so instrumentation installed before a navigation can never run in a protected document. That covers redirects, service-worker-served navigations and the page's own Fetch interception.
+  - **Auto-attached targets with no URL yet** (OOPIFs, popups) are held until the URL is known, then detached if protected. After 10 s with no URL they are treated as protected. The node's own setup connection ([§1.1](#11-local-setup-over-cdp)) isn't a `cdp` stream and is the one exception. [`cdp` (browser control)](#cdp-browser-control) has the details.
+
+#### 5.8.1 `browsers` updates (page cap `browsers`), node → page
+- **When:** the browser list changes while a link is up (a browser quits, or the TUI adds one). The node then opens `OPEN { "kind": "browsers", "browsers": [ … ] }` on the control channel, carrying the **full** current list in HELLO's shape. It replaces the previous list; there are no deltas.
+- **Answer:** the page answers OPENED `{}`, then END, and the node sends END. A RESET is ignored, since the next update carries the full list anyway.
+- **Only to pages that advertise `browsers`.**
+- **Ids never change meaning:** a removed id is never reused for another browser, and re-adding the same endpoint (same CDP host:port) gets its old id back.
+- **Removal:** a later `OPEN cdp` for a removed id gets `ENOENT`, and the node resets that browser's open `cdp` streams with `ECONNRESET: browser removed`.
+- **Automatic removal:** the node checks each browser's debugging port every 2 s. After two misses it removes the browser (`ECONNRESET: browser quit`). Once the port answers again, it lists the browser again under the same id.
+
+#### 5.9 `kernel` listener on the node (local only)
+- **When:** a local node whose peer advertises `kernel-in` listens on `127.0.0.1:<kernel port>` (default `80`, or `--kernel-port`; `--no-kernel` turns it off). It serves `http://<port>.kernel.localhost/`, with slicc-node's rules ([its README, *Kernel services*](https://github.com/ai-ecoverse/slicc-node#kernel-services)):
+  - the request head is read for at most 64 KiB and 30 s;
+  - exactly one `Host` of the form `<1–65535>.kernel.localhost`, with no port or the listener's own port, no leading zeros and no trailing dot;
+  - errors: `421`, `400`, `431`, `502 no seven page connected`, `502 nothing listening on kernel port N`, `504`.
+- **Per connection:** the node opens `OPEN { "kind": "kernel", "port": N }` to the page, sends the bytes it has read, then pipes both ways.
+  - The node refuses port 9222 itself, before any OPEN.
+  - Its listener port joins the policy's protected ports.
+- **Binding:** if the port can't be bound, the node prints `kernel services are off: … try --kernel-port` and goes on without them.
+- **Remote nodes** never listen.
+
+#### 5.10 `fs` (cap `fs`), page → node: host folders over the link
+slicc-node's hostfs ([its README, *Host folders*](https://github.com/ai-ecoverse/slicc-node#host-folders)), carried as link streams instead of HTTP. The kernel's `hostfs` driver keeps its operations and semantics. [Host folders](#host-folders) is the detailed spec, and this section is the summary.
+
+- **Export:** `--mount <path>[:<name>][:ro]` (repeatable) on `attach`, `follow` and the default flow.
+  - The root is `realpath`'d at start. A missing path, a file, or a taken name is skipped with a warning.
+  - Names never reveal host paths.
+  - Without `--mount`, the node doesn't advertise `fs`.
+- **HELLO:** `"mounts": [{ "name", "readonly", "capabilities": { "maxIo", "symlinks", "chmod", "caseInsensitive", "normalization", "ranges": true } }]`.
+  - `capabilities` is exactly slicc-node's grant answer, probed **per mount** on that folder's volume, so seven passes it to the driver unchanged.
+- **No tokens:** the link is the trust boundary.
+- **Read-only per OPEN:** the page may set `readonly: true` on any OPEN, and the node enforces it per OPEN (`EROFS` for any write, write open or namespace change), even on a writable export.
+- **Stream shape:** one stream per op, `OPEN { "kind": "fs", "mount", "readonly"?, "op", …args }` with slicc-node's ops and arguments. The OPEN is at most one frame (64 KiB).
+  - The node answers OPENED (plus DATA for `list` and `read`), then END. The page sends END once it has OPENED.
+  - **Errors:** `RESET <ERRNO>: <message>`, where the message is libuv's lower-case strerror text and never contains a path. Wrongly typed or out-of-range arguments, and an unknown `op`, are `EINVAL`. An unknown `mount` is `ENOENT`.
+- **Op answers:**
+  - Most ops answer in OPENED with slicc-node's answer JSON.
+  - **`list`:** OPENED `{}`, then NDJSON as DATA (`{"name","attr"}` per line), then END.
+    - It's streamed in batches with bounded memory, so an entry that vanishes between batches is left out.
+    - If the directory itself is moved or replaced mid-list, the stream ends with `RESET ESTALE`.
+  - **`read`:** OPENED `{ "etag", "size", "offset", "length" }`, then exactly `length` bytes as DATA, then END. The read is short at EOF, `length: 0` past it, and `RESET ESTALE` if the file shrinks during the read.
+  - **Etags** keep slicc-node's quoting, so `attr.etag` and `ifMatch` compare as plain strings.
+  - **Layout:** the page should give reads over 64 KiB their own channel, and the node accepts either layout.
+- **`write`:** `OPEN { "kind": "fs", "mount", "op": "write", "fh", "offset" }`, on its own stream channel.
+  - The node first runs the checks that need no I/O, and RESETs before OPENED with `EROFS`, `EBADF` (unknown fh, or one from another mount or without write flags) or `EINVAL`.
+  - Then OPENED `{}`, and DATA, credited once each `pwrite` returns.
+  - More than `maxIo` in total is `RESET EINVAL`, and what came before stays written.
+  - The node sends END after the page's END, once the last `pwrite` has returned. A page RESET leaves what was written.
+- **Watch:** `OPEN { "kind": "fs", "op": "watch", "mounts": [ … ] }` on its own channel. A missing or empty list is `EINVAL`, and an unknown name `ENOENT`.
+  - OPENED `{}`, then slicc-node's NDJSON lines as DATA.
+  - A page that doesn't read gets its backlog folded into one `{"mount","all":true}` per mount, instead of a dropped stream.
+- **Watch replacement:** a watch OPEN is cheap to replace. The page typically keeps one per link covering every mounted name, and restarts it when the list changes.
+- **Mount updates** (page cap `mounts`): when the node's export set changes, it opens `OPEN { "kind": "mounts", "mounts": [ … ] }` on the control channel, the full list in HELLO's shape, like [§5.8.1](#581-browsers-updates-page-cap-browsers-node--page). The page answers OPENED `{}` then END.
+  - Handles on a removed mount get `EBADF`.
+  - Its ops get `ENOENT`.
+  - A watch covering it ends with `RESET ENOENT`.
+- **Handles:** numbered per link from 1, at most 4096 open per link and mount (`EMFILE`). An fh used with another mount is `EBADF`. All of them close with the link.
+- **Locking:** one node-wide lock across all links and mounts, as in slicc-node. Namespace changes and write opens are exclusive. Name opens, `read`'s re-open, `stat`, `list`, `readlink` and `statfs` are shared. `pwrite` takes no lock.
+- **Path rules and safety:** exactly slicc-node's:
+  - `realpath` the parent, then lstat semantics for the last component;
+  - `..`, a leading `/` and NUL refused;
+  - namespace changes serialized;
+  - the root can't be removed or renamed (`EBUSY`);
+  - writes in place.
+- **Windows:**
+  - `symlinks: false` and `chmod: false`, and the `symlink` op is `EPERM`.
+  - Existing symlinks and junctions show as `kind: "symlink"`, and `readlink` works on them.
+  - `\` and `:` in a path are `EINVAL`.
+  - Paths go through `\\?\`, so device names and 8.3 names are plain names inside the folder.
+
+#### 5.11 `agent` (page cap `agent`), node → page: remote control
+`slicc prompt`, `slicc watch` and `slicc abort` talk to seven's agent, the cone, which slicc-agent hosts. The page serves each stream through `remoteControl(connection)` from `@ai-ecoverse/slicc-agent/page`, on top of its `AgentConnection`, so the CLI never speaks pi's protocol.
+
+- **Who may:** the page advertises `agent` only to links the user allowed to control it.
+  - A **local** link ([§1.1](#11-local-setup-over-cdp)) gets it by default, because a CLI holding the browser's CDP can drive the page anyway.
+  - A **remote** link gets it only after the user turns on *Allow remote control* for that device in Linked devices. It's off by default, and keyed on the fingerprint.
+  - Seven lists every device that has linked once, even one that's offline or offered no caps, so the toggle can be found after a refused `prompt`.
+  - Without the cap, the node doesn't open `agent` streams, and the page refuses them with `EACCES`.
+- **Control-only links:** `prompt`, `watch` and `abort` links advertise `caps: []`. The page gives them no `<host>.slicc.internal`, no exit entry, and opens no `kernel` streams to them.
+- **One device, several processes:** the node's HELLO ([§4](#4-hello)) and the [§1.1](#11-local-setup-over-cdp) hello both carry a random per-process `"node"` id.
+  - The page replaces an older link of the same device (local: any local link; remote: the same fingerprint) only when `node` matches.
+  - Over the tray, the page learns `node` at HELLO, so any replacement waits for HELLO.
+  - So `slicc <join> prompt` doesn't kick that machine's running `follow`, and `slicc prompt --cdp …` doesn't kick `slicc`'s bridge.
+- **`prompt`:** `OPEN { "kind": "agent", "op": "prompt", "text": "…", "whenBusy": "steer" | "followUp" | "reject", "thinking"?: true }` on its own channel. The default `whenBusy` is `followUp`.
+  - **Long prompts:** a prompt that doesn't fit in the OPEN frame sends `"length": <bytes>` instead of `text`.
+    - The page answers OPENED `{}` at once. The node then sends exactly that many bytes of UTF-8 as DATA, then END. A different count is `RESET EPROTO`.
+    - The page then delivers the prompt. The first NDJSON line is `{"t":"delivered","delivered":…}`, or `RESET EBUSY` for a `reject` while busy, then the events as usual.
+    - The node uses this past about 60 KiB, up to 16 MiB.
+  - **OPENED:** `{ "delivered": "run" | "steer" | "follow-up" }`, once the agent has accepted the send. A `reject` while busy is `RESET EBUSY`.
+  - **Then DATA:** NDJSON events, **starting at this prompt's own `user` event**. Nothing from before it is sent. They run until the run that includes it ends.
+  - **The last line** is `{"t":"end","reason":"stop"|"aborted"|"error","message"?}`, then END.
+  - **Aborting:** a page RESET or a closed CLI doesn't abort the run. Aborting is explicit.
+- **`abort`:** `OPEN { "kind": "agent", "op": "abort" }`, answered OPENED `{ "aborted": true | false }` (false when nothing was running), then END.
+- **`watch`:** `OPEN { "kind": "agent", "op": "watch", "since"?: "<entry id>", "thinking"?: true }` on its own channel.
+  - **OPENED:** `{ "head": "<entry id>", "gap"?: true }`, then NDJSON events forever.
+  - **Without `since`,** the stream starts at the next event.
+  - **With `since`,** the page first replays `since`'s own entry when it's `text` or `thinking`, as one `delta` with its whole text so far. Then it replays every entry after it. Clients skip what they already printed.
+  - **`gap: true`** means the transcript no longer holds `since` (a new session, or a compaction). The stream then starts at the next event.
+- **Events:** one JSON object per line, mapped by slicc-agent from pi-durable's agent events (`watchEvents`) and handed to the page by `remoteControl(connection)` from `@ai-ecoverse/slicc-agent/page`.
+  - `{"t":"user","id","text","delivered"}`;
+  - `{"t":"text","id","delta"}`: assistant text as it streams;
+  - `{"t":"thinking","id","delta"}`: only when the stream was opened with `thinking`;
+  - `{"t":"tool","id","call","name","summary"}` and `{"t":"tool-result","id","call","ok","summary"}`;
+  - `{"t":"run","state":"start"|"end","reason"?}`. These have no `id`, so a resume doesn't replay a missed `run end`. Clients use them only for layout and notices, and the `end` line or the next `user` event is authoritative.
+  - `{"t":"notice","id","text"}`: retries, compactions, rewinds;
+  - `{"t":"error","id","message","detail"?}`.
+  - **Ids** are opaque strings.
+    - `user`, `tool-result`, and a `notice` or `error` that is a transcript entry: the entry id, such as `"42"`.
+    - An assistant message's `text`, `thinking` and `tool` blocks: `"a<ts>.<block>"`, where `<ts>` is the message's own timestamp (set when its generation starts, and kept in the committed entry) and `<block>` its content index. An assistant message isn't an entry until it's committed, so this id is stable from the first delta to the committed entry. A second message with the same timestamp gets `"a<ts>~1.<block>"`, a third `~2`, and so on.
+    - Other notices and errors: an id unique to that event, such as `"retry-<at>"`, `"compaction-<task>"` or `"task-<task>"`.
+    - `run` lines have no id. A watch can't replay them, because runs aren't transcript entries.
+  - **Guarantees** (the CLI's tracker relies on them):
+    1. **An id is never reused for different content.** A regenerated or retried message is a new message with its own timestamp, and messages that share a timestamp get the `~n` suffix.
+    2. **Deltas only append.** `delta` lines for one id arrive in order, and their concatenation equals the text `watch` replays for that id as `since`'s own entry, byte for byte.
+    3. **Every event that isn't streamed has its own id.** A client drops a second non-streamed event with an id it has already shown, so a notice that changes gets a new id.
+    4. **A `since` that names nothing the transcript still holds** (a compacted entry, or a message an abort or reload dropped before it was committed) answers `gap: true`. It never fails the OPEN.
+  - **`delivered`** on `user`: `run`; `steer` when it follows a tool result in a run; `follow-up` when it was queued behind a run.
+  - **A `prompt` stream** carries only its own `user` event, not other clients' user entries, even a steer into the same run. `watch` carries them all.
+  - **`run end`** comes once the agent has settled the run's inputs, so its `reason` (`stop`, `aborted` or `error`) is the agent's. A `prompt` stream's `end` line follows it.
+  - **Rules:** `summary` is at most 200 characters, with secrets redacted.
+  - **Never sent:** credentials, or tool output beyond the summary. A tool's summary is its name and main argument (the command, path, pattern or URL). A result's summary is its line count, or the first line of an error.
+
+#### 5.12 Reserved
+`exec` (a command in seven's kernel shell, like six's `exec`) and `udp` (datagram frames, once the kernel has datagram sockets).
+
+#### 5.13 `credentialed` (node cap): `http` streams that carry a value
+Values live in the vault (`vault.sliccy.ai`). A request reaches a node with a value in it only through a **transit exit**: the vault's `forward` hands bios the injected head, and bios sends it over the link.
+
+- **The cap:** a node that lists `credentialed` in `caps` handles every `http` stream opened with `"credentialed": true` as below. There's no new kind.
+- **OPEN:** `{ "kind": "http", "credentialed": true }`. The bytes in both directions are [§5.3](#53-http-cap-http-page--node)'s.
+- **The page** sets the flag on every `http` OPEN whose head carries an injected value, and sends such an OPEN only to a node that advertises the cap. A node without it ignores the field ([§4](#4-hello)), so to the vault that device has no transit exit.
+- **The node:**
+  - never logs the request's or the response's head or body, at any level, `SLICC_DEBUG` included;
+  - names the request only by method, host and path, without the query, the fragment or userinfo. That holds for logs, the dashboard, `--json` events and RESET messages;
+  - doesn't follow redirects (as for every `http` stream);
+  - keeps nothing: no cache, no cookie jar, nothing on disk, and nothing of the request in memory once the stream has ended;
+  - reports nothing about the request to telemetry. An error report carries its fixed source and the errno only.
+- **RESETs:** [§5.3](#53-http-cap-http-page--node)'s codes. The text after `ERRNO:` never contains a header, a body byte, the query or the full URL. A TLS failure is `ECONNREFUSED: fetch failed: x509: …` and names only the host.
+- **Refused:** a credentialed head whose URL isn't `https:` on port 443 is `RESET EACCES` before anything is dialled. The vault already refuses those, so this is defence in depth.
+- **Not the node's job:** redacting the response. The node passes it on as it came, and the vault's and bios's rules apply on the page side.
+
+#### 5.14 `jerk` (caps `jerk` and `jerk-seal`), page → node: J1
+jerk ([ai-ecoverse/slicc-jerk](https://github.com/ai-ecoverse/slicc-jerk)) gets tokens on the host.
+
+**The ground rule:** no token, grant, code or masked token crosses the link. The **one exception** is `seal`'s `lease` event, which only bios's link layer reads.
+
+**Advertising:**
+
+| node command | `jerk` (status, create) | `jerk-seal` (seal, unseal) |
+|---|---|---|
+| `slicc`, `slicc attach` (local) | yes, when `jerk` ≥ the minimum version is on the host's `PATH` or in slicc's data dir. `--no-jerk` turns both off. | yes, by default |
+| `slicc <join> follow` (remote) | only with an explicit `--jerk` | only with an explicit `--jerk-seal`, which implies `--jerk`. A remote seven pulling this machine's tokens into its browser is a bigger grant than starting a sign-in. |
+| `prompt`, `watch`, `abort` | no | no |
+| any node without host jerk | no. Host providers are missing in seven. | no |
+
+HELLO adds `"jerk": { "version": "1.0.0" }` next to `caps`.
+
+**OPEN:** `{ "kind": "jerk", "op": <op>, "provider"?: <id>, "scope"?: <string>, "lease_id"?: <string>, "duration"?: <seconds>, "params"?: { <k>: <string> } }`
+
+| op | cap | opened by | fields | what the node runs, as the host user | limits |
+|---|---|---|---|---|---|
+| `list` | `jerk` | the kernel facade or bios | none | `jerk list --json` | |
+| `status` | `jerk` | facade or bios | `provider` | `jerk <provider> get --json` without `--reveal`; the node keeps only the status fields | |
+| `accounts` | `jerk` | facade or bios | `provider` | `jerk <provider> list --json` | |
+| `create` | `jerk` | facade or bios | `provider`, `scope?`, `params?` | `jerk <provider> create --via-link --seven-origin <origin of the linked page> [--scope S] [-p k=v]` | only when the provider's create **opens a sign-in page a human completes**: `[oauth]` modes `loopback`, `intercept` and `device`, and CLI flows marked `create.link = true`. Never `--force`. Never a create that mints a token with no UI (`npm token create`, `lease_via = "create"`). |
+| `seal` | `jerk-seal` | **bios's link layer only**; the facade refuses it | `provider`, `duration?` (default 3600) | `FNOX_LEASE_DURATION=<duration> jerk <provider> lease --via-link` | |
+| `unseal` | `jerk-seal` | **bios's link layer only** | `provider`, `lease_id` | `FNOX_LEASE_ID=<lease_id> jerk <provider> drop --lease --via-link` | revokes upstream only what jerk minted |
+
+- **`--via-link`** is a host-jerk flag. It forbids a terminal, `--reveal`, `--force` and CLI logout. Its stdout is status JSON, plus the single lease object for `lease`. Host jerk enforces it again itself, so a buggy node can't widen it.
+- **There's no `drop` op.** A provider CLI logout is never possible over J1, and jerk-minted lease tokens are dropped through `unseal`.
+- **`provider`** matches `^[a-z0-9][a-z0-9-]{0,63}$`. **`params`** values are validated against the provider's declared `params` keys. Anything else gets `EPROTO`.
+- **OPENED:** `{}` once the node has started host jerk.
+- **Bytes node → page:** newline-delimited JSON events, then END.
+  - `{ "event": "progress", "message": "sign-in opened in Google Chrome on laptop" }`, zero or more of them, for `create` only. A device-flow user code may appear here, since it is useless without the human's approval.
+  - `{ "event": "lease", "credentials": { "<ENV>": "<token>", … }, "expires_at": "<RFC3339>", "lease_id": "…" }`, exactly once, for `seal` only, before the result.
+    - bios's link layer takes it out of the stream and passes it straight to the vault's `seal`, and keeps no copy. It never forwards it, logs it, or puts it in an error.
+    - Without `expires_at`, bios discards it and the result becomes exit 1.
+    - The node never logs it either, and keeps no copy once it's sent.
+  - Exactly one `{ "event": "result", "exit": <jerk exit code>, "provider"?, "user"?, "scopes"?, "expires_at"?, "env"?: [names], "message" }`. `list` and `accounts` add `"items": [ … ]` with the same status fields per row.
+  - Bytes page → node: none. The page sends END right after OPEN.
+- **Jerk outcomes are results, not RESETs.** Exits 1–5 (jerk's exit codes) arrive in `result.exit`, and in-kernel jerk exits with that code.
+
+| RESET | when | in-kernel jerk exits |
+|---|---|---|
+| `EPROTO` | bad OPEN: unknown op, missing field, unknown param | 1 |
+| `EACCES` | the op isn't allowed over J1 (the table above); a remote link lacks `--jerk` or `--jerk-seal`; or `seal`/`unseal` came through the kernel facade | 2 |
+| `EBUSY` | a `create` is already in flight on this link (at most one at a time) | 1 |
+| `ETIMEDOUT` | `create` ran past the provider `timeout` plus 30 s | 3 |
+| `ECONNRESET` | host jerk died, or the link dropped | 1 |
+| (cap not advertised) | `EOPNOTSUPP` per [§4](#4-hello)'s rule | 4 |
+
+**Node-side details ([slicc-cli#74](https://github.com/ai-ecoverse/slicc-cli/pull/74)):**
+- **`params`:** the node can't see a provider's declared params, so it refuses only malformed ones with `EPROTO`: keys must match `^[a-z][a-z0-9_]{0,31}$`, values must be printable, at most 16 params of at most 256 bytes each. Host jerk rejects unknown keys with exit 2, which arrives as `result.exit` 2.
+- **`--seven-origin`** is passed only on links set up over CDP ([§1.1](#11-local-setup-over-cdp)), from the seven context's origin. Tray (`follow`) and stdio links run `create` without it.
+- **Timeouts:** `create` gets 2 min 30 s (jerk's default provider timeout plus 30 s); other ops get 60 s. Then `result.exit` 1 with "jerk timed out", not a RESET.
+- **Lease validation:** a lease without string `credentials` or an RFC 3339 `expires_at` is never sent; the result is exit 1.
+- **"Died":** a signal, an exit code above 5, or a failed start gives `ECONNRESET`. Exits 0–5 are results.
+- **Status fields are whitelisted:**
+  - results keep `provider`, `user`, `scopes`, `expires_at`, `env`, `message` (and `items`);
+  - list rows keep `provider`, `name`, `source`, `requires`, `cli`, `user`, `scopes`, `expires_at`, `env`, `id`, as strings, booleans or string lists.
+  - Everything else is dropped, including any masked token.
+
+**The agent-vs-user rule:**
+- The caller of J1 may be the agent. So J1 only starts things a human must finish (`create`), moves tokens into a store the agent can't read (`seal`), or undoes what jerk minted (`unseal`).
+- For `create`, the **sign-in page is the confirmation**. A create that would succeed without a human on a page is refused (`EACCES`).
+- `seal` can succeed with no human present, for example when gh is already signed in on the host. That's safe because a seal carries no rules: the token is injected only under rules in seven's root-owned fnox config, and adding one takes `sudo`, whose dialog is the human's approval.
+- Ending a provider CLI's own login (`gh auth logout`, `wrangler logout`, `aio logout`) is never possible over J1. The user runs `jerk <provider> drop` on the host.
+- A provider whose sign-in needs a terminal reports `exit 5` over J1, with "run `jerk github create` on laptop".
+
+#### 5.15 `ws` (cap `ws`), page → node: WebSockets for kernel programs
+From [slicc-bios#360](https://github.com/ai-ecoverse/slicc-bios/pull/360) and [slicc-kernel#215](https://github.com/ai-ecoverse/slicc-kernel/pull/215). bios never opens a browser WebSocket for a program, because the browser would attach the user's cookies. So a program's `ws:` or `wss:` connection always goes out through an exit.
+
+- **OPEN:** `{ "kind": "ws", "url": "wss://host/path", "protocols": ["…"], "headers": [["name","value"], …] }`.
+  - **`url`:** `ws:` or `wss:`. A URL on the link's own `<host>.slicc.internal` arrives already rewritten to `127.0.0.1`, as for `http`.
+  - **`headers`:** the program's handshake headers, Latin-1, with [§5.3](#53-http-cap-http-page--node)'s header rules.
+    - The node drops `Host`, `Connection`, `Upgrade`, `Sec-WebSocket-Key`, `-Version`, `-Extensions` and `-Protocol`, and sends the rest, `Origin` and `Authorization` included.
+    - It offers no extensions (no permessage-deflate).
+  - **Refused with `RESET EPROTO`:** URLs with credentials, other schemes, a bad OPEN.
+- **Dial:** through the same policy-checked dialer and system TLS roots as `http`. **Protected ports ([§6](#6-policy-node)) apply**, so a `ws` stream can never reach a browser's debugging port.
+  - **Redirects:** not followed.
+  - **Success:** OPENED `{ "protocol": "<chosen or empty>" }`.
+  - **Failure:** RESET with `EACCES` (policy), `ECONNREFUSED: HTTP <status>` (a non-101 answer, 3xx included), `ECONNREFUSED: …` (dial, DNS, timeout (30 s) or TLS; for TLS, `ECONNREFUSED: x509: …` naming only the host). bios maps every RESET to 502, so no finer codes are needed.
+- **Bytes, both directions:** records of `u8 type`, then a `u32` BE length, then the payload. Records are independent of DATA frame boundaries.
+  - **Types:** `1` text (UTF-8), `2` binary, `8` close (`u16` code, then a UTF-8 reason of at most 123 bytes; an empty payload means 1005).
+  - **Whole messages only:** the node reassembles fragments, and the page sends whole messages.
+  - **Size:** at most 64 MiB per message; over that, the receiver closes with 1009.
+  - **Other types:** an unknown type, or a malformed close, makes the receiver close with 1002.
+  - **Page-side violations** (1009, 1002): the node tells the page with a close record carrying that code, then END.
+  - **Pings:** the node answers the far end's pings itself, and they're never relayed.
+- **Closing:**
+  - **Page first:** the page sends a close record, then END. The node sends the WebSocket close, relays the far end's close record, then END.
+  - **Far end first:** the node echoes the far end's close code at once (RFC 6455), relays its close record, then END. A close record from the page after that is optional and ignored.
+  - **No clean close:** END alone, which the page reports as 1006.
+- **Flow control:** the stream window ([§3.3](#33-flow-control)), with nothing extra.
+- **Privacy:** the node never logs handshake headers or message payloads at any level, and names a stream only by host and path (no query). A program may hold a real value through `fnox exec`.
+- **No vault injection, v1:** `ws` streams are never `credentialed`. bios refuses (`EACCES`, "secrets in WebSocket handshakes aren't supported yet") an OPEN whose handshake contains a vault placeholder, rather than sending the placeholder.
+- **HELLO:** nodes that implement it add `"ws"` to `caps`. Without it, bios answers the program 502 "…carries no WebSockets; update its slicc CLI".
+
+#### 5.16 The link facade (page side, not on the wire): the in-kernel `slicc`
+
+How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-leader). This isn't a link stream. It's seven's page serving its own kernel. The page holds the WebRTC; the program never sees the hub, the join state or the peer connection.
+
+- **The program:** `@ai-ecoverse/wasi-slicc`, slicc-cli's client command layer built for `GOOS=wasip1` (published by slicc-cli, offered by bios's catalog).
+  - **Commands:** `slicc <join-url> prompt|watch|abort`, with the CLI's own flags, output and `--json` events.
+  - **Anything else** exits 2 with `slicc: <command> isn't available inside seven`. A prompt without a join URL is refused the same way.
+  - **How it reaches the facade:** through its host module, at `SLICC_LINK_URL` (below).
+- **Where it's served:** a page-served kernel facade with the caller's stamp on each connection, mirroring the CDP facade on `127.0.0.1:9222`. The mechanism is [slicc-kernel#526](https://github.com/ai-ecoverse/slicc-kernel/issues/526).
+- **The connection:** a raw byte stream on the kernel's loopback, reached at `SLICC_LINK_URL` (`tcp://127.0.0.1:<port>`). The kernel hands the connection and the connector's stamp to the page's hook, as `SO_PEERCRED` would. The program's host module connects with the JS program API's `net.connect`.
+- **Framing, one connection per [§5.11](#511-agent-page-cap-agent-node--page-remote-control) stream:** records of `u8 type`, a `u32` BE length, then the payload (as [§5.15](#515-ws-cap-ws-page--node-websockets-for-kernel-programs)), in both directions.
+  - **`1` control (JSON):**
+    - the program's first record is `{ "v": 1, "join": "<join-url>", "open": { "kind": "agent", "op": "prompt" | "watch" | "abort", … } }`. `open` is exactly [§5.11](#511-agent-page-cap-agent-node--page-remote-control)'s OPEN, `length` for long prompts included;
+    - the page answers with `{ "opened": { … } }` ([§5.11](#511-agent-page-cap-agent-node--page-remote-control)'s OPENED) or `{ "reset": "ERRNO: message" }`. After a `reset`, it closes the connection.
+  - **`2` data:** the stream's DATA, prompt bytes up and NDJSON down.
+  - **`3` end:** that side's END. The page closes the connection after both ends, or after a `reset`.
+  - **After the first exchange, the only control record allowed is a `reset`,** at any point: it's that stream's RESET. Any other later control record gets `reset` `EPROTO`.
+  - **Limits:** a control record is at most 64 KiB. A data record is at most 16 MiB, and senders keep them at 64 KiB or less. Any other type, or an oversized or malformed record, gets a `reset` with `EPROTO`.
+  - **Ctrl-C inside seven** ends the program with status 130 (the kernel's default), `watch` included. Go on `wasip1` can't catch signals, so `--abort-on-interrupt` isn't offered there.
+- **Who may:**
+  - **only under kernel users `enforce`;**
+  - **only uid 0 and members of `sudo`** (cones), from the stamp. Scoops are refused;
+  - **otherwise** `{ "reset": "EACCES: …" }`.
+- **Secrets:** a prompt ends at B's model provider.
+  - **On the way out:** A's page scrubs every outgoing prompt byte with A's vault scrubber, streaming.
+  - **While the vault is locked** (`scrub.ready: false`), the answer is `{ "reset": "EACCES: unlock the vault to continue" }`.
+  - **On the way back:** events from B aren't scrubbed on A.
+- **Errors:** [§5.11](#511-agent-page-cap-agent-node--page-remote-control)'s, plus:
+  - `ENOTCONN`: the tray can't be reached;
+  - `EACCES`: B refused (`UNLINKED`, or no *Allow remote control*), with B's message.
+- **Not offered:** exits, kernel streams, CDP or anything else on B. Six's `exec` and `list` are parked.
+
+### 6. Policy (node)
+
+#### 6.1 Where it's checked
+- **On the address being connected:** in the dialer's `Control` hook, for every address Happy Eyeballs tries. So a name can't rebind past it, and one check covers `tcp`, `http` and `resolve` filtering.
+- **Normalized first:**
+  - IPv4-mapped IPv6 (`::ffff:a.b.c.d`) is checked as IPv4.
+  - NAT64 `64:ff9b::/96` and 6to4 (`2002::/16`) are checked by their embedded IPv4. The local-use NAT64 range `64:ff9b:1::/48` is denied outright, since RFC 8215 lets operators place the IPv4 address differently.
+  - Teredo (`2001::/32`) is denied.
+  - `0.0.0.0/8` and `::/128` are always denied, because `connect()` to them reaches loopback.
+
+#### 6.2 Rules
+- **Form:** `--allow` and `--deny` take `CIDR` or `CIDR:port` (`127.0.0.1/32:9222`, `[::1]/128:9222`).
+- **Most specific wins:** the longest prefix wins, and at the same prefix a rule with a port wins over one without.
+- **Ties:** at a full tie, a **user flag beats a default rule**, so `--allow 192.168.0.0/16` opens exactly the range it names. Among the user's own flags, deny wins.
+- **Refusal:** `EACCES`.
+
+#### 6.3 Remote default (`slicc exit <join>`)
+
+The node allows public unicast and denies:
+- loopback: `127.0.0.0/8`, `::1/128`;
+- private ranges: `10/8`, `172.16/12`, `192.168/16`;
+- CGNAT and tailnets: `100.64/10`;
+- link-local, including cloud metadata: `169.254/16`, `fe80::/10`;
+- ULA: `fc00::/7`, which covers `fd7a:115c:a1e0::/48`;
+- multicast: `224/4`, `ff00::/8`;
+- reserved and documentation ranges: `240/4`, `255.255.255.255/32`, `192.0.0/24`, `192.0.2/24`, `198.18/15`, `198.51.100/24`, `203.0.113/24`, `2001:db8::/32`, `100::/64`;
+- deprecated IPv4-compatible `::/96` and SIIT `::ffff:0:0:0/96`.
+
+#### 6.4 Local default (`slicc`, the bridge to the browser it controls)
+
+The remote default, but it **also allows loopback and the private ranges** (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`).
+- **Why:** this is parity with slicc-node, whose `fetch-proxy` reaches the LAN today (a NAS, a dev server on another box).
+- **Still denied:** link-local and metadata.
+- **Except on loopback:** the node denies the browser's debugging port and its own listening ports (the kernel listener of [§5.9](#59-kernel-listener-on-the-node-local-only) included). Otherwise a kernel program could reach raw CDP on the host and get around the `cdp` capability.
+  - It denies them on **every address of this machine** too (interfaces enumerated at check time, cached briefly), in case something listens on `0.0.0.0`.
+  - Browsers the node launches bind their debugging port to loopback only, and so do the node's own listeners.
+- **Opting out:** `--deny 127.0.0.0/8` and `--deny 192.168.0.0/16` restore the remote default.
+
+### 7. Reference peer for seven's CI
+
+The node is the reference. Two setup modes exist for tests:
+- **`slicc attach --cdp <url> --origin <test origin> [--allow …]`** is the production local path.
+- **`--signal stdio`** writes the setup messages from [§1.1](#11-local-setup-over-cdp) as NDJSON on stdout and reads them from stdin. A test harness that already owns CDP relays them itself. slicc-shared-web's harness wants to be the only CDP client.
+
+For tests, a node in either mode can add `--allow 127.0.0.1/32`, so the harness's own upstream servers count as public.
+
+Until there's a release, CI installs it with `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@<commit>`.
+
+§8 is retired.
 
 ## Development
 
