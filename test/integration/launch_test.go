@@ -59,7 +59,11 @@ func testChrome(t *testing.T, env []string) ([]string, string) {
 	for _, e := range r.Entries {
 		if e.Kind == browser.KindInstalled && e.ID == "chrome" {
 			if runtime.GOOS == "windows" {
-				env = overrideEnv(env, map[string]string{"LOCALAPPDATA": realGetenv("LOCALAPPDATA")})
+				local := realGetenv("LOCALAPPDATA")
+				if matches, _ := filepath.Glob(filepath.Join(local, "slicc", "bin", "jerk*")); len(matches) > 0 {
+					t.Fatalf("%v would leak into this test through the real LOCALAPPDATA it needs for Chrome", matches)
+				}
+				env = overrideEnv(env, map[string]string{"LOCALAPPDATA": local})
 			}
 			return env, "chrome"
 		}
