@@ -41,7 +41,6 @@ func isolateProcess(root string) {
 	}
 	if runtime.GOOS == "windows" {
 		delete(set, "USERPROFILE")
-		delete(set, "LOCALAPPDATA")
 	}
 	for k, v := range set {
 		_ = os.MkdirAll(v, 0o700)
@@ -58,12 +57,42 @@ func shadowJerk(dir string) string {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		panic(err)
 	}
-	for name, body := range map[string]string{"jerk": "#!/bin/sh\nexit 1\n", "jerk.bat": "@exit /b 1\r\n"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+	path := dir + string(os.PathListSeparator) + os.Getenv("PATH")
+	if runtime.GOOS != "windows" {
+		if err := os.WriteFile(filepath.Join(dir, "jerk"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+			panic(err)
+		}
+		return path
+	}
+	stub := filepath.Join(dir, "nojerk.exe")
+	build := exec.Command("go", "build", "-o", stub, "./testdata/nojerk")
+	build.Stdout, build.Stderr = os.Stdout, os.Stderr
+	if err := build.Run(); err != nil {
+		panic(err)
+	}
+	exe, err := os.ReadFile(stub)
+	if err != nil {
+		panic(err)
+	}
+	exts := os.Getenv("PATHEXT")
+	if exts == "" {
+		exts = ".com;.exe;.bat;.cmd"
+	}
+	for _, ext := range strings.Split(exts, ";") {
+		if ext = strings.ToLower(ext); ext == "" {
+			continue
+		} else if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		body := exe
+		if ext == ".bat" || ext == ".cmd" {
+			body = []byte("@exit /b 1\r\n")
+		}
+		if err := os.WriteFile(filepath.Join(dir, "jerk"+ext), body, 0o755); err != nil {
 			panic(err)
 		}
 	}
-	return dir + string(os.PathListSeparator) + os.Getenv("PATH")
+	return path
 }
 
 func harnessLoopbackPorts() string {
