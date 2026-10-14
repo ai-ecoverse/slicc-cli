@@ -407,7 +407,7 @@ func (r *openRun) mint() (string, error) {
 		r.outMu.Lock()
 		current := r.token == tok
 		r.outMu.Unlock()
-		if current && !r.ln.Used(tok) {
+		if unused := r.ln.Expire(tok); current && unused {
 			r.status("the pairing URL expired; press Enter for a new one")
 		}
 	})
