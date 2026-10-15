@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -8,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,9 +38,11 @@ func declaredTests(t *testing.T) []string {
 	return names
 }
 
-func shardSelector(t *testing.T, node, spec string) func(string) bool {
+func shardSelector(t *testing.T, node, spec string, env ...string) func(string) bool {
 	t.Helper()
-	out, err := exec.Command(node, "../../scripts/test-shard.mjs", spec, "--print").Output()
+	cmd := exec.Command(node, "../../scripts/test-shard.mjs", spec, "--print")
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("test-shard %s: %v", spec, err)
 	}
@@ -59,39 +64,95 @@ func shardSelector(t *testing.T, node, spec string) func(string) bool {
 	return nil
 }
 
+func shardTimes(t *testing.T) map[string]map[string]float64 {
+	t.Helper()
+	raw, err := os.ReadFile("shard-times.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var times map[string]map[string]float64
+	if err := json.Unmarshal(raw, &times); err != nil {
+		t.Fatalf("shard-times.json: %v", err)
+	}
+	return times
+}
+
+func TestShardTimesCoverEachCIPlatform(t *testing.T) {
+	times := shardTimes(t)
+	declared := map[string]bool{}
+	for _, name := range declaredTests(t) {
+		declared[name] = true
+	}
+	for _, platform := range []string{"darwin", "linux", "win32"} {
+		known := 0
+		for name := range times[platform] {
+			if declared[name] {
+				known++
+			}
+		}
+		if known < len(declared)/2 {
+			t.Errorf("shard-times.json knows %d of %d tests on %s; refresh it with scripts/shard-times.mjs", known, len(declared), platform)
+		}
+	}
+}
+
 func TestTestShardsPartitionTheSuite(t *testing.T) {
 	node := requireNode(t)
-	names := append(declaredTests(t), "TestNotYetWritten")
+	declared := declaredTests(t)
+	names := append(append([]string{}, declared...), "TestNotYetWritten")
 	if len(names) < 100 {
 		t.Fatalf("found only %d tests", len(names))
 	}
-	for _, count := range []int{1, 2, 3} {
-		sizes := make([]int, count)
-		owner := map[string]int{}
-		for i := 1; i <= count; i++ {
-			picks := shardSelector(t, node, strconv.Itoa(i)+"/"+strconv.Itoa(count))
+	times := shardTimes(t)
+	for _, platform := range []string{"darwin", "linux", "win32", "nowhere"} {
+		weight := map[string]float64{}
+		var known []float64
+		for _, name := range declared {
+			if s, ok := times[platform][name]; ok {
+				known = append(known, s)
+			}
+		}
+		sort.Float64s(known)
+		fallback := 1.0
+		if len(known) > 0 {
+			fallback = known[len(known)/2]
+		}
+		heaviest := 0.0
+		for _, name := range declared {
+			s, ok := times[platform][name]
+			if !ok {
+				s = fallback
+			}
+			weight[name] = s
+			heaviest = max(heaviest, s)
+		}
+		for _, count := range []int{1, 2, 3} {
+			loads := make([]float64, count)
+			owner := map[string]int{}
+			for i := 1; i <= count; i++ {
+				picks := shardSelector(t, node, strconv.Itoa(i)+"/"+strconv.Itoa(count), "SLICC_TEST_SHARD_PLATFORM="+platform)
+				for _, name := range names {
+					if !picks(name) {
+						continue
+					}
+					if prev, dup := owner[name]; dup {
+						t.Fatalf("%s: %s is in shards %d and %d of %d", platform, name, prev, i, count)
+					}
+					owner[name] = i
+					loads[i-1] += weight[name]
+				}
+			}
 			for _, name := range names {
-				if !picks(name) {
-					continue
+				if owner[name] == 0 {
+					t.Fatalf("%s: %s is in no shard of %d", platform, name, count)
 				}
-				if prev, dup := owner[name]; dup {
-					t.Fatalf("%s is in shards %d and %d of %d", name, prev, i, count)
-				}
-				owner[name] = i
-				sizes[i-1]++
 			}
-		}
-		for _, name := range names {
-			if owner[name] == 0 {
-				t.Fatalf("%s is in no shard of %d", name, count)
+			if owner["TestNotYetWritten"] != count {
+				t.Fatalf("%s: a test the script does not know ran in shard %d of %d", platform, owner["TestNotYetWritten"], count)
 			}
-		}
-		if owner["TestNotYetWritten"] != count {
-			t.Fatalf("a test the script does not know ran in shard %d of %d", owner["TestNotYetWritten"], count)
-		}
-		for _, n := range sizes {
-			if n < sizes[0]-1 || n > sizes[0]+1 {
-				t.Fatalf("unbalanced shards of %d: %v", count, sizes)
+			lo, hi := slices.Min(loads), slices.Max(loads)
+			if hi-lo > heaviest+0.001 {
+				t.Fatalf("%s: unbalanced shards of %d: %v s, heaviest test %v s", platform, count, loads, heaviest)
 			}
 		}
 	}
@@ -149,5 +210,52 @@ func TestTestShardRunsGoTestOnItsShard(t *testing.T) {
 	failed, code := run("2/2", "FIXTURE_FAIL=1")
 	if code != 1 || !strings.Contains(failed, "bravo failed") {
 		t.Fatalf("a failing shard: exit %d\n%s", code, failed)
+	}
+	timed := filepath.Join(t.TempDir(), "times.json")
+	if err := os.WriteFile(timed, []byte(`{"fixture": {"TestAlpha": 30, "TestBravo": 1, "TestCharlie": 2}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	weighted := []string{"SLICC_TEST_SHARD_TIMES=" + timed, "SLICC_TEST_SHARD_PLATFORM=fixture"}
+	heavy, code := run("1/2", weighted...)
+	if got := strings.Join(ran(heavy), " "); code != 0 || got != "TestAlpha" || !strings.Contains(heavy, "test-shard 1/2: 1 tests, about 30 s by the fixture times") {
+		t.Fatalf("weighted shard 1/2: exit %d, ran %q\n%s", code, got, heavy)
+	}
+	light, code := run("2/2", weighted...)
+	if got := strings.Join(ran(light), " "); code != 0 || got != "TestBravo TestCharlie TestCharlie/sub" {
+		t.Fatalf("weighted shard 2/2: exit %d, ran %q\n%s", code, got, light)
+	}
+}
+
+func TestShardTimesReadsGoTestLogs(t *testing.T) {
+	node := requireNode(t)
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	out := write("times.json", `{"win32": {"TestOld": 4}, "darwin": {"TestGone": 9}}`)
+	one := write("one.log", "=== RUN   TestAlpha\n--- PASS: TestAlpha (12.34s)\n    --- PASS: TestAlpha/sub (12.00s)\n2026-10-15T06:41:39.2245670Z --- FAIL: TestBravo (0.71s)\r\n")
+	two := write("two.log", "--- SKIP: TestCharlie (0.00s)\nok  \tfixture\t13.1s\n")
+	cmd := exec.Command(node, "../../scripts/shard-times.mjs", "--out", out, "darwin="+one, "darwin="+two)
+	if b, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(b), "darwin: 3 tests, 13 s") {
+		t.Fatalf("shard-times: %v\n%s", err, b)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\n  \"darwin\": {\n    \"TestAlpha\": 12.3,\n    \"TestBravo\": 0.7,\n    \"TestCharlie\": 0\n  },\n  \"win32\": {\n    \"TestOld\": 4\n  }\n}\n"
+	if string(raw) != want {
+		t.Fatalf("shard-times wrote\n%s\nwant\n%s", raw, want)
+	}
+	empty := write("empty.log", "ok  \tfixture\t1.0s\n")
+	for _, args := range [][]string{{"--out", out, "linux=" + empty}, {"--out", out}, {"--run", "1", "linux=" + one}, {"--bogus"}} {
+		err := exec.Command(node, append([]string{"../../scripts/shard-times.mjs"}, args...)...).Run()
+		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 {
+			t.Fatalf("shard-times %v: %v", args, err)
+		}
 	}
 }
