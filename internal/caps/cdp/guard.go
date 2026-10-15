@@ -98,7 +98,7 @@ type guard struct {
 	seen            map[requestKey]reqLevel
 	seenOrder       []requestKey
 	handed          map[requestKey]int
-	handedOrder     []requestKey
+	handedOrder     []handedPause
 	pauses          int
 	continues       map[callKey]handedPause
 	bodyCalls       map[callKey]bodyCall
