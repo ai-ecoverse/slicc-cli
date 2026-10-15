@@ -82,14 +82,31 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
       - run: scripts/package.sh "0.0.0-ci.$GITHUB_RUN_NUMBER"
         env:
           SLICC_SIGN: '0'
+
+      - name: Stage and check the npm packages
+        env:
+          VERSION: 0.0.0-ci.${{ github.run_number }}
+        run: |
+          node scripts/npm-stage.mjs --version "$VERSION" --companions --wasi
+          node scripts/npm-stage.mjs --name sliccy --launcher-only --out dist/npm-next \
+            --version "7.0.0-next.$VERSION" --deps-version "$VERSION" --companions
+          node scripts/npm-publish.mjs --dry-run
+          node scripts/npm-publish.mjs --dir dist/npm-next --tag next --dry-run
+          node scripts/sliccy-next.mjs --dry-run
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
