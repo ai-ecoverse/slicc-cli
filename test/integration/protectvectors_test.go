@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -140,13 +139,11 @@ func (e *vectorEnv) env() map[string]any {
 
 var vectorOrigins = []string{"ordinary", "seven", "vault"}
 
-func TestCDPProtectVectors(t *testing.T) {
+func TestCDPProtectLocalVectors(t *testing.T) {
 	e := setupVectors(t)
 	var list []vectorInfo
 	e.p.eval("linkTest.protect.vectorList()", &list)
-	cases := map[string]bool{}
 	for _, v := range list {
-		cases[v.Case] = true
 		if v.Control != "ordinary" {
 			t.Errorf("vector %s has no control on an ordinary origin", v.ID)
 		}
@@ -157,12 +154,11 @@ func TestCDPProtectVectors(t *testing.T) {
 		}
 	}
 	var got []string
-	for c := range cases {
-		got = append(got, c)
+	for _, v := range list {
+		got = append(got, v.ID)
 	}
-	sort.Strings(got)
-	if strings.Join(got, " ") != "C1 C2 C3 C4 C5 C6" {
-		t.Errorf("the vectors cover %v, want C1 to C6", got)
+	if strings.Join(got, " ") != "C3.redirect-popup-stays-out C3.direct-popup-stays-out" {
+		t.Errorf("the local vectors are %v, want only the ones the shared set lacks", got)
 	}
 	env := e.env()
 	for _, v := range list {

@@ -546,6 +546,10 @@ globalThis.linkTest = {
   loopback: loopbackTest,
   cdp: cdpTest(() => state.link, describe),
   protect: protectTest(() => state.link, describe),
+  guard: {
+    start: (opts) => import('./guard.js').then((m) => m.guardStart(() => state.link, opts)),
+    progress: (since) => import('./guard.js').then((m) => m.guardProgress(since)),
+  },
   fs: fsTest(() => state.link, describe, { sha256, toBase64, fromBase64, prng }),
   ws: wsTest(() => state.link, describe, { sha256, fromBase64, prng }),
   async transport() {

@@ -273,10 +273,16 @@ func (rl *relay) expireAnswerLater(k callKey) {
 	})
 }
 
-func (rl *relay) writePage(data []byte) error {
+func (g *guard) pageFrame(data []byte) []byte {
+	data = g.scrub(data)
 	msg := make([]byte, 4+len(data))
 	binary.BigEndian.PutUint32(msg, uint32(len(data)))
 	copy(msg[4:], data)
+	return msg
+}
+
+func (rl *relay) writePage(data []byte) error {
+	msg := rl.g.pageFrame(data)
 	rl.pageMu.Lock()
 	defer rl.pageMu.Unlock()
 	_, err := rl.s.Write(msg)
