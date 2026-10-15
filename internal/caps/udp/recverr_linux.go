@@ -8,7 +8,6 @@ import (
 	"net/netip"
 	"syscall"
 
-	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
 	"golang.org/x/sys/unix"
 )
 
@@ -89,7 +88,7 @@ func parseQueued(oob []byte, from unix.Sockaddr) (queued, bool) {
 			continue
 		}
 		errno := syscall.Errno(binary.NativeEndian.Uint32(m.Data))
-		return queued{to: to, reason: tcp.Errno(errno) + ": " + errno.Error()}, true
+		return queued{to: to, reason: sendErrno(errno) + ": " + errno.Error()}, true
 	}
 	return queued{}, false
 }
