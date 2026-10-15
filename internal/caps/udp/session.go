@@ -143,7 +143,7 @@ func (x *session) send(d datagram) {
 		return
 	}
 	x.sent.Add(1)
-	x.trim()
+	x.used(d.to)
 	if fresh {
 		x.o.Logf("udp %s: to %s", x.name, d.to)
 	}
@@ -152,17 +152,19 @@ func (x *session) send(d datagram) {
 func (x *session) remember(to netip.AddrPort) bool {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	if e, ok := x.peers[to]; ok {
-		x.order.MoveToBack(e)
+	if _, ok := x.peers[to]; ok {
 		return false
 	}
 	x.peers[to] = x.order.PushBack(to)
 	return true
 }
 
-func (x *session) trim() {
+func (x *session) used(to netip.AddrPort) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	if e, ok := x.peers[to]; ok {
+		x.order.MoveToBack(e)
+	}
 	for x.order.Len() > MaxPeers {
 		oldest := x.order.Front()
 		delete(x.peers, oldest.Value.(netip.AddrPort))
