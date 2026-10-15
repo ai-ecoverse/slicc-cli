@@ -2,6 +2,7 @@ package udp
 
 import (
 	"bufio"
+	"container/list"
 	"errors"
 	"io"
 	"net"
@@ -29,8 +30,8 @@ type session struct {
 	name   string
 
 	mu    sync.Mutex
-	peers map[netip.AddrPort]struct{}
-	order []netip.AddrPort
+	peers map[netip.AddrPort]*list.Element
+	order *list.List
 
 	last      atomic.Int64
 	closed    atomic.Bool
@@ -46,7 +47,7 @@ type session struct {
 }
 
 func newSession(s *link.Stream, c *net.UDPConn, o Options, family int, name string) *session {
-	return &session{s: s, c: c, o: o, family: family, name: name, peers: map[netip.AddrPort]struct{}{}}
+	return &session{s: s, c: c, o: o, family: family, name: name, peers: map[netip.AddrPort]*list.Element{}, order: list.New()}
 }
 
 func (x *session) run() {
@@ -124,11 +125,15 @@ func (x *session) send(d datagram) {
 		x.unreachable(d.to, policy.Errno+": "+err.Error())
 		return
 	}
+	fresh := x.remember(d.to)
 	_, err := x.c.WriteToUDPAddrPort(d.payload, d.to)
 	if err != nil && x.drainErrors() > 0 {
 		_, err = x.c.WriteToUDPAddrPort(d.payload, d.to)
 	}
 	if err != nil {
+		if fresh {
+			x.forget(d.to)
+		}
 		if x.closed.Load() {
 			return
 		}
@@ -138,7 +143,7 @@ func (x *session) send(d datagram) {
 		return
 	}
 	x.sent.Add(1)
-	if x.remember(d.to) {
+	if fresh {
 		x.o.Logf("udp %s: to %s", x.name, d.to)
 	}
 }
@@ -146,16 +151,26 @@ func (x *session) send(d datagram) {
 func (x *session) remember(to netip.AddrPort) bool {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	if _, ok := x.peers[to]; ok {
+	if e, ok := x.peers[to]; ok {
+		x.order.MoveToBack(e)
 		return false
 	}
-	if len(x.order) >= MaxPeers {
-		delete(x.peers, x.order[0])
-		x.order = x.order[1:]
+	if x.order.Len() >= MaxPeers {
+		oldest := x.order.Front()
+		delete(x.peers, oldest.Value.(netip.AddrPort))
+		x.order.Remove(oldest)
 	}
-	x.peers[to] = struct{}{}
-	x.order = append(x.order, to)
+	x.peers[to] = x.order.PushBack(to)
 	return true
+}
+
+func (x *session) forget(to netip.AddrPort) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if e, ok := x.peers[to]; ok {
+		x.order.Remove(e)
+		delete(x.peers, to)
+	}
 }
 
 func (x *session) known(from netip.AddrPort) bool {
