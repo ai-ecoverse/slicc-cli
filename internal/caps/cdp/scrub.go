@@ -5,7 +5,14 @@ import "strings"
 var freeForm = map[string]bool{
 	"value": true, "unserializableValue": true, "description": true, "expression": true, "functionDeclaration": true,
 	"arguments": true, "text": true, "data": true, "body": true, "postData": true, "postDataEntries": true,
-	"bytes": true, "html": true, "source": true, "outerHTML": true, "nodeValue": true,
+	"bytes": true, "html": true, "source": true, "outerHTML": true, "nodeValue": true, "entries": true,
+}
+
+var headerLists = map[string]bool{"headers": true, "requestHeaders": true, "responseHeaders": true}
+
+type scrubItem struct {
+	v       any
+	headers bool
 }
 
 func (g *guard) scrub(data []byte) []byte {
@@ -29,20 +36,20 @@ func (g *guard) scrubValue(root any) bool {
 		changed = true
 		return redactURL(s), true
 	}
-	stack := []any{root}
+	stack := []scrubItem{{v: root}}
 	for len(stack) > 0 {
-		v := stack[len(stack)-1]
+		it := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		switch t := v.(type) {
+		switch t := it.v.(type) {
 		case map[string]any:
 			for k, val := range t {
-				if freeForm[k] && (k != "value" || !isString(t["name"])) {
+				if freeForm[k] && (k != "value" || !it.headers) {
 					continue
 				}
 				if r, ok := cut(val); ok {
 					t[k] = r
 				} else {
-					stack = append(stack, val)
+					stack = append(stack, scrubItem{v: val, headers: headerLists[k]})
 				}
 			}
 		case []any:
@@ -50,15 +57,10 @@ func (g *guard) scrubValue(root any) bool {
 				if r, ok := cut(val); ok {
 					t[i] = r
 				} else {
-					stack = append(stack, val)
+					stack = append(stack, scrubItem{v: val, headers: it.headers})
 				}
 			}
 		}
 	}
 	return changed
-}
-
-func isString(v any) bool {
-	_, ok := v.(string)
-	return ok
 }
