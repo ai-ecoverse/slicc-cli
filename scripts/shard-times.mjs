@@ -47,7 +47,14 @@ function runLogs(run, repo) {
     const os = platformOf(job.name);
     if (!os) continue;
     if (job.status !== 'completed') throw new Error(`${job.name} has not finished`);
-    logs.push([os, gh(['api', `repos/${repo}/actions/jobs/${job.id}/logs`])]);
+    const path = `repos/${repo}/actions/jobs/${job.id}/logs`;
+    let text;
+    try {
+      text = gh(['api', '--allow-escape-sequences', path]);
+    } catch {
+      text = gh(['api', path]);
+    }
+    logs.push([os, text]);
   }
   if (logs.length === 0) throw new Error(`run ${run} has no test jobs`);
   return logs;
