@@ -1327,7 +1327,7 @@ The scenario: seven is open in the user's **everyday browser** (any vendor, no C
 **Entry points** (automatic fallback):
 - **Plain `slicc`** with no SLICC profile and no CDP endpoint (none launched, none found, none given) falls back to this mode by itself: it opens the pairing URL in the default browser and links over loopback.
   - The dashboard (and a plain-mode status line, plus a `--json` event `{"event":"mode","mode":"loopback","reason":"no-browser"}`, then `{"event":"pairing","url"}` for each pairing URL, and the same `linked` and `closed` events as other modes) says: "No SLICC browser or debugging endpoint found, so seven opens in your default browser for pairing. Use --profile or --cdp to choose."
-- **`--no-fallback`** keeps the pre-fallback behaviour, for scripts: launch an installed Chromium into a new SLICC profile when one exists, and exit with "no browser to control" only when nothing can host seven. Non-interactive runs (no TTY) still fall back, but print the pairing URL instead of opening a browser unless `--open` is given.
+- **`--no-fallback`** keeps the pre-fallback behaviour, for scripts: launch an installed Chromium into a new SLICC profile when one exists, and exit with "no browser to control" only when nothing can host seven. Without it, non-interactive runs (no TTY) still fall back, but print the pairing URL instead of opening a browser unless `--open` is given. With it, nothing falls back, TTY or not.
 - **`slicc open`, `slicc --default-browser` and `slicc pair`** stay as the explicit forms.
 - **A found or given profile or CDP endpoint always wins;** the fallback only triggers when both are absent.
 
@@ -1629,7 +1629,7 @@ slicc-node's hostfs ([its README, *Host folders*](https://github.com/ai-ecoverse
     - The page answers OPENED `{}` at once. The node then sends exactly that many bytes of UTF-8 as DATA, then END. A different count is `RESET EPROTO`.
     - The page then delivers the prompt. The first NDJSON line is `{"t":"delivered","delivered":…}`, or `RESET EBUSY` for a `reject` while busy, then the events as usual.
     - The node uses this past about 60 KiB, up to 16 MiB.
-  - **OPENED:** `{ "delivered": "run" | "steer" | "follow-up" }`, once the agent has accepted the send. A `reject` while busy is `RESET EBUSY`.
+  - **OPENED** (inline `text` only): `{ "delivered": "run" | "steer" | "follow-up" }`, once the agent has accepted the send. A `reject` while busy is `RESET EBUSY`. A `length` prompt gets OPENED `{}` at once instead, and its delivery comes as the first NDJSON line (above).
   - **Then DATA:** NDJSON events, **starting at this prompt's own `user` event**. Nothing from before it is sent. They run until the run that includes it ends.
   - **The last line** is `{"t":"end","reason":"stop"|"aborted"|"error","message"?}`, then END.
   - **Aborting:** a page RESET or a closed CLI doesn't abort the run. Aborting is explicit.
@@ -1711,7 +1711,7 @@ HELLO adds `"jerk": { "version": "1.0.0" }` next to `caps`.
 
 - **`--via-link`** is a host-jerk flag. It forbids a terminal, `--reveal`, `--force` and CLI logout. Its stdout is status JSON, plus the single lease object for `lease`. Host jerk enforces it again itself, so a buggy node can't widen it.
 - **There's no `drop` op.** A provider CLI logout is never possible over J1, and jerk-minted lease tokens are dropped through `unseal`.
-- **`provider`** matches `^[a-z0-9][a-z0-9-]{0,63}$`. **`params`** values are validated against the provider's declared `params` keys. Anything else gets `EPROTO`.
+- **`provider`** matches `^[a-z0-9][a-z0-9-]{0,63}$`. **`params`** must be well formed (the node-side details below), otherwise `EPROTO`. Whether a key is one the provider declares is checked by host jerk, and an undeclared key arrives as `result.exit` 2.
 - **OPENED:** `{}` once the node has started host jerk.
 - **Bytes node → page:** newline-delimited JSON events, then END.
   - `{ "event": "progress", "message": "sign-in opened in Google Chrome on laptop" }`, zero or more of them, for `create` only. A device-flow user code may appear here, since it is useless without the human's approval.
@@ -1735,7 +1735,7 @@ HELLO adds `"jerk": { "version": "1.0.0" }` next to `caps`.
 **Node-side details ([slicc-cli#74](https://github.com/ai-ecoverse/slicc-cli/pull/74)):**
 - **`params`:** the node can't see a provider's declared params, so it refuses only malformed ones with `EPROTO`: keys must match `^[a-z][a-z0-9_]{0,31}$`, values must be printable, at most 16 params of at most 256 bytes each. Host jerk rejects unknown keys with exit 2, which arrives as `result.exit` 2.
 - **`--seven-origin`** is passed only on links set up over CDP ([§1.1](#11-local-setup-over-cdp)), from the seven context's origin. Tray (`follow`) and stdio links run `create` without it.
-- **Timeouts:** `create` gets 2 min 30 s (jerk's default provider timeout plus 30 s); other ops get 60 s. Then `result.exit` 1 with "jerk timed out", not a RESET.
+- **Timeouts:** `create` gets 2 min 30 s (jerk's default provider timeout plus 30 s); other ops get 60 s. A `create` past its time is `RESET ETIMEDOUT`. Any other op past its time gives `result.exit` 1 with "jerk timed out", not a RESET.
 - **Lease validation:** a lease without string `credentials` or an RFC 3339 `expires_at` is never sent; the result is exit 1.
 - **"Died":** a signal, an exit code above 5, or a failed start gives `ECONNRESET`. Exits 0–5 are results.
 - **Status fields are whitelisted:**
@@ -1787,7 +1787,11 @@ How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-
   - **Commands:** `slicc <join-url> prompt|watch|abort`, with the CLI's own flags, output and `--json` events.
   - **Anything else** exits 2 with `slicc: <command> isn't available inside seven`. A prompt without a join URL is refused the same way.
   - **How it reaches the facade:** through its host module, at `SLICC_LINK_URL` (below).
-- **Where it's served:** a page-served kernel facade with the caller's stamp on each connection, mirroring the CDP facade on `127.0.0.1:9222`. The mechanism is [slicc-kernel#526](https://github.com/ai-ecoverse/slicc-kernel/issues/526).
+- **Where it's served:** a page-served kernel facade with the caller's stamp on each connection, mirroring the CDP facade on `127.0.0.1:9222`. The mechanism is [slicc-kernel#526](https://github.com/ai-ecoverse/slicc-kernel/issues/526), shipped in [slicc-kernel 1.90.0](https://github.com/ai-ecoverse/slicc-kernel/tree/v1.90.0#page-facades) ([#556](https://github.com/ai-ecoverse/slicc-kernel/pull/556)):
+  - **The kernel side:** `createKernel({ facades: { link: { port, hook } } })`. An attached client can supply the hook later with `client.serveFacade("link", hook)`.
+  - **The stamp:** `hook(stamp, { name })` gets the connector's `{ pid, ppid, uid, gid, user?, groups, users, tag? }`, taken by the kernel at `connect()` from the process's credentials. A program can't forge it.
+  - **The port:** reserved from boot, so a program's `bind()` to it fails with `EADDRINUSE`, and kernel-only, so the page's `kernel.dial`, a client's `dial` and `loopbackFetch` are refused with `ECONNREFUSED`.
+  - **The limit:** bytes from the page wait in the kernel until the program reads them, up to 16 MiB per connection. Past that, the kernel closes the connection, and the hook's `close(reason)` gets `slicc-kernel: more than 16777216 bytes are waiting for the program to read`.
 - **The connection:** a raw byte stream on the kernel's loopback, reached at `SLICC_LINK_URL` (`tcp://127.0.0.1:<port>`). The kernel hands the connection and the connector's stamp to the page's hook, as `SO_PEERCRED` would. The program's host module connects with the imports-module API's `ctx.net.connect` (slicc-kernel 1.92.0 or later).
 - **Framing, one connection per [§5.11](#511-agent-page-cap-agent-node--page-remote-control) stream:** records of `u8 type`, a `u32` BE length, then the payload (as [§5.15](#515-ws-cap-ws-page--node-websockets-for-kernel-programs)), in both directions.
   - **`1` control (JSON):**
@@ -1857,7 +1861,7 @@ The node is the reference. Two setup modes exist for tests:
 
 For tests, a node in either mode can add `--allow 127.0.0.1/32`, so the harness's own upstream servers count as public.
 
-Until there's a release, CI installs it with `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@<commit>`.
+CI installs a pinned release: `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@v<version>`, or the release binary (see [Install](#install)).
 
 §8 is retired.
 
@@ -1900,7 +1904,9 @@ The real-Chrome tests in `test/integration/` launch headless, so they run the ex
 
 ## Releases
 
-semantic-release cuts releases from `main` in `.github/workflows/release.yml`, on a macOS runner. The release doesn't run the tests again: the workflow starts when the CI workflow's run for a push to `main` completes (`workflow_run`), and the release job runs only when that run passed, sharded tests on all three OSes included, on the commit that run tested. A CI run that failed or was cancelled releases nothing; when a re-run of its failed jobs passes, the release follows by itself. When `main` has moved on by then, the checkout is behind `main`, so semantic-release (in `release-plan.mjs` and again in the release) skips without failing, and the newer commit's run releases. A pull request's dry run and a manual run instead wait in the `ci` job for the CI workflow's run on the same commit (`pull_request`, or `push` on `main`), and fail unless it passed. The release job then runs these steps:
+PRs merge through the merge queue. CI also runs on `merge_group`, and the queue requires one check, the `ci` job, which fails unless every other CI job passed. Merge-queue runs never start or satisfy a release: the release starts only from CI's `push` run on `main`.
+
+semantic-release cuts releases from `main` in `.github/workflows/release.yml`, on a macOS runner. The release doesn't run the tests again: the workflow starts when the CI workflow's run for a push to `main` completes (`workflow_run`), and the release job runs only when that run passed, sharded tests on all three OSes included, on the commit that run tested. A CI run that failed or was cancelled releases nothing; when a re-run of its failed jobs passes, the release follows by itself. When `main` has moved on by then, the checkout is behind `main`, so semantic-release (in `release-plan.mjs` and again in the release) skips without failing, and the newer commit's run releases. A pull request's dry run and a manual run instead wait in the `ci` job for the CI workflow's run on the same commit (`pull_request`, or `push` on `main`), and fail unless it passed. Only a run on `main` publishes: anywhere else (a pull request, a manual run from another branch) the release job is a dry run (`DRY_RUN` is true whenever `github.ref` isn't `refs/heads/main`), and the attestation, semantic-release (the GitHub release and the npm packages), `go-warm.sh`, `install-smoke` and the `sliccy-next` recovery each also require `refs/heads/main` themselves. The release job then runs these steps:
 1. `scripts/release-plan.mjs` asks semantic-release (dry run) for the next version, and stops when there is none.
 2. `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath` and `-X main.version=<version>`, and `slicc-wasip1-wasm.wasm` (`GOOS=wasip1 GOARCH=wasm`) the same way. It signs and notarizes the darwin binaries and writes `SHA256SUMS`. The windows and linux binaries are not signed. Without the Apple signing secrets (forks, pull requests) it warns and leaves the darwin binaries unsigned.
 3. `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`. It also stages the same launcher as `sliccy` (with two bins, `sliccy` and `slicc`, and a short preview README) into `dist/npm-next/`, as version `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages. `npx sliccy@next` runs the bin named after the package, `sliccy`, and both bins run the same launcher. `--bin <name>` (repeatable) overrides the bins of any staged launcher. `--wasi` also stages `@ai-ecoverse/wasi-slicc` into `dist/npm/wasi-slicc/` from `slicc-wasip1-wasm.wasm` and `npm/wasi-slicc/host/slicc-host.mjs`, with README.md's [Inside seven](#inside-seven) section as its README; `--wasi-only` stages only that package.

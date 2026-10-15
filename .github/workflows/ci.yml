@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
 
 permissions:
   contents: read
@@ -182,4 +183,24 @@ jobs:
             docker run --rm --network host -e SLICC_CHECK_WGET=1 \
               -v "$PWD:/src:ro" -v "$ROOT:$ROOT" "$IMAGE" \
               sh /src/test/integration/testdata/install/check.sh "$ROOT" http://127.0.0.1:8765 "$CI_VERSION"
+          fi
+
+  ci:
+    if: always()
+    needs: [lint, test, shellcheck, installer-assets, installer]
+    runs-on: cloud-run-bench
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: lint=${{ needs.lint.result }} test=${{ needs.test.result }} shellcheck=${{ needs.shellcheck.result }} installer-assets=${{ needs.installer-assets.result }} installer=${{ needs.installer.result }}
+        run: |
+          failed=
+          for pair in $RESULTS; do
+            echo "$pair"
+            [ "${pair#*=}" = success ] || failed="$failed ${pair%%=*}"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::these jobs did not succeed:$failed"
+            exit 1
           fi
