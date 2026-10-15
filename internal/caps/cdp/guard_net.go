@@ -216,6 +216,7 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 		req, _ := p["request"].(map[string]any)
 		u, _ := req["url"].(string)
 		if g.o.URL(u) {
+			delete(g.handed, requestKey{m.SessionID, id})
 			g.markRequestLocked(m.SessionID, id)
 			g.markRequestLocked(m.SessionID, other)
 			return false, false, [][]byte{g.settlePausedLocked(m, p, id)}
@@ -232,6 +233,29 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 		changed = stripHeaders(req["headers"], "cookie") || changed
 		return true, changed, nil
 	})
+}
+
+func (g *guard) noteContinueLocked(k callKey, c *command) {
+	if !continueOK[c.method] {
+		return
+	}
+	for key := range requestKeys {
+		if id := c.str(key); id != "" {
+			req := requestKey{c.session, id}
+			g.continues[k] = handedPause{req, g.handed[req]}
+		}
+	}
+}
+
+func (g *guard) continuedLocked(k callKey, failed bool) {
+	h, ok := g.continues[k]
+	if !ok {
+		return
+	}
+	delete(g.continues, k)
+	if !failed && g.handed[h.req] == h.pause {
+		delete(g.handed, h.req)
+	}
 }
 
 func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) []byte {
@@ -267,11 +291,21 @@ func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) []by
 	return msg
 }
 
+type handedPause struct {
+	req   requestKey
+	pause int
+}
+
 func (g *guard) handOutLocked(k requestKey) {
-	if k.request == "" || g.handed[k] {
+	if k.request == "" {
 		return
 	}
-	g.handed[k] = true
+	g.pauses++
+	_, known := g.handed[k]
+	g.handed[k] = g.pauses
+	if known {
+		return
+	}
 	g.handedOrder = append(g.handedOrder, k)
 	for len(g.handedOrder) > maxSettled {
 		delete(g.handed, g.handedOrder[0])

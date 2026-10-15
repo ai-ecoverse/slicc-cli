@@ -1,6 +1,7 @@
 package protect
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"slices"
@@ -125,6 +126,30 @@ func (o *Origins) URL(raw string) bool {
 	}
 	origin := originOf(u)
 	return origin != "" && o != nil && slices.Contains(o.extra, origin)
+}
+
+func (o *Origins) Mentions(text []byte) bool {
+	for _, s := range rules.AnySchemes {
+		if bytes.Contains(text, []byte(s+":")) {
+			return true
+		}
+	}
+	for _, list := range [][]string{rules.Domains, rules.Hosts} {
+		for _, s := range list {
+			if bytes.Contains(text, []byte(s)) {
+				return true
+			}
+		}
+	}
+	if o == nil {
+		return false
+	}
+	for _, s := range o.extra {
+		if bytes.Contains(text, []byte(s)) {
+			return true
+		}
+	}
+	return false
 }
 
 func Inheriting(raw string) bool {

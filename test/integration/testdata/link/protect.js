@@ -336,7 +336,7 @@ function frameVector(id, mode, sameSite) {
         pageBeacon: beaconed(log, page),
         ...landedOn(ctx, log),
         frameOnDest: [...frames.map((f) => f.url), ...frameTargets].some((u) => u.startsWith(originOf(ctx.dest))),
-        errorFrame: frames.some((f) => f.url.startsWith('chrome-error://') && (f.unreachableUrl ?? '').startsWith(src)),
+        errorFrame: frames.some((f) => f.url.startsWith('chrome-error://') && (f.unreachableUrl ?? '').startsWith(originOf(ctx.dest))),
         children: children.join(' '),
       };
     },
@@ -710,6 +710,33 @@ export function protectTest(getLink, describe) {
   return {
     vectorList: () => protectVectors.map(({ id, control, skip }) => ({ id, case: id.split('.')[0], control: control.origin, skip })),
     vector: (browser, id, origin, env) => run(browser, (c) => runVector(c, id, origin, env, () => CdpClient.open(getLink(), browser))),
+    continuedTwice: (browser, base) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(`${base}/doc?n=twice-start`);
+        await c.send('Fetch.enable', { patterns: [{ urlPattern: '*/data?n=twice*' }] }, sessionId);
+        const paused = c.waitEvent((e) => e.method === 'Fetch.requestPaused' && e.sessionId === sessionId);
+        const body = c.evaluate(`fetch(${JSON.stringify(`${base}/data?n=twice`)}).then((r) => r.text())`, sessionId);
+        const { params } = await paused;
+        const first = await outcome(c.send('Fetch.continueRequest', { requestId: params.requestId }, sessionId));
+        const text = await body;
+        const again = await outcome(c.send('Fetch.continueWithAuth', { requestId: params.requestId, authChallengeResponse: { response: 'Default' } }, sessionId));
+        await c.send('Target.closeTarget', { targetId });
+        return { first, text, again };
+      }),
+    urlsShown: (browser, from, to) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(from);
+        await c.send('Page.enable', {}, sessionId);
+        await c.send('Network.enable', {}, sessionId);
+        const start = c.events.length;
+        await c.evaluate(`(() => { const f = document.createElement('iframe'); f.src = ${JSON.stringify(to)}; document.body.append(f); return true; })()`, sessionId);
+        await sleep(2000);
+        const tree = await outcome(c.send('Page.getFrameTree', {}, sessionId));
+        await outcome(c.send('Runtime.evaluate', { expression: later(to) }, sessionId));
+        await sleep(2000);
+        const events = c.events.slice(start).filter((e) => JSON.stringify(e).includes(to)).map((e) => e.method);
+        return { targetId, events, tree: tree.ok ? JSON.stringify(tree.result).includes(to) : null };
+      }),
     targets: (browser) =>
       run(browser, async (c) => {
         const { targetInfos } = await c.send('Target.getTargets');
