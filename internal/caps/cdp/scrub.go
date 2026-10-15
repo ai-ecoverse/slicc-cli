@@ -36,7 +36,7 @@ func (g *guard) scrubValue(root any) bool {
 		switch t := v.(type) {
 		case map[string]any:
 			for k, val := range t {
-				if freeForm[k] {
+				if freeForm[k] && !(k == "value" && isString(t["name"])) {
 					continue
 				}
 				if r, ok := cut(val); ok {
@@ -56,4 +56,9 @@ func (g *guard) scrubValue(root any) bool {
 		}
 	}
 	return changed
+}
+
+func isString(v any) bool {
+	_, ok := v.(string)
+	return ok
 }
