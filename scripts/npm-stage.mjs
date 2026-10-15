@@ -42,7 +42,7 @@ const { values } = parseArgs({
 
 const WASI_ASSET = 'slicc-wasip1-wasm.wasm';
 const WASI_NAME = `${SCOPE}/wasi-slicc`;
-const WASI_KERNEL = '>=1.81.0';
+const WASI_KERNEL = '>=1.92.0';
 
 const COMPANIONS = ['@ai-ecoverse/slicc-jerk'];
 
