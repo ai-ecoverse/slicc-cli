@@ -387,7 +387,7 @@ func LaunchSix(ctx context.Context, in Installed, six Six, lo LaunchOptions) (*B
 	b.stale, b.staleAt = stale, staleAt
 	ctx, cancel := context.WithTimeout(ctx, lo.LaunchTimeout)
 	defer cancel()
-	if err := b.waitActivePort(ctx, lo.Options); err != nil {
+	if err := b.waitActivePort(ctx, lo); err != nil {
 		b.abort()
 		return nil, err
 	}

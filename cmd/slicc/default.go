@@ -376,6 +376,8 @@ func plainLine(e flow.Event) string {
 		return e.Name + " quit; it is no longer listed for cdp"
 	case flow.BrowserBack:
 		return e.Name + " is back and listed for cdp again"
+	case flow.BrowserSlow:
+		return flow.SlowLine(e.Name, e.Elapsed)
 	case flow.Linked:
 		return fmt.Sprintf("linked with %q in %s", firstNonEmpty(e.Peer, "seven"), firstNonEmpty(e.Tab, "the seven tab"))
 	case flow.LinkLost:

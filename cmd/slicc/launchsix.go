@@ -51,7 +51,7 @@ func runLaunchSix(ctx context.Context, f launchFlags, out launchOut, sigs <-chan
 	if err != nil {
 		return out.fail(err)
 	}
-	b, err := browser.LaunchSix(ctx, in, six, browser.LaunchOptions{URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven})
+	b, err := browser.LaunchSix(ctx, in, six, browser.LaunchOptions{URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Slow: out.slow(in)})
 	if err != nil {
 		return out.fail(err)
 	}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 )
 
 const launchUsage = `usage: slicc launch [--browser <id>] [--profile <name>] [--url <url>] [--headless] [--no-seven-flags] [--kill] [--json]
@@ -96,6 +97,7 @@ type launchEvent struct {
 	CDP          string `json:"cdp,omitempty"`
 	WebSocketURL string `json:"webSocketDebuggerUrl,omitempty"`
 	Message      string `json:"message,omitempty"`
+	Elapsed      int    `json:"elapsed,omitempty"`
 }
 
 type launchOut struct {
@@ -108,6 +110,16 @@ func (o launchOut) event(e launchEvent) {
 	if o.json {
 		b, _ := json.Marshal(e)
 		fmt.Fprintf(o.stdout, "%s\n", b)
+	}
+}
+
+func (o launchOut) slow(in browser.Installed) func(time.Duration) {
+	return func(elapsed time.Duration) {
+		secs := int(elapsed / time.Second)
+		o.event(launchEvent{Event: "browser-slow", ID: in.ID, Name: in.Name, Elapsed: secs})
+		if !o.json {
+			fmt.Fprintf(o.stderr, "slicc: %s\n", flow.SlowLine(in.Name, secs))
+		}
 	}
 }
 
@@ -150,7 +162,7 @@ func runLaunch(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return out.fail(err)
 	}
-	b, err := browser.Launch(ctx, in, browser.LaunchOptions{Profile: f.profile, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Kill: f.kill})
+	b, err := browser.Launch(ctx, in, browser.LaunchOptions{Profile: f.profile, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Kill: f.kill, Slow: out.slow(in)})
 	if err != nil {
 		return out.fail(err)
 	}

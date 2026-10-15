@@ -17,7 +17,9 @@ import (
 	"time"
 )
 
-const DefaultLaunchTimeout = 30 * time.Second
+const DefaultLaunchTimeout = 120 * time.Second
+
+const SlowLaunchAfter = 10 * time.Second
 
 var ErrAlreadyRunning = errors.New("already running")
 
@@ -30,6 +32,7 @@ type LaunchOptions struct {
 	NoSevenFlags  bool
 	Kill          bool
 	LaunchTimeout time.Duration
+	Slow          func(elapsed time.Duration)
 }
 
 type Browser struct {
@@ -51,6 +54,7 @@ type Browser struct {
 	six      bool
 	stale    []byte
 	staleAt  os.FileInfo
+	started  time.Time
 }
 
 func (b *Browser) Done() <-chan struct{} {
@@ -176,7 +180,7 @@ func Launch(ctx context.Context, in Installed, lo LaunchOptions) (*Browser, erro
 	b.Profile = filepath.Base(dir)
 	ctx, cancel := context.WithTimeout(ctx, lo.LaunchTimeout)
 	defer cancel()
-	if err := b.waitActivePort(ctx, lo.Options); err != nil {
+	if err := b.waitActivePort(ctx, lo); err != nil {
 		b.abort()
 		return nil, err
 	}
@@ -211,7 +215,7 @@ func launchElectron(ctx context.Context, in Installed, lo LaunchOptions) (*Brows
 	ctx, cancel := context.WithTimeout(ctx, lo.LaunchTimeout)
 	defer cancel()
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
-	if err := b.waitVersion(ctx, lo.Options, candidate{base: base, source: SourceFlag}); err != nil {
+	if err := b.waitVersion(ctx, lo, candidate{base: base, source: SourceFlag}); err != nil {
 		b.abort()
 		return nil, err
 	}
@@ -230,7 +234,7 @@ func start(in Installed, name string, args []string) (*Browser, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", in.Name, err)
 	}
-	b := &Browser{Installed: in, cmd: cmd, done: make(chan struct{}), stderr: tail}
+	b := &Browser{Installed: in, cmd: cmd, done: make(chan struct{}), stderr: tail, started: time.Now()}
 	if !strings.HasSuffix(name, "/open") {
 		b.mainPID = cmd.Process.Pid
 	}
@@ -242,16 +246,51 @@ func start(in Installed, name string, args []string) (*Browser, error) {
 }
 
 func (b *Browser) exitError(what string) error {
-	msg := strings.TrimSpace(b.stderr.String())
-	if msg != "" {
-		msg = ": " + msg
+	how := "exited"
+	if s := b.cmd.ProcessState; s != nil && s.Exited() {
+		how = fmt.Sprintf("exited with code %d", s.ExitCode())
+	} else if b.waitErr != nil {
+		how = "exited (" + b.waitErr.Error() + ")"
 	}
-	return fmt.Errorf("%s exited before %s (%v)%s", b.Installed.Name, what, b.waitErr, msg)
+	msg := strings.TrimSpace(b.stderr.String())
+	if msg == "" {
+		msg = "no output"
+	}
+	return fmt.Errorf("%s %s after %s, before %s; its output: %s", b.Installed.Name, how, b.elapsed(), what, msg)
 }
 
-func (b *Browser) waitActivePort(ctx context.Context, o Options) error {
-	o = o.withDefaults()
+func (b *Browser) elapsed() time.Duration {
+	return time.Since(b.started).Round(100 * time.Millisecond)
+}
+
+type slowNotice struct {
+	report func(time.Duration)
+	next   time.Time
+	start  time.Time
+}
+
+func newSlowNotice(start time.Time, report func(time.Duration)) *slowNotice {
+	return &slowNotice{report: report, start: start, next: start.Add(SlowLaunchAfter)}
+}
+
+func (n *slowNotice) check(now time.Time) {
+	if n.report == nil || now.Before(n.next) {
+		return
+	}
+	n.report(n.next.Sub(n.start))
+	for !now.Before(n.next) {
+		n.next = n.next.Add(SlowLaunchAfter)
+	}
+}
+
+func (b *Browser) stillRunning(ctx context.Context, what string) error {
+	return fmt.Errorf("%s is still running after %s but %s: %w", b.Installed.Name, b.elapsed(), what, ctx.Err())
+}
+
+func (b *Browser) waitActivePort(ctx context.Context, lo LaunchOptions) error {
+	o := lo.withDefaults()
 	client := o.httpClient()
+	slow := newSlowNotice(b.started, lo.Slow)
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -267,10 +306,11 @@ func (b *Browser) waitActivePort(ctx context.Context, o Options) error {
 			return b.exitError("writing " + ActivePortFile)
 		case <-ctx.Done():
 			if b.six {
-				return fmt.Errorf("%s did not write %s in SLICC six's profile: %w", b.Installed.Name, ActivePortFile, ctx.Err())
+				return b.stillRunning(ctx, "has not written "+ActivePortFile+" in SLICC six's profile")
 			}
-			return fmt.Errorf("%s did not write %s in %s: %w", b.Installed.Name, filepath.Join(b.ProfileDir, ActivePortFile), b.ProfileDir, ctx.Err())
-		case <-tick.C:
+			return b.stillRunning(ctx, "has not written "+filepath.Join(b.ProfileDir, ActivePortFile))
+		case now := <-tick.C:
+			slow.check(now)
 		}
 	}
 }
@@ -304,9 +344,10 @@ func (b *Browser) freshActivePort() (int, string, error) {
 	return port, ws, nil
 }
 
-func (b *Browser) waitVersion(ctx context.Context, o Options, c candidate) error {
-	o = o.withDefaults()
+func (b *Browser) waitVersion(ctx context.Context, lo LaunchOptions, c candidate) error {
+	o := lo.withDefaults()
 	client := o.httpClient()
+	slow := newSlowNotice(b.started, lo.Slow)
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -318,8 +359,9 @@ func (b *Browser) waitVersion(ctx context.Context, o Options, c candidate) error
 		case <-b.done:
 			return b.exitError("its CDP port answered")
 		case <-ctx.Done():
-			return fmt.Errorf("%s: no CDP on %s: %w", b.Installed.Name, c.base, ctx.Err())
-		case <-tick.C:
+			return b.stillRunning(ctx, "has no CDP on "+c.base)
+		case now := <-tick.C:
+			slow.check(now)
 		}
 	}
 }
