@@ -22,12 +22,24 @@ type wasiFirst struct {
 	} `json:"json"`
 }
 
+type wasiStamp struct {
+	PID    int    `json:"pid"`
+	UID    int    `json:"uid"`
+	GID    int    `json:"gid"`
+	User   string `json:"user"`
+	Groups []int  `json:"groups"`
+	Users  string `json:"users"`
+}
+
 type wasiConn struct {
+	Stamp    *wasiStamp       `json:"stamp"`
+	Facade   string           `json:"facade"`
 	First    *wasiFirst       `json:"first"`
 	Records  []int            `json:"records"`
 	Controls []map[string]any `json:"controls"`
 	Bytes    int              `json:"bytes"`
 	Ended    bool             `json:"ended"`
+	Closed   bool             `json:"closed"`
 	Text     string           `json:"text"`
 }
 
@@ -45,6 +57,7 @@ type wasiCase struct {
 	Name           string            `json:"name"`
 	Argv           []string          `json:"argv"`
 	Env            map[string]string `json:"env,omitempty"`
+	User           string            `json:"user,omitempty"`
 	Stdin          *string           `json:"stdin,omitempty"`
 	TTY            bool              `json:"tty,omitempty"`
 	Scenario       []map[string]any  `json:"scenario,omitempty"`
@@ -100,7 +113,27 @@ func requireKernel(t *testing.T) string {
 	return node
 }
 
+type wasiUser struct {
+	Name   string   `json:"name"`
+	Groups []string `json:"groups,omitempty"`
+}
+
+type wasiReal struct {
+	Port  int        `json:"port"`
+	Users []wasiUser `json:"users"`
+}
+
 func runWasi(t *testing.T, cases []wasiCase) {
+	t.Helper()
+	runWasiOn(t, nil, cases)
+}
+
+func runWasiReal(t *testing.T, real wasiReal, cases []wasiCase) {
+	t.Helper()
+	runWasiOn(t, &real, cases)
+}
+
+func runWasiOn(t *testing.T, real *wasiReal, cases []wasiCase) {
 	t.Helper()
 	node := requireKernel(t)
 	pkg := wasiPackage(t, node)
@@ -108,7 +141,7 @@ func runWasi(t *testing.T, cases []wasiCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, err := json.Marshal(map[string]any{"package": pkg, "facade": facade, "cases": cases})
+	input, err := json.Marshal(map[string]any{"package": pkg, "facade": facade, "real": real, "cases": cases})
 	if err != nil {
 		t.Fatal(err)
 	}
