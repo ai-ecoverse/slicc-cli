@@ -47,6 +47,7 @@ func TestWatchLocalResumesWithoutDuplicates(t *testing.T) {
 		t.Fatalf("resumed watch %+v", o)
 	}
 	s.p.agentDo(`emit([{t: 'tool', id: 't1', call: 'c1', name: 'bash', summary: 'ls'}, {t: 'tool-result', id: 'r1', call: 'c1', ok: true, summary: '2 files'}])`)
+	w.waitFor(t, w.stderr, "tool bash ok: 2 files", 30*time.Second)
 	s.p.eval(`(linkTest.agent.resetWatches(), linkTest.agent.emit([{t: 'text', id: 'a2', delta: 'Bye'}]))`, &n)
 	st = s.p.waitWatches(t, 3)
 	if o := lastWatch(st); o.Since != "r1" {

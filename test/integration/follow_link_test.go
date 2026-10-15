@@ -308,8 +308,7 @@ func (fp *followProc) fingerprint(t *testing.T) (string, bool) {
 
 func followSetup(t *testing.T, trays int) ([]string, *fakeHub, []*fakeTray, *page, *trayLeader) {
 	t.Helper()
-	b := launchBrowser(t)
-	p := b.openPage(t, pageServer(t).URL+"/index.html")
+	_, p := launchWithPage(t, pageServer(t).URL+"/index.html")
 	env := append(configEnv(t), "SLICC_DEBUG=1", "SLICC_NO_TELEMETRY=1")
 	h := newFakeHub(t)
 	ts := make([]*fakeTray, trays)
