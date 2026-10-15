@@ -301,14 +301,12 @@ func (g *guard) handOutLocked(k requestKey) {
 		return
 	}
 	g.pauses++
-	_, known := g.handed[k]
 	g.handed[k] = g.pauses
-	if known {
-		return
-	}
-	g.handedOrder = append(g.handedOrder, k)
+	g.handedOrder = append(g.handedOrder, handedPause{k, g.pauses})
 	for len(g.handedOrder) > maxSettled {
-		delete(g.handed, g.handedOrder[0])
+		if old := g.handedOrder[0]; g.handed[old.req] == old.pause {
+			delete(g.handed, old.req)
+		}
 		g.handedOrder = g.handedOrder[1:]
 	}
 }
