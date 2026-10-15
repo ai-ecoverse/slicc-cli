@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { attachKernel, createNodeKernel } from '@ai-ecoverse/slicc-kernel/node'
+import { linkPage } from './page.mjs'
 
 const decoder = new TextDecoder()
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -36,7 +37,7 @@ async function waitFor (what, check, ms = 30000) {
   }
 }
 
-async function runCase (kernel, client, c, n) {
+async function fakeFacade (kernel, client, c, n) {
   const dir = `/tmp/case${n}`
   await kernel.writeFile(`${dir}/scenario.json`, JSON.stringify(c.scenario ?? [{ answer: { reset: 'EIO' } }]))
   const facade = await client.spawn(['slicc-fake-facade', dir], { cwd: '/tmp' })
@@ -50,6 +51,33 @@ async function runCase (kernel, client, c, n) {
   const env = { PATH: '/usr/bin:/bin', HOME: '/root', ...(c.env ?? {}) }
   if (c.env?.SLICC_LINK_URL === undefined) env.SLICC_LINK_URL = `tcp://127.0.0.1:${port}`
   if (c.env?.SLICC_LINK_URL === '') delete env.SLICC_LINK_URL
+  return {
+    env,
+    log: () => readJSON(kernel, `${dir}/log.json`),
+    stop: async () => {
+      await signal(facade, 'SIGKILL')
+      await Promise.race([facade.ended, sleep(2000)]).catch(() => {})
+    },
+  }
+}
+
+function realFacade (page, c) {
+  page.scenario = c.scenario ?? []
+  page.log = []
+  return { env: { ...(c.env ?? {}) }, log: async () => page.log, stop: async () => {} }
+}
+
+function groupId (text, name) {
+  for (const row of text.split('\n')) {
+    const [group, , gid] = row.split(':')
+    if (group === name) return Number(gid)
+  }
+  throw new Error(`no group ${name} in /etc/group`)
+}
+
+async function runCase (kernel, client, c, n) {
+  const facade = page ? realFacade(page, c) : await fakeFacade(kernel, client, c, n)
+  const env = facade.env
   let stdout = ''
   let stderr = ''
   const started = Date.now()
@@ -58,6 +86,7 @@ async function runCase (kernel, client, c, n) {
     : await client.spawn(c.argv, {
       cwd: '/tmp',
       env,
+      ...(c.user ? { user: c.user } : {}),
       ...(c.stdin !== undefined ? { stdin: c.stdin } : {}),
       onStdout: b => { stdout += decoder.decode(b, { stream: true }) },
       onStderr: b => { stderr += decoder.decode(b, { stream: true }) },
@@ -65,7 +94,7 @@ async function runCase (kernel, client, c, n) {
   let interrupted = false
   if (c.interruptAfter) {
     await waitFor('the facade connections', async () => {
-      const log = await readJSON(kernel, `${dir}/log.json`)
+      const log = await facade.log()
       return log && log.length >= c.interruptAfter && log.slice(0, c.interruptAfter).every(e => e.first) && stdout.length + stderr.length >= (c.outputBefore ?? 0)
     }, 60000)
     await sleep(c.settle ?? 500)
@@ -75,14 +104,17 @@ async function runCase (kernel, client, c, n) {
   const ended = await Promise.race([proc.ended, sleep(c.timeout ?? 60000).then(() => null)])
   if (!ended) await signal(proc, 'SIGKILL')
   await sleep(200)
-  const log = await readJSON(kernel, `${dir}/log.json`)
-  await signal(facade, 'SIGKILL')
-  await Promise.race([facade.ended, sleep(2000)]).catch(() => {})
+  const log = await facade.log()
+  await facade.stop()
   return { name: c.name, status: ended ? ended.status : -1, interrupted, ms: Date.now() - started, stdout, stderr, log }
 }
 
-const kernel = await createNodeKernel()
+const kernel = await createNodeKernel(input.real ? { facades: { link: { port: input.real.port } } } : {})
 const client = await attachKernel(await kernel.connect())
+for (const user of input.real?.users ?? []) await kernel.users.add(user)
+const sudo = input.real ? groupId(decoder.decode(await kernel.readFile('/etc/group')), 'sudo') : undefined
+const page = input.real ? linkPage({ sudo }) : null
+if (page) await client.serveFacade('link', page.hook)
 await install(kernel, input.package, '/node_modules/@ai-ecoverse/wasi-slicc')
 await install(kernel, input.facade, '/node_modules/slicc-fake-facade')
 const manifest = JSON.parse(readFileSync(join(input.package, 'package.json'), 'utf8'))
