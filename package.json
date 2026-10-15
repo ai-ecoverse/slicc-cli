@@ -20,7 +20,8 @@
       "@ai-ecoverse/slicc-linux-arm64",
       "@ai-ecoverse/slicc-linux-amd64",
       "@ai-ecoverse/slicc-windows-arm64",
-      "@ai-ecoverse/slicc-windows-amd64"
+      "@ai-ecoverse/slicc-windows-amd64",
+      "@ai-ecoverse/wasi-slicc"
     ]
   },
   "scripts": {
