@@ -83,7 +83,7 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
     env:
-      DRY_RUN: ${{ github.event_name == 'pull_request' }}
+      DRY_RUN: ${{ github.ref != 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -157,12 +157,12 @@ jobs:
           retention-days: 7
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
-        if: steps.plan.outputs.version != '' && env.DRY_RUN != 'true'
+        if: steps.plan.outputs.version != '' && env.DRY_RUN != 'true' && github.ref == 'refs/heads/main'
         with:
           subject-checksums: artifacts/release/SHA256SUMS
 
       - name: Release
-        if: steps.plan.outputs.version != '' && env.DRY_RUN != 'true'
+        if: steps.plan.outputs.version != '' && env.DRY_RUN != 'true' && github.ref == 'refs/heads/main'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLICC_NPM_PUBLISH: ${{ vars.SLICC_NPM_PUBLISH }}
@@ -171,7 +171,7 @@ jobs:
         run: npx semantic-release
 
       - name: Warm the Go module proxy
-        if: ${{ !cancelled() && steps.plan.outputs.version != '' && env.DRY_RUN != 'true' }}
+        if: ${{ !cancelled() && steps.plan.outputs.version != '' && env.DRY_RUN != 'true' && github.ref == 'refs/heads/main' }}
         continue-on-error: true
         timeout-minutes: 5
         env:
@@ -241,7 +241,7 @@ jobs:
 
   install-smoke:
     needs: release
-    if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.version != '' && github.event_name != 'pull_request' }}
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.version != '' && github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
       matrix:
