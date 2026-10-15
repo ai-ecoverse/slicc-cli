@@ -32,7 +32,7 @@ jobs:
   ci:
     if: ${{ github.event_name != 'workflow_run' && !(github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only) }}
     name: CI on this commit
-    runs-on: ubuntu-latest
+    runs-on: cloud-run-bench
     timeout-minutes: 120
     permissions:
       actions: read
@@ -180,7 +180,7 @@ jobs:
 
   sliccy-next:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: cloud-run-bench
     timeout-minutes: 30
     permissions:
       contents: read
@@ -210,7 +210,7 @@ jobs:
             asset: slicc-darwin-arm64
           - runner: macos-15-intel
             asset: slicc-darwin-amd64
-          - runner: ubuntu-latest
+          - runner: cloud-run-bench
             asset: slicc-linux-amd64
           - runner: ubuntu-24.04-arm
             asset: slicc-linux-arm64
@@ -247,7 +247,7 @@ jobs:
       matrix:
         include:
           - name: ubuntu-curl
-            runner: ubuntu-latest
+            runner: cloud-run-bench
             container: ''
           - name: macos-curl
             runner: macos-latest
