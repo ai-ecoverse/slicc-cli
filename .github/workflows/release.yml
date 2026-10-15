@@ -66,10 +66,34 @@ jobs:
             sleep 30
           done
 
-  release:
-    needs: ci
+  fresh:
     if: >-
-      ${{ !cancelled() && (needs.ci.result == 'success' || github.event_name == 'workflow_run'
+      ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository }}
+    name: Still the head of main
+    runs-on: cloud-run-bench
+    timeout-minutes: 5
+    outputs:
+      stale: ${{ steps.head.outputs.stale }}
+    steps:
+      - name: Compare the tested commit with main
+        id: head
+        env:
+          REPO: ${{ github.server_url }}/${{ github.repository }}.git
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          head="$(git ls-remote "$REPO" refs/heads/main | cut -f1)" || head=""
+          if [ -n "$head" ] && [ "$head" != "$SHA" ]; then
+            echo "main is at $head, past $SHA; the newer commit's CI releases"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main is at ${head:-an unknown commit}; releasing $SHA"
+          fi
+
+  release:
+    needs: [ci, fresh]
+    if: >-
+      ${{ !cancelled() && needs.fresh.outputs.stale != 'true' && (needs.ci.result == 'success' || github.event_name == 'workflow_run'
       && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
       && github.event.workflow_run.head_repository.full_name == github.repository) }}
     runs-on: macos-latest
