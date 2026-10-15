@@ -238,6 +238,31 @@ func (s *Stream) Write(p []byte) (int, error) {
 	return total, nil
 }
 
+func (s *Stream) TryWrite(p []byte) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case s.reset != nil:
+		return false, s.reset
+	case s.sentEnd:
+		return false, ErrWriteAfterEnd
+	case !s.estab:
+		return false, ErrNotAccepted
+	case len(p) > Window-s.outstanding:
+		return false, nil
+	}
+	for len(p) > 0 {
+		n := min(len(p), MaxPayload)
+		if err := s.send(FrameData, p[:n]); err != nil {
+			s.resetLocked(&ResetError{Code: "ECONNRESET", Message: err.Error()}, false)
+			return false, s.reset
+		}
+		s.outstanding += n
+		p = p[n:]
+	}
+	return true, nil
+}
+
 func (s *Stream) SetReadDeadline(t time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -455,6 +455,8 @@ func (r *run) pump(q *queue, n *node.Node, pol *policy.Policy) {
 			r.emit(Event{Event: StreamOpen, Stream: ev.Stream})
 		case node.EventStreamClose:
 			r.emit(Event{Event: StreamDone, Stream: ev.Stream})
+		case node.EventDropped:
+			r.emit(Event{Event: Dropped, Stream: ev.Stream, Count: ev.Count})
 		}
 	}
 }

@@ -342,7 +342,7 @@ func TestFollowLinksThroughTheTrayAndServesTCP(t *testing.T) {
 	if !created {
 		t.Fatal("first run did not mint a device")
 	}
-	fp.waitStderr(t, "slicc: exit on (tcp, resolve, http, ws)", 10*time.Second)
+	fp.waitStderr(t, "slicc: exit on (tcp, resolve, http, ws, udp)", 10*time.Second)
 	fp.waitStderr(t, "slicc: linked to link test page", 60*time.Second)
 	p.waitUp(t, "")
 	if got := p.fingerprint(); got != fingerprint || !strings.HasPrefix(got, "sha-256 ") {

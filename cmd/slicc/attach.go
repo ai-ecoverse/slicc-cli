@@ -20,6 +20,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
+	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
@@ -181,6 +182,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	resolve.Register(n)
 	httpcap.Register(n)
 	wscap.Register(n)
+	udpcap.Register(n)
 	if !f.noJerk {
 		serveJerk(n, true, false, status)
 	}
