@@ -1,5 +1,7 @@
 package cdp
 
+import "strings"
+
 var freeForm = map[string]bool{
 	"value": true, "unserializableValue": true, "description": true, "expression": true, "functionDeclaration": true,
 	"arguments": true, "text": true, "data": true, "body": true, "postData": true, "postDataEntries": true,
@@ -7,9 +9,6 @@ var freeForm = map[string]bool{
 }
 
 func (g *guard) scrub(data []byte) []byte {
-	if !g.o.Mentions(data) {
-		return data
-	}
 	m, ok := decodeObject(data)
 	if !ok {
 		return data
@@ -24,7 +23,7 @@ func (g *guard) scrubValue(root any) bool {
 	changed := false
 	cut := func(v any) (string, bool) {
 		s, ok := v.(string)
-		if !ok || !g.o.URL(s) {
+		if !ok || !strings.Contains(s, ":") || !g.o.URL(s) {
 			return "", false
 		}
 		changed = true
