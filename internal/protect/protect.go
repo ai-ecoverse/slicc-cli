@@ -144,7 +144,7 @@ func (o *Origins) Mentions(text []byte) bool {
 	if o == nil {
 		return false
 	}
-	for _, s := range o.extra {
+	for _, s := range o.hosts {
 		if bytes.Contains(text, []byte(s)) {
 			return true
 		}
