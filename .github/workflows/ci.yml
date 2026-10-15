@@ -59,7 +59,7 @@ jobs:
 
       - run: npm ci
 
-      - run: node scripts/test-shard.mjs ${{ matrix.shard }} -race -count=1 -timeout 12m ./test/integration/...
+      - run: node scripts/test-shard.mjs ${{ matrix.shard }} -race -count=1 -timeout 12m -v ./test/integration/...
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}

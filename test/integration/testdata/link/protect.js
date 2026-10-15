@@ -222,53 +222,57 @@ async function autoAttachRound(c, targetId, waitForDebuggerOnStart) {
 function staysOutVector(id, viaRedirect) {
   return {
     id,
-    setup: `an allowed opener with auto-attach opens a popup ${viaRedirect ? 'on a redirect chain that ends' : 'straight'} on a page that later navigates itself to another path of its origin`,
+    setup: `an allowed opener with auto-attach opens a popup ${viaRedirect ? 'on a redirect chain that ends' : 'straight'} on a page that later navigates itself to another path of its origin; a second client runs its own auto-attach rounds alongside`,
     trigger: async (ctx) => {
       const { c, env, tag } = ctx;
-      const { targetId, sessionId } = await c.attachTo(`${env.allowed}/doc?n=opener`);
+      const [c2, { targetId, sessionId }] = await Promise.all([ctx.open(), c.attachTo(`${env.allowed}/doc?n=opener`)]);
       ctx.targets.push(targetId);
-      await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
-      const later = `${ctx.dest}/doc?n=${tag}-later`;
-      const page = `${ctx.dest}/selfnav?n=${tag}&ms=8000&to=${encodeURIComponent(later)}`;
-      const url = viaRedirect ? hop([[env.allowed, 302], [env.cross, 307]], page) : page;
-      await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(url)}))`, userGesture: true }, sessionId);
-      let p = await popupOf(c, targetId);
-      for (const end = Date.now() + 10000; p && !p.url.startsWith(originOf(ctx.dest)) && Date.now() < end; p = await popupOf(c, targetId)) await sleep(100);
-      if (!p) return { opened: false };
-      ctx.targets.push(p.targetId);
-      const mine = (e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.targetId === p.targetId;
-      const atOpen = await c.waitEvent(mine, 2000).then(() => true, () => false);
-      const noWait = await autoAttachRound(c, p.targetId, false);
-      const attach = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
-      if (attach.ok) await outcome(c.send('Target.detachFromTarget', { sessionId: attach.result.sessionId }));
-      const activate = await outcome(c.send('Target.activateTarget', { targetId: p.targetId }));
-      const info = await outcome(c.send('Target.getTargetInfo', { targetId: p.targetId }));
-      const navigatedLater = await until(async () => hit(await vlog(env, tag), ctx.dest, `/doc?n=${tag}-later`), 15000);
-      await sleep(500);
-      const laterWait = await autoAttachRound(c, p.targetId, true);
-      const laterNoWait = await autoAttachRound(c, p.targetId, false);
-      const attachLater = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
-      const infoLater = await outcome(c.send('Target.getTargetInfo', { targetId: p.targetId }));
-      await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
-      const close = await outcome(c.send('Target.closeTarget', { targetId: p.targetId }));
-      const masked = (r) => r.ok && [originOf(ctx.dest), `${originOf(ctx.dest)}/`].includes(r.result.targetInfo.url);
-      return {
-        opened: true,
-        autoAttachedAtOpen: atOpen,
-        autoAttachedNoWait: noWait,
-        attach: attach.ok,
-        activate: activate.ok,
-        infoMasked: masked(info),
-        navigatedLater: Boolean(navigatedLater),
-        autoAttachedLaterWait: laterWait,
-        autoAttachedLaterNoWait: laterNoWait,
-        attachLater: attachLater.ok,
-        infoMaskedLater: masked(infoLater),
-        close: close.ok,
-        everAttached: c.events.some(mine),
-        refused: [attach, activate, attachLater, close].every(isRefused),
-        url: info.ok ? info.result.targetInfo.url : '',
-      };
+      try {
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+        const later = `${ctx.dest}/doc?n=${tag}-later`;
+        const page = `${ctx.dest}/selfnav?n=${tag}&ms=6000&to=${encodeURIComponent(later)}`;
+        const url = viaRedirect ? hop([[env.allowed, 302], [env.cross, 307]], page) : page;
+        await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(url)}))`, userGesture: true }, sessionId);
+        let p = await popupOf(c, targetId);
+        for (const end = Date.now() + 10000; p && !p.url.startsWith(originOf(ctx.dest)) && Date.now() < end; p = await popupOf(c, targetId)) await sleep(100);
+        if (!p) return { opened: false };
+        ctx.targets.push(p.targetId);
+        const mine = (e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.targetId === p.targetId;
+        const [atOpen, noWait] = await Promise.all([c.waitEvent(mine, 2000).then(() => true, () => false), autoAttachRound(c2, p.targetId, false)]);
+        for (const e of c.events.filter(mine)) await outcome(c.send('Target.detachFromTarget', { sessionId: e.params.sessionId }));
+        const attach = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
+        if (attach.ok) await outcome(c.send('Target.detachFromTarget', { sessionId: attach.result.sessionId }));
+        const activate = await outcome(c.send('Target.activateTarget', { targetId: p.targetId }));
+        const info = await outcome(c.send('Target.getTargetInfo', { targetId: p.targetId }));
+        const navigatedLater = await until(async () => hit(await vlog(env, tag), ctx.dest, `/doc?n=${tag}-later`), 15000);
+        await sleep(500);
+        const [laterWait, laterNoWait] = await Promise.all([autoAttachRound(c, p.targetId, true), autoAttachRound(c2, p.targetId, false)]);
+        const attachLater = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
+        const infoLater = await outcome(c.send('Target.getTargetInfo', { targetId: p.targetId }));
+        await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+        await c2.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+        const close = await outcome(c.send('Target.closeTarget', { targetId: p.targetId }));
+        const masked = (r) => r.ok && [originOf(ctx.dest), `${originOf(ctx.dest)}/`].includes(r.result.targetInfo.url);
+        return {
+          opened: true,
+          autoAttachedAtOpen: atOpen,
+          autoAttachedNoWait: noWait,
+          attach: attach.ok,
+          activate: activate.ok,
+          infoMasked: masked(info),
+          navigatedLater: Boolean(navigatedLater),
+          autoAttachedLaterWait: laterWait,
+          autoAttachedLaterNoWait: laterNoWait,
+          attachLater: attachLater.ok,
+          infoMaskedLater: masked(infoLater),
+          close: close.ok,
+          everAttached: c.events.some(mine) || c2.events.some(mine),
+          refused: [attach, activate, attachLater, close].every(isRefused),
+          url: info.ok ? info.result.targetInfo.url : '',
+        };
+      } finally {
+        await c2.close();
+      }
     },
     control: {
       origin: 'ordinary',
@@ -671,12 +675,12 @@ const vectors = [
 
 export const protectVectors = vectors.map(({ id, setup, control, expected, skip }) => ({ id, setup, control, expected, skip: skip ?? {} }));
 
-async function runVector(c, id, origin, env) {
+async function runVector(c, id, origin, env, open) {
   const v = vectors.find((x) => x.id === id);
   if (!v) throw new Error(`no vector ${id}`);
   if (v.skip?.[origin]) return { skipped: v.skip[origin], pass: true, targets: [] };
   const tag = `${id}-${origin}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`.replace(/[^A-Za-z0-9-]/g, '-');
-  const ctx = { c, env, origin, dest: env.dest[origin], tag, targets: [], errorPage: [] };
+  const ctx = { c, open, env, origin, dest: env.dest[origin], tag, targets: [], errorPage: [] };
   const control = origin === v.control.origin;
   try {
     const observed = await v.trigger(ctx);
@@ -705,7 +709,7 @@ export function protectTest(getLink, describe) {
   };
   return {
     vectorList: () => protectVectors.map(({ id, control, skip }) => ({ id, case: id.split('.')[0], control: control.origin, skip })),
-    vector: (browser, id, origin, env) => run(browser, (c) => runVector(c, id, origin, env)),
+    vector: (browser, id, origin, env) => run(browser, (c) => runVector(c, id, origin, env, () => CdpClient.open(getLink(), browser))),
     targets: (browser) =>
       run(browser, async (c) => {
         const { targetInfos } = await c.send('Target.getTargets');
