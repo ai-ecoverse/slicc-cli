@@ -1,0 +1,48 @@
+name: stress
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [before, after]
+    name: gate (${{ matrix.variant }})
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - if: matrix.variant == 'before'
+        shell: bash
+        run: git checkout 6ecc3a6 -- internal/signal/loopback/listener.go test/integration/loopback_test.go
+
+      - shell: bash
+        run: |
+          set +e
+          go test -race -count=50 -timeout 35m -run '^TestLoopbackGateRefuses$' -v ./test/integration/ > "$RUNNER_TEMP/out.txt" 2>&1
+          code=$?
+          grep -E '^(--- FAIL|ok|FAIL)|loopback_test.go:[0-9]+' "$RUNNER_TEMP/out.txt"
+          echo "pass $(grep -c -- '^--- PASS: TestLoopbackGateRefuses' "$RUNNER_TEMP/out.txt") fail $(grep -c -- '^--- FAIL: TestLoopbackGateRefuses' "$RUNNER_TEMP/out.txt")"
+          exit $code
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
