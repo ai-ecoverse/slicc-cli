@@ -19,7 +19,45 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  ci:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only) }}
+    name: CI on this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for CI to pass on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push' }}
+        run: |
+          url="repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=$EVENT&per_page=1"
+          start=$(date +%s)
+          while :; do
+            run="$(gh api "$url" --jq '.workflow_runs[0] // empty | "\(.status) \(.conclusion) \(.html_url)"' || true)"
+            status="${run%% *}"
+            if [ -z "$run" ]; then
+              if [ $(( $(date +%s) - start )) -gt 600 ]; then
+                echo "::error::no CI run ($EVENT) for $SHA after 10 minutes"
+                exit 1
+              fi
+            elif [ "$status" = completed ]; then
+              rest="${run#* }"
+              conclusion="${rest%% *}"
+              echo "CI for $SHA: $conclusion ${rest#* }"
+              if [ "$conclusion" = success ]; then exit 0; fi
+              echo "::error::CI for $SHA ended $conclusion; re-run its failed jobs, then re-run this workflow"
+              exit 1
+            else
+              echo "CI for $SHA: $run"
+            fi
+            sleep 30
+          done
+
   release:
+    needs: ci
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only) }}
     runs-on: macos-latest
     timeout-minutes: 90
@@ -48,8 +86,6 @@ jobs:
           go-version-file: go.mod
 
       - run: npm ci
-
-      - run: npm test -- -v
 
       - name: Plan
         id: plan
