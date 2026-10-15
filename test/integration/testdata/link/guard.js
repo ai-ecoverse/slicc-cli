@@ -123,6 +123,17 @@ function fixtureLog(base) {
   };
 }
 
+async function retried(open) {
+  for (let i = 1; ; i += 1) {
+    try {
+      return await open();
+    } catch (error) {
+      if (i === 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500 * i));
+    }
+  }
+}
+
 const state = { rows: [], done: false, error: null, summary: null };
 
 export function guardStart(getLink, opts) {
@@ -134,9 +145,9 @@ export function guardStart(getLink, opts) {
     const execution = await run(set, {
       clientFactory: async ({ slot }) => {
         const b = browsers[slot % browsers.length];
-        const client = await CdpClient.open(getLink(), b.id);
+        const client = await retried(() => CdpClient.open(getLink(), b.id));
         client.transport = 'cli';
-        const unguarded = await SocketClient.open(b.ws);
+        const unguarded = await retried(() => SocketClient.open(b.ws));
         return {
           client: sessionBound(client),
           unguarded: sessionBound(unguarded),

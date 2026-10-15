@@ -46,8 +46,9 @@ jobs:
           - { os: macos-latest, shard: 1/3 }
           - { os: macos-latest, shard: 2/3 }
           - { os: macos-latest, shard: 3/3 }
-          - { os: windows-latest, shard: 1/2 }
-          - { os: windows-latest, shard: 2/2 }
+          - { os: windows-latest, shard: 1/3 }
+          - { os: windows-latest, shard: 2/3 }
+          - { os: windows-latest, shard: 3/3 }
     name: test (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'cloud-run-bench' || matrix.os }}
     timeout-minutes: 20

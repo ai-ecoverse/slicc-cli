@@ -258,11 +258,13 @@ func TestCDPProtectVectors(t *testing.T) {
 	begin := time.Now()
 	var sum *guardSummary
 	seen := 0
+	said := begin
 	for deadline := begin.Add(11 * time.Minute); sum == nil; time.Sleep(2 * time.Second) {
 		var p guardProgress
 		env.p.eval("linkTest.guard.progress("+strconv.Itoa(seen)+")", &p)
 		seen += len(p.Rows)
-		if len(p.Rows) > 0 {
+		if time.Since(said) > 30*time.Second {
+			said = time.Now()
 			t.Logf("%d rows run after %s", seen, time.Since(begin).Round(time.Second))
 		}
 		if p.Error != "" {
