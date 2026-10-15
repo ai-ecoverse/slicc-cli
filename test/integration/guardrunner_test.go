@@ -25,7 +25,12 @@ const guardSetVersion = "1.7.0"
 
 var guardVariants = []string{"prompt", "lagging"}
 
-const guardSlots = 10
+func guardSlots() int {
+	if runtime.GOOS == "windows" {
+		return 8
+	}
+	return 10
+}
 
 func guardPackage(t *testing.T) string {
 	t.Helper()
@@ -203,7 +208,7 @@ func TestCDPProtectVectors(t *testing.T) {
 		"ordinary-same-site": "http://page.guard.test:" + fp,
 		"cross":              "http://cross.test:" + fp,
 	}
-	n := guardSlots
+	n := guardSlots()
 	rules := "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1,MAP sliccy.ai 127.0.0.1,MAP *.test 127.0.0.1"
 	chromes := make([]*chromeProc, n)
 	for i := range chromes {
