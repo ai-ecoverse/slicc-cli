@@ -1,9 +1,19 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .releaserc.json
+      - scripts/go-*
+      - scripts/npm-*.mjs
+      - scripts/package.sh
+      - scripts/release-plan.mjs
+      - scripts/sliccy-next.mjs
   workflow_dispatch:
     inputs:
       sliccy_next_only:
@@ -15,12 +25,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  group: release-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'workflow_run' && (github.event.workflow_run.event != 'push' || github.event.workflow_run.conclusion != 'success') && github.run_id || 'main' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only) }}
+    if: ${{ github.event_name != 'workflow_run' && !(github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only) }}
     name: CI on this commit
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -58,7 +68,10 @@ jobs:
 
   release:
     needs: ci
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only) }}
+    if: >-
+      ${{ !cancelled() && (needs.ci.result == 'success' || github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_repository.full_name == github.repository) }}
     runs-on: macos-latest
     timeout-minutes: 90
     permissions:
@@ -74,6 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -187,7 +201,7 @@ jobs:
 
   smoke:
     needs: release
-    if: needs.release.outputs.version != ''
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.version != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -227,7 +241,7 @@ jobs:
 
   install-smoke:
     needs: release
-    if: needs.release.outputs.version != '' && github.event_name != 'pull_request'
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.version != '' && github.event_name != 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:
