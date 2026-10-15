@@ -6,6 +6,7 @@ var freeForm = map[string]bool{
 	"value": true, "unserializableValue": true, "description": true, "expression": true, "functionDeclaration": true,
 	"arguments": true, "text": true, "data": true, "body": true, "postData": true, "postDataEntries": true,
 	"bytes": true, "html": true, "source": true, "outerHTML": true, "nodeValue": true, "entries": true,
+	"key": true, "newValue": true, "oldValue": true,
 }
 
 var headerLists = map[string]bool{"headers": true, "requestHeaders": true, "responseHeaders": true}
@@ -43,7 +44,7 @@ func (g *guard) scrubValue(root any) bool {
 		switch t := it.v.(type) {
 		case map[string]any:
 			for k, val := range t {
-				if freeForm[k] && (k != "value" || !it.headers) {
+				if freeForm[k] && !it.headers {
 					continue
 				}
 				if r, ok := cut(val); ok {
