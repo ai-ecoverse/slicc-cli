@@ -453,12 +453,16 @@ func gateDo(t *testing.T, port int, method, path, host string, header map[string
 	if _, err := c.Write(b.Bytes()); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	br := bufio.NewReader(c)
+	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	if n, err := br.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+		t.Fatalf("%s %s with a %d-byte body: after the %d answer the connection ended with %d bytes and %v, not a clean close", method, path, len(body), resp.StatusCode, n, err)
+	}
 	return gateAnswer{status: resp.StatusCode, body: string(got), header: resp.Header}
 }
 

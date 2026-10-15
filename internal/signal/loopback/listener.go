@@ -29,6 +29,7 @@ const (
 	MaxBody       = 64 << 10
 	FragmentKey   = "slicc-pair"
 	AnswerTimeout = 10 * time.Second
+	maxDrain      = 4 * MaxBody
 )
 
 type Config struct {
@@ -255,13 +256,13 @@ func (l *Listener) origin(r *http.Request) string {
 func (l *Listener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !l.hostOK(r.Host) || (r.RequestURI != PairPath && r.RequestURI != SignalPath) {
 		l.cfg.Logf("loopback: refused %s: host or path", r.Method)
-		forbid(w, "")
+		forbid(w, r, "")
 		return
 	}
 	origin := l.origin(r)
 	if origin == "" {
 		l.cfg.Logf("loopback: refused %s %s: origin", r.Method, r.RequestURI)
-		forbid(w, "")
+		forbid(w, r, "")
 		return
 	}
 	switch r.Method {
@@ -270,11 +271,12 @@ func (l *Listener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		l.post(w, r, origin)
 	default:
-		forbid(w, origin)
+		forbid(w, r, origin)
 	}
 }
 
-func forbid(w http.ResponseWriter, origin string) {
+func forbid(w http.ResponseWriter, r *http.Request, origin string) {
+	drain(r)
 	if origin != "" {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Vary", "Origin")
@@ -283,14 +285,21 @@ func forbid(w http.ResponseWriter, origin string) {
 	w.WriteHeader(http.StatusForbidden)
 }
 
+func drain(r *http.Request) {
+	if r.ContentLength > maxDrain {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, maxDrain))
+}
+
 func (l *Listener) preflight(w http.ResponseWriter, r *http.Request, origin string) {
 	if r.Header.Get("Access-Control-Request-Method") != http.MethodPost {
-		forbid(w, "")
+		forbid(w, r, "")
 		return
 	}
 	for _, h := range strings.Split(r.Header.Get("Access-Control-Request-Headers"), ",") {
 		if h = strings.TrimSpace(h); h != "" && !strings.EqualFold(h, "content-type") {
-			forbid(w, "")
+			forbid(w, r, "")
 			return
 		}
 	}
@@ -330,37 +339,37 @@ func (l *Listener) post(w http.ResponseWriter, r *http.Request, origin string) {
 	pairing := r.RequestURI == PairPath
 	if pairing && !l.rate.allow(time.Now()) {
 		l.cfg.Logf("loopback: refused a pairing: more than %d a minute", PairLimit)
-		forbid(w, origin)
+		forbid(w, r, origin)
 		return
 	}
 	req, ok := readRequest(r)
 	if !ok {
 		l.cfg.Logf("loopback: refused %s: body", r.RequestURI)
-		forbid(w, origin)
+		forbid(w, r, origin)
 		return
 	}
 	fp, err := Fingerprint(req.Offer)
 	if err != nil {
 		l.cfg.Logf("loopback: refused %s: %v", r.RequestURI, err)
-		forbid(w, origin)
+		forbid(w, r, origin)
 		return
 	}
 	norm := browser.NormalizeOrigin(origin)
 	if pairing {
 		if !l.tokens.burn(req.Token, time.Now()) {
 			l.cfg.Status("refused a pairing request from %s: the token is wrong, used or expired", norm)
-			forbid(w, origin)
+			forbid(w, r, origin)
 			return
 		}
 		if err := l.cfg.Peers.Pin(fp, norm, l.nodeFingerprint()); err != nil {
 			l.cfg.Status("could not save the pairing: %v", err)
-			forbid(w, origin)
+			forbid(w, r, origin)
 			return
 		}
 		l.cfg.Status("paired with seven on %s (%s)", norm, ShortFingerprint(fp))
 	} else if pinned, ok := l.cfg.Peers.Origin(fp, l.nodeFingerprint()); !ok || pinned != norm {
 		l.cfg.Logf("loopback: refused a signal from %s (%s): not paired from there", norm, ShortFingerprint(fp))
-		forbid(w, origin)
+		forbid(w, r, origin)
 		return
 	}
 	l.answer(w, r, origin, norm, fp, req.Offer)
@@ -369,7 +378,7 @@ func (l *Listener) post(w http.ResponseWriter, r *http.Request, origin string) {
 func (l *Listener) answer(w http.ResponseWriter, r *http.Request, origin, norm, fp, offer string) {
 	c := l.conn(fp)
 	if c == nil {
-		forbid(w, origin)
+		forbid(w, r, origin)
 		return
 	}
 	defer func() {
@@ -380,7 +389,7 @@ func (l *Listener) answer(w http.ResponseWriter, r *http.Request, origin, norm, 
 	sdp, err := c.offer(r.Context(), norm, offer, l.cfg.AnswerTimeout)
 	if err != nil {
 		l.cfg.Status("could not answer seven on %s (%s): %v", norm, ShortFingerprint(fp), err)
-		forbid(w, origin)
+		forbid(w, r, origin)
 		return
 	}
 	body, _ := json.Marshal(map[string]string{"answer": sdp, "node": l.cfg.NodeID, "name": l.cfg.Name})
