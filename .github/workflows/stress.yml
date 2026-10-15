@@ -1,0 +1,43 @@
+name: stress
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  stress:
+    strategy:
+      fail-fast: false
+      max-parallel: 30
+      matrix:
+        variant: [before, after]
+        n: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+    name: stress (${{ matrix.variant }}, ${{ matrix.n }})
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - if: matrix.variant == 'after'
+        name: Read Chrome in from the runner's cold disk
+        run: |
+          $dir = Join-Path $env:ProgramFiles 'Google\Chrome\Application'
+          (Get-Item (Join-Path $dir 'chrome.exe')).VersionInfo.ProductVersion
+          $files = Get-ChildItem $dir -Recurse -File -ErrorAction Stop
+          $took = Measure-Command { foreach ($f in $files) { $null = [IO.File]::ReadAllBytes($f.FullName) } }
+          '{0:N0} MB of {1} read in {2:N1} s' -f (($files | Measure-Object Length -Sum).Sum / 1MB), $dir, $took.TotalSeconds
+
+      - run: go test -race -count=1 -timeout 12m -v -run '^(TestAgentOverStdio|TestPromptThinkingGoesToStderr|TestPromptJSONPrintsTheRawEvents|TestSixAttachOpensSevenAndLeavesTheProfileAsItWas)$' ./test/integration/...
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
