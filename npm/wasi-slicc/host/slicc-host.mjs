@@ -2,11 +2,10 @@ export const PROBE = 0x736c6331
 
 const EAGAIN = 6
 const EINPROGRESS = 26
-const SOL_SOCKET = 1
-const SO_ERROR = 4
 const EACCES = 2
 const EINVAL = 28
 const EIO = 29
+const ENOSYS = 52
 const decoder = new TextDecoder()
 
 export function loopbackHost (host) {
@@ -21,36 +20,28 @@ export function createImports (ctx) {
     if (typeof error?.code !== 'string') throw error
     return -(ctx.errno(error) || EIO)
   }
-  const close = fd => {
-    try {
-      ctx.syscall({ op: 'fd-close', fd })
-    } catch (error) {
-      fail(error)
-    }
-  }
 
   function connect (pointer, size, port) {
     const host = loopbackHost(decoder.decode(view(pointer, size).slice()))
     if (host === null) return -EACCES
     if (!Number.isInteger(port) || port < 1 || port > 65535) return -EINVAL
-    let fd
+    if (typeof ctx.net?.connect !== 'function') return -ENOSYS
     try {
-      fd = ctx.syscall({ op: 'sock-open', domain: 'inet' })
-      ctx.syscall({ op: 'sock-connect', fd, addr: { family: 'inet', host, port }, nonblock: true })
-      return fd
+      return ctx.net.connect({ host, port, nonblock: true })
     } catch (error) {
-      if (error?.code === 'EINPROGRESS' && fd !== undefined) return fd
-      if (fd !== undefined) close(fd)
       return fail(error)
     }
   }
 
   function connected (fd, timeoutMs) {
     try {
-      const ready = ctx.syscall({ op: 'fd-select', read: [], write: [fd], timeoutMs })
-      if (!ready?.write?.length) return -EAGAIN
-      const failed = Number(ctx.syscall({ op: 'sock-getopt', fd, level: SOL_SOCKET, name: SO_ERROR }))
-      return failed === 0 ? 0 : -(failed === EINPROGRESS ? EAGAIN : failed)
+      let state = ctx.net.ready(fd)
+      if (state === EINPROGRESS) {
+        ctx.syscall({ op: 'fd-select', read: [], write: [fd], timeoutMs })
+        state = ctx.net.ready(fd)
+      }
+      if (state === EINPROGRESS) return -EAGAIN
+      return state === 0 ? 0 : -(Number(state) || EIO)
     } catch (error) {
       return fail(error)
     }
