@@ -21,7 +21,7 @@ import (
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
-const guardSetVersion = "1.7.0"
+const guardSetVersion = "1.7.2"
 
 var guardVariants = []string{"prompt", "lagging"}
 
