@@ -26,10 +26,7 @@ const guardSetVersion = "1.7.3"
 var guardVariants = []string{"prompt", "lagging"}
 
 func guardSlots() int {
-	if runtime.GOOS == "windows" {
-		return 8
-	}
-	return 10
+	return min(10, max(4, 2*runtime.NumCPU()))
 }
 
 func guardPackage(t *testing.T) string {
