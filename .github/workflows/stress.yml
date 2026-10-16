@@ -1,0 +1,38 @@
+name: stress
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  stress:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [before, after]
+        n: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    name: stress (${{ matrix.variant }}, ${{ matrix.n }})
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - if: matrix.variant == 'before'
+        run: git checkout origin/main -- internal/signal/loopback
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: go test -race -count=10 -timeout 25m -v -run '^(TestLoopbackFirstRunsShareOneIdentity|TestLoopbackManyFirstRunsAtOnceShareOneIdentity)$' ./test/integration/...
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
