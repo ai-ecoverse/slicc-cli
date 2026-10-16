@@ -131,8 +131,17 @@ func (o launchOut) fail(err error) int {
 	return 1
 }
 
-func pickInstalled(ctx context.Context, id string) (browser.Installed, error) {
-	installed := browser.DiscoverInstalled(ctx, browser.Options{})
+type launchDeps struct {
+	options  browser.Options
+	discover func(context.Context, browser.Options) []browser.Installed
+}
+
+func realLaunchDeps() launchDeps {
+	return launchDeps{discover: browser.DiscoverInstalled}
+}
+
+func pickInstalled(ctx context.Context, id string, deps launchDeps) (browser.Installed, error) {
+	installed := deps.discover(ctx, deps.options)
 	if id != "" {
 		if in, ok := browser.FindInstalled(installed, id); ok {
 			return in, nil
@@ -156,14 +165,18 @@ func runLaunch(args []string, stdout, stderr io.Writer) int {
 	defer signal.Stop(sigs)
 	ctx := context.Background()
 	if f.six != nil {
-		return runLaunchSix(ctx, f, out, sigs)
+		return runLaunchSix(ctx, f, out, sigs, realLaunchDeps())
 	}
-	in, err := pickInstalled(ctx, f.browserID)
+	return launchInstalled(ctx, f, out, sigs, realLaunchDeps())
+}
+
+func launchInstalled(ctx context.Context, f launchFlags, out launchOut, sigs <-chan os.Signal, deps launchDeps) int {
+	in, err := pickInstalled(ctx, f.browserID, deps)
 	if err != nil {
 		return out.fail(err)
 	}
 	lctx, launched := interruptible(ctx, sigs)
-	b, err := browser.Launch(lctx, in, browser.LaunchOptions{Profile: f.profile, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Kill: f.kill, Slow: out.slow(in)})
+	b, err := browser.Launch(lctx, in, browser.LaunchOptions{Options: deps.options, Profile: f.profile, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Kill: f.kill, Slow: out.slow(in)})
 	pending := launched()
 	if err != nil {
 		return out.launchFailed(err, pending, in)

@@ -15,8 +15,8 @@ import (
 
 var errNoSixBrowser = errors.New("no Chrome to open SLICC six's profile with; install Chrome or name one with --browser")
 
-func pickSixBrowser(ctx context.Context, id, dir string) (browser.Installed, error) {
-	installed := browser.DiscoverInstalled(ctx, browser.Options{})
+func pickSixBrowser(ctx context.Context, id, dir string, deps launchDeps) (browser.Installed, error) {
+	installed := deps.discover(ctx, deps.options)
 	if id == "" {
 		if in, ok := browser.SixBrowser(dir, installed); ok {
 			return in, nil
@@ -33,13 +33,13 @@ func pickSixBrowser(ctx context.Context, id, dir string) (browser.Installed, err
 	return in, nil
 }
 
-func runLaunchSix(ctx context.Context, f launchFlags, out launchOut, sigs <-chan os.Signal) int {
-	six := browser.SixProfileFor(browser.Options{}, *f.six)
+func runLaunchSix(ctx context.Context, f launchFlags, out launchOut, sigs <-chan os.Signal, deps launchDeps) int {
+	six := browser.SixProfileFor(deps.options, *f.six)
 	if err := browser.SixExists(six.Dir); err != nil {
 		return out.fail(err)
 	}
 	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	ep, err := browser.ProbeSix(pctx, browser.Options{}, six.Dir)
+	ep, err := browser.ProbeSix(pctx, deps.options, six.Dir)
 	cancel()
 	if err != nil {
 		return out.fail(err)
@@ -47,12 +47,12 @@ func runLaunchSix(ctx context.Context, f launchFlags, out launchOut, sigs <-chan
 	if ep != nil {
 		return attachSix(ctx, f, out, sigs, six, *ep)
 	}
-	in, err := pickSixBrowser(ctx, f.browserID, six.Dir)
+	in, err := pickSixBrowser(ctx, f.browserID, six.Dir, deps)
 	if err != nil {
 		return out.fail(err)
 	}
 	lctx, launched := interruptible(ctx, sigs)
-	b, err := browser.LaunchSix(lctx, in, six, browser.LaunchOptions{URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Slow: out.slow(in)})
+	b, err := browser.LaunchSix(lctx, in, six, browser.LaunchOptions{Options: deps.options, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Slow: out.slow(in)})
 	pending := launched()
 	if err != nil {
 		return out.launchFailed(err, pending, in)

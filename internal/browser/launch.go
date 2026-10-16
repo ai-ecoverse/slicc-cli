@@ -45,18 +45,19 @@ type Browser struct {
 	WebSocketURL string
 	PID          int
 
-	cmd      *exec.Cmd
-	mainPID  int
-	done     chan struct{}
-	waitErr  error
-	stderr   *tailBuffer
-	closeMu  sync.Mutex
-	closeErr error
-	closed   bool
-	six      bool
-	stale    []byte
-	staleAt  os.FileInfo
-	started  time.Time
+	cmd       *exec.Cmd
+	mainPID   int
+	done      chan struct{}
+	waitErr   error
+	stderr    *tailBuffer
+	closeMu   sync.Mutex
+	closeErr  error
+	closed    bool
+	six       bool
+	stale     []byte
+	staleAt   os.FileInfo
+	started   time.Time
+	processes func(context.Context) ([]byte, error)
 }
 
 func (b *Browser) Done() <-chan struct{} {
@@ -180,6 +181,7 @@ func Launch(ctx context.Context, in Installed, lo LaunchOptions) (*Browser, erro
 	}
 	b.ProfileDir = dir
 	b.Profile = filepath.Base(dir)
+	b.processes = lo.Processes
 	ctx, cancel := context.WithTimeout(ctx, lo.LaunchTimeout)
 	defer cancel()
 	if err := b.waitActivePort(ctx, lo); err != nil {
@@ -410,7 +412,7 @@ func (b *Browser) killStrays(settle, giveUp time.Duration) []int {
 
 func (b *Browser) strays() []int {
 	if b.Installed.Engine != EngineElectron {
-		return profilePIDs(b.ProfileDir)
+		return profilePIDs(b.ProfileDir, b.processes)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -420,7 +422,7 @@ func (b *Browser) strays() []int {
 	return nil
 }
 
-func profilePIDs(dir string) []int {
+func profilePIDs(dir string, table func(context.Context) ([]byte, error)) []int {
 	if dir == "" {
 		return nil
 	}
@@ -431,7 +433,10 @@ func profilePIDs(dir string) []int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := processTable(ctx)
+	if table == nil {
+		table = processTable
+	}
+	out, err := table(ctx)
 	if err != nil {
 		return pids
 	}
