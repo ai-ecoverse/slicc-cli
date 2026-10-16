@@ -41,17 +41,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-latest, shard: 1/2 }
-          - { os: ubuntu-latest, shard: 2/2 }
-          - { os: macos-latest, shard: 1/3 }
-          - { os: macos-latest, shard: 2/3 }
-          - { os: macos-latest, shard: 3/3 }
-          - { os: windows-latest, shard: 1/2 }
-          - { os: windows-latest, shard: 2/2 }
+        include: >-
+          ${{ fromJSON(github.event_name != 'push'
+          && '[{"os":"ubuntu-latest","shard":"1/2"},{"os":"ubuntu-latest","shard":"2/2"},{"os":"macos-latest","shard":"1/1"},{"os":"windows-latest","shard":"1/1"}]'
+          || '[{"os":"ubuntu-latest","shard":"1/2"},{"os":"ubuntu-latest","shard":"2/2"},{"os":"macos-latest","shard":"1/3"},{"os":"macos-latest","shard":"2/3"},{"os":"macos-latest","shard":"3/3"},{"os":"windows-latest","shard":"1/2"},{"os":"windows-latest","shard":"2/2"}]') }}
     name: test (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'cloud-run-bench' || matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.shard == '1/1' && 35 || 20 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -75,7 +71,7 @@ jobs:
           $took = Measure-Command { foreach ($f in $files) { $null = [IO.File]::ReadAllBytes($f.FullName) } }
           '{0:N0} MB of {1} read in {2:N1} s' -f (($files | Measure-Object Length -Sum).Sum / 1MB), $dir, $took.TotalSeconds
 
-      - run: node scripts/test-shard.mjs ${{ matrix.shard }} -race -count=1 -timeout 12m -v ./test/integration/...
+      - run: node scripts/test-shard.mjs ${{ matrix.shard }} ${{ (github.event_name == 'push' || matrix.os == 'ubuntu-latest') && '-race' || '' }} -count=1 -timeout ${{ matrix.shard == '1/1' && '25m' || '12m' }} -v ./test/integration/...
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
