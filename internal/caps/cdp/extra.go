@@ -140,6 +140,11 @@ func (g *guard) forgetExtrasLocked(session string) {
 			delete(g.handed, k)
 		}
 	}
+	for k := range g.continues {
+		if k.session == session {
+			delete(g.continues, k)
+		}
+	}
 	for k := range g.seen {
 		if k.session == session {
 			delete(g.seen, k)

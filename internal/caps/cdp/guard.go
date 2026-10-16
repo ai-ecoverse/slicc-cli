@@ -97,8 +97,10 @@ type guard struct {
 	heldExtraCount  int
 	seen            map[requestKey]reqLevel
 	seenOrder       []requestKey
-	handed          map[requestKey]bool
-	handedOrder     []requestKey
+	handed          map[requestKey]int
+	handedOrder     []handedPause
+	pauses          int
+	continues       map[callKey]handedPause
 	bodyCalls       map[callKey]bodyCall
 	heldAnswers     map[callKey]*heldAnswer
 	streams         map[string]bool
@@ -131,7 +133,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		attachCalls:     map[callKey]string{},
 		heldExtras:      map[requestKey][]heldExtra{},
 		seen:            map[requestKey]reqLevel{},
-		handed:          map[requestKey]bool{},
+		handed:          map[requestKey]int{},
+		continues:       map[callKey]handedPause{},
 		bodyCalls:       map[callKey]bodyCall{},
 		heldAnswers:     map[callKey]*heldAnswer{},
 		streams:         map[string]bool{},

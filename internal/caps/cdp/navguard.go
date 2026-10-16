@@ -124,6 +124,9 @@ func (g *guard) navDetachedLocked(sessionID string) {
 		return
 	}
 	delete(g.navSessions, sessionID)
+	if !nt.done {
+		g.logf("cdp: lost the session guarding a target's navigations before it was ready")
+	}
 	nt.session = ""
 	nt.settle(true)
 	nt.failed = true
@@ -160,8 +163,14 @@ func (g *guard) navCheckLocked(sessionID string) string {
 	if !ok || !navTypes[s.typ] {
 		return ""
 	}
-	if nt, ok := g.navTargets[s.target]; ok && nt.done && !nt.failed {
+	nt, ok := g.navTargets[s.target]
+	switch {
+	case ok && nt.done && !nt.failed:
 		return ""
+	case !ok:
+		g.logf("cdp: refused a command on a target whose navigations aren't guarded")
+	case !nt.done:
+		g.logf("cdp: refused a command on a target whose navigation guard isn't ready")
 	}
 	return refusedGuard
 }

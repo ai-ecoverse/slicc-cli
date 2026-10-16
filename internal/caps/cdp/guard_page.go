@@ -102,6 +102,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	k := callKey{c.session, c.id}
 	g.pending[k] = resultKind(c.method)
 	g.noteBodyCallLocked(k, c)
+	g.noteContinueLocked(k, c)
 	if t := c.str("targetId"); c.method == "Target.attachToTarget" && t != "" {
 		g.attachCalls[k] = t
 		g.explicit[t]++
@@ -387,7 +388,7 @@ func (g *guard) scanString(k, s string, c *command) string {
 
 func (g *guard) requestRule(id string, c *command) string {
 	switch {
-	case continueOK[c.method] && !g.handed[requestKey{c.session, id}]:
+	case continueOK[c.method] && g.handed[requestKey{c.session, id}] == 0:
 		return refusedPaused
 	case !continueOK[c.method] && g.requestMarkedLocked(c.session, id):
 		return refusedBody
