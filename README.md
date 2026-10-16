@@ -225,11 +225,11 @@ gh release download v<version> --repo ai-ecoverse/slicc-cli -p SHA256SUMS -O - |
 `diff` shows only the two darwin lines: every `linux`, `windows` and `.wasm` asset and `install.sh` is identical. `@ai-ecoverse/wasi-slicc`'s `bin/slicc.wasm` is `slicc-wasip1-wasm.wasm`. A `git archive` of the tag, or a checkout with tags made later, gives the same bytes:
 - `package.sh` builds with `-buildvcs=false`, so Go stamps no tag, revision or `.git` state into the binary. Nothing reads it there: a release links its version with `-X main.version`, and only a binary with no linked version reads its Go build info (see [Updates](#updates)).
 - It uses `-trimpath`, so the checkout's path doesn't matter.
-- It runs the Go toolchain that `go.mod` names (its `toolchain` line, else `go`) through `GOTOOLCHAIN`, downloading it when another Go is installed, and clears `GOFLAGS`, `GOEXPERIMENT`, `GOAMD64`, `GOARM64` and `GOWASM` and sets `GOWORK=off`, so the environment doesn't change the build. Its log names the Go it used.
+- It runs the Go release that `go.mod` names (its `toolchain` line, else its `go` line, which then needs a patch version such as `go 1.26.5`; without one `package.sh` refuses to build) through `GOTOOLCHAIN`, downloading it when another Go is installed. It clears `GOFLAGS`, `GOEXPERIMENT`, `GOAMD64`, `GOARM64`, `GOWASM` and `GOFIPS140`, sets `GOENV=off` so no `go env -w` setting applies, and sets `GOWORK=off`, so the environment doesn't change the build. Its log names the Go it used.
 
-The darwin binaries differ only by their signature: the release signs the same unsigned bytes. The integration test `TestReleaseBuildIsReproducibleFromAnyCheckout` (on macOS, where the release builds) builds a checkout tagged after its commit and a `git archive` of it, and requires identical `SHA256SUMS`.
+The darwin binaries differ only by their signature: the release signs the same unsigned bytes. The integration test `TestReleaseBuildIsReproducibleFromAnyCheckout` (on macOS, where the release builds) builds a checkout tagged after its commit, and a `git archive` of it with `GOAMD64`, `GOARM64`, `GOFIPS140`, `GOFLAGS` and a `go env -w` file set, and requires identical `SHA256SUMS`.
 
-Releases whose `package.sh` lacks `-buildvcs=false` were built with Go's VCS stamping, so their bytes depend on the tags present at build time: rebuild one from its commit with that tag and every later one deleted locally (`git tag -d`), as the release saw it.
+Releases whose `package.sh` lacks `-buildvcs=false` were built with Go's VCS stamping, so their bytes depend on the tags present at build time: rebuild one from its commit with that tag and every later one deleted locally (`git tag -d`), as the release saw it, with the Go that `go.mod` names at that tag (`GOTOOLCHAIN=go<version>`) and a clean Go environment (`GOENV=off`, and none of the variables above set).
 
 ## Companion tools
 

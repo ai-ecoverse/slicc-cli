@@ -33,9 +33,13 @@ sha256() {
 
 pin_go() {
   local want
-  want="$(awk '$1 == "toolchain" { t = $2 } $1 == "go" { g = "go" $2 } END { print t ? t : g }' go.mod)"
-  unset GOFLAGS GOEXPERIMENT GOAMD64 GOARM64 GOWASM
-  export GOTOOLCHAIN="$want" GOWORK=off
+  want="$(awk '$1 == "toolchain" { t = $2 } $1 == "go" { g = $2 } END { if (t) print t; else if (g ~ /^[0-9]+\.[0-9]+\.[0-9]+$/) print "go" g }' go.mod)"
+  if [ -z "$want" ]; then
+    echo "::error::go.mod names no Go release: it needs a toolchain line or a go line with a patch version (go 1.26.5)" >&2
+    exit 1
+  fi
+  unset GOFLAGS GOEXPERIMENT GOAMD64 GOARM64 GOWASM GOFIPS140
+  export GOENV=off GOTOOLCHAIN="$want" GOWORK=off
   echo "building with $(go version) (GOTOOLCHAIN=$GOTOOLCHAIN from go.mod)"
 }
 

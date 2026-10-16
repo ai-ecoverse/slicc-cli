@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -139,10 +140,17 @@ func TestReleaseBuildIsReproducibleFromAnyCheckout(t *testing.T) {
 	runIn(t, tagged, gitEnv, "git", "tag", "v99.0.0")
 
 	env := []string{"SLICC_SIGN=0", "RUNNER_TEMP=" + work}
+	goenv := filepath.Join(work, "hostile.env")
+	runIn(t, work, []string{"GOENV=" + goenv}, "go", "env", "-w", "GOEXPERIMENT=nogreenteagc", "GOFLAGS=-tags=slicc_repro_probe_file")
+	hostile := append([]string{"GOENV=" + goenv, "GOAMD64=v3", "GOARM64=v9.0", "GOFIPS140=latest", "GOFLAGS=-tags=slicc_repro_probe"}, env...)
 	sums := map[string][]byte{}
 	for _, tree := range []string{tagged, archived} {
 		start := time.Now()
-		runIn(t, tree, env, "bash", "scripts/package.sh", "1.2.3")
+		buildEnv := env
+		if tree == archived {
+			buildEnv = hostile
+		}
+		runIn(t, tree, buildEnv, "bash", "scripts/package.sh", "1.2.3")
 		t.Logf("%s built in %s", filepath.Base(tree), time.Since(start).Round(time.Second))
 		data, err := os.ReadFile(filepath.Join(tree, "artifacts", "release", "SHA256SUMS"))
 		if err != nil {
@@ -155,7 +163,7 @@ func TestReleaseBuildIsReproducibleFromAnyCheckout(t *testing.T) {
 		t.Fatalf("SHA256SUMS has %d lines, want 8:\n%s", len(lines), sums[tagged])
 	}
 	if !bytes.Equal(sums[tagged], sums[archived]) {
-		t.Fatalf("a checkout tagged after the build and a git archive of it build different bytes:\ntagged checkout:\n%s\ngit archive:\n%s", sums[tagged], sums[archived])
+		t.Fatalf("a checkout tagged after the build and a git archive of it, built with GOAMD64, GOARM64, GOFIPS140, GOFLAGS and a go env file set, build different bytes:\ntagged checkout:\n%s\ngit archive:\n%s", sums[tagged], sums[archived])
 	}
 	for _, line := range lines {
 		name := strings.TrimPrefix(strings.Fields(line)[1], "*")
@@ -170,6 +178,24 @@ func TestReleaseBuildIsReproducibleFromAnyCheckout(t *testing.T) {
 		if !bytes.Equal(a, b) {
 			t.Fatalf("%s differs between the two builds", name)
 		}
+	}
+	gomod := filepath.Join(archived, "go.mod")
+	data, err := os.ReadFile(gomod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short := regexp.MustCompile(`(?m)^go [0-9]+\.[0-9]+\.[0-9]+$`).ReplaceAll(data, []byte("go 1.26"))
+	if err := os.WriteFile(gomod, short, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "scripts/package.sh", "1.2.3")
+	cmd.Dir = archived
+	cmd.Env = append(os.Environ(), env...)
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "go.mod names no Go release") {
+		t.Fatalf("a go line without a patch version names no Go release, so package.sh must refuse it: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(gomod, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	host := "slicc-" + runtime.GOOS + "-" + runtime.GOARCH
 	out := runIn(t, archived, nil, filepath.Join(archived, "artifacts", "release", host), "--version")
