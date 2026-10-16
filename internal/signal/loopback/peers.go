@@ -39,6 +39,31 @@ const lockWait = 5 * time.Second
 
 func (p *Peers) lock() (func(), error) { return lockFile(p.path + ".lock") }
 
+func (p *Peers) identityLock() (func(), error) {
+	return lockFile(filepath.Join(filepath.Dir(p.path), identityFileName) + ".lock")
+}
+
+func (p *Peers) updateAs(node string, f func(*peersFile) (bool, error)) error {
+	unlock, err := p.identityLock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := p.current(node); err != nil {
+		return err
+	}
+	return p.update(f)
+}
+
+func (p *Peers) read() (peersFile, error) {
+	unlock, err := p.lock()
+	if err != nil {
+		return peersFile{Version: stateVersion, Peers: map[string]Peer{}}, err
+	}
+	defer unlock()
+	return p.load()
+}
+
 func lockFile(path string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
@@ -98,7 +123,7 @@ func (p *Peers) current(node string) error {
 
 func (p *Peers) load() (peersFile, error) {
 	f := peersFile{Version: stateVersion, Peers: map[string]Peer{}}
-	data, err := os.ReadFile(p.path)
+	data, err := readShared(p.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return f, nil
 	}
@@ -118,10 +143,7 @@ func (p *Peers) load() (peersFile, error) {
 func (p *Peers) Pin(fp, origin, node string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.update(func(f *peersFile) (bool, error) {
-		if err := p.current(node); err != nil {
-			return false, err
-		}
+	return p.updateAs(node, func(f *peersFile) (bool, error) {
 		if old, ok := f.Peers[fp]; ok && old.Origin == origin && old.Node == node {
 			return false, nil
 		}
@@ -133,7 +155,7 @@ func (p *Peers) Pin(fp, origin, node string) error {
 func (p *Peers) Origin(fp, node string) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	f, err := p.load()
+	f, err := p.read()
 	if err != nil {
 		return "", false
 	}
@@ -147,7 +169,7 @@ func (p *Peers) Origin(fp, node string) (string, bool) {
 func (p *Peers) List() ([]Peer, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	f, err := p.load()
+	f, err := p.read()
 	return sorted(f.Peers), err
 }
 
@@ -210,10 +232,7 @@ func (p *Peers) Forget(fp, node string) (Peer, bool, error) {
 	defer p.mu.Unlock()
 	var e Peer
 	var ok bool
-	err := p.update(func(f *peersFile) (bool, error) {
-		if err := p.current(node); err != nil {
-			return false, err
-		}
+	err := p.updateAs(node, func(f *peersFile) (bool, error) {
 		e, ok = f.Peers[fp]
 		if !ok || e.Node != node {
 			ok = false

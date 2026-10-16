@@ -762,6 +762,33 @@ func TestLoopbackFirstRunsShareOneIdentity(t *testing.T) {
 	}
 }
 
+func TestLoopbackManyFirstRunsAtOnceShareOneIdentity(t *testing.T) {
+	e := newLoopEnv(t)
+	var runs []*loopProc
+	for range 6 {
+		runs = append(runs, startLoop(t, e, "pair", "--page", "https://seven.sliccy.ai/"))
+	}
+	seen := map[int]bool{}
+	first := ""
+	for i, r := range runs {
+		p := parsePairing(t, r.url(t))
+		if first == "" {
+			first = p.fingerprint
+		}
+		if p.fingerprint != first || seen[p.port] {
+			t.Fatalf("first run %d: %+v, after %s on ports %v", i, p, first, seen)
+		}
+		seen[p.port] = true
+	}
+	for _, r := range runs {
+		r.stop(t)
+	}
+	again := startLoop(t, e, "pair", "--page", "https://seven.sliccy.ai/")
+	if p := parsePairing(t, again.url(t)); p.fingerprint != first {
+		t.Fatalf("after the first runs %s, before %s", p.fingerprint, first)
+	}
+}
+
 func TestDefaultBrowserFlagFollowsComputeArgv(t *testing.T) {
 	e := newLoopEnv(t)
 	o := startLoop(t, e, "", "--runner", "sh", "-c", "--", "--default-browser", "--page", "https://seven.sliccy.ai/")
