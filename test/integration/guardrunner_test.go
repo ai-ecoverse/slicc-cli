@@ -23,8 +23,6 @@ import (
 
 const guardSetVersion = "1.7.3"
 
-var guardVariants = []string{"prompt", "lagging"}
-
 func guardSlots() int {
 	return min(10, max(4, 2*runtime.NumCPU()))
 }
@@ -188,7 +186,18 @@ func guardSHA() string {
 	return "unknown"
 }
 
-func TestCDPProtectVectors(t *testing.T) {
+func TestCDPProtectVectorsPrompt(t *testing.T) {
+	runGuardVectors(t, "prompt")
+}
+
+func TestCDPProtectVectorsLagging(t *testing.T) {
+	runGuardVectors(t, "lagging")
+}
+
+func runGuardVectors(t *testing.T, variant string) {
+	if os.Getenv("SLICC_GUARD_VECTORS") == "0" {
+		t.Skip("the guard vectors run on Linux for pull requests and on every OS on main")
+	}
 	pkg := guardPackage(t)
 	fix := startGuardFixture(t)
 	srv := guardPageServer(t, pkg, fix.port)
@@ -245,7 +254,7 @@ func TestCDPProtectVectors(t *testing.T) {
 		"browsers":     slots,
 		"targets":      targets,
 		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true},
-		"variants":     guardVariants,
+		"variants":     []string{variant},
 		"parallel":     n,
 		"log":          "http://127.0.0.1:" + strconv.Itoa(fix.log),
 		"sha":          sha,
