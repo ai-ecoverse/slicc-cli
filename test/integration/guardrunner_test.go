@@ -168,11 +168,48 @@ type guardSummary struct {
 	Counts          json.RawMessage `json:"counts"`
 }
 
+const guardStall = 3 * time.Minute
+
+type guardCall struct {
+	Client   string `json:"client"`
+	Method   string `json:"method"`
+	Session  string `json:"session"`
+	Answered bool   `json:"answered"`
+	MS       int    `json:"ms"`
+}
+
+type guardInflight struct {
+	ID      string      `json:"id"`
+	Target  string      `json:"target"`
+	Variant string      `json:"variant"`
+	Slot    int         `json:"slot"`
+	Browser string      `json:"browser"`
+	MS      int         `json:"ms"`
+	Last    []guardCall `json:"last"`
+}
+
+func (r guardInflight) String() string {
+	out := fmt.Sprintf("%s %s %s (slot %d, %s) running %s", r.ID, r.Target, r.Variant, r.Slot, r.Browser, time.Duration(r.MS)*time.Millisecond)
+	for _, c := range r.Last {
+		if c.Method == "" {
+			out += fmt.Sprintf("; %s: no command yet", c.Client)
+			continue
+		}
+		state := "answered"
+		if !c.Answered {
+			state = "unanswered"
+		}
+		out += fmt.Sprintf("; %s's oldest unanswered or last command %s (session %q) %s, sent %s ago", c.Client, c.Method, c.Session, state, time.Duration(c.MS)*time.Millisecond)
+	}
+	return out
+}
+
 type guardProgress struct {
-	Done    bool          `json:"done"`
-	Error   string        `json:"error"`
-	Rows    []guardRow    `json:"rows"`
-	Summary *guardSummary `json:"summary"`
+	Done     bool            `json:"done"`
+	Error    string          `json:"error"`
+	Rows     []guardRow      `json:"rows"`
+	Inflight []guardInflight `json:"inflight"`
+	Summary  *guardSummary   `json:"summary"`
 }
 
 func guardSHA() string {
@@ -270,10 +307,20 @@ func runGuardVectors(t *testing.T, variant string) {
 	var sum *guardSummary
 	seen := 0
 	said := begin
+	moved := begin
 	for deadline := begin.Add(11 * time.Minute); sum == nil; time.Sleep(2 * time.Second) {
 		var p guardProgress
 		env.p.eval("linkTest.guard.progress("+strconv.Itoa(seen)+")", &p)
 		seen += len(p.Rows)
+		if len(p.Rows) > 0 {
+			moved = time.Now()
+		}
+		if sum == nil && !p.Done && time.Since(moved) > guardStall {
+			for _, r := range p.Inflight {
+				t.Logf("in flight: %s", r)
+			}
+			t.Fatalf("the guard run stalled: no row finished for %s, with %d rows done and %d in flight", guardStall, seen, len(p.Inflight))
+		}
 		if time.Since(said) > 30*time.Second {
 			said = time.Now()
 			t.Logf("%d rows run after %s", seen, time.Since(begin).Round(time.Second))

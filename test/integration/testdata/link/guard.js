@@ -84,27 +84,42 @@ class SocketClient {
   }
 }
 
-function sessionBound(c) {
+function sessionBound(c, name) {
   const calls = new Map();
+  const tracked = { name, last: null, pending: new Set() };
   c.on?.((e) => {
     if (e.method !== 'Target.detachedFromTarget') return;
     for (const reject of calls.get(e.params.sessionId) ?? []) reject(new Error('the session detached'));
     calls.delete(e.params.sessionId);
   });
+  const sent = (method, sessionId, promise) => {
+    const call = { method, session: sessionId ?? '', at: Date.now(), answered: false };
+    tracked.last = call;
+    tracked.pending.add(call);
+    return promise.finally(() => {
+      call.answered = true;
+      tracked.pending.delete(call);
+    });
+  };
   return {
+    tracked,
     events: c.events,
     transport: c.transport,
     waitEvent: (match, timeout) => c.waitEvent(match, timeout),
     send(method, params, sessionId) {
-      if (!sessionId) return c.send(method, params);
-      return new Promise((resolve, reject) => {
-        const set = calls.get(sessionId) ?? new Set();
-        calls.set(sessionId, set);
-        set.add(reject);
-        c.send(method, params, sessionId)
-          .then(resolve, reject)
-          .finally(() => set.delete(reject));
-      });
+      if (!sessionId) return sent(method, sessionId, c.send(method, params));
+      return sent(
+        method,
+        sessionId,
+        new Promise((resolve, reject) => {
+          const set = calls.get(sessionId) ?? new Set();
+          calls.set(sessionId, set);
+          set.add(reject);
+          c.send(method, params, sessionId)
+            .then(resolve, reject)
+            .finally(() => set.delete(reject));
+        }),
+      );
     },
   };
 }
@@ -134,7 +149,7 @@ async function retried(open) {
   }
 }
 
-const state = { rows: [], done: false, error: null, summary: null };
+const state = { rows: [], inflight: new Map(), done: false, error: null, summary: null };
 
 export function guardStart(getLink, opts) {
   if (state.started) return { started: false };
@@ -143,15 +158,21 @@ export function guardStart(getLink, opts) {
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
     const execution = await run(set, {
-      clientFactory: async ({ slot }) => {
+      clientFactory: async ({ slot, vector, target, variant }) => {
         const b = browsers[slot % browsers.length];
         const client = await retried(() => CdpClient.open(getLink(), b.id));
         client.transport = 'cli';
         const unguarded = await retried(() => SocketClient.open(b.ws));
+        const row = { id: vector.id, target, variant, slot, browser: b.id, started: Date.now() };
+        const guarded = sessionBound(client, 'guarded');
+        const observer = sessionBound(unguarded, 'unguarded');
+        row.clients = [guarded.tracked, observer.tracked];
+        state.inflight.set(slot, row);
         return {
-          client: sessionBound(client),
-          unguarded: sessionBound(unguarded),
+          client: guarded,
+          unguarded: observer,
           close: async () => {
+            state.inflight.delete(slot);
             unguarded.close();
             await client.close().catch(() => {});
           },
@@ -177,6 +198,18 @@ export function guardStart(getLink, opts) {
   return { started: true };
 }
 
+function inflight() {
+  const now = Date.now();
+  return [...state.inflight.values()].map(({ clients, started, ...row }) => ({
+    ...row,
+    ms: now - started,
+    last: clients.map((c) => {
+      const call = [...c.pending][0] ?? c.last;
+      return call ? { client: c.name, method: call.method, session: call.session, answered: call.answered, ms: now - call.at } : { client: c.name };
+    }),
+  }));
+}
+
 export function guardProgress(since) {
-  return { done: state.done, error: state.error, rows: state.rows.slice(since), summary: state.done ? state.summary : null };
+  return { done: state.done, error: state.error, rows: state.rows.slice(since), inflight: inflight(), summary: state.done ? state.summary : null };
 }
