@@ -230,10 +230,13 @@ func (x *session) down() {
 		if !x.known(from) {
 			continue
 		}
-		x.touch()
 		x.received.Add(1)
-		if !x.deliver(Record(RecordDatagram, from.Addr().String(), from.Port(), buf[:n])) {
+		delivered, alive := x.deliver(Record(RecordDatagram, from.Addr().String(), from.Port(), buf[:n]))
+		if !alive {
 			return
+		}
+		if delivered {
+			x.touch()
 		}
 	}
 }
@@ -242,16 +245,16 @@ func (x *session) unreachable(to netip.AddrPort, reason string) {
 	x.deliver(Record(RecordUnreachable, to.Addr().String(), to.Port(), []byte(reason)))
 }
 
-func (x *session) deliver(rec []byte) bool {
+func (x *session) deliver(rec []byte) (bool, bool) {
 	ok, err := x.s.TryWrite(rec)
 	if err != nil {
 		x.shut(false)
-		return false
+		return false, false
 	}
 	if !ok {
 		x.drop()
 	}
-	return true
+	return ok, true
 }
 
 func (x *session) drop() {
