@@ -69,6 +69,21 @@ jobs:
 
       - run: npm run lint
 
+      - name: Install shellcheck
+        if: ${{ !cancelled() }}
+        env:
+          VERSION: v0.11.0
+          SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          tarball="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl -fsSL -o "$tarball" "https://github.com/koalaman/shellcheck/releases/download/$VERSION/shellcheck-$VERSION.linux.x86_64.tar.xz"
+          echo "$SHA256  $tarball" | sha256sum -c -
+          tar -xJf "$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-$VERSION" >> "$GITHUB_PATH"
+
+      - if: ${{ !cancelled() }}
+        run: shellcheck -s sh install.sh test/integration/testdata/install/check.sh
+
   test:
     needs: runner
     strategy:
@@ -114,26 +129,6 @@ jobs:
         run: go build -trimpath -o bin/ ./cmd/slicc
         env:
           CGO_ENABLED: '0'
-
-  shellcheck:
-    needs: runner
-    runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Install shellcheck
-        env:
-          VERSION: v0.11.0
-          SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-        run: |
-          tarball="$RUNNER_TEMP/shellcheck.tar.xz"
-          curl -fsSL -o "$tarball" "https://github.com/koalaman/shellcheck/releases/download/$VERSION/shellcheck-$VERSION.linux.x86_64.tar.xz"
-          echo "$SHA256  $tarball" | sha256sum -c -
-          tar -xJf "$tarball" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/shellcheck-$VERSION" >> "$GITHUB_PATH"
-
-      - run: shellcheck -s sh install.sh test/integration/testdata/install/check.sh
 
   installer-assets:
     needs: runner
@@ -221,13 +216,13 @@ jobs:
 
   ci:
     if: always()
-    needs: [runner, lint, test, shellcheck, installer-assets, installer]
+    needs: [runner, lint, test, installer-assets, installer]
     runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Require every job to pass
         env:
-          RESULTS: runner=${{ needs.runner.result }} lint=${{ needs.lint.result }} test=${{ needs.test.result }} shellcheck=${{ needs.shellcheck.result }} installer-assets=${{ needs.installer-assets.result }} installer=${{ needs.installer.result }}
+          RESULTS: runner=${{ needs.runner.result }} lint=${{ needs.lint.result }} test=${{ needs.test.result }} installer-assets=${{ needs.installer-assets.result }} installer=${{ needs.installer.result }}
         run: |
           failed=
           for pair in $RESULTS; do
