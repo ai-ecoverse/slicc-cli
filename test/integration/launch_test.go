@@ -144,7 +144,10 @@ func startLaunch(t *testing.T, env []string, args ...string) *launched {
 		if cmd.ProcessState == nil {
 			_ = interrupt(cmd)
 			select {
-			case <-l.exit:
+			case err := <-l.exit:
+				if err != nil {
+					t.Logf("slicc launch after the interrupt: %v", err)
+				}
 			case <-time.After(20 * time.Second):
 				_ = cmd.Process.Kill()
 			}
@@ -176,7 +179,10 @@ func (l *launched) wait(t *testing.T) int {
 	t.Helper()
 	go func() { l.exit <- l.cmd.Wait() }()
 	select {
-	case <-l.exit:
+	case err := <-l.exit:
+		if exit := (*exec.ExitError)(nil); err != nil && !errors.As(err, &exit) {
+			t.Fatalf("waiting for slicc launch: %v", err)
+		}
 	case <-time.After(30 * time.Second):
 		t.Fatalf("slicc launch did not exit; stderr %s", l.stderr.String())
 	}

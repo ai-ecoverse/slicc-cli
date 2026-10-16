@@ -110,10 +110,7 @@ func (ll *localLinks) next(ctx context.Context) (agentctl.Link, error) {
 
 func (ll *localLinks) close() {
 	ll.cancel()
-	select {
-	case <-ll.served:
-	case <-time.After(5 * time.Second):
-	}
+	_ = awaitServed(ll.served, 5*time.Second)
 	_ = ll.conn.Close()
 	if ll.client != nil {
 		_ = ll.client.Close()
@@ -193,10 +190,7 @@ func (rl *remoteLinks) once(ctx context.Context) (*link.Link, error) {
 	go func() { served <- rl.node.Serve(sctx, conn) }()
 	stop := func() {
 		cancel()
-		select {
-		case <-served:
-		case <-time.After(5 * time.Second):
-		}
+		_ = awaitServed(served, 5*time.Second)
 		_ = conn.Close()
 	}
 	timer := time.NewTimer(followSetupTimeout)
@@ -255,4 +249,13 @@ func peerName(l *link.Link) string {
 
 func agentLink(l *link.Link) agentctl.Link {
 	return agentctl.FromLink(l, peerName(l))
+}
+
+func awaitServed(served <-chan error, grace time.Duration) error {
+	select {
+	case err := <-served:
+		return err
+	case <-time.After(grace):
+		return context.DeadlineExceeded
+	}
 }

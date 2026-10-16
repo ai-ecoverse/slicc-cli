@@ -436,8 +436,7 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 	for {
 		select {
 		case <-ctx.Done():
-			cancel()
-			<-served
+			_ = stopServing(cancel, served)
 			return 0, outcomeStop
 		case err := <-served:
 			if err == nil {
@@ -458,12 +457,10 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 						return code, outcome
 					}
 				}
-				cancel()
-				<-served
+				_ = stopServing(cancel, served)
 				return 0, r.after(up)
 			case evUnlink:
-				cancel()
-				<-served
+				_ = stopServing(cancel, served)
 				return r.unlink(ev.name), outcomeStop
 			}
 		}
@@ -574,4 +571,9 @@ func printICEServers(w io.Writer, servers []tray.ICEServer) {
 		}
 		fmt.Fprintf(w, "  %s%s\n", strings.Join(s.URLs, " "), auth)
 	}
+}
+
+func stopServing(cancel context.CancelFunc, served <-chan error) error {
+	cancel()
+	return <-served
 }

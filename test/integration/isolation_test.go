@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -145,7 +146,10 @@ func TestTheHarnessNeverReachesRealBrowsers(t *testing.T) {
 	}
 	go func() { done <- cmd.Wait() }()
 	select {
-	case <-done:
+	case err := <-done:
+		if exit := (*exec.ExitError)(nil); err != nil && !errors.As(err, &exit) {
+			t.Fatalf("waiting for bare slicc --plain: %v", err)
+		}
 	case <-time.After(60 * time.Second):
 		_ = cmd.Process.Kill()
 		t.Fatalf("bare slicc --plain kept running under the harness: %s", stderr.String())

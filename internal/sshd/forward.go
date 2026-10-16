@@ -65,8 +65,12 @@ func splice(ch ssh.Channel, conn net.Conn) {
 		done <- err
 	}()
 	if err := <-done; err == nil {
-		<-done
+		_ = drained(done)
 	}
 	_ = ch.Close()
 	_ = conn.Close()
+}
+
+func drained(done <-chan error) error {
+	return <-done
 }
