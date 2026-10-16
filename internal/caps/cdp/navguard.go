@@ -10,6 +10,8 @@ const (
 	NavTimeout   = 10 * time.Second
 )
 
+var slowGuard = 2 * time.Second
+
 var navTypes = map[string]bool{"page": true, "iframe": true, "background_page": true, "webview": true}
 
 type navTarget struct {
@@ -51,7 +53,11 @@ func (g *guard) touchLocked(targetID, typ string) [][]byte {
 	}
 	nt := &navTarget{ready: make(chan struct{})}
 	g.navTargets[targetID] = nt
+	sent := time.Now()
 	msg := g.callbackLocked(g.relaySession, "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, func(m message) [][]byte {
+		if took := time.Since(sent); took > slowGuard {
+			g.logf("cdp: attaching a target's navigation guard took %s", took.Round(time.Millisecond))
+		}
 		return g.navAttachedLocked(nt, m)
 	})
 	return [][]byte{msg}
@@ -68,16 +74,14 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 	}
 	nt.session = res.SessionID
 	g.navSessions[res.SessionID] = nt
-	step := func(m message) [][]byte {
-		if m.Error != nil {
-			g.logf("cdp: couldn't guard a target's navigations: %s", m.Error)
-			nt.settle(true)
-			return nil
+	sent := time.Now()
+	step := func(method string) func(m message) [][]byte {
+		return func(m message) [][]byte {
+			if took := time.Since(sent); took > slowGuard {
+				g.logf("cdp: %s for a target's navigation guard took %s", method, took.Round(time.Millisecond))
+			}
+			return nt.stepLocked(g, m)
 		}
-		if nt.pending--; nt.pending == 0 {
-			nt.settle(false)
-		}
-		return nil
 	}
 	calls := []struct {
 		method string
@@ -90,9 +94,21 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 	nt.pending = len(calls)
 	out := make([][]byte, 0, len(calls))
 	for _, c := range calls {
-		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, step))
+		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, step(c.method)))
 	}
 	return out
+}
+
+func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
+	if m.Error != nil {
+		g.logf("cdp: couldn't guard a target's navigations: %s", m.Error)
+		nt.settle(true)
+		return nil
+	}
+	if nt.pending--; nt.pending == 0 {
+		nt.settle(false)
+	}
+	return nil
 }
 
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
