@@ -24,6 +24,9 @@ func TestReleaseFollowsAGreenCIPushOnMain(t *testing.T) {
 		"github.event.workflow_run.head_repository.full_name == github.repository",
 		"ref: ${{ github.event.workflow_run.head_sha }}",
 		"if: ${{ github.event_name != 'workflow_run' && ",
+		"    needs: [ci, fresh]\n",
+		"${{ !cancelled() && needs.fresh.outputs.stale != 'true' && ",
+		"git ls-remote \"$REPO\" refs/heads/main",
 	} {
 		if !strings.Contains(release, want) {
 			t.Fatalf("release.yml lacks %q", want)
