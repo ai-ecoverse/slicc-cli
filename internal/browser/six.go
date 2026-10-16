@@ -384,6 +384,7 @@ func LaunchSix(ctx context.Context, in Installed, six Six, lo LaunchOptions) (*B
 	b.ProfileDir = dir
 	b.Profile = six.Label
 	b.six = true
+	b.processes = lo.Processes
 	b.stale, b.staleAt = stale, staleAt
 	ctx, cancel := context.WithTimeout(ctx, lo.LaunchTimeout)
 	defer cancel()
