@@ -142,14 +142,14 @@ func (x *session) send(d datagram) {
 		x.unreachable(d.to, policy.Errno+": "+err.Error())
 		return
 	}
-	fresh := x.remember(d.to)
+	fresh, evicted := x.remember(d.to)
 	_, err := x.c.WriteToUDPAddrPort(d.payload, d.to)
 	if err != nil && x.drain() > 0 {
 		_, err = x.c.WriteToUDPAddrPort(d.payload, d.to)
 	}
 	if err != nil {
 		if fresh {
-			x.forget(d.to)
+			x.rollback(d.to, evicted)
 		}
 		if x.closed.Load() {
 			return
@@ -166,14 +166,33 @@ func (x *session) send(d datagram) {
 	}
 }
 
-func (x *session) remember(to netip.AddrPort) bool {
+func (x *session) remember(to netip.AddrPort) (bool, netip.AddrPort) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if _, ok := x.peers[to]; ok {
-		return false
+		return false, netip.AddrPort{}
+	}
+	var evicted netip.AddrPort
+	if x.order.Len() >= MaxPeers {
+		oldest := x.order.Front()
+		evicted = oldest.Value.(netip.AddrPort)
+		delete(x.peers, evicted)
+		x.order.Remove(oldest)
 	}
 	x.peers[to] = x.order.PushBack(to)
-	return true
+	return true, evicted
+}
+
+func (x *session) rollback(to, evicted netip.AddrPort) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if e, ok := x.peers[to]; ok {
+		x.order.Remove(e)
+		delete(x.peers, to)
+	}
+	if evicted.IsValid() {
+		x.peers[evicted] = x.order.PushFront(evicted)
+	}
 }
 
 func (x *session) used(to netip.AddrPort) {
@@ -181,20 +200,6 @@ func (x *session) used(to netip.AddrPort) {
 	defer x.mu.Unlock()
 	if e, ok := x.peers[to]; ok {
 		x.order.MoveToBack(e)
-	}
-	for x.order.Len() > MaxPeers {
-		oldest := x.order.Front()
-		delete(x.peers, oldest.Value.(netip.AddrPort))
-		x.order.Remove(oldest)
-	}
-}
-
-func (x *session) forget(to netip.AddrPort) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if e, ok := x.peers[to]; ok {
-		x.order.Remove(e)
-		delete(x.peers, to)
 	}
 }
 
