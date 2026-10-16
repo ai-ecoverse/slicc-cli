@@ -37,10 +37,9 @@ jobs:
           POOL: ${{ vars.CERT_RUNNER || 'cloud-run-bench' }}
         with:
           script: |
-            const { decide } = await import(`${process.env.GITHUB_WORKSPACE}/.github/runner.mjs`);
-            const { runner, why } = await decide({ context, github, env: process.env }).catch(
-              (error) => ({ runner: 'ubuntu-latest', why: `the decider failed: ${error.message}` })
-            );
+            const { runner, why } = await import(`${process.env.GITHUB_WORKSPACE}/.github/runner.mjs`)
+              .then(({ decide }) => decide({ context, github, env: process.env }))
+              .catch((error) => ({ runner: 'ubuntu-latest', why: `the decider failed: ${error.message}` }));
             core.setOutput('runner', runner);
             await core.summary.addRaw(`runner: ${runner} (${why})\n`).write();
 
