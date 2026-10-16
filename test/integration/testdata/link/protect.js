@@ -218,6 +218,16 @@ export function protectTest(getLink, describe) {
         const events = c.events.slice(start).filter((e) => JSON.stringify(e).includes(to)).map((e) => e.method);
         return { targetId, events, tree: tree.ok ? JSON.stringify(tree.result).includes(to) : null };
       }),
+    guardWait: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const start = Date.now();
+        const enable = outcome(c.send('Page.enable', {}, sessionId)).then((r) => ({ ...r, ms: Date.now() - start }));
+        await sleep(500);
+        const other = await outcome(c.send('Browser.getVersion')).then((r) => ({ ...r, ms: Date.now() - start }));
+        return { enable: await enable, other };
+      }),
     targets: (browser) =>
       run(browser, async (c) => {
         const { targetInfos } = await c.send('Target.getTargets');

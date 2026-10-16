@@ -7,7 +7,7 @@ import (
 
 const (
 	refusedGuard = "slicc can't keep seven's origin out of this target"
-	NavTimeout   = 10 * time.Second
+	NavTimeout   = 60 * time.Second
 )
 
 var slowGuard = 2 * time.Second
@@ -15,11 +15,12 @@ var slowGuard = 2 * time.Second
 var navTypes = map[string]bool{"page": true, "iframe": true, "background_page": true, "webview": true}
 
 type navTarget struct {
-	session string
-	ready   chan struct{}
-	pending int
-	done    bool
-	failed  bool
+	session  string
+	deadline time.Time
+	ready    chan struct{}
+	pending  int
+	done     bool
+	failed   bool
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -51,7 +52,7 @@ func (g *guard) touchLocked(targetID, typ string) [][]byte {
 	if _, ok := g.navTargets[targetID]; ok {
 		return nil
 	}
-	nt := &navTarget{ready: make(chan struct{})}
+	nt := &navTarget{ready: make(chan struct{}), deadline: time.Now().Add(NavTimeout)}
 	g.navTargets[targetID] = nt
 	sent := time.Now()
 	msg := g.callbackLocked(g.relaySession, "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, func(m message) [][]byte {
@@ -160,18 +161,29 @@ func (g *guard) navForgetLocked(targetID string) {
 	nt.settle(true)
 }
 
-func (g *guard) navWait(sessionID string) <-chan struct{} {
+func (g *guard) navWait(sessionID string) (<-chan struct{}, time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	s, ok := g.sessions[sessionID]
 	if !ok || !navTypes[s.typ] {
-		return nil
+		return nil, time.Time{}
 	}
 	nt, ok := g.navTargets[s.target]
 	if !ok || nt.done {
-		return nil
+		return nil, time.Time{}
 	}
-	return nt.ready
+	return nt.ready, nt.deadline
+}
+
+func (g *guard) navExpire(sessionID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if s, ok := g.sessions[sessionID]; ok {
+		if nt, ok := g.navTargets[s.target]; ok && !nt.done {
+			g.logf("cdp: a target's navigation guard wasn't ready in %s; refusing its commands", NavTimeout)
+			nt.settle(true)
+		}
+	}
 }
 
 func (g *guard) navCheckLocked(sessionID string) string {

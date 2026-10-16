@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestCILoadsTheRunnerDeciderFromMain(t *testing.T) {
+	raw, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	if strings.Contains(ci, "merge_group.base_sha") {
+		t.Fatal("ci.yml uses merge_group.base_sha, which can be the speculative commit of the merge group ahead, with its pull requests in it")
+	}
+	runner := workflowJobs(t, ci)["runner"].body
+	const ref = "          ref: ${{ github.event.merge_group.base_ref || github.event.pull_request.base.sha || github.sha }}\n          sparse-checkout: .github/runner.mjs\n"
+	if !strings.Contains(runner, ref) {
+		t.Fatalf("ci.yml's runner job must check the decider out from main (%q):\n%s", ref, runner)
+	}
+}
+
 func TestReleaseFollowsAGreenCIPushOnMain(t *testing.T) {
 	read := func(name string) string {
 		raw, err := os.ReadFile("../../.github/workflows/" + name)
@@ -23,7 +39,8 @@ func TestReleaseFollowsAGreenCIPushOnMain(t *testing.T) {
 		"github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'",
 		"github.event.workflow_run.head_repository.full_name == github.repository",
 		"ref: ${{ github.event.workflow_run.head_sha }}",
-		"if: ${{ github.event_name != 'workflow_run' && ",
+		"    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.sliccy_next_only }}\n    name: CI on this commit\n",
+		"(needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'",
 		"    needs: [ci, fresh]\n",
 		"${{ !cancelled() && needs.fresh.outputs.stale != 'true' && ",
 		"git ls-remote \"$REPO\" refs/heads/main",

@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -72,9 +73,10 @@ func (rl *relay) syncCall(ctx context.Context, sessionID, method string, params 
 
 func (rl *relay) checkPage(data []byte) ([]byte, bool) {
 	c, id, ok := parseCommand(data)
-	if ok {
-		rl.awaitGuard(c.session)
-	}
+	return rl.admit(c, id, ok)
+}
+
+func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 	v := rl.g.fromCommand(c, id, ok)
 	if v.history != nil {
 		v = rl.resolveHistory(v.history)
@@ -105,16 +107,63 @@ func (rl *relay) resolveHistory(c *command) pageVerdict {
 	return rl.g.afterHistory(c, message{}, false)
 }
 
-func (rl *relay) awaitGuard(sessionID string) {
-	ready := rl.g.navWait(sessionID)
-	if ready == nil {
-		return
+const (
+	maxParked      = 4096
+	maxParkedBytes = 64 << 20
+)
+
+func (rl *relay) park(data []byte) bool {
+	c, _, ok := parseCommand(data)
+	if !ok || c.session == "" {
+		return false
 	}
-	t := time.NewTimer(NavTimeout)
+	rl.parkMu.Lock()
+	defer rl.parkMu.Unlock()
+	q, waiting := rl.parked[c.session]
+	if !waiting {
+		ready, deadline := rl.g.navWait(c.session)
+		if ready == nil {
+			return false
+		}
+		go rl.release(c.session, ready, deadline)
+	}
+	if rl.parkedCount >= maxParked || rl.parkedBytes+len(data) > maxParkedBytes {
+		rl.kill("ENOBUFS: too many commands wait for a target's guard")
+		return true
+	}
+	rl.parkedCount++
+	rl.parkedBytes += len(data)
+	rl.parked[c.session] = append(q, bytes.Clone(data))
+	return true
+}
+
+func (rl *relay) release(session string, ready <-chan struct{}, deadline time.Time) {
+	t := time.NewTimer(time.Until(deadline))
 	defer t.Stop()
 	select {
 	case <-ready:
 	case <-t.C:
+		rl.g.navExpire(session)
 	case <-rl.s.Done():
+	}
+	for {
+		rl.parkMu.Lock()
+		q := rl.parked[session]
+		if len(q) == 0 {
+			delete(rl.parked, session)
+			rl.parkMu.Unlock()
+			return
+		}
+		rl.parked[session] = q[1:]
+		rl.parkedCount--
+		rl.parkedBytes -= len(q[0])
+		rl.parkMu.Unlock()
+		out, ok := rl.checkPage(q[0])
+		if !ok {
+			return
+		}
+		if out != nil && rl.conn.Write(context.Background(), websocket.MessageText, out) != nil {
+			return
+		}
 	}
 }
