@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
-	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 )
 
@@ -22,12 +21,28 @@ const (
 	dropReportGap = time.Second
 )
 
+type packetConn interface {
+	ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error)
+	WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error)
+	Close() error
+}
+
+type stream interface {
+	io.Reader
+	TryWrite(p []byte) (bool, error)
+	CloseWrite() error
+	Reset(reason string) error
+	Done() <-chan struct{}
+}
+
 type session struct {
-	s      *link.Stream
-	c      *net.UDPConn
+	s      stream
+	c      packetConn
 	o      Options
 	family int
 	name   string
+	report func(int)
+	drain  func() int
 
 	mu    sync.Mutex
 	peers map[netip.AddrPort]*list.Element
@@ -46,8 +61,10 @@ type session struct {
 	sent, received atomic.Int64
 }
 
-func newSession(s *link.Stream, c *net.UDPConn, o Options, family int, name string) *session {
-	return &session{s: s, c: c, o: o, family: family, name: name, peers: map[netip.AddrPort]*list.Element{}, order: list.New()}
+func newSession(s stream, c packetConn, o Options, family int, name string, report func(int)) *session {
+	x := &session{s: s, c: c, o: o, family: family, name: name, report: report, peers: map[netip.AddrPort]*list.Element{}, order: list.New()}
+	x.drain = func() int { return drainErrors(x) }
+	return x
 }
 
 func (x *session) run() {
@@ -127,7 +144,7 @@ func (x *session) send(d datagram) {
 	}
 	fresh := x.remember(d.to)
 	_, err := x.c.WriteToUDPAddrPort(d.payload, d.to)
-	if err != nil && x.drainErrors() > 0 {
+	if err != nil && x.drain() > 0 {
 		_, err = x.c.WriteToUDPAddrPort(d.payload, d.to)
 	}
 	if err != nil {
@@ -196,7 +213,7 @@ func (x *session) down() {
 			if x.closed.Load() || errors.Is(err, net.ErrClosed) {
 				return
 			}
-			if x.drainErrors() > 0 || transient(err) {
+			if x.drain() > 0 || transient(err) {
 				continue
 			}
 			x.o.Logf("udp %s: ECONNRESET: %v", x.name, err)
@@ -254,7 +271,7 @@ func (x *session) flushDrops(final bool) int {
 	x.dropMu.Unlock()
 	if n > 0 {
 		x.o.Logf("udp %s: dropped %d datagrams, the page's window was full (%d so far)", x.name, n, total)
-		x.o.Dropped(x.s, n)
+		x.report(n)
 	}
 	return total
 }

@@ -1842,6 +1842,9 @@ How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-
   - `EACCES`: B refused (`UNLINKED`, or no *Allow remote control*), with B's message.
 - **Not offered:** exits, kernel streams, CDP or anything else on B. Six's `exec` and `list` are parked.
 
+#### 5.17 Reserved
+`exec` is reserved (six's leader `exec`, parked in [slicc-cli#102](https://github.com/ai-ecoverse/slicc-cli/issues/102)).
+
 ### 6. Policy (node)
 
 #### 6.1 Where it's checked

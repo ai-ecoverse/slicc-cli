@@ -24,6 +24,7 @@ type Options struct {
 	Logf    func(format string, args ...any)
 	Idle    time.Duration
 	Dropped func(s *link.Stream, count int)
+	listen  func(family int) (*net.UDPConn, error)
 }
 
 type Opened struct {
@@ -47,6 +48,9 @@ func Handler(o Options) link.Handler {
 	}
 	if o.Dropped == nil {
 		o.Dropped = func(*link.Stream, int) {}
+	}
+	if o.listen == nil {
+		o.listen = Listen
 	}
 	return func(s *link.Stream) {
 		serve(s, o)
@@ -73,7 +77,7 @@ func serve(s *link.Stream, o Options) {
 		_ = s.Reset("EPROTO: " + err.Error())
 		return
 	}
-	c, err := Listen(family)
+	c, err := o.listen(family)
 	if err != nil {
 		o.Logf("udp: ENETUNREACH: %v", err)
 		_ = s.Reset("ENETUNREACH: " + err.Error())
@@ -85,21 +89,25 @@ func serve(s *link.Stream, o Options) {
 		return
 	}
 	o.Logf("udp %s: open", local)
-	x := newSession(s, c, o, family, local)
+	x := newSession(s, c, o, family, local, func(n int) { o.Dropped(s, n) })
 	x.run()
 }
 
 var errNoInterface = errors.New("no interface has an address of this family")
 
 func Listen(family int) (*net.UDPConn, error) {
-	if !hasFamily(family) {
+	return listen(family, upAddrs(), net.ListenUDP)
+}
+
+func listen(family int, addrs []net.Addr, listenUDP func(string, *net.UDPAddr) (*net.UDPConn, error)) (*net.UDPConn, error) {
+	if !hasFamily(family, addrs) {
 		return nil, errNoInterface
 	}
 	network, ip := "udp4", net.IPv4zero
 	if family == 6 {
 		network, ip = "udp6", net.IPv6unspecified
 	}
-	c, err := net.ListenUDP(network, &net.UDPAddr{IP: ip})
+	c, err := listenUDP(network, &net.UDPAddr{IP: ip})
 	if err != nil {
 		return nil, err
 	}
@@ -109,18 +117,23 @@ func Listen(family int) (*net.UDPConn, error) {
 	return c, nil
 }
 
-func hasFamily(family int) bool {
+func upAddrs() []net.Addr {
 	ifs, _ := net.Interfaces()
+	var out []net.Addr
 	for _, ifc := range ifs {
-		if ifc.Flags&net.FlagUp == 0 {
-			continue
+		if ifc.Flags&net.FlagUp != 0 {
+			addrs, _ := ifc.Addrs()
+			out = append(out, addrs...)
 		}
-		addrs, _ := ifc.Addrs()
-		for _, a := range addrs {
-			n, ok := a.(*net.IPNet)
-			if ok && (n.IP.To4() != nil) == (family == 4) {
-				return true
-			}
+	}
+	return out
+}
+
+func hasFamily(family int, addrs []net.Addr) bool {
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if ok && (n.IP.To4() != nil) == (family == 4) {
+			return true
 		}
 	}
 	return false

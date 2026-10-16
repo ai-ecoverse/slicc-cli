@@ -6,4 +6,4 @@ import "net"
 
 func recvErrors(*net.UDPConn, int) {}
 
-func (x *session) drainErrors() int { return 0 }
+func drainErrors(*session) int { return 0 }

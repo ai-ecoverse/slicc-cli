@@ -35,8 +35,12 @@ type queued struct {
 	reason string
 }
 
-func (x *session) drainErrors() int {
-	rc, err := x.c.SyscallConn()
+func drainErrors(x *session) int {
+	sc, ok := x.c.(syscall.Conn)
+	if !ok {
+		return 0
+	}
+	rc, err := sc.SyscallConn()
 	if err != nil {
 		return 0
 	}
