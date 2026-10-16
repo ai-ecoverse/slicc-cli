@@ -227,7 +227,7 @@ gh release download v<version> --repo ai-ecoverse/slicc-cli -p SHA256SUMS -O - |
 - It uses `-trimpath`, so the checkout's path doesn't matter.
 - It runs the Go toolchain that `go.mod` names (its `toolchain` line, else `go`) through `GOTOOLCHAIN`, downloading it when another Go is installed, and clears `GOFLAGS`, `GOEXPERIMENT`, `GOAMD64`, `GOARM64` and `GOWASM` and sets `GOWORK=off`, so the environment doesn't change the build. Its log names the Go it used.
 
-The darwin binaries differ only by their signature: the release signs the same unsigned bytes. The integration test `TestReleaseBuildIsReproducibleFromAnyCheckout` builds a checkout tagged after its commit and a `git archive` of it, and requires identical `SHA256SUMS`.
+The darwin binaries differ only by their signature: the release signs the same unsigned bytes. The integration test `TestReleaseBuildIsReproducibleFromAnyCheckout` (on macOS, where the release builds) builds a checkout tagged after its commit and a `git archive` of it, and requires identical `SHA256SUMS`.
 
 Releases whose `package.sh` lacks `-buildvcs=false` were built with Go's VCS stamping, so their bytes depend on the tags present at build time: rebuild one from its commit with that tag and every later one deleted locally (`git tag -d`), as the release saw it.
 
