@@ -7,17 +7,20 @@ import (
 
 const (
 	refusedGuard = "slicc can't keep seven's origin out of this target"
-	NavTimeout   = 10 * time.Second
+	NavTimeout   = 60 * time.Second
 )
+
+var slowGuard = 2 * time.Second
 
 var navTypes = map[string]bool{"page": true, "iframe": true, "background_page": true, "webview": true}
 
 type navTarget struct {
-	session string
-	ready   chan struct{}
-	pending int
-	done    bool
-	failed  bool
+	session  string
+	deadline time.Time
+	ready    chan struct{}
+	pending  int
+	done     bool
+	failed   bool
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -49,9 +52,13 @@ func (g *guard) touchLocked(targetID, typ string) [][]byte {
 	if _, ok := g.navTargets[targetID]; ok {
 		return nil
 	}
-	nt := &navTarget{ready: make(chan struct{})}
+	nt := &navTarget{ready: make(chan struct{}), deadline: time.Now().Add(NavTimeout)}
 	g.navTargets[targetID] = nt
+	sent := time.Now()
 	msg := g.callbackLocked(g.relaySession, "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, func(m message) [][]byte {
+		if took := time.Since(sent); took > slowGuard {
+			g.logf("cdp: attaching a target's navigation guard took %s", took.Round(time.Millisecond))
+		}
 		return g.navAttachedLocked(nt, m)
 	})
 	return [][]byte{msg}
@@ -68,16 +75,14 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 	}
 	nt.session = res.SessionID
 	g.navSessions[res.SessionID] = nt
-	step := func(m message) [][]byte {
-		if m.Error != nil {
-			g.logf("cdp: couldn't guard a target's navigations: %s", m.Error)
-			nt.settle(true)
-			return nil
+	sent := time.Now()
+	step := func(method string) func(m message) [][]byte {
+		return func(m message) [][]byte {
+			if took := time.Since(sent); took > slowGuard {
+				g.logf("cdp: %s for a target's navigation guard took %s", method, took.Round(time.Millisecond))
+			}
+			return nt.stepLocked(g, m)
 		}
-		if nt.pending--; nt.pending == 0 {
-			nt.settle(false)
-		}
-		return nil
 	}
 	calls := []struct {
 		method string
@@ -90,9 +95,21 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 	nt.pending = len(calls)
 	out := make([][]byte, 0, len(calls))
 	for _, c := range calls {
-		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, step))
+		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, step(c.method)))
 	}
 	return out
+}
+
+func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
+	if m.Error != nil {
+		g.logf("cdp: couldn't guard a target's navigations: %s", m.Error)
+		nt.settle(true)
+		return nil
+	}
+	if nt.pending--; nt.pending == 0 {
+		nt.settle(false)
+	}
+	return nil
 }
 
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
@@ -144,18 +161,29 @@ func (g *guard) navForgetLocked(targetID string) {
 	nt.settle(true)
 }
 
-func (g *guard) navWait(sessionID string) <-chan struct{} {
+func (g *guard) navWait(sessionID string) (<-chan struct{}, time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	s, ok := g.sessions[sessionID]
 	if !ok || !navTypes[s.typ] {
-		return nil
+		return nil, time.Time{}
 	}
 	nt, ok := g.navTargets[s.target]
 	if !ok || nt.done {
-		return nil
+		return nil, time.Time{}
 	}
-	return nt.ready
+	return nt.ready, nt.deadline
+}
+
+func (g *guard) navExpire(sessionID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if s, ok := g.sessions[sessionID]; ok {
+		if nt, ok := g.navTargets[s.target]; ok && !nt.done {
+			g.logf("cdp: a target's navigation guard wasn't ready in %s; refusing its commands", NavTimeout)
+			nt.settle(true)
+		}
+	}
 }
 
 func (g *guard) navCheckLocked(sessionID string) string {
