@@ -31,19 +31,28 @@ sha256() {
   fi
 }
 
+pin_go() {
+  local want
+  want="$(awk '$1 == "toolchain" { t = $2 } $1 == "go" { g = "go" $2 } END { print t ? t : g }' go.mod)"
+  unset GOFLAGS GOEXPERIMENT GOAMD64 GOARM64 GOWASM
+  export GOTOOLCHAIN="$want" GOWORK=off
+  echo "building with $(go version) (GOTOOLCHAIN=$GOTOOLCHAIN from go.mod)"
+}
+
 build() {
+  pin_go
   rm -rf "$out"
   mkdir -p "$out" dist
   for target in $targets; do
     local goos="${target%/*}" goarch="${target#*/}" ext=""
     [ "$goos" = "windows" ] && ext=".exe"
     echo "building slicc-$goos-$goarch$ext ($version)"
-    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -buildvcs=false \
       -ldflags "-s -w -X main.version=$version" \
       -o "$out/slicc-$goos-$goarch$ext" ./cmd/slicc
   done
   echo "building slicc-wasip1-wasm.wasm ($version)"
-  CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -trimpath \
+  CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -trimpath -buildvcs=false \
     -ldflags "-s -w -X main.version=$version" \
     -o "$out/slicc-wasip1-wasm.wasm" ./cmd/slicc
   printf '%s\n' "$version" > dist/VERSION
