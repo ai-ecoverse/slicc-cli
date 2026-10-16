@@ -38,7 +38,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-kernel": "1.98.4",
+    "@ai-ecoverse/slicc-kernel": "1.100.3",
     "@ai-ecoverse/slicc-shared-web": "1.20.0",
     "@semantic-release/exec": "7.1.0",
     "semantic-release": "25.0.9"
