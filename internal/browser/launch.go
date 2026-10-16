@@ -23,6 +23,8 @@ const SlowLaunchAfter = 10 * time.Second
 
 var ErrAlreadyRunning = errors.New("already running")
 
+var ErrLeftRunning = errors.New("left running")
+
 type LaunchOptions struct {
 	Options
 	Profile       string
@@ -181,8 +183,7 @@ func Launch(ctx context.Context, in Installed, lo LaunchOptions) (*Browser, erro
 	ctx, cancel := context.WithTimeout(ctx, lo.LaunchTimeout)
 	defer cancel()
 	if err := b.waitActivePort(ctx, lo); err != nil {
-		b.abort()
-		return nil, err
+		return nil, b.abortWith(err)
 	}
 	if pid := profileOwner(dir); pid > 0 {
 		b.mainPID = pid
@@ -216,8 +217,7 @@ func launchElectron(ctx context.Context, in Installed, lo LaunchOptions) (*Brows
 	defer cancel()
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	if err := b.waitVersion(ctx, lo, candidate{base: base, source: SourceFlag}); err != nil {
-		b.abort()
-		return nil, err
+		return nil, b.abortWith(err)
 	}
 	if b.mainPID == 0 {
 		b.mainPID = findProcess(ctx, in.Executable)
@@ -372,6 +372,63 @@ func (b *Browser) abort() {
 	case <-b.done:
 	case <-time.After(5 * time.Second):
 	}
+}
+
+func (b *Browser) abortWith(err error) error {
+	b.abort()
+	if b.mainPID != 0 {
+		return err
+	}
+	if left := b.killProfileProcesses(appSettle, appGiveUp); len(left) > 0 {
+		return fmt.Errorf("%w; %w: %s is still running as process %v", err, ErrLeftRunning, b.Installed.Name, left)
+	}
+	return err
+}
+
+const (
+	appSettle = 3 * time.Second
+	appGiveUp = 15 * time.Second
+)
+
+func (b *Browser) killProfileProcesses(settle, giveUp time.Duration) []int {
+	start := time.Now()
+	quiet := start.Add(settle)
+	for {
+		pids := profilePIDs(b.ProfileDir)
+		for _, pid := range pids {
+			signalTree(0, pid, true)
+		}
+		if len(pids) > 0 {
+			quiet = time.Now().Add(settle)
+		}
+		if now := time.Now(); now.After(quiet) || now.Sub(start) > giveUp {
+			return profilePIDs(b.ProfileDir)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func profilePIDs(dir string) []int {
+	if dir == "" {
+		return nil
+	}
+	want := resolvedPath(dir)
+	var pids []int
+	if pid := profileOwner(dir); pid > 1 && pid != os.Getpid() {
+		pids = append(pids, pid)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := processTable(ctx)
+	if err != nil {
+		return pids
+	}
+	for _, h := range parseProcessTable(out, runtime.GOOS == "windows", os.Getpid()) {
+		if h.pid > 1 && h.dir != "" && samePath(resolvedPath(h.dir), want) && pidAlive(h.pid) && !slices.Contains(pids, h.pid) {
+			pids = append(pids, h.pid)
+		}
+	}
+	return pids
 }
 
 func (b *Browser) groupPID() int {

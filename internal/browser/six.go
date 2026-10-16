@@ -388,8 +388,7 @@ func LaunchSix(ctx context.Context, in Installed, six Six, lo LaunchOptions) (*B
 	ctx, cancel := context.WithTimeout(ctx, lo.LaunchTimeout)
 	defer cancel()
 	if err := b.waitActivePort(ctx, lo); err != nil {
-		b.abort()
-		return nil, err
+		return nil, b.abortWith(err)
 	}
 	if pid := profileOwner(dir); pid > 0 {
 		b.mainPID = pid

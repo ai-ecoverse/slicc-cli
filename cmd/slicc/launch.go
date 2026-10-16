@@ -197,7 +197,7 @@ func interruptible(ctx context.Context, sigs <-chan os.Signal) (context.Context,
 }
 
 func (o launchOut) launchFailed(err error, sigs <-chan os.Signal, in browser.Installed) int {
-	if len(sigs) == 0 {
+	if len(sigs) == 0 || errors.Is(err, browser.ErrLeftRunning) {
 		return o.fail(err)
 	}
 	o.event(launchEvent{Event: "closed"})
