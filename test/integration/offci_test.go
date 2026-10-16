@@ -88,13 +88,15 @@ func browserTests(t *testing.T) []string {
 var installedBrowser = regexp.MustCompile(`(?i)(\.app/contents/macos/|chrome|chromium|msedge|brave|vivaldi|opera)`)
 
 type browserWatch struct {
-	root string
-	mu   sync.Mutex
-	hits map[string]bool
-	hit  chan struct{}
-	once sync.Once
-	stop chan struct{}
-	done chan struct{}
+	root    string
+	mu      sync.Mutex
+	hits    map[string]bool
+	started int
+	scanned []int
+	hit     chan struct{}
+	once    sync.Once
+	stop    chan struct{}
+	done    chan struct{}
 }
 
 func watchInstalledBrowsers(root string) *browserWatch {
@@ -114,20 +116,22 @@ func watchInstalledBrowsers(root string) *browserWatch {
 	return w
 }
 
-func processLines() []string {
+func processLines() ([]string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if runtime.GOOS == "linux" {
-		return procLines()
+		lines := procLines()
+		return lines, len(lines) > 0
 	}
 	var out []byte
+	var err error
 	if runtime.GOOS == "windows" {
-		out, _ = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command",
+		out, err = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command",
 			"Get-CimInstance Win32_Process | ForEach-Object { [string]$_.ProcessId + ' ' + $_.CommandLine }").Output()
 	} else {
-		out, _ = exec.CommandContext(ctx, "ps", "-A", "-ww", "-o", "pid=,args=").Output()
+		out, err = exec.CommandContext(ctx, "ps", "-A", "-ww", "-o", "pid=,args=").Output()
 	}
-	return strings.Split(string(bytes.ReplaceAll(out, []byte("\r"), nil)), "\n")
+	return strings.Split(string(bytes.ReplaceAll(out, []byte("\r"), nil)), "\n"), err == nil && len(out) > 0
 }
 
 func procLines() []string {
@@ -145,7 +149,19 @@ func procLines() []string {
 
 func (w *browserWatch) scan() {
 	root := strings.ToLower(filepath.ToSlash(w.root))
-	for _, line := range processLines() {
+	w.mu.Lock()
+	w.started++
+	seq := w.started
+	w.mu.Unlock()
+	lines, complete := processLines()
+	defer func() {
+		if complete {
+			w.mu.Lock()
+			w.scanned = append(w.scanned, seq)
+			w.mu.Unlock()
+		}
+	}()
+	for _, line := range lines {
 		l := strings.ToLower(filepath.ToSlash(line))
 		at := strings.Index(l, root)
 		if at < 0 {
@@ -219,27 +235,61 @@ func TestOffCINoTestRunsAnInstalledBrowser(t *testing.T) {
 	}
 	w := watchInstalledBrowsers(root)
 	probe := exec.Command(canary, "--remote-debugging-port=0", "--user-data-dir="+canaryProfile)
+	var probeErr bytes.Buffer
+	probe.Stderr = &probeErr
 	if err := probe.Start(); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(30 * time.Second)
+	exited := make(chan error, 1)
+	go func() { exited <- probe.Wait() }()
+	fail := func(format string, args ...any) {
+		_ = probe.Process.Kill()
+		w.finish()
+		t.Fatalf(format, args...)
+	}
+	active := filepath.Join(canaryProfile, "DevToolsActivePort")
+	from := -1
+	safety := time.After(4 * time.Minute)
 	for {
 		w.mu.Lock()
-		seen := len(w.hits)
+		seen, started, after := len(w.hits), w.started, 0
+		for _, seq := range w.scanned {
+			if from >= 0 && seq > from {
+				after++
+			}
+		}
 		w.mu.Unlock()
 		if seen > 0 {
 			break
 		}
-		if time.Now().After(deadline) {
-			_ = probe.Process.Kill()
-			_ = probe.Wait()
-			w.finish()
-			t.Fatal("the watch never saw a browser outside the run's temp dir that uses a profile inside it")
+		if from < 0 {
+			if _, err := os.Stat(active); err == nil {
+				w.mu.Lock()
+				from = w.started
+				w.mu.Unlock()
+			}
+		} else if after >= 3 {
+			var mention []string
+			lines, _ := processLines()
+			for _, line := range lines {
+				if strings.Contains(strings.ToLower(line), "canary-profile") {
+					mention = append(mention, line)
+				}
+			}
+			fail("the watch never saw a browser outside the run's temp dir that uses a profile inside it, in %d process-list scans started after the canary was up; the process list names the canary's profile in %q; root %q", after, mention, root)
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case err := <-exited:
+			fail("the canary exited before the watch saw it: %v\n%s", err, probeErr.String())
+		case <-safety:
+			fail("the canary never came up, or the watch never finished a process-list scan (canary up: %t, scans started: %d)", from >= 0, started)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	_ = probe.Process.Kill()
-	_ = probe.Wait()
+	if err := <-exited; err != nil {
+		t.Logf("the canary ended after it was seen: %v", err)
+	}
 	if hits := w.finish(); len(hits) != 1 || !strings.Contains(hits[0], "Google Chrome Canary") {
 		t.Fatalf("the canary was seen as %q", hits)
 	}
