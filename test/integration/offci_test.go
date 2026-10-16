@@ -210,8 +210,12 @@ func TestOffCINoTestRunsAnInstalledBrowser(t *testing.T) {
 	if err := build.Run(); err != nil {
 		t.Fatal(err)
 	}
+	canaryProfile := filepath.Join(root, "canary-profile")
+	if err := os.MkdirAll(canaryProfile, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	w := watchInstalledBrowsers(root)
-	probe := exec.Command(canary, "--remote-debugging-port=0", "--user-data-dir="+filepath.Join(root, "canary-profile"))
+	probe := exec.Command(canary, "--remote-debugging-port=0", "--user-data-dir="+canaryProfile)
 	if err := probe.Start(); err != nil {
 		t.Fatal(err)
 	}
