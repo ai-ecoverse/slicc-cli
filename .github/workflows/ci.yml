@@ -66,6 +66,15 @@ jobs:
 
       - run: npm ci
 
+      - if: runner.os == 'Windows'
+        name: Read Chrome in from the runner's cold disk
+        run: |
+          $dir = Join-Path $env:ProgramFiles 'Google\Chrome\Application'
+          (Get-Item (Join-Path $dir 'chrome.exe')).VersionInfo.ProductVersion
+          $files = Get-ChildItem $dir -Recurse -File -ErrorAction Stop
+          $took = Measure-Command { foreach ($f in $files) { $null = [IO.File]::ReadAllBytes($f.FullName) } }
+          '{0:N0} MB of {1} read in {2:N1} s' -f (($files | Measure-Object Length -Sum).Sum / 1MB), $dir, $took.TotalSeconds
+
       - run: node scripts/test-shard.mjs ${{ matrix.shard }} -race -count=1 -timeout 12m -v ./test/integration/...
         env:
           TEMP: ${{ runner.temp }}
