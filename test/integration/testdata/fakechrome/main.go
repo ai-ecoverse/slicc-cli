@@ -23,6 +23,13 @@ func main() {
 			dir = v
 		}
 	}
+	if code, err := strconv.Atoi(os.Getenv("FAKE_CHROME_EXIT")); err == nil {
+		fmt.Fprintln(os.Stderr, os.Getenv("FAKE_CHROME_EXIT_MESSAGE"))
+		os.Exit(code)
+	}
+	if ms, err := strconv.Atoi(os.Getenv("FAKE_CHROME_DELAY_MS")); err == nil {
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
 	active := filepath.Join(dir, "DevToolsActivePort")
 	saw, _ := os.ReadFile(active)
 	probe, _ := strconv.Atoi(os.Getenv("FAKE_CHROME_PROBE_MS"))

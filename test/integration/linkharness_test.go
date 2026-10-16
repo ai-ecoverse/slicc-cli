@@ -109,6 +109,7 @@ func launchBrowserOn(t *testing.T, debugPort int, extra ...string) *chromeProc {
 		_ = os.RemoveAll(dir)
 	})
 	port := 0
+	started := time.Now()
 	for deadline := time.Now().Add(30 * time.Second); debugPort != 0 && time.Now().Before(deadline) && port == 0; time.Sleep(100 * time.Millisecond) {
 		if _, err := getVersion(fmt.Sprintf("http://127.0.0.1:%d", debugPort)); err == nil {
 			port = debugPort
@@ -121,7 +122,7 @@ func launchBrowserOn(t *testing.T, debugPort int, extra ...string) *chromeProc {
 		}
 	}
 	if port == 0 {
-		t.Fatal("Chrome did not write DevToolsActivePort")
+		t.Fatalf("Chrome did not write DevToolsActivePort in %s; %s\n%s%s", time.Since(started).Round(time.Millisecond), userDataFiles(dir), chromeOutput(stderr), chromeTree(cmd.Process.Pid))
 	}
 	b := &chromeProc{endpoint: fmt.Sprintf("http://127.0.0.1:%d", port), port: port, cmd: cmd, stderr: stderr}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -241,17 +242,30 @@ func (b *chromeProc) report() string {
 	defer tcancel()
 	err := b.client.Call(tctx, "", "Target.getTargets", nil, &targets)
 	fmt.Fprintf(&out, "Target.getTargets: %+v (%v)\n", targets.TargetInfos, err)
-	log, err := os.ReadFile(b.stderr)
-	lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
-	if len(lines) > 60 {
-		lines = lines[len(lines)-60:]
-	}
-	fmt.Fprintf(&out, "Chrome output (%v):\n  %s\n", err, strings.Join(lines, "\n  "))
+	out.WriteString(chromeOutput(b.stderr))
 	out.WriteString(chromeTree(b.cmd.Process.Pid))
 	if stuck != nil && runtime.GOOS == "darwin" {
 		out.WriteString(chromeSample(b.cmd.Process.Pid))
 	}
 	return out.String()
+}
+
+func chromeOutput(name string) string {
+	log, err := os.ReadFile(name)
+	lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
+	if len(lines) > 60 {
+		lines = lines[len(lines)-60:]
+	}
+	return fmt.Sprintf("Chrome output (%v):\n  %s\n", err, strings.Join(lines, "\n  "))
+}
+
+func userDataFiles(dir string) string {
+	entries, err := os.ReadDir(dir)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return fmt.Sprintf("the user-data dir holds [%s] (%v)", strings.Join(names, " "), err)
 }
 
 func (p *page) eval(expr string, out any) {
