@@ -296,7 +296,7 @@ func TestLoopbackLinksSevenWithoutCDP(t *testing.T) {
 		if h.Mode != "local" || h.Name != "it-loop" || h.Node != r.Node {
 			t.Fatalf("hello %+v", h)
 		}
-		for _, c := range []string{"net", "http", "credentialed", "ws", "fs", "unlink-loopback"} {
+		for _, c := range []string{"net", "http", "credentialed", "ws", "udp", "fs", "unlink-loopback"} {
 			if !slices.Contains(h.Caps, c) {
 				t.Fatalf("caps %v lack %s", h.Caps, c)
 			}

@@ -5,6 +5,7 @@ import { protectTest } from './protect.js';
 import { fsTest } from './fs-test.js';
 import { agentTest, onAgent } from './agent.js';
 import { wsTest } from './ws.js';
+import { udpTest } from './udp.js';
 import { LoopbackError, backoff, certificateFingerprint, loadCertificate, pair as loopbackPair, post as loopbackPost, signal as loopbackSignal, takePairing, unlink as loopbackUnlink } from './loopback.js';
 
 const params = new URLSearchParams(location.search);
@@ -552,6 +553,7 @@ globalThis.linkTest = {
   },
   fs: fsTest(() => state.link, describe, { sha256, toBase64, fromBase64, prng }),
   ws: wsTest(() => state.link, describe, { sha256, fromBase64, prng }),
+  udp: udpTest(() => state.link, describe, { sha256, fromBase64 }),
   async transport() {
     const out = { dropped: state.link?.dropped ?? [], streams: state.link?.streamCount ?? 0, channels: [], pairs: [] };
     const stats = await state.pc?.getStats();

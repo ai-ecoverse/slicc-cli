@@ -14,6 +14,7 @@ const (
 	EventLinkDown    EventKind = "link-down"
 	EventStreamOpen  EventKind = "stream-open"
 	EventStreamClose EventKind = "stream-close"
+	EventDropped     EventKind = "dropped"
 )
 
 type Event struct {
@@ -22,6 +23,7 @@ type Event struct {
 	Peer   link.Hello
 	Stream string
 	Reason string
+	Count  int
 	Err    error
 }
 
@@ -76,6 +78,12 @@ func (n *Node) subscribed() bool {
 	n.subs.mu.RLock()
 	defer n.subs.mu.RUnlock()
 	return len(n.subs.ids) > 0
+}
+
+func (n *Node) Dropped(s *link.Stream, count int) {
+	if count > 0 {
+		n.emit(Event{Kind: EventDropped, Link: s.Link(), Stream: s.Kind(), Count: count})
+	}
 }
 
 func (n *Node) counted(kind string, h link.Handler) link.Handler {

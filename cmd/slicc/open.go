@@ -26,6 +26,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
+	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
@@ -363,6 +364,7 @@ func (r *openRun) serveCaps() (func(), error) {
 	resolve.Register(n)
 	httpcap.Register(n)
 	wscap.Register(n)
+	udpcap.Register(n)
 	if !r.f.noJerk {
 		serveJerk(n, true, false, r.status)
 	}
