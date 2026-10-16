@@ -88,14 +88,15 @@ func browserTests(t *testing.T) []string {
 var installedBrowser = regexp.MustCompile(`(?i)(\.app/contents/macos/|chrome|chromium|msedge|brave|vivaldi|opera)`)
 
 type browserWatch struct {
-	root  string
-	mu    sync.Mutex
-	hits  map[string]bool
-	scans int
-	hit   chan struct{}
-	once  sync.Once
-	stop  chan struct{}
-	done  chan struct{}
+	root    string
+	mu      sync.Mutex
+	hits    map[string]bool
+	started int
+	scanned []int
+	hit     chan struct{}
+	once    sync.Once
+	stop    chan struct{}
+	done    chan struct{}
 }
 
 func watchInstalledBrowsers(root string) *browserWatch {
@@ -146,11 +147,15 @@ func procLines() []string {
 
 func (w *browserWatch) scan() {
 	root := strings.ToLower(filepath.ToSlash(w.root))
+	w.mu.Lock()
+	w.started++
+	seq := w.started
+	w.mu.Unlock()
 	lines := processLines()
 	defer func() {
 		if len(lines) > 1 {
 			w.mu.Lock()
-			w.scans++
+			w.scanned = append(w.scanned, seq)
 			w.mu.Unlock()
 		}
 	}()
@@ -245,29 +250,36 @@ func TestOffCINoTestRunsAnInstalledBrowser(t *testing.T) {
 	safety := time.After(4 * time.Minute)
 	for {
 		w.mu.Lock()
-		seen, scans := len(w.hits), w.scans
+		seen, started, after := len(w.hits), w.started, 0
+		for _, seq := range w.scanned {
+			if from >= 0 && seq > from {
+				after++
+			}
+		}
 		w.mu.Unlock()
 		if seen > 0 {
 			break
 		}
 		if from < 0 {
 			if _, err := os.Stat(active); err == nil {
-				from = scans
+				w.mu.Lock()
+				from = w.started
+				w.mu.Unlock()
 			}
-		} else if scans >= from+3 {
+		} else if after >= 3 {
 			var mention []string
 			for _, line := range processLines() {
 				if strings.Contains(strings.ToLower(line), "canary-profile") {
 					mention = append(mention, line)
 				}
 			}
-			fail("the watch never saw a browser outside the run's temp dir that uses a profile inside it, in %d process-list scans while the canary was up; the process list names the canary's profile in %q; root %q", scans-from, mention, root)
+			fail("the watch never saw a browser outside the run's temp dir that uses a profile inside it, in %d process-list scans started after the canary was up; the process list names the canary's profile in %q; root %q", after, mention, root)
 		}
 		select {
 		case err := <-exited:
 			fail("the canary exited before the watch saw it: %v\n%s", err, probeErr.String())
 		case <-safety:
-			fail("the canary never came up, or the watch never finished a process-list scan (canary up: %t, scans: %d)", from >= 0, scans)
+			fail("the canary never came up, or the watch never finished a process-list scan (canary up: %t, scans started: %d)", from >= 0, started)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
