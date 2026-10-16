@@ -21,7 +21,7 @@ import (
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
-const guardSetVersion = "1.7.4"
+const guardSetVersion = "1.7.5"
 
 func guardSlots() int {
 	return min(10, max(4, 2*runtime.NumCPU()))
