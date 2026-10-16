@@ -142,16 +142,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: ubuntu-curl
-            runner: cloud-run-bench
-            container: ''
-          - name: macos-curl
-            runner: macos-latest
-            container: ''
-          - name: alpine-wget
-            runner: ubuntu-latest
-            container: alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
+        include: >-
+          ${{ fromJSON(github.event_name != 'push'
+          && '[{"name":"ubuntu-curl","runner":"cloud-run-bench","container":""},{"name":"alpine-wget","runner":"ubuntu-latest","container":"alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0"}]'
+          || '[{"name":"ubuntu-curl","runner":"cloud-run-bench","container":""},{"name":"macos-curl","runner":"macos-latest","container":""},{"name":"alpine-wget","runner":"ubuntu-latest","container":"alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0"}]') }}
     name: installer (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
