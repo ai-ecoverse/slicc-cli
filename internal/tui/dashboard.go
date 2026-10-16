@@ -106,6 +106,8 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 	case flow.BrowserBack:
 		d.browser(e.Browser).gone = false
 		d.log(now, e.Name+" is back")
+	case flow.BrowserSlow:
+		d.log(now, flow.SlowLine(e.Name, e.Elapsed))
 	case flow.Kernel:
 		d.kernel = e.Kernel
 	case flow.Status:

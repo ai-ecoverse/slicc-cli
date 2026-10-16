@@ -156,12 +156,13 @@ func (r *run) profileFor(e browser.Entry, host bool) string {
 func (r *run) launch(ctx context.Context, e browser.Entry, role, page string) (*browser.Browser, error) {
 	opts := r.cfg.Browser
 	opts.Origins = r.origins
+	slow := r.slowReporter(e, role)
 	var b *browser.Browser
 	var err error
 	if e.Six != nil {
-		b, err = browser.LaunchSix(ctx, *e.Installed, *e.Six, browser.LaunchOptions{Options: opts, URL: page, Headless: r.cfg.Headless})
+		b, err = browser.LaunchSix(ctx, *e.Installed, *e.Six, browser.LaunchOptions{Options: opts, URL: page, Headless: r.cfg.Headless, Slow: slow})
 	} else {
-		b, err = browser.Launch(ctx, *e.Installed, browser.LaunchOptions{Options: opts, Profile: r.profileFor(e, role == RoleSeven), URL: page, Headless: r.cfg.Headless})
+		b, err = browser.Launch(ctx, *e.Installed, browser.LaunchOptions{Options: opts, Profile: r.profileFor(e, role == RoleSeven), URL: page, Headless: r.cfg.Headless, Slow: slow})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("launch %s: %w", e.Name, err)
@@ -174,6 +175,12 @@ func (r *run) launch(ctx context.Context, e browser.Entry, role, page string) (*
 		Profile: b.Profile, ProfileDir: b.ProfileDir, CDP: b.CDP, WebSocketURL: b.WebSocketURL,
 	})
 	return b, nil
+}
+
+func (r *run) slowReporter(e browser.Entry, role string) func(time.Duration) {
+	return func(elapsed time.Duration) {
+		r.emit(Event{Event: BrowserSlow, Browser: e.ID, Name: e.Name, Role: role, Elapsed: int(elapsed / time.Second)})
+	}
 }
 
 func (r *run) setupHost(ctx context.Context, e browser.Entry) error {

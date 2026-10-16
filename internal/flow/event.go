@@ -2,6 +2,7 @@ package flow
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
@@ -25,6 +26,7 @@ const (
 	Kernel      Kind = "kernel"
 	BrowserGone Kind = "browser-gone"
 	BrowserBack Kind = "browser-back"
+	BrowserSlow Kind = "browser-slow"
 	Closed      Kind = "closed"
 	Error       Kind = "error"
 
@@ -32,7 +34,7 @@ const (
 )
 
 var Public = map[Kind]bool{
-	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, Closed: true, Error: true, ForeignBrowser: true,
+	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, BrowserSlow: true, Closed: true, Error: true, ForeignBrowser: true,
 }
 
 const (
@@ -65,6 +67,7 @@ type Event struct {
 	Kernel       string          `json:"kernel,omitempty"`
 	Compute      string          `json:"compute,omitempty"`
 	OpenedTab    *bool           `json:"openedTab,omitempty"`
+	Elapsed      int             `json:"elapsed,omitempty"`
 	Time         time.Time       `json:"-"`
 }
 
@@ -95,4 +98,8 @@ func (e Event) MarshalJSON() ([]byte, error) {
 		}{p, closed})
 	}
 	return json.Marshal(p)
+}
+
+func SlowLine(name string, elapsed int) string {
+	return fmt.Sprintf("%s is still starting (slow disk?), %d s so far", name, elapsed)
 }

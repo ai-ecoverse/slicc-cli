@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 )
 
 const launchUsage = `usage: slicc launch [--browser <id>] [--profile <name>] [--url <url>] [--headless] [--no-seven-flags] [--kill] [--json]
@@ -96,6 +97,7 @@ type launchEvent struct {
 	CDP          string `json:"cdp,omitempty"`
 	WebSocketURL string `json:"webSocketDebuggerUrl,omitempty"`
 	Message      string `json:"message,omitempty"`
+	Elapsed      int    `json:"elapsed,omitempty"`
 }
 
 type launchOut struct {
@@ -108,6 +110,16 @@ func (o launchOut) event(e launchEvent) {
 	if o.json {
 		b, _ := json.Marshal(e)
 		fmt.Fprintf(o.stdout, "%s\n", b)
+	}
+}
+
+func (o launchOut) slow(in browser.Installed) func(time.Duration) {
+	return func(elapsed time.Duration) {
+		secs := int(elapsed / time.Second)
+		o.event(launchEvent{Event: "browser-slow", ID: in.ID, Name: in.Name, Elapsed: secs})
+		if !o.json {
+			fmt.Fprintf(o.stderr, "slicc: %s\n", flow.SlowLine(in.Name, secs))
+		}
 	}
 }
 
@@ -150,11 +162,49 @@ func runLaunch(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return out.fail(err)
 	}
-	b, err := browser.Launch(ctx, in, browser.LaunchOptions{Profile: f.profile, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Kill: f.kill})
+	lctx, launched := interruptible(ctx, sigs)
+	b, err := browser.Launch(lctx, in, browser.LaunchOptions{Profile: f.profile, URL: f.url, Headless: f.headless, NoSevenFlags: f.noSeven, Kill: f.kill, Slow: out.slow(in)})
+	pending := launched()
 	if err != nil {
-		return out.fail(err)
+		return out.launchFailed(err, pending, in)
 	}
-	return serveLaunched(ctx, f, out, sigs, in, b)
+	return serveLaunched(ctx, f, out, pending, in, b)
+}
+
+func interruptible(ctx context.Context, sigs <-chan os.Signal) (context.Context, func() <-chan os.Signal) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	got := make(chan os.Signal, 1)
+	go func() {
+		defer close(finished)
+		select {
+		case s := <-sigs:
+			got <- s
+			cancel()
+		case <-done:
+		}
+	}()
+	return ctx, func() <-chan os.Signal {
+		close(done)
+		<-finished
+		cancel()
+		if len(got) > 0 {
+			return got
+		}
+		return sigs
+	}
+}
+
+func (o launchOut) launchFailed(err error, sigs <-chan os.Signal, in browser.Installed) int {
+	if len(sigs) == 0 || errors.Is(err, browser.ErrLeftRunning) {
+		return o.fail(err)
+	}
+	o.event(launchEvent{Event: "closed"})
+	if !o.json {
+		fmt.Fprintf(o.stderr, "slicc: interrupted while %s was starting; closed it\n", in.Name)
+	}
+	return 0
 }
 
 func serveLaunched(ctx context.Context, f launchFlags, out launchOut, sigs <-chan os.Signal, in browser.Installed, b *browser.Browser) int {
