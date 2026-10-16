@@ -116,20 +116,22 @@ func watchInstalledBrowsers(root string) *browserWatch {
 	return w
 }
 
-func processLines() []string {
+func processLines() ([]string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if runtime.GOOS == "linux" {
-		return procLines()
+		lines := procLines()
+		return lines, len(lines) > 0
 	}
 	var out []byte
+	var err error
 	if runtime.GOOS == "windows" {
-		out, _ = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command",
+		out, err = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command",
 			"Get-CimInstance Win32_Process | ForEach-Object { [string]$_.ProcessId + ' ' + $_.CommandLine }").Output()
 	} else {
-		out, _ = exec.CommandContext(ctx, "ps", "-A", "-ww", "-o", "pid=,args=").Output()
+		out, err = exec.CommandContext(ctx, "ps", "-A", "-ww", "-o", "pid=,args=").Output()
 	}
-	return strings.Split(string(bytes.ReplaceAll(out, []byte("\r"), nil)), "\n")
+	return strings.Split(string(bytes.ReplaceAll(out, []byte("\r"), nil)), "\n"), err == nil && len(out) > 0
 }
 
 func procLines() []string {
@@ -151,9 +153,9 @@ func (w *browserWatch) scan() {
 	w.started++
 	seq := w.started
 	w.mu.Unlock()
-	lines := processLines()
+	lines, complete := processLines()
 	defer func() {
-		if len(lines) > 1 {
+		if complete {
 			w.mu.Lock()
 			w.scanned = append(w.scanned, seq)
 			w.mu.Unlock()
@@ -268,7 +270,8 @@ func TestOffCINoTestRunsAnInstalledBrowser(t *testing.T) {
 			}
 		} else if after >= 3 {
 			var mention []string
-			for _, line := range processLines() {
+			lines, _ := processLines()
+			for _, line := range lines {
 				if strings.Contains(strings.ToLower(line), "canary-profile") {
 					mention = append(mention, line)
 				}
