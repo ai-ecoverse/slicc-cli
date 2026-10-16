@@ -14,8 +14,38 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  runner:
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CERT_LIGHT_RUNNER || vars.CERT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.merge_group.base_sha || github.event.pull_request.base.sha || github.sha }}
+          sparse-checkout: .github/runner.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - id: pick
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          FORCED: ${{ vars.CI_RUNNER }}
+          POOL: ${{ vars.CERT_RUNNER || 'cloud-run-bench' }}
+        with:
+          script: |
+            const { runner, why } = await import(`${process.env.GITHUB_WORKSPACE}/.github/runner.mjs`)
+              .then(({ decide }) => decide({ context, github, env: process.env }))
+              .catch((error) => ({ runner: 'ubuntu-latest', why: `the decider failed: ${error.message}` }));
+            core.setOutput('runner', runner);
+            await core.summary.addRaw(`runner: ${runner} (${why})\n`).write();
+
   lint:
-    runs-on: cloud-run-bench
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -38,6 +68,7 @@ jobs:
       - run: npm run lint
 
   test:
+    needs: runner
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +77,7 @@ jobs:
           && '[{"os":"ubuntu-latest","shard":"1/2"},{"os":"ubuntu-latest","shard":"2/2"},{"os":"macos-latest","shard":"1/1"},{"os":"windows-latest","shard":"1/1"}]'
           || '[{"os":"ubuntu-latest","shard":"1/2"},{"os":"ubuntu-latest","shard":"2/2"},{"os":"macos-latest","shard":"1/3"},{"os":"macos-latest","shard":"2/3"},{"os":"macos-latest","shard":"3/3"},{"os":"windows-latest","shard":"1/2"},{"os":"windows-latest","shard":"2/2"}]') }}
     name: test (${{ matrix.os }}, ${{ matrix.shard }})
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'cloud-run-bench' || matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && (needs.runner.outputs.runner || 'ubuntu-latest') || matrix.os }}
     timeout-minutes: ${{ matrix.shard == '1/1' && 35 || 20 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -82,7 +113,8 @@ jobs:
           CGO_ENABLED: '0'
 
   shellcheck:
-    runs-on: cloud-run-bench
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -101,7 +133,8 @@ jobs:
       - run: shellcheck -s sh install.sh test/integration/testdata/install/check.sh
 
   installer-assets:
-    runs-on: cloud-run-bench
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -138,16 +171,16 @@ jobs:
           retention-days: 1
 
   installer:
-    needs: installer-assets
+    needs: [runner, installer-assets]
     strategy:
       fail-fast: false
       matrix:
         include: >-
           ${{ fromJSON(github.event_name != 'push'
-          && '[{"name":"ubuntu-curl","runner":"cloud-run-bench","container":""},{"name":"alpine-wget","runner":"ubuntu-latest","container":"alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0"}]'
-          || '[{"name":"ubuntu-curl","runner":"cloud-run-bench","container":""},{"name":"macos-curl","runner":"macos-latest","container":""},{"name":"alpine-wget","runner":"ubuntu-latest","container":"alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0"}]') }}
+          && '[{"name":"ubuntu-curl","runner":"pool","container":""},{"name":"alpine-wget","runner":"ubuntu-latest","container":"alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0"}]'
+          || '[{"name":"ubuntu-curl","runner":"pool","container":""},{"name":"macos-curl","runner":"macos-latest","container":""},{"name":"alpine-wget","runner":"ubuntu-latest","container":"alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0"}]') }}
     name: installer (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'pool' && (needs.runner.outputs.runner || 'ubuntu-latest') || matrix.runner }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -185,13 +218,13 @@ jobs:
 
   ci:
     if: always()
-    needs: [lint, test, shellcheck, installer-assets, installer]
-    runs-on: cloud-run-bench
+    needs: [runner, lint, test, shellcheck, installer-assets, installer]
+    runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Require every job to pass
         env:
-          RESULTS: lint=${{ needs.lint.result }} test=${{ needs.test.result }} shellcheck=${{ needs.shellcheck.result }} installer-assets=${{ needs.installer-assets.result }} installer=${{ needs.installer.result }}
+          RESULTS: runner=${{ needs.runner.result }} lint=${{ needs.lint.result }} test=${{ needs.test.result }} shellcheck=${{ needs.shellcheck.result }} installer-assets=${{ needs.installer-assets.result }} installer=${{ needs.installer.result }}
         run: |
           failed=
           for pair in $RESULTS; do
