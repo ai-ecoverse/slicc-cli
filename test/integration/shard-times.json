@@ -195,6 +195,7 @@
     "TestProtectedVectors": 0,
     "TestRankOrder": 0,
     "TestRelativeRunnerRunsFromTheHomeDirectory": 3.2,
+    "TestReleaseBuildIsReproducibleFromAnyCheckout": 96.2,
     "TestReleaseSignsOnlyDarwin": 0,
     "TestReleaseVerifiesTheGoMajor": 0,
     "TestReleaseWorkflowOffersTheSliccyNextRecovery": 0,
