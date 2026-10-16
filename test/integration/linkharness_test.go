@@ -29,6 +29,9 @@ func findChrome() string {
 	if p := os.Getenv("SLICC_TEST_CHROME"); p != "" {
 		return p
 	}
+	if os.Getenv("CI") == "" {
+		return ""
+	}
 	var candidates []string
 	switch runtime.GOOS {
 	case "darwin":
