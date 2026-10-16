@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
@@ -46,16 +47,17 @@ flags:
   --name <name>        the name and host this link shows in seven
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
-  --kernel-port <n>    serve http://<port>.kernel.localhost on this local
+` + exposeUsage + `  --kernel-port <n>    serve http://<port>.kernel.localhost on this local
                        port instead of 80
   --no-kernel          don't serve <port>.kernel.localhost at all
 ` + jerkLocalUsage + mountUsage + computeUsage + `
 The link offers the net capability (tcp and resolve streams) and the http
 capability (fetches without redirects) under the local policy: public
-addresses, this machine and the local network, but not link-local addresses
-or the browsers' debugging ports and endpoints. With --runner it also offers
-ssh: seven's kernel reaches this machine's SSH server, which never listens on
-a port, and its forwarding goes through the same policy. With --cdp or
+addresses, this machine and the local network, but not link-local addresses,
+the debugging ports (below), or the browsers' endpoints. With --runner it
+also offers ssh: seven's kernel reaches this machine's SSH server, which
+never listens on a port, and its forwarding goes through the same policy.
+With --cdp or
 --cdp-extra it also offers cdp: seven gets full control of every browser
 listed, except tabs, cookies and storage on seven's own origins (sliccy.ai
 and --origin). With --mount it also offers fs: seven's kernel can mount the
@@ -65,7 +67,7 @@ When seven offers kernel-in, slicc listens on 127.0.0.1:<kernel port> and
 carries navigations and WebSockets to http://<port>.kernel.localhost/ into
 the page's kernel. If that port can't be bound, slicc says so and runs on
 without it.
-`
+` + debugPortsHelp
 
 type attachFlags struct {
 	cdp        string
@@ -75,6 +77,7 @@ type attachFlags struct {
 	name       string
 	allow      policy.Rules
 	deny       policy.Rules
+	expose     policy.Ports
 	compute    computeFlags
 	hosts      hostsFlag
 	kernelPort int
@@ -100,6 +103,7 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	fs.StringVar(&f.name, "name", "", "")
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
+	fs.Var(&f.expose, "expose-debug-port", "")
 	f.compute.register(fs)
 	fs.Var(&f.hosts, "hosts", "")
 	fs.IntVar(&f.kernelPort, "kernel-port", kernelin.DefaultPort, "")
@@ -171,7 +175,11 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer closer()
-	pol := policy.Local(append(cdpPorts(append([]string{f.cdp}, f.extra...)...), kernelPolicyPort(f))...).With(f.allow, f.deny)
+	pol := policy.Local(kernelPolicyPort(f)).With(f.allow, f.deny)
+	if err := browser.Guard(ctx, pol, browser.Options{}, cdpPorts(append([]string{f.cdp}, f.extra...)...), f.expose, logf); err != nil {
+		status("%v", err)
+		return 1
+	}
 	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, f.origins, pol, f.hosts.hosts, logf)
 	if err != nil {
 		status("%v", err)

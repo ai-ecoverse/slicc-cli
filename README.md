@@ -298,6 +298,7 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 | `SLICC_LAUNCHER` | set to `npm` by the npm launcher; removed from the environment that `slicc` passes on |
 | `SLICC_DISCOVERY` | test-only: limits browser discovery, see [Development](#development) |
 | `SLICC_OPEN_COMMAND` | test-only: `slicc open` runs this program with the pairing URL as its only argument instead of opening the default browser; the integration tests always set it |
+| `SLICC_PROTECTED_PORTS` | test-only: `<first>-<last>` (or one port), the range of [debugging ports](#network-policy) denied in every mode instead of 9222-9229, so tests can prove the range without touching the real ports. A malformed value exits 1 |
 | `SLICC_LOOPBACK_PORTS` | test-only: `<first>-<last>`, the port range of the [loopback listener](#linking-seven-in-your-everyday-browser) instead of 17117-17126 |
 | `SLICC_LINK_URL` | inside seven only: the link facade's address, `tcp://127.0.0.1:<port>` (see [Inside seven](#inside-seven)) |
 | `SLICC_USER_DATA_DIR`, `XDG_STATE_HOME` | read, as SLICC six reads them, only to find six's Chrome profile (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)) |
@@ -306,7 +307,7 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 
 ```
 slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]... [--profile <name> | --profile six[:<port>]] [--headless]
-      [--name <name>] [--kernel-port <n>] [--no-kernel] [--allow <rule>]... [--deny <rule>]... [--mount <path>[:<name>][:ro]]...
+      [--name <name>] [--kernel-port <n>] [--no-kernel] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]... [--mount <path>[:<name>][:ro]]...
       [--yes] [--plain] [--json] [--no-fallback] [--open] [--default-browser]
       [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
 ```
@@ -321,7 +322,7 @@ slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]...
   - `linked`: `peer?`, `caps` and `policy`, for each link that comes up;
   - `link-lost`: `reason?` or `message?`, for each one that goes;
   - `closed`, with `browsers: []`, last, when slicc exits.
-- **Then** it serves loopback links with this run's `--page`, `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and compute flags, until `SIGINT` or `SIGTERM`.
+- **Then** it serves loopback links with this run's `--page`, `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and compute flags, until `SIGINT` or `SIGTERM`.
 
 **Discovery** is `slicc browsers`' discovery and ranking (see [Browsers](#browsers)), with each `--cdp` URL added and the `--page` origin counted as a seven origin.
 
@@ -332,7 +333,7 @@ slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]...
 
 Without `--browser`, the first row of the ranking that can host seven is chosen, an endpoint slicc didn't launch included, but never one in SLICC six's profile. When that happens without the picker, slicc says so on stderr, for an endpoint that isn't in a SLICC profile and that no `--cdp` named: `slicc: using Google Chrome (profile default) at http://127.0.0.1:9222, which slicc didn't launch; opened a new seven tab. Use --browser or --cdp to choose another.` It says `found a seven tab` when one was open already. The profile is `default` for a browser's default user-data dir, the base name of the user-data dir otherwise, and left out (with its parentheses) when unknown. With `--json` the line comes as the `foreign-browser` event too. Picking a row in the picker, `--browser`, or a `--cdp` for that endpoint means the user chose it, and there is no notice. An Electron app can't host seven. Each further browser is an extra: an installed one is launched without a start page, and an endpoint is used as it is. Then the link is set up as for `slicc attach` (see [Local setup](#local-setup-slicc-attach)): over CDP with the browser that hosts seven, the first page tab on an allowed origin.
 
-**What the link offers:** `net` (tcp, resolve), `http`, `ws`, `udp`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected; and kernel services on `--kernel-port` (default 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)); and `ssh` only with `--runner` (see [SSH server](#ssh-server)); and `fs` with each `--mount` folder (see [Host folders](#host-folders)). seven gets full control of every listed browser, the one it runs in too. The `cdp` list (HELLO `browsers`) has only the browser that hosts seven and the extras picked with `--browser` or in the picker; the other browsers discovery found are never offered.
+**What the link offers:** `net` (tcp, resolve), `http`, `ws`, `udp`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected, and 9222–9229 and the `DevToolsActivePort` ports too (see [Network policy](#network-policy)); and kernel services on `--kernel-port` (default 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)); and `ssh` only with `--runner` (see [SSH server](#ssh-server)); and `fs` with each `--mount` folder (see [Host folders](#host-folders)). seven gets full control of every listed browser, the one it runs in too. The `cdp` list (HELLO `browsers`) has only the browser that hosts seven and the extras picked with `--browser` or in the picker; the other browsers discovery found are never offered.
 
 The cdp list follows the browsers: an extra that stops answering is taken off the list (`browser-gone`), and listed again with the same id when it answers on the same endpoint again (`browser-back`).
 
@@ -340,7 +341,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `--browser <id>`: an id from `slicc browsers` (an installed id such as `chrome`, or `cdp:<host>:<port>`), or a name, case-insensitively. Repeatable: the first hosts seven, the others are extras. Without it, the best match that can host seven. An endpoint in SLICC six's profile is refused (`<id> is SLICC six's Chrome; only --profile six uses it`).
 - `--cdp <url>`: also consider this CDP endpoint, as `slicc browsers --cdp`.
 - `--page <url>`: the seven page, default `https://seven.sliccy.ai/`. It must be `http` or `https`, and its origin is accepted as a seven origin.
-- `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
+- `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven. `--profile six` and `--profile six:<port>` use SLICC six's own Chrome profile instead, without the picker (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)).
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
@@ -500,7 +501,7 @@ Plain output: the CDP HTTP URL on stdout, status lines on stderr. With `--json`,
 ## Local setup: `slicc attach`
 
 ```
-slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]...
+slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp] [--kernel-port <n>] [--no-kernel]
              [--mount <path>[:<name>][:ro]]...
 ```
@@ -513,7 +514,8 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - `--origin`: also accept seven on this origin (`scheme://host[:port]`), repeatable. `https://<label>.sliccy.ai` is always accepted, except `www`.
 - `--signal`: `cdp` (default) or `stdio`.
 - `--name`: the link's `name` and `host` in HELLO. The default name is `slicc on <host>`, with this machine's short host name, lower-cased.
-- `--allow`, `--deny`: policy rules on top of the local default (see [Network policy](#network-policy)). The `--cdp` and `--cdp-extra` ports and endpoint addresses are denied.
+- `--allow`, `--deny`: policy rules on top of the local default (see [Network policy](#network-policy)). The `--cdp` and `--cdp-extra` ports and endpoint addresses are denied, and so are 9222–9229 and the `DevToolsActivePort` ports, whatever `--allow` says.
+- `--expose-debug-port <port>`: let seven reach this one debugging port after all (repeatable): one of 9222–9229 or a `DevToolsActivePort` port. The `--cdp` and `--cdp-extra` ports stay denied.
 - `--runner <argv…>`: offer compute over SSH (cap `ssh`, see [SSH server](#ssh-server)). Each command runs as `<argv…> <command>`. The argv is every word after `--runner` up to a lone `--` or the end of the command line, so `--runner bash -c` or `--runner docker exec -i box sh -c -- --name box`. An argv can't contain a lone `--` itself. `--runner=…` is refused. At start, slicc resolves the argv's first word as exec does (on `PATH`, or a path to an executable; a relative path is made absolute, since commands run in the home directory) and exits 2 before linking when it doesn't: `slicc: --runner <x>: program not found`, or, when the word holds whitespace (`--runner "bash -c"`), `slicc: --runner "bash -c": no program "bash -c"; did you mean --runner bash -c?`. Without `--runner` the link has no `ssh` capability, and the flags below are refused.
 - `--shell <argv…>`: the interactive form for `ssh` without a command, in the same argv syntax. The default is derived from the runner.
 - `--eval <argv…>` and `--eval-quiet <duration>`: the REPL behind the `slicc-eval` subsystem (for example `--eval python3 -i`), and the silence that ends one response (default `500ms`).
@@ -555,7 +557,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 ## Linking seven in your everyday browser
 
 ```
-slicc open [--page <url>] [--origin <origin>]... [--name <name>] [--allow <rule>]... [--deny <rule>]...
+slicc open [--page <url>] [--origin <origin>]... [--name <name>] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]...
            [--kernel-port <n>] [--no-kernel] [--no-jerk] [--mount <path>[:<name>][:ro]]...
            [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
 slicc pair [the same flags]
@@ -569,7 +571,7 @@ Link spec §1.3. These commands link a seven that runs in the browser you use ev
 - **`slicc pair`** only prints the pairing URL, for a seven that's already open. Paste it into seven's address bar, or into its *Link this computer* field.
 - **Plain `slicc`** falls back to this mode by itself when it finds no SLICC profile and no CDP endpoint (see [The default](#the-default-slicc)).
 - Both serve links until `SIGINT` or `SIGTERM`, then exit 0. A listener that can't bind, or a missing config directory, exits 1, and bad flags exit 2. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics.
-- **Flags** are as for `slicc attach`: `--origin`, `--name`, `--allow`, `--deny`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and the compute flags. `--page <url>` is the seven page to pair (default `https://seven.sliccy.ai/`), and its origin is accepted as a seven origin. `--default-browser` takes these flags too. The flags of `slicc` that pick or launch browsers (`--browser`, `--cdp`, `--profile`, `--headless`, `--yes`, `--plain`, `--json`) are errors here. A flag of SLICC six's points back to six, as for `slicc`.
+- **Flags** are as for `slicc attach`: `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and the compute flags. `--page <url>` is the seven page to pair (default `https://seven.sliccy.ai/`), and its origin is accepted as a seven origin. `--default-browser` takes these flags too. The flags of `slicc` that pick or launch browsers (`--browser`, `--cdp`, `--profile`, `--headless`, `--yes`, `--plain`, `--json`) are errors here. A flag of SLICC six's points back to six, as for `slicc`.
 
 **Identity.** The node's DTLS certificate (ECDSA P-256, valid for 20 years) lives in `<config>/slicc/loopback-identity.json` (mode `0600`, directory `0700`). The same file holds the port the node last listened on. It is minted on first use, and slicc says `new loopback identity for this computer: <name> (ab12…ef), fingerprint sha-256 AB:12:…`, or `this computer: …` on later runs. It is separate from the tray hub's certificates and survives restarts and updates. A file that exists but can't be read as an identity (another version, broken JSON or PEM) is left alone: slicc says ``<path> is not a loopback identity slicc can read; …`` and exits 1. Only a certificate within a day of expiring is replaced. Whenever slicc mints a new identity (none yet, or a replacement), it forgets every pin in `loopback-peers.json` right after writing it, since every seven has to pair with the new certificate anyway. A `loopback-peers.json` that can't be read is left alone the same way: pairings and `slicc unpair` fail with ``<path> is not a list of paired sevens slicc can read; …``, and signals are refused. `<name>` is `--name`, or this machine's short host name in lower case.
 
@@ -607,7 +609,7 @@ The URL is the secret, and it carries the node's fingerprint, so a process that 
 
 **The link in this mode** is local (HELLO `mode: "local"`), with the node's loopback certificate:
 - **Caps:** `net`, `http`, `credentialed`, `ws`, `udp`, `unlink-loopback`, `fs` with `--mount`, `ssh` with `--runner`, `jerk` and `jerk-seal` unless `--no-jerk`, and kernel services on `--kernel-port` for a page that offers `kernel-in` (see [Kernel services](#kernel-services)). There is no `cdp`, since the node controls no browser, so a `cdp` OPEN gets `EOPNOTSUPP`. `jerk`'s `--seven-origin` is the pinned origin.
-- **Policy:** the local default (see [Network policy](#network-policy)). The protected ports are 9222–9229, every port in a `DevToolsActivePort` file that browser discovery would read (default user-data dirs, SLICC profiles and six's profiles; files are only read, nothing is probed), the listener's port and the kernel port. Those files are read again every 5 s, and a new port is protected from then on as these are: on loopback and on every address of this machine. It isn't added to HELLO's `policy.deny`, which was sent already. So a kernel program can't reach a debugging port the user turned on.
+- **Policy:** the local default (see [Network policy](#network-policy)), with its debugging ports (9222–9229 and every `DevToolsActivePort` port, rescanned every 5 s; `--allow` never reopens them, only `--expose-debug-port`), the listener's port and the kernel port denied. So a kernel program can't reach a debugging port the user turned on.
 - **ICE:** host candidates, loopback included, as for `slicc attach`.
 - **Several sevens:** the node keeps one link per paired page fingerprint. A new offer for a fingerprint replaces that fingerprint's link only. Each link is an exit of its own, and kernel connections go to the page that linked last, as for `slicc attach`.
 - **Restarts:** the node keeps its certificate and its port, and the page keeps its certificate and its pin. A restarted `slicc open` or `slicc pair` is reachable again at once, and a paired page signals again without a new token. Each process has a new `node` id, so seven keys the device on the fingerprint.
@@ -989,7 +991,11 @@ A node checks every address it connects to for the link's `tcp`, `http`, `ws` an
 
 **Local default** (the bridge to the browser `slicc` controls). The remote default, with loopback and the private ranges (`127.0.0.0/8`, `::1/128`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) allowed instead of denied, so this machine and the LAN are reachable. `--deny 127.0.0.0/8` and `--deny 192.168.0.0/16` take loopback and the LAN back out.
 
-**Protected ports**, in both defaults. The debugging port of every browser the node serves over `cdp` (`attach --cdp` and `--cdp-extra`, `follow --cdp`) and any port the node itself listens on are denied, so a `tcp` stream can't get around the `cdp` capability:
+**Protected ports**, in both defaults and in every mode (`slicc`, `attach`, `open`, `pair`, `--default-browser` and `follow`). Two kinds:
+- **Debugging ports:** ports 9222–9229; every port in a `DevToolsActivePort` file that browser discovery would read (default user-data dirs, SLICC profiles and six's profiles; files are only read, nothing is probed), read again every 5 s so a port that appears later is denied from then on; and the debugging port of every browser the node was given or launched (`slicc`'s browsers, `attach --cdp` and `--cdp-extra`, `follow --cdp`). No `--allow` reopens one, not even `--allow 127.0.0.1:9222` or `--allow 127.0.0.0/8`: a debugging port wins over every other rule. Only `--expose-debug-port <port>` (repeatable, every mode) leaves one of 9222–9229 or a `DevToolsActivePort` port open; the ports of the browsers the node was given or launched stay denied even then, since `cdp` is the way to them. So seven never reaches raw CDP on this machine, `<host>.slicc.internal:9222` included, unless the user named that port.
+- **The node's own listeners** (the kernel listener and, for `open` and `pair`, the loopback listener): denied the same way, but an `--allow` for exactly the same address and port reopens one.
+
+Both are denied:
 - on loopback, each as `127.0.0.0/8:port`, `127.0.0.1/32:port` and `[::1]/128:port`, so `--allow 127.0.0.1/32` doesn't reopen them;
 - on every address of this machine, as `<address>/32:port` or `<address>/128:port`. The interfaces are enumerated at check time and cached for 5 seconds, so a new interface counts. If they can't be enumerated, those ports are denied on every address.
 
@@ -1001,11 +1007,11 @@ A node checks every address it connects to for the link's `tcp`, `http`, `ws` an
 
 They are listed in HELLO's `policy.deny` as `<address>/32:port` or `[<address>]/128:port`.
 
-Only a user allow for exactly the same address and port reopens one of these.
+Only a user allow for exactly the same address and port reopens one of these, and only on another machine: on this machine the browser's debugging port wins.
 
 **`resolve` filtering.** An address is kept when the policy allows it on at least one port. When every address is dropped, the answer is an empty list.
 
-**HELLO.** `policy.summary` names the default and lists the `--allow` and `--deny` rules on top of it. `policy.allow` and `policy.deny` list the `--allow` and `--deny` rules plus the protected ports' loopback denies and the browser endpoints, not the default ranges or the per-interface denies.
+**HELLO.** `policy.summary` names the default and lists the `--allow` and `--deny` rules on top of it, and `exposes debugging ports <ports>` after them with `--expose-debug-port`. `policy.allow` and `policy.deny` list the `--allow` and `--deny` rules plus the protected ports' loopback denies (debugging ports found at startup included, later ones not, since HELLO was sent already) and the browser endpoints, not the default ranges or the per-interface denies.
 
 ## SSH server
 
@@ -1039,7 +1045,7 @@ A command that can't start exits 127 with the reason on stderr.
 ## Remote setup: `slicc <join-url> follow`
 
 ```
-slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name <name>] [--cdp <url>]...
+slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]... [--name <name>] [--cdp <url>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
              [--mount <path>[:<name>][:ro]]... [--jerk] [--jerk-seal]
 ```
@@ -1048,7 +1054,8 @@ slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--name 
 
 **Flags.**
 - `--exit`: offer this machine's network to seven, as `tcp` and `resolve` streams (cap `net`), `http` streams (cap `http`), `ws` streams (cap `ws`) and `udp` streams (cap `udp`) under the remote policy, so public addresses only by default. Without `--exit`, all five are refused with `EOPNOTSUPP`.
-- `--allow`, `--deny`: policy rules on top of the remote default (see [Network policy](#network-policy)).
+- `--allow`, `--deny`: policy rules on top of the remote default (see [Network policy](#network-policy)). This machine's debugging ports stay denied on every address of it, whatever `--allow` says, `--allow 127.0.0.1/32` included.
+- `--expose-debug-port <port>`: let seven reach this one debugging port after all (repeatable), as for `attach`. The `--cdp` ports stay denied.
 - `--name`: the link's `name` and `host` in HELLO, as for `attach`.
 - `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: compute over SSH (cap `ssh`), exactly as for `attach`. `direct-tcpip` forwarding goes through the remote policy, so it reaches public addresses only unless `--allow` says otherwise. `--runner` works with or without `--exit`.
 - `--cdp <url>`: let seven drive this browser over the link (repeatable, in any form `slicc browsers --cdp` takes; each must answer when `follow` starts). See [`cdp`](#cdp-browser-control), and its warning: the seven on the other machine gets full control of every browser listed. No browser is `seven: true`. Without `--cdp`, `follow` doesn't offer `cdp`, and a `cdp` OPEN is refused with `EOPNOTSUPP`. Each browser's debugging port and its own endpoint addresses are [denied](#network-policy) to `tcp`, `http`, `ws`, `udp` and `ssh` forwarding.
@@ -1328,7 +1335,7 @@ The scenario: seven is open in the user's **everyday browser** (any vendor, no C
 **The link in this mode**
 - **ICE:** host candidates on loopback only, as in [§1.1](#11-local-setup-over-cdp).
 - **Caps:** `net`, `http`, `ws`, `udp`, `credentialed`, `fs` (with `--mount`), `kernel-in` services ([§5.9](#59-kernel-listener-on-the-node-local-only), listener on `--kernel-port`), `ssh` with `--runner`, `jerk`/`jerk-seal`, and `agent`. **No `cdp`:** the node controls no browser.
-- **Policy:** the local default ([§6.4](#64-local-default-slicc-the-bridge-to-the-browser-it-controls)). Its protected ports have no served browser here, so they become 9222–9229 plus every port in a `DevToolsActivePort` file the node finds read-only, plus the node's own listeners. A kernel program can't reach a debugging port the user enabled.
+- **Policy:** the local default ([§6.4](#64-local-default-slicc-the-bridge-to-the-browser-it-controls)), with the debugging ports of [§6.5](#65-debugging-ports-every-mode) (no served browser here, so 9222–9229 plus every `DevToolsActivePort` port) and the node's own listeners denied. A kernel program can't reach a debugging port the user enabled.
 - **PRE-1** ([§5.8](#58-cdp-cap-cdp-page--node)) protects seven's origin from seven's own browser control. In this mode there's none, so PRE-1 doesn't apply. The `http` cap is the node's own client and carries no browser cookies or storage, so fetching a `*.sliccy.ai` URL through it exposes nothing of the user's session.
 - **Restarts:** the node keeps its certificate and port, and the page keeps its certificate and pin. On link loss the page retries `/signal` with backoff (1 s up to 30 s, and on `online` or `visibilitychange`). A restarted `slicc` is reachable again with no new pairing. The `node` id changes, and the page keys the device on the fingerprint, so the name stays.
 - **Several sevens:** the node holds one link per paired page fingerprint, and each is an exit on its own.
@@ -1546,7 +1553,7 @@ On a [§1.3](#13-local-setup-without-cdp-loopback-signalling) loopback link, `un
 - **Which browsers:**
   - **`attach`:** the browser it set up through (`--cdp <url>`, single-valued, `seven: true`), plus every `--cdp-extra <url>` (repeatable); the TUI's multi-select passes those. A second `--cdp` is an error that points to `--cdp-extra`.
   - **`follow`:** only the browsers named with `--cdp <url>`. Without one, `follow` doesn't advertise `cdp`, because a remote seven gets full control of every browser listed. `follow` never marks a browser `seven: true`.
-  - **Protected ports:** every listed browser's debugging port is protected in the policy on both commands, so a `tcp` stream can't reach the raw port even under `--allow`.
+  - **Protected ports:** every listed browser's debugging port is protected in the policy on both commands, so a `tcp` stream can't reach the raw port even under `--allow` or `--expose-debug-port` ([§6.5](#65-debugging-ports-every-mode)).
 
 - **Protected origins (PRE-1):** the node filters every `cdp` stream against `protectedOrigins` from slicc-browsers (≥ 1.4.0: `*.sliccy.ai` at any depth, any port, http and https; `vault.sliccy.ai` by name; plus the setup's extra origins). It refuses navigating to, attaching to, or driving targets on those origins, and storage, cookie and permission access for them, as **CDP errors** `{"error":{"code":-32000,"message":"slicc: refused: …"}}`, not RESETs. It detaches sessions that land on them and redacts their `url`/`title` in listings to the origin.
   - **In targets the stream touched** (attached to or created): the node fails every protected document load with `net::ERR_BLOCKED_BY_CLIENT`, so instrumentation installed before a navigation can never run in a protected document. That covers redirects, service-worker-served navigations and the page's own Fetch interception.
@@ -1878,17 +1885,26 @@ The node allows public unicast and denies:
 - ULA: `fc00::/7`, which covers `fd7a:115c:a1e0::/48`;
 - multicast: `224/4`, `ff00::/8`;
 - reserved and documentation ranges: `240/4`, `255.255.255.255/32`, `192.0.0/24`, `192.0.2/24`, `198.18/15`, `198.51.100/24`, `203.0.113/24`, `2001:db8::/32`, `100::/64`;
-- deprecated IPv4-compatible `::/96` and SIIT `::ffff:0:0:0/96`.
+- deprecated IPv4-compatible `::/96` and SIIT `::ffff:0:0:0/96`;
+- this machine's debugging ports on every address of it ([§6.5](#65-debugging-ports-every-mode)), which no `--allow` reopens.
 
 #### 6.4 Local default (`slicc`, the bridge to the browser it controls)
 
 The remote default, but it **also allows loopback and the private ranges** (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`).
 - **Why:** this is parity with slicc-node, whose `fetch-proxy` reaches the LAN today (a NAS, a dev server on another box).
 - **Still denied:** link-local and metadata.
-- **Except on loopback:** the node denies the browser's debugging port and its own listening ports (the kernel listener of [§5.9](#59-kernel-listener-on-the-node-local-only) included). Otherwise a kernel program could reach raw CDP on the host and get around the `cdp` capability.
+- **Except on loopback:** the node denies the debugging ports of [§6.5](#65-debugging-ports-every-mode) and its own listening ports (the kernel listener of [§5.9](#59-kernel-listener-on-the-node-local-only) included). Otherwise a kernel program could reach raw CDP on the host and get around the `cdp` capability.
   - It denies them on **every address of this machine** too (interfaces enumerated at check time, cached briefly), in case something listens on `0.0.0.0`.
   - Browsers the node launches bind their debugging port to loopback only, and so do the node's own listeners.
 - **Opting out:** `--deny 127.0.0.0/8` and `--deny 192.168.0.0/16` restore the remote default.
+
+#### 6.5 Debugging ports (every mode)
+
+Both defaults, in every mode (local and remote), deny this machine's browser debugging ports on `127.0.0.0/8`, `::1` and **every address of this machine**, so `<host>.slicc.internal:<port>` (which the page sends as `127.0.0.1`) is refused too:
+- **Which:** `9222`–`9229`; every port in a `DevToolsActivePort` file the node finds read-only, rescanned every 5 s; and the debugging port of each browser the node was given or launched.
+- **Above every rule:** no `--allow` reopens one, `--allow 127.0.0.1:9222` included. A refusal is `EACCES`, reason `a browser debugging port`.
+- **Opt-in:** only `--expose-debug-port <port>` (repeatable) leaves a port of the first two kinds open. The ports of browsers the node was given or launched stay denied: `cdp` is the way to them.
+- **HELLO:** `policy.deny` lists the loopback denies of the ports known at startup; `policy.summary` ends in `exposes debugging ports <ports>` when some are exposed.
 
 ### 7. Reference peer for seven's CI
 
@@ -1918,6 +1934,8 @@ Front ends and capabilities follow a node's links with `node.Node.Subscribe(func
 - `home`: installed browsers, and the `DevToolsActivePort` files under the home and config dirs from the environment (`HOME`, `APPDATA`, `LOCALAPPDATA`, `XDG_CONFIG_HOME`), SLICC six's profiles included (`XDG_STATE_HOME`, `SLICC_USER_DATA_DIR`).
 
 In the same process, probe ports, dirs and a process list passed in explicitly (`Options.ProbePorts`, `Options.Home`, `Options.ProfilesDir`, and `Options.Processes`, which returns the output of the process-list command) are still used. `Options.Transport` and `Options.Dial` replace discovery's HTTP transport and TCP dial; the corpus test fakes every server with them, and its process list is fake too. `test/integration`'s `TestMain` sets `SLICC_DISCOVERY=isolated` and unsets `SLICC_USER_DATA_DIR`, and points `HOME`, `APPDATA` and the XDG dirs, `XDG_STATE_HOME` included (and `LOCALAPPDATA`, and `USERPROFILE` except on Windows, where a Chrome started with a temporary one never writes `DevToolsActivePort`; the tests that have `slicc` launch a real Chrome give it the real `LOCALAPPDATA` on Windows, which they only do on CI) at a temporary directory for itself and every `slicc` it starts, so no test can reach the browsers of the machine it runs on. It also puts a stand-in `jerk` first on `PATH` that fails `--version` (on Windows one for every `PATHEXT` extension), so slicc never finds the machine's own slicc-jerk there, while every other tool keeps its own path. The tests that want a jerk put the fake jerk's dir before it. Tests opt in to more with a fake home or fake endpoints. The Chrome the harness starts itself gets the real environment.
+
+**Debugging ports in tests: `SLICC_PROTECTED_PORTS`** (test-only). `<first>-<last>` (or one port) replaces 9222–9229 as the range every mode denies (see [Network policy](#network-policy)). The debugging-port tests (`test/integration/debugports_test.go`) set it to two free ports where fakes listen, and write fake `DevToolsActivePort` files for two more under `SLICC_DISCOVERY=home`, so they prove, in every mode, that a link `net`, `http` or `ws` request to a debugging port is refused, that `--allow` doesn't reopen it and that `--expose-debug-port` does, without ever touching 9222–9229 on the machine they run on.
 
 **SLICC six's profile in tests.** The `--profile six` tests build fake six profile trees in a fake home only: each OS's layout, a mixed-case name, a symlinked profile and root, `SingletonLock` (or `lockfile`) live, stale and absent, and debuggable endpoints that are fakes or the harness's own headless Chrome on a free port. They check the trees byte for byte after a launch, an attach and an exit. A fake browser (`testdata/fakechrome`) stands in for Chrome where a real one would write to the profile itself. The one real-Chrome launch into a fake six profile checks that nothing was seeded; on Windows it puts that profile at `SLICC_USER_DATA_DIR` in a temporary dir, since that Chrome keeps the real `LOCALAPPDATA` (see below).
 
