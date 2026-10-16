@@ -178,6 +178,9 @@ type relay struct {
 	parkMu sync.Mutex
 	parked map[string][][]byte
 
+	parkedCount int
+	parkedBytes int
+
 	pageEnded   atomic.Bool
 	browserDone atomic.Bool
 	killOnce    sync.Once

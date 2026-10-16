@@ -107,6 +107,11 @@ func (rl *relay) resolveHistory(c *command) pageVerdict {
 	return rl.g.afterHistory(c, message{}, false)
 }
 
+const (
+	maxParked      = 4096
+	maxParkedBytes = 64 << 20
+)
+
 func (rl *relay) park(data []byte) bool {
 	c, _, ok := parseCommand(data)
 	if !ok || c.session == "" {
@@ -114,25 +119,31 @@ func (rl *relay) park(data []byte) bool {
 	}
 	rl.parkMu.Lock()
 	defer rl.parkMu.Unlock()
-	if q, waiting := rl.parked[c.session]; waiting {
-		rl.parked[c.session] = append(q, bytes.Clone(data))
+	q, waiting := rl.parked[c.session]
+	if !waiting {
+		ready, deadline := rl.g.navWait(c.session)
+		if ready == nil {
+			return false
+		}
+		go rl.release(c.session, ready, deadline)
+	}
+	if rl.parkedCount >= maxParked || rl.parkedBytes+len(data) > maxParkedBytes {
+		rl.kill("ENOBUFS: too many commands wait for a target's guard")
 		return true
 	}
-	ready := rl.g.navWait(c.session)
-	if ready == nil {
-		return false
-	}
-	rl.parked[c.session] = [][]byte{bytes.Clone(data)}
-	go rl.release(c.session, ready)
+	rl.parkedCount++
+	rl.parkedBytes += len(data)
+	rl.parked[c.session] = append(q, bytes.Clone(data))
 	return true
 }
 
-func (rl *relay) release(session string, ready <-chan struct{}) {
-	t := time.NewTimer(NavTimeout)
+func (rl *relay) release(session string, ready <-chan struct{}, deadline time.Time) {
+	t := time.NewTimer(time.Until(deadline))
 	defer t.Stop()
 	select {
 	case <-ready:
 	case <-t.C:
+		rl.g.navExpire(session)
 	case <-rl.s.Done():
 	}
 	for {
@@ -144,6 +155,8 @@ func (rl *relay) release(session string, ready <-chan struct{}) {
 			return
 		}
 		rl.parked[session] = q[1:]
+		rl.parkedCount--
+		rl.parkedBytes -= len(q[0])
 		rl.parkMu.Unlock()
 		out, ok := rl.checkPage(q[0])
 		if !ok {
