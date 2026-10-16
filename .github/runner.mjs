@@ -2,8 +2,12 @@ const HOSTED = 'ubuntu-latest';
 const QUEUE = `query($o:String!,$n:String!,$b:String!){repository(owner:$o,name:$n){mergeQueue(branch:$b){entries(first:100){nodes{position headCommit{oid} pullRequest{number isCrossRepository}}}}}}`;
 
 export async function decide({ context, github, env }) {
-  if (env.FORCED) return { runner: env.FORCED, why: 'vars.CI_RUNNER' };
-  const pool = env.POOL;
+  if (env.FORCED) return { runner: env.FORCED, light: env.FORCED, why: 'vars.CI_RUNNER' };
+  const { runner, why } = await pick({ context, github, pool: env.POOL });
+  return { runner, light: runner === HOSTED ? HOSTED : env.LIGHT || HOSTED, why };
+}
+
+async function pick({ context, github, pool }) {
   const { owner, repo } = context.repo;
   if (context.eventName === 'pull_request') {
     const head = context.payload.pull_request.head.repo;
