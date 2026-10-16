@@ -59,7 +59,7 @@ func badIdentity(path string) error {
 
 func readIdentity(path string) (*Identity, error) {
 	var f identityFile
-	data, err := os.ReadFile(path)
+	data, err := readShared(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -81,9 +81,6 @@ func readIdentity(path string) (*Identity, error) {
 
 func LoadIdentity(dir string) (*Identity, error) {
 	path := filepath.Join(dir, identityFileName)
-	if id, err := readIdentity(path); id != nil || err != nil {
-		return id, err
-	}
 	unlock, err := lockFile(path + ".lock")
 	if err != nil {
 		return nil, err
@@ -256,5 +253,5 @@ func writePrivateJSON(path string, v any) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	return replaceFile(name, path)
 }
