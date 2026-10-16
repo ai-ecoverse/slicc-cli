@@ -7,7 +7,7 @@ import (
 
 const (
 	refusedGuard = "slicc can't keep seven's origin out of this target"
-	NavTimeout   = 10 * time.Second
+	NavTimeout   = 60 * time.Second
 )
 
 var slowGuard = 2 * time.Second

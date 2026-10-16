@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -72,9 +73,10 @@ func (rl *relay) syncCall(ctx context.Context, sessionID, method string, params 
 
 func (rl *relay) checkPage(data []byte) ([]byte, bool) {
 	c, id, ok := parseCommand(data)
-	if ok {
-		rl.awaitGuard(c.session)
-	}
+	return rl.admit(c, id, ok)
+}
+
+func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 	v := rl.g.fromCommand(c, id, ok)
 	if v.history != nil {
 		v = rl.resolveHistory(v.history)
@@ -105,16 +107,50 @@ func (rl *relay) resolveHistory(c *command) pageVerdict {
 	return rl.g.afterHistory(c, message{}, false)
 }
 
-func (rl *relay) awaitGuard(sessionID string) {
-	ready := rl.g.navWait(sessionID)
-	if ready == nil {
-		return
+func (rl *relay) park(data []byte) bool {
+	c, _, ok := parseCommand(data)
+	if !ok || c.session == "" {
+		return false
 	}
+	rl.parkMu.Lock()
+	defer rl.parkMu.Unlock()
+	if q, waiting := rl.parked[c.session]; waiting {
+		rl.parked[c.session] = append(q, bytes.Clone(data))
+		return true
+	}
+	ready := rl.g.navWait(c.session)
+	if ready == nil {
+		return false
+	}
+	rl.parked[c.session] = [][]byte{bytes.Clone(data)}
+	go rl.release(c.session, ready)
+	return true
+}
+
+func (rl *relay) release(session string, ready <-chan struct{}) {
 	t := time.NewTimer(NavTimeout)
 	defer t.Stop()
 	select {
 	case <-ready:
 	case <-t.C:
 	case <-rl.s.Done():
+	}
+	for {
+		rl.parkMu.Lock()
+		q := rl.parked[session]
+		if len(q) == 0 {
+			delete(rl.parked, session)
+			rl.parkMu.Unlock()
+			return
+		}
+		rl.parked[session] = q[1:]
+		rl.parkMu.Unlock()
+		out, ok := rl.checkPage(q[0])
+		if !ok {
+			return
+		}
+		if out != nil && rl.conn.Write(context.Background(), websocket.MessageText, out) != nil {
+			return
+		}
 	}
 }

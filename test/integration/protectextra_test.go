@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -19,6 +20,16 @@ type fakeCDPBrowser struct {
 	script fakeScript
 	mu     sync.Mutex
 	got    []string
+	slow   map[string]time.Duration
+}
+
+func (f *fakeCDPBrowser) delay(method string, d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.slow == nil {
+		f.slow = map[string]time.Duration{}
+	}
+	f.slow[method] = d
 }
 
 func afterEnable(events []string) fakeScript {
@@ -92,9 +103,23 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		default:
 			result, after = f.script(m.Method, m.Params)
 		}
-		reply := fmt.Sprintf(`{"id":%d,"result":%s}`, m.ID, result)
+		field := `"result":` + result
+		if msg, failed := strings.CutPrefix(result, "!"); failed {
+			field = fmt.Sprintf(`"error":{"code":-32000,"message":%q}`, msg)
+		}
+		reply := fmt.Sprintf(`{"id":%d,%s}`, m.ID, field)
 		if m.SessionID != "" {
-			reply = fmt.Sprintf(`{"id":%d,"sessionId":%q,"result":%s}`, m.ID, m.SessionID, result)
+			reply = fmt.Sprintf(`{"id":%d,"sessionId":%q,%s}`, m.ID, m.SessionID, field)
+		}
+		f.mu.Lock()
+		d := f.slow[m.Method]
+		f.mu.Unlock()
+		if d > 0 {
+			go func() {
+				time.Sleep(d)
+				_ = c.Write(ctx, websocket.MessageText, []byte(reply))
+			}()
+			continue
 		}
 		if c.Write(ctx, websocket.MessageText, []byte(reply)) != nil {
 			return

@@ -67,7 +67,7 @@ func (r *Registry) serve(s *link.Stream) {
 		_ = s.Reset("ECONNREFUSED: " + err.Error())
 		return
 	}
-	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf)}
+	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), parked: map[string][][]byte{}}
 	err = rl.bootstrap(ctx)
 	cancel()
 	if err != nil {
@@ -175,6 +175,8 @@ type relay struct {
 	id     string
 	g      *guard
 	pageMu sync.Mutex
+	parkMu sync.Mutex
+	parked map[string][][]byte
 
 	pageEnded   atomic.Bool
 	browserDone atomic.Bool
@@ -342,6 +344,9 @@ func (rl *relay) toBrowser() {
 			return
 		}
 		if rl.browserDone.Load() {
+			continue
+		}
+		if rl.park(buf.Bytes()) {
 			continue
 		}
 		out, ok := rl.checkPage(buf.Bytes())
