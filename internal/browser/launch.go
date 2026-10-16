@@ -379,7 +379,7 @@ func (b *Browser) abortWith(err error) error {
 	if b.mainPID != 0 {
 		return err
 	}
-	if left := b.killProfileProcesses(appSettle, appGiveUp); len(left) > 0 {
+	if left := b.killStrays(appSettle, appGiveUp); len(left) > 0 {
 		return fmt.Errorf("%w; %w: %s is still running as process %v", err, ErrLeftRunning, b.Installed.Name, left)
 	}
 	return err
@@ -390,11 +390,11 @@ const (
 	appGiveUp = 15 * time.Second
 )
 
-func (b *Browser) killProfileProcesses(settle, giveUp time.Duration) []int {
+func (b *Browser) killStrays(settle, giveUp time.Duration) []int {
 	start := time.Now()
 	quiet := start.Add(settle)
 	for {
-		pids := profilePIDs(b.ProfileDir)
+		pids := b.strays()
 		for _, pid := range pids {
 			signalTree(0, pid, true)
 		}
@@ -402,10 +402,22 @@ func (b *Browser) killProfileProcesses(settle, giveUp time.Duration) []int {
 			quiet = time.Now().Add(settle)
 		}
 		if now := time.Now(); now.After(quiet) || now.Sub(start) > giveUp {
-			return profilePIDs(b.ProfileDir)
+			return b.strays()
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+func (b *Browser) strays() []int {
+	if b.Installed.Engine != EngineElectron {
+		return profilePIDs(b.ProfileDir)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if pid := findProcess(ctx, b.Installed.Executable); pid > 1 && pid != os.Getpid() {
+		return []int{pid}
+	}
+	return nil
 }
 
 func profilePIDs(dir string) []int {
