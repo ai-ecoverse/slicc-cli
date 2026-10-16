@@ -23,6 +23,8 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 )
 
+const harnessChromeNotice = "the harness never launches this machine's Chrome off CI: set SLICC_TEST_CHROME to a Chrome for Testing executable to run this test"
+
 func findChrome() string {
 	if p := os.Getenv("SLICC_TEST_CHROME"); p != "" {
 		return p
@@ -75,7 +77,7 @@ func launchBrowserOn(t *testing.T, debugPort int, extra ...string) *chromeProc {
 		if os.Getenv("CI") != "" {
 			t.Fatal("no Chrome found; set SLICC_TEST_CHROME")
 		}
-		t.Skip("no Chrome found; set SLICC_TEST_CHROME")
+		t.Skip(harnessChromeNotice)
 	}
 	dir, err := os.MkdirTemp("", "slicc-it-chrome-")
 	if err != nil {
