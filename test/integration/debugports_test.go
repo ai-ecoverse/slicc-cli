@@ -185,10 +185,11 @@ func TestDefaultDeniesTheHostsDebuggingPorts(t *testing.T) {
 	b := launchBrowser(t)
 	base, _ := launchEnv(t)
 	srv := pageServer(t)
-	pageURL := srv.URL + "/index.html"
+	pageURL := srv.URL + "/"
 	id := "cdp:127.0.0.1:" + strconv.Itoa(b.port)
 	args := append([]string{"--plain", "--no-kernel", "--cdp", b.endpoint, "--browser", id, "--page", pageURL, "--expose-debug-port", strconv.Itoa(b.port)}, d.allowArgs()...)
-	startFlow(t, d.env(base), append(args, d.exposeArgs()...)...)
+	f := startFlow(t, d.env(base), append(args, d.exposeArgs()...)...)
+	f.waitStderr(t, `linked with "link test page" in `+pageURL)
 	d.check(t, dialPage(t, b.endpoint, pageURL), b.port)
 }
 
