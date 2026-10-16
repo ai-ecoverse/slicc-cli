@@ -32,7 +32,7 @@ jobs:
   ci:
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.sliccy_next_only }}
     name: CI on this commit
-    runs-on: cloud-run-bench
+    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 120
     permissions:
       actions: read
@@ -71,7 +71,7 @@ jobs:
       ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
       && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository }}
     name: Still the head of main
-    runs-on: cloud-run-bench
+    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       stale: ${{ steps.head.outputs.stale }}
@@ -204,7 +204,7 @@ jobs:
 
   sliccy-next:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only && github.ref == 'refs/heads/main' }}
-    runs-on: cloud-run-bench
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
@@ -234,7 +234,7 @@ jobs:
             asset: slicc-darwin-arm64
           - runner: macos-15-intel
             asset: slicc-darwin-amd64
-          - runner: cloud-run-bench
+          - runner: pool
             asset: slicc-linux-amd64
           - runner: ubuntu-24.04-arm
             asset: slicc-linux-arm64
@@ -242,7 +242,7 @@ jobs:
             asset: slicc-windows-amd64.exe
           - runner: windows-11-arm
             asset: slicc-windows-arm64.exe
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'pool' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CERT_RUNNER || 'ubuntu-latest') || matrix.runner }}
     timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -271,7 +271,7 @@ jobs:
       matrix:
         include:
           - name: ubuntu-curl
-            runner: cloud-run-bench
+            runner: pool
             container: ''
           - name: macos-curl
             runner: macos-latest
@@ -280,7 +280,7 @@ jobs:
             runner: ubuntu-latest
             container: alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
     name: install-smoke (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'pool' && (vars.CERT_RUNNER || 'ubuntu-latest') || matrix.runner }}
     timeout-minutes: 10
     steps:
       - name: Run the documented one-liner against releases/latest
