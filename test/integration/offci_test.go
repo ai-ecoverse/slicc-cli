@@ -287,7 +287,9 @@ func TestOffCINoTestRunsAnInstalledBrowser(t *testing.T) {
 		}
 	}
 	_ = probe.Process.Kill()
-	<-exited
+	if err := <-exited; err != nil {
+		t.Logf("the canary ended after it was seen: %v", err)
+	}
 	if hits := w.finish(); len(hits) != 1 || !strings.Contains(hits[0], "Google Chrome Canary") {
 		t.Fatalf("the canary was seen as %q", hits)
 	}
