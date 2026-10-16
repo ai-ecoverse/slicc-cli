@@ -91,12 +91,14 @@ type browserWatch struct {
 	root string
 	mu   sync.Mutex
 	hits map[string]bool
+	hit  chan struct{}
+	once sync.Once
 	stop chan struct{}
 	done chan struct{}
 }
 
 func watchInstalledBrowsers(root string) *browserWatch {
-	w := &browserWatch{root: root, hits: map[string]bool{}, stop: make(chan struct{}), done: make(chan struct{})}
+	w := &browserWatch{root: root, hits: map[string]bool{}, hit: make(chan struct{}), stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(w.done)
 		for {
@@ -153,6 +155,7 @@ func (w *browserWatch) scan() {
 			w.mu.Lock()
 			w.hits[strings.TrimSpace(line)] = true
 			w.mu.Unlock()
+			w.once.Do(func() { close(w.hit) })
 		}
 	}
 }
@@ -242,12 +245,23 @@ func TestOffCINoTestRunsAnInstalledBrowser(t *testing.T) {
 	}
 
 	w = watchInstalledBrowsers(root)
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	run := exec.CommandContext(ctx, os.Args[0], "-test.run", "^("+strings.Join(tests, "|")+")$", "-test.count=1", "-test.v", "-test.timeout=7m")
+	go func() {
+		select {
+		case <-w.hit:
+			time.Sleep(2 * time.Second)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	run := exec.CommandContext(ctx, os.Args[0], "-test.run", "^("+strings.Join(tests, "|")+")$", "-test.count=1", "-test.v", "-test.timeout=4m")
 	run.Env = offCIEnv(root)
 	out, err := run.CombinedOutput()
 	hits := w.finish()
+	if len(hits) > 20 {
+		hits = append(hits[:20], "…")
+	}
 	if len(hits) > 0 {
 		t.Errorf("off CI, the browser tests ran an installed browser:\n  %s", strings.Join(hits, "\n  "))
 	}
