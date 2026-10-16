@@ -518,6 +518,12 @@ func TestSixAttachOpensSevenAndLeavesTheProfileAsItWas(t *testing.T) {
 	holdSixLock(t, dir, b.cmd.Process.Pid)
 	before := snapshotTree(t, dir)
 	pageURL := pageServer(t).URL + "/"
+	start := time.Now()
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("page server since %s:\n%s%s", start.Format("15:04:05.000"), pageRequests.since(start), b.report())
+		}
+	})
 
 	f := startFlow(t, sixEnv(h, "isolated"), "--json", "--profile", "six", "--page", pageURL, "--no-kernel")
 	f.next(t, "discovered")
