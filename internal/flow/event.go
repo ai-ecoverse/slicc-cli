@@ -22,6 +22,7 @@ const (
 	LinkLost    Kind = "link-lost"
 	StreamOpen  Kind = "stream-open"
 	StreamDone  Kind = "stream-close"
+	Dropped     Kind = "dropped"
 	Status      Kind = "status"
 	Kernel      Kind = "kernel"
 	BrowserGone Kind = "browser-gone"
@@ -64,6 +65,7 @@ type Event struct {
 	Message      string          `json:"message,omitempty"`
 	Browsers     []string        `json:"browsers,omitempty"`
 	Stream       string          `json:"stream,omitempty"`
+	Count        int             `json:"count,omitempty"`
 	Kernel       string          `json:"kernel,omitempty"`
 	Compute      string          `json:"compute,omitempty"`
 	OpenedTab    *bool           `json:"openedTab,omitempty"`

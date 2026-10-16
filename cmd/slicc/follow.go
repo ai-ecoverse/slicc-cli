@@ -21,6 +21,7 @@ import (
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
+	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
@@ -46,16 +47,16 @@ The join URL is never printed.
 
 flags:
   --exit               offer this machine's network to seven (tcp, resolve,
-                       http and ws streams) under the remote policy: public
-                       addresses only
+                       http, ws and udp streams) under the remote policy:
+                       public addresses only
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
   --name <name>        the name and host this link shows in seven
   --cdp <url>          let seven drive this browser over the link (cdp,
                        repeatable); seven gets full control of it, except
                        tabs, cookies and storage on sliccy.ai, and its
-                       endpoint and port are denied to tcp, http, ws and
-                       ssh
+                       endpoint and port are denied to tcp, http, ws,
+                       udp and ssh
 ` + jerkFollowUsage + mountUsage + computeUsage + `
 With --runner the link also offers ssh: seven's kernel reaches this machine's
 SSH server, which never listens on a port, and its forwarding goes through
@@ -235,7 +236,8 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 		resolve.Register(r.node)
 		httpcap.Register(r.node)
 		wscap.Register(r.node)
-		status("exit on (tcp, resolve, http, ws), %s", pol.Summary())
+		udpcap.Register(r.node)
+		status("exit on (tcp, resolve, http, ws, udp), %s", pol.Summary())
 	} else {
 		status("exit off")
 	}

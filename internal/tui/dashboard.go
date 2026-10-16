@@ -22,8 +22,9 @@ type dashBrowser struct {
 }
 
 type streamCount struct {
-	open  int
-	total int
+	open    int
+	total   int
+	dropped int
 }
 
 type dashboard struct {
@@ -100,6 +101,8 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 		if c := d.count(e.Stream); c.open > 0 {
 			c.open--
 		}
+	case flow.Dropped:
+		d.count(e.Stream).dropped += e.Count
 	case flow.BrowserGone:
 		d.browser(e.Browser).gone = true
 		d.log(now, e.Name+" quit")
@@ -252,7 +255,11 @@ func (d dashboard) streamLine() string {
 	parts := make([]string, 0, len(d.order))
 	for _, k := range d.order {
 		c := d.streams[k]
-		parts = append(parts, fmt.Sprintf("%s %d open, %d total", k, c.open, c.total))
+		part := fmt.Sprintf("%s %d open, %d total", k, c.open, c.total)
+		if c.dropped > 0 {
+			part += fmt.Sprintf(", %d dropped", c.dropped)
+		}
+		parts = append(parts, part)
 	}
 	return strings.Join(parts, " · ")
 }
