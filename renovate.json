@@ -1,4 +1,20 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>ai-ecoverse/slicc-shared-web"]
+  "extends": [
+    "github>ai-ecoverse/slicc-shared-web"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The Alpine image the installer checks run in, pinned by tag and digest inside the workflows' matrix values (a JSON string in ci.yml, a matrix container in release.yml).",
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "alpine:(?<currentValue>\\d[\\w.-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "alpine",
+      "datasourceTemplate": "docker"
+    }
+  ]
 }
