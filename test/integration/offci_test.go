@@ -115,6 +115,9 @@ func watchInstalledBrowsers(root string) *browserWatch {
 func processLines() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	if runtime.GOOS == "linux" {
+		return procLines()
+	}
 	var out []byte
 	if runtime.GOOS == "windows" {
 		out, _ = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command",
@@ -123,6 +126,19 @@ func processLines() []string {
 		out, _ = exec.CommandContext(ctx, "ps", "-A", "-ww", "-o", "pid=,args=").Output()
 	}
 	return strings.Split(string(bytes.ReplaceAll(out, []byte("\r"), nil)), "\n")
+}
+
+func procLines() []string {
+	dirs, _ := filepath.Glob("/proc/[0-9]*")
+	var lines []string
+	for _, d := range dirs {
+		b, err := os.ReadFile(filepath.Join(d, "cmdline"))
+		if err != nil || len(b) == 0 {
+			continue
+		}
+		lines = append(lines, filepath.Base(d)+" "+strings.TrimSpace(string(bytes.ReplaceAll(b, []byte{0}, []byte{' '}))))
+	}
+	return lines
 }
 
 func (w *browserWatch) scan() {
