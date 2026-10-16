@@ -2,6 +2,8 @@ package cdp
 
 import "strings"
 
+var opaque = map[string]bool{"value": true, "preview": true, "customPreview": true, "arguments": true, "returnValue": true}
+
 var headerLists = map[string]bool{"headers": true, "requestHeaders": true, "responseHeaders": true}
 
 type scrubItem struct {
@@ -60,6 +62,9 @@ func (g *guard) scrubValue(root any) bool {
 func (g *guard) scrubMap(t map[string]any, headers bool, changed *bool) []scrubItem {
 	var more []scrubItem
 	for k, val := range t {
+		if !headers && opaque[k] {
+			continue
+		}
 		if headers || urlKey(k) {
 			if r, ok := g.cut(val); ok {
 				t[k], *changed = r, true
