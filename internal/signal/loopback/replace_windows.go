@@ -28,20 +28,7 @@ func retryShared(op func() error) error {
 }
 
 func replaceFile(from, to string) error {
-	src, err := windows.UTF16PtrFromString(from)
-	if err != nil {
-		return err
-	}
-	dst, err := windows.UTF16PtrFromString(to)
-	if err != nil {
-		return err
-	}
-	return retryShared(func() error {
-		if err := windows.MoveFileEx(src, dst, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH); err != nil {
-			return &os.LinkError{Op: "rename", Old: from, New: to, Err: err}
-		}
-		return nil
-	})
+	return retryShared(func() error { return os.Rename(from, to) })
 }
 
 func readShared(path string) ([]byte, error) {
