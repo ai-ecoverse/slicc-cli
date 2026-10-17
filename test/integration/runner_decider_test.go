@@ -76,6 +76,8 @@ func TestCIPoolKeepsTheForkRule(t *testing.T) {
 		{"same-repo merge group", map[string]any{"event": "merge_group", "payload": group, "env": pool, "queue": []any{entry(1, "fake-sha-0001", false), entry(2, "fake-sha-0002", false)}}, trusted},
 		{"merge group not in the queue", map[string]any{"event": "merge_group", "payload": group, "env": pool}, hosted},
 		{"push", map[string]any{"event": "push", "payload": map[string]any{}, "env": pool}, trusted},
+		{"nightly schedule", map[string]any{"event": "schedule", "payload": map[string]any{}, "env": pool}, trusted},
+		{"nightly dispatch", map[string]any{"event": "workflow_dispatch", "payload": map[string]any{}, "env": pool}, trusted},
 		{"push without a light pool", map[string]any{"event": "push", "payload": map[string]any{}, "env": map[string]any{"POOL": "fake-pool"}}, decision{"fake-pool", "ubuntu-latest"}},
 		{"forced", map[string]any{"event": "pull_request", "payload": pr("someone/slicc-cli"), "env": map[string]any{"FORCED": "fake-forced", "POOL": "fake-pool", "LIGHT": "fake-light-pool"}}, decision{"fake-forced", "fake-forced"}},
 	} {

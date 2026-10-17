@@ -31,5 +31,6 @@ async function pick({ context, github, pool }) {
         };
   }
   if (context.eventName === 'push') return { runner: pool, why: 'push to this repo' };
+  if (context.eventName === 'schedule' || context.eventName === 'workflow_dispatch') return { runner: pool, why: `nightly (${context.eventName})` };
   return { runner: HOSTED, why: context.eventName };
 }
