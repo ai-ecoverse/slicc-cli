@@ -235,7 +235,11 @@ func (f *verifyFixture) run(t *testing.T, mutate func(f *verifyFixture)) (int, s
 	}
 	out := filepath.Join(f.dir, "verify.json")
 	_ = os.Remove(out)
-	cmd := exec.Command(node, certTools+"verify.mjs", "--version", verifyVersion, "--run", "1", "--wait", "1", "--rebuild", filepath.Join(f.dir, "evidence", "rebuild", "rebuild.json"), "--darwin", filepath.Join(f.dir, "evidence", "darwin", "darwin.json"), "--artifacts", f.declared, "--installer", srv.URL+"/slicc", "--out", out, "--lines", filepath.Join(f.dir, "lines.json"))
+	args := []string{certTools + "verify.mjs"}
+	if f.declared != "" {
+		args = append(args, "--artifacts", f.declared)
+	}
+	cmd := exec.Command(node, append(args, "--version", verifyVersion, "--run", "1", "--wait", "1", "--rebuild", filepath.Join(f.dir, "evidence", "rebuild", "rebuild.json"), "--darwin", filepath.Join(f.dir, "evidence", "darwin", "darwin.json"), "--installer", srv.URL+"/slicc", "--out", out, "--lines", filepath.Join(f.dir, "lines.json"))...)
 	cmd.Env = append(os.Environ(), append([]string{"PATH=" + filepath.Join(f.dir, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_DIR=" + f.dir, "CERT_NPM_REGISTRY=" + srv.URL, "RUNNER_TEMP=" + filepath.Join(f.dir, "tmp"), "GITHUB_STEP_SUMMARY="}, f.env...)...)
 	msg, err := cmd.CombinedOutput()
 	code := 0

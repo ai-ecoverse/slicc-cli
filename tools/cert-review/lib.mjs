@@ -490,7 +490,10 @@ export function artifactBinding({ declared, listed, since, prefix = 'cert-' }) {
       problems.push(`the artifact declaration "${d.raw}" isn't name=id:digest`);
       continue;
     }
-    if (!d.id) continue;
+    if (!d.id) {
+      problems.push(`${d.name} has no artifact from its producer`);
+      continue;
+    }
     ids.add(d.id);
     const a = listed.find((x) => String(x.id) === d.id);
     if (!a) {

@@ -18,7 +18,7 @@ const { positionals, values } = parseArgs({
     guard: { type: 'string', default: '' },
     approval: { type: 'string', default: 'cert-review-approved' },
     forced: { type: 'string', default: '' },
-    artifacts: { type: 'string' },
+    artifacts: { type: 'string', default: '' },
     'base-manifest': { type: 'string', default: '' },
     'candidate-manifest': { type: 'string', default: '' },
   },
@@ -135,7 +135,6 @@ function readManifest(file) {
 }
 
 async function bound() {
-  if (values.artifacts === undefined) return [];
   try {
     const run = await (await request(`repos/${repo}/actions/runs/${values.run}`)).json();
     const listed = await all(`repos/${repo}/actions/runs/${values.run}/artifacts`);
