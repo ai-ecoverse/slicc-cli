@@ -21,13 +21,14 @@ const { values } = parseArgs({
     repo: { type: 'string', default: 'ai-ecoverse/slicc-cli' },
     run: { type: 'string', default: '' },
     wait: { type: 'string', default: '3600' },
-    notes: { type: 'string', default: 'write' },
+    lines: { type: 'string', default: '' },
     evidence: { type: 'string', default: '' },
     installer: { type: 'string', default: 'https://get.sliccy.ai/slicc' },
     out: { type: 'string', default: '' },
   },
 });
 const { version, repo } = values;
+const REGISTRY = new URL(process.env.CERT_NPM_REGISTRY || 'https://registry.npmjs.org').origin;
 const problems = [];
 const missing = [];
 const facts = { packages: {}, assets: {} };
@@ -78,7 +79,7 @@ async function npmPackage(p, until, sums) {
   const f = { tarball: m.dist.tarball };
   facts.packages[p.name] = f;
   const url = new URL(m.dist.tarball);
-  if (url.origin !== 'https://registry.npmjs.org') return problems.push(`${p.name}: the tarball is at ${url.origin}`);
+  if (url.origin !== REGISTRY) return problems.push(`${p.name}: the tarball is at ${url.origin}`);
   const res = await fetch(url);
   if (!res.ok) return problems.push(`${p.name}: downloading the tarball answered ${res.status}`);
   const bytes = Buffer.from(await res.arrayBuffer());
@@ -259,20 +260,15 @@ const ci = `${process.env.GITHUB_SERVER_URL ?? 'https://github.com'}/${repo}/act
 const record = (state, extra = {}) => {
   if (values.out) writeFileSync(values.out, `${JSON.stringify({ version, state, problems, missing, facts, ...extra }, null, 2)}\n`);
 };
-if (problems.length) {
-  const alert = `supply-chain alert: slicc-cli v${version} doesn't verify: ${problems.join('; ')}${missing.length ? `; also missing: ${missing.join('; ')}` : ''} (ci: ${ci})`;
-  summary(alert);
-  record('failure');
-  console.log(`::error title=verify on npm::${alert}`);
-  process.exit(1);
-}
-if (missing.length) {
-  const line = `cert-ci: INCOMPLETE slicc-cli v${version} (${missing.join('; ')}; re-run the failed jobs) (ci: ${ci})`;
+const fail = (state, line) => {
   summary(line);
-  record('error');
+  record(state, { line });
   console.log(`::error title=verify on npm::${line}`);
   process.exit(1);
-}
+};
+if (problems.length)
+  fail('failure', `supply-chain alert: slicc-cli v${version} doesn't verify: ${problems.join('; ')}${missing.length ? `; also missing: ${missing.join('; ')}` : ''} (ci: ${ci})`);
+if (missing.length) fail('error', `cert-ci: INCOMPLETE slicc-cli v${version} (${missing.join('; ')}; re-run the failed jobs) (ci: ${ci})`);
 const tail = `ci: ${ci}; pr-certified: ${facts.prCertified}; known: ${facts.known.length ? facts.known.join(', ') : 'none'}`;
 const lines = [
   ...packages.map((p) => ({
@@ -286,20 +282,14 @@ const lines = [
     line: `certified slicc-cli@${version} binaries SHA256SUMS sha256=${facts.sums} (reproducible: ${facts.rebuild.files} files from a git archive of the tag; darwin: Developer ID ${facts.darwin.team}, notarized; attested by release.yml@refs/heads/main; installer: ${values.installer}; ${tail}${skipped.length ? `; not published: ${skipped.map((p) => p.name).join(', ')}` : ''})`,
   },
 ];
-for (const l of lines) summary(l.line);
-record('success', { lines: lines.map((l) => l.line) });
-const release = gh(`repos/${repo}/releases/tags/v${version}`);
-const notes = releaseNotes(release.body, lines);
-if (notes.conflict) {
-  const alert = `supply-chain alert: slicc-cli v${version}: ${notes.conflict}, but it verifies as another (ci: ${ci})`;
-  summary(alert);
-  console.log(`::error title=verify on npm::${alert}`);
-  process.exit(1);
+let notes;
+try {
+  notes = releaseNotes(gh(`repos/${repo}/releases/tags/v${version}`).body, lines);
+} catch (error) {
+  fail('error', `cert-ci: INCOMPLETE slicc-cli v${version} (the release notes couldn't be read: ${one(error.stderr || error.message).slice(0, 200)}; re-run the failed jobs) (ci: ${ci})`);
 }
-if (notes.unchanged) summary(`the release notes of v${version} already carry these lines: unchanged`);
-else if (values.notes === 'write') {
-  const file = join(mkdtempSync(join(tmpdir(), 'cert-notes-')), 'notes.md');
-  writeFileSync(file, notes.body);
-  sh('gh', ['release', 'edit', `v${version}`, '--repo', repo, '--notes-file', file]);
-  summary(`wrote the lines into the release notes of v${version}`);
-} else summary(`the release notes of v${version} would get these lines (--notes ${values.notes}: not written)`);
+if (notes.conflict) fail('failure', `supply-chain alert: slicc-cli v${version}: ${notes.conflict}, but it verifies as another (ci: ${ci})`);
+for (const l of lines) summary(l.line);
+summary(notes.unchanged ? `the release notes of v${version} already carry these lines` : `the release notes of v${version} get these lines in the next job`);
+if (values.lines) writeFileSync(values.lines, `${JSON.stringify(lines, null, 2)}\n`);
+record('success', { lines: lines.map((l) => l.line), notes: notes.unchanged ? 'unchanged' : 'to write' });

@@ -195,10 +195,10 @@ func TestCertReviewPlanBuildsOnlyOnTheEventsThatMatter(t *testing.T) {
 		{name: "another label finds a pending status whose run ended", action: "labeled", label: "bug", guard: "PASS", state: "error", build: "false", files: files("cmd/slicc/main.go"), head: pending, runStatus: "completed"},
 		{name: "another label leaves a pending status whose run is still going", action: "labeled", label: "bug", guard: "PASS", build: "false", files: files("cmd/slicc/main.go"), head: pending, runStatus: "in_progress"},
 	}
-	for _, path := range []string{"scripts/npm-publish.mjs", "scripts/package.sh", "scripts/release-plan.mjs", "scripts/go-major.mjs", "scripts/go-warm.sh", "scripts/sliccy-next.mjs", "scripts/npm-stage.mjs", "install.sh", "npm/slicc.js", "npm/wasi-slicc/host/slicc-host.mjs", ".releaserc.json", ".github/workflows/ci.yml", ".github/runner.mjs"} {
+	for _, path := range []string{"scripts/npm-publish.mjs", "scripts/package.sh", "scripts/release-plan.mjs", "scripts/go-major.mjs", "scripts/go-warm.sh", "scripts/sliccy-next.mjs", "scripts/npm-stage.mjs", "install.sh", "npm/slicc.js", "npm/wasi-slicc/host/slicc-host.mjs", ".releaserc.json", "package.json", "package-lock.json", ".github/workflows/ci.yml", ".github/workflows/sigstore.yml", ".github/workflows/new-workflow.yml", ".github/actions/some-action/action.yml", ".github/runner.mjs", "tools/cert-review/lib.mjs"} {
 		cases = append(cases, planCase{name: "always behaviour: " + path, action: "synchronize", guard: "PASS", state: "pending", build: "true", forced: path, files: files(path, "README.md")})
 	}
-	for _, path := range []string{"README.md", "cmd/slicc/main.go", "go.mod", "package.json", "test/integration/cli_test.go"} {
+	for _, path := range []string{"README.md", "cmd/slicc/main.go", "go.mod", "go.sum", "renovate.json", "test/integration/cli_test.go"} {
 		cases = append(cases, planCase{name: "by build output: " + path, action: "synchronize", guard: "PASS", state: "pending", build: "true", forced: "", files: files(path)})
 	}
 	for _, c := range cases {

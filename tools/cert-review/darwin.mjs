@@ -40,19 +40,28 @@ for (const asset of ['slicc-darwin-arm64', 'slicc-darwin-amd64']) {
     answers.push(capture('spctl', ['-a', '-vv', '-t', 'install', file]));
     if (notarized(answers)) break;
   }
+  const finished = (r) => r.exit !== null && !r.signal && !r.error;
   const why = [];
   if (!display.output.includes(`Identifier=${values.identifier}\n`)) why.push(`its identifier isn't ${values.identifier}`);
   if (!display.output.includes('Authority=Developer ID Application:')) why.push('it has no Developer ID Application authority');
   if (!display.output.includes(`TeamIdentifier=${values.team}\n`)) why.push(`its team isn't ${values.team}`);
   if (!/flags=0x[0-9a-f]*\(runtime\)/.test(display.output)) why.push('it lacks the hardened runtime');
   if (display.exit !== 0 || strict.exit !== 0) why.push('codesign --verify --strict refuses it');
-  const ok = notarized(answers);
-  if (!ok) why.push(`Gatekeeper never said Notarized Developer ID in ${answers.length} tries: ${answers.map((a) => (/source=([^\n]+)/.exec(a.output)?.[1] ?? `exit ${a.exit}`)).join(' / ')}`);
-  const broken = [display, strict, ...answers].some((r) => r.exit === null || r.signal || r.error);
+  const said = answers.map((a) => /source=([^\n]+)/.exec(a.output)?.[1] ?? (finished(a) ? `exit ${a.exit}` : 'no answer'));
+  let status;
+  if (!finished(display) || !finished(strict)) {
+    status = 'INCOMPLETE';
+    why.unshift('codesign did not finish');
+  } else if (why.length > 0) status = 'FAIL';
+  else if (notarized(answers)) status = 'PASS';
+  else {
+    status = answers.every(finished) ? 'FAIL' : 'INCOMPLETE';
+    why.push(`Gatekeeper never said Notarized Developer ID in ${answers.length} tries: ${said.join(' / ')}`);
+  }
   binaries.push({
     asset,
     sha256: createHash('sha256').update(bytes).digest('hex'),
-    status: why.length === 0 ? 'PASS' : broken ? 'INCOMPLETE' : 'FAIL',
+    status,
     why: why.join('; '),
     display,
     strict,

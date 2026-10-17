@@ -43,11 +43,8 @@ jobs:
         with:
           approval-label: cert-review-approved
           paths: |
-            .github/workflows/cert*.yml
-            .github/workflows/cert*.yaml
+            .github/**
             tools/cert-review/**
-            .github/actions/cert-self-guard/**
-            .github/runner.mjs
 
   plan:
     name: cert-review-pr / plan

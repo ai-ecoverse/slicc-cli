@@ -9,22 +9,15 @@ const TOP = /^(?:var|const|type)\b/;
 
 export const NAME = 'ai-ecoverse/slicc-cli';
 
-export const REVIEWER_GLOBS = [
-  '.github/workflows/cert*.yml',
-  '.github/workflows/cert*.yaml',
-  'tools/cert-review/**',
-  '.github/actions/cert-self-guard/**',
-  '.github/runner.mjs',
-];
+export const REVIEWER_GLOBS = ['.github/**', 'tools/cert-review/**'];
 
 export const FORCED_GLOBS = [
   'scripts/**',
   'install.sh',
   'npm/**',
+  'package.json',
+  'package-lock.json',
   '.releaserc*',
-  '.github/workflows/release.yml',
-  '.github/workflows/ci.yml',
-  '.github/runner.mjs',
 ];
 
 const names = (files) =>
@@ -462,9 +455,11 @@ export function releaseNotes(body, lines) {
     if (found.length === 0) all = false;
   }
   if (all) return { unchanged: true, body: text };
-  const kept = text.replace(/\n*<!-- cert-verify -->[\s\S]*?<!-- \/cert-verify -->\n*/g, '').trimEnd();
+  const old = [...text.matchAll(/<!-- cert-verify -->\n([\s\S]*?)<!-- \/cert-verify -->/g)].flatMap((m) => m[1].split('\n'));
+  const kept = old.filter((l) => l.startsWith('certified ') && !lines.some((n) => l.startsWith(`certified ${n.prefix} sha256=`)));
+  const rest = text.replace(/\n*<!-- cert-verify -->[\s\S]*?<!-- \/cert-verify -->\n*/g, '').trimEnd();
   return {
-    body: `${kept}${kept ? '\n\n' : ''}<!-- cert-verify -->\n${lines.map((l) => l.line).join('\n')}\n<!-- /cert-verify -->\n`,
+    body: `${rest}${rest ? '\n\n' : ''}<!-- cert-verify -->\n${[...kept, ...lines.map((l) => l.line)].join('\n')}\n<!-- /cert-verify -->\n`,
   };
 }
 

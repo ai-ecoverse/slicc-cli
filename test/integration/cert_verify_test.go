@@ -93,6 +93,8 @@ echo "accepted" >&2; echo "source=Notarized Developer ID" >&2; exit 0
 		{"Gatekeeper says Unnotarized first, then Notarized", good, second, "PASS", "", 2},
 		{"never notarized", good, unnotarized, "FAIL", "never said Notarized Developer ID in 3 tries: Unnotarized Developer ID / Unnotarized Developer ID / Unnotarized Developer ID", 3},
 		{"another team", otherTeam, notarized, "FAIL", "its team isn't FAKETEAM01", 1},
+		{"another team, and spctl killed", otherTeam, "kill -9 $$\n", "FAIL", "its team isn't FAKETEAM01", 3},
+		{"codesign killed", "kill -9 $$\n", notarized, "INCOMPLETE", "codesign did not finish", 1},
 		{"spctl killed", good, "kill -9 $$\n", "INCOMPLETE", "never said Notarized", 3},
 	}
 	for _, c := range cases {
@@ -119,7 +121,7 @@ func TestCertVerifyReproducesEverythingButTheSignedDarwinBinaries(t *testing.T) 
 	}
 	check := func(rebuilt string) map[string]any {
 		out := filepath.Join(dir, "rebuild.json")
-		r := certTool(t, "", "outputs.mjs", "reproduce", "--release", filepath.Join(dir, "release"), "--rebuilt", filepath.Join(dir, rebuilt), "--out", out)
+		r := certTool(t, "", "outputs.mjs", "reproduce", "--release", filepath.Join(dir, "release"), "--tree", dir, "--rebuilt", filepath.Join(dir, rebuilt), "--out", out)
 		if r.code != 0 {
 			t.Fatalf("reproduce:\n%s", r.out)
 		}
@@ -136,126 +138,59 @@ func TestCertVerifyReproducesEverythingButTheSignedDarwinBinaries(t *testing.T) 
 	}
 }
 
-func libCall(t *testing.T, expr string) string {
-	t.Helper()
-	node := requireNode(t)
-	lib, err := filepath.Abs(certTools + "lib.mjs")
+func TestCertVerifyRunsCodeOnlyAfterTheReleaseOutsideItsConcurrency(t *testing.T) {
+	raw, err := os.ReadFile("../../.github/workflows/cert-verify.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := fmt.Sprintf("import(%q).then((l) => process.stdout.write(JSON.stringify(%s)))", "file://"+filepath.ToSlash(lib), expr)
-	if runtime.GOOS == "windows" {
-		script = fmt.Sprintf("import(%q).then((l) => process.stdout.write(JSON.stringify(%s)))", "file:///"+filepath.ToSlash(lib), expr)
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	if !strings.Contains(text, "  workflow_run:\n    workflows: [Release]\n    types: [completed]\n    branches: [main]\n") || !strings.Contains(text, "  group: cert-verify-${{ github.event.workflow_run.head_sha || inputs.version }}\n") {
+		t.Fatal("cert-verify follows each Release run in a concurrency group of its own, never release-main")
 	}
-	out, err := exec.Command(node, "-e", script).CombinedOutput()
-	if err != nil {
-		t.Fatalf("%v\n%s", err, out)
+	jobs := jobsOf(t, text)
+	runners := map[string]string{"tag": "${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}", "rebuild": "${{ vars.CERT_RUNNER || 'ubuntu-latest' }}", "darwin": "macos-latest", "verify": "${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}", "notes": "ubuntu-latest"}
+	if len(jobs) != len(runners) {
+		t.Fatalf("jobs %v", jobs)
 	}
-	return string(out)
-}
-
-func TestCertVerifyWritesTheCertifiedLinesIntoTheNotesOnce(t *testing.T) {
-	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
-	lines := fmt.Sprintf(`[{prefix: '@ai-ecoverse/wasi-slicc@1.43.0', sha256: '%s', line: 'certified @ai-ecoverse/wasi-slicc@1.43.0 sha256=%s (covers 1.43.0)'}, {prefix: 'slicc-cli@1.43.0 binaries SHA256SUMS', sha256: '%s', line: 'certified slicc-cli@1.43.0 binaries SHA256SUMS sha256=%s (reproducible)'}]`, a, a, b, b)
-	var written struct {
-		Body      string `json:"body"`
-		Unchanged bool   `json:"unchanged"`
-		Conflict  string `json:"conflict"`
-	}
-	if err := json.Unmarshal([]byte(libCall(t, "l.releaseNotes('## Changes\\n\\n* fix: x\\n', "+lines+")")), &written); err != nil {
-		t.Fatal(err)
-	}
-	want := "## Changes\n\n* fix: x\n\n<!-- cert-verify -->\ncertified @ai-ecoverse/wasi-slicc@1.43.0 sha256=" + a + " (covers 1.43.0)\ncertified slicc-cli@1.43.0 binaries SHA256SUMS sha256=" + b + " (reproducible)\n<!-- /cert-verify -->\n"
-	if written.Body != want {
-		t.Fatalf("notes:\n%s\nwant:\n%s", written.Body, want)
-	}
-	body, _ := json.Marshal(written.Body)
-	var again struct {
-		Unchanged bool `json:"unchanged"`
-	}
-	_ = json.Unmarshal([]byte(libCall(t, "l.releaseNotes("+string(body)+", "+lines+")")), &again)
-	if !again.Unchanged {
-		t.Fatal("notes that already carry every line stay unchanged")
-	}
-	other := strings.ReplaceAll(lines, "'"+a+"'", "'"+strings.Repeat("c", 64)+"'")
-	var conflict struct {
-		Conflict string `json:"conflict"`
-	}
-	_ = json.Unmarshal([]byte(libCall(t, "l.releaseNotes("+string(body)+", "+other+")")), &conflict)
-	if conflict.Conflict != "the release notes already certify @ai-ecoverse/wasi-slicc@1.43.0 sha256="+a {
-		t.Fatalf("another sha in the notes is a supply-chain alert, never overwritten: %q", conflict.Conflict)
-	}
-	stale := "x\n\n<!-- cert-verify -->\ncertified @ai-ecoverse/wasi-slicc@1.43.0 sha256=" + a + " (covers 1.43.0)\n<!-- /cert-verify -->\n"
-	sb, _ := json.Marshal(stale)
-	var replaced struct {
-		Body string `json:"body"`
-	}
-	_ = json.Unmarshal([]byte(libCall(t, "l.releaseNotes("+string(sb)+", "+lines+")")), &replaced)
-	if strings.Count(replaced.Body, "<!-- cert-verify -->") != 1 || !strings.Contains(replaced.Body, "binaries SHA256SUMS sha256="+b) {
-		t.Fatalf("a partial block is replaced by the whole one: %s", replaced.Body)
-	}
-}
-
-func TestCertVerifyChecksTheProvenanceOfEveryPackage(t *testing.T) {
-	commit := strings.Repeat("1", 40)
-	statement := func(subject, ref, builder, git string) string {
-		return fmt.Sprintf(`{subject: [{name: '%s', digest: {sha512: 'fake-sha512'}}], predicate: {buildDefinition: {externalParameters: {workflow: {repository: 'https://github.com/ai-ecoverse/slicc-cli', path: '.github/workflows/release.yml', ref: '%s'}}, resolvedDependencies: [{digest: {gitCommit: '%s'}}]}, runDetails: {builder: {id: '%s'}}}}`, subject, ref, git, builder)
-	}
-	hosted := "https://github.com/actions/runner/github-hosted"
-	args := func(name, version string) string {
-		return fmt.Sprintf(`{repo: 'ai-ecoverse/slicc-cli', name: '%s', version: '%s', sha512: 'fake-sha512', commit: '%s'}`, name, version, commit)
-	}
-	cases := []struct {
-		stmt, args, want string
-	}{
-		{statement("pkg:npm/%40ai-ecoverse/wasi-slicc@1.43.0", "refs/heads/main", hosted, commit), args("@ai-ecoverse/wasi-slicc", "1.43.0"), "[]"},
-		{statement("pkg:npm/sliccy@7.0.0-next.1.43.0", "refs/heads/main", hosted, commit), args("sliccy", "7.0.0-next.1.43.0"), "[]"},
-		{statement("pkg:npm/%40ai-ecoverse/slicc@1.43.0", "refs/heads/other", hosted, commit), args("@ai-ecoverse/slicc", "1.43.0"), "provenance ref is refs/heads/other"},
-		{statement("pkg:npm/%40ai-ecoverse/slicc@1.43.0", "refs/heads/main", "https://example.invalid/self-hosted", commit), args("@ai-ecoverse/slicc", "1.43.0"), "provenance builder is https://example.invalid/self-hosted"},
-		{statement("pkg:npm/%40ai-ecoverse/slicc@1.43.0", "refs/heads/main", hosted, strings.Repeat("2", 40)), args("@ai-ecoverse/slicc", "1.43.0"), "isn't the tag's commit"},
-		{statement("pkg:npm/%40ai-ecoverse/slicc@1.42.0", "refs/heads/main", hosted, commit), args("@ai-ecoverse/slicc", "1.43.0"), "the provenance subject isn't this tarball's sha512"},
-	}
-	for _, c := range cases {
-		got := libCall(t, "l.provenanceProblems("+c.stmt+", "+c.args+").problems")
-		if c.want == "[]" && got != "[]" || c.want != "[]" && !strings.Contains(got, c.want) {
-			t.Fatalf("problems %s, want %s", got, c.want)
-		}
-	}
-}
-
-func TestReleaseVerifiesWhatItPublishedCodeOnly(t *testing.T) {
-	raw, err := os.ReadFile("../../.github/workflows/release.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	jobs := jobsOf(t, strings.ReplaceAll(string(raw), "\r\n", "\n"))
-	gate := "if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.version != '' && github.ref == 'refs/heads/main' }}"
-	for name, runner := range map[string]string{"verify-rebuild": "${{ vars.CERT_RUNNER || 'ubuntu-latest' }}", "verify-darwin": "macos-latest", "verify": "${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}"} {
-		body, ok := jobs[name]
-		if !ok {
-			t.Fatalf("release.yml has no %s job", name)
-		}
-		if !strings.Contains(body, "    runs-on: "+runner+"\n") || !strings.Contains(body, "    "+gate+"\n") {
-			t.Errorf("%s: runs on %s, only after a release on main", name, runner)
+	for name, runner := range runners {
+		body := jobs[name]
+		if !strings.Contains(body, "    runs-on: "+runner+"\n") {
+			t.Errorf("%s must run on %s", name, runner)
 		}
 		if strings.Contains(body, "id-token") || strings.Contains(body, "secrets.") || strings.Contains(body, "claude") {
 			t.Errorf("%s is code only, with no id-token and no secret", name)
 		}
-		if strings.Contains(body, "contents: write") != (name == "verify") {
-			t.Errorf("%s: only verify writes, to edit the release notes", name)
+		if strings.Contains(body, "contents: write") != (name == "notes") {
+			t.Errorf("%s: only the notes job writes, on a hosted runner", name)
+		}
+		if name != "tag" && !strings.Contains(body, "needs.tag.outputs.version != ''") {
+			t.Errorf("%s runs only for a release", name)
 		}
 	}
-	if !strings.Contains(jobs["verify"], "    name: release / verify on npm\n") || !strings.Contains(jobs["verify"], "    needs: [release, verify-rebuild, verify-darwin]\n") {
-		t.Fatal("verify on npm reads the rebuild and darwin evidence")
+	if !strings.Contains(jobs["tag"], "github.ref == 'refs/heads/main'") || !strings.Contains(jobs["tag"], "github.event.workflow_run.conclusion == 'success'") {
+		t.Fatal("only a successful Release run on main is verified")
 	}
-	if !strings.Contains(jobs["verify"], "tools/cert-review/verify.mjs") || !strings.Contains(jobs["verify-darwin"], "tools/cert-review/darwin.mjs") || !strings.Contains(jobs["verify-rebuild"], "git archive --format=tar \"v$VERSION\"") {
-		t.Fatal("the verify jobs run the cert tools on the tag")
+	if strings.Contains(jobs["rebuild"], "GH_TOKEN") || strings.Contains(jobs["rebuild"], "gh ") {
+		t.Fatal("the pool runner that rebuilds gets no token")
+	}
+	if !strings.Contains(jobs["verify"], "    needs: [tag, rebuild, darwin]\n") || !strings.Contains(jobs["notes"], "needs.verify.result == 'success'") || !strings.Contains(jobs["notes"], "tools/cert-review/notes.mjs") || strings.Contains(jobs["verify"], "notes.mjs") {
+		t.Fatal("verify reads the rebuild and darwin evidence, read-only; only the notes job edits, after it")
+	}
+	if !strings.Contains(jobs["verify"], "    name: release / verify on npm\n") {
+		t.Fatal("the job is release / verify on npm")
+	}
+	release, err := os.ReadFile("../../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(release), "cert-review") {
+		t.Fatal("release.yml stays plain semantic-release")
 	}
 	wf, err := os.ReadFile("../../.github/workflows/cert-review-pr.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(wf), "\nenv:\n  CERT_CONTEXT: cert-review\n") {
+	if !strings.Contains(strings.ReplaceAll(string(wf), "\r\n", "\n"), "\nenv:\n  CERT_CONTEXT: cert-review\n") {
 		t.Fatal("the pull request check posts the required context cert-review")
 	}
 }
@@ -309,7 +244,7 @@ func runSilently(t *testing.T, script string, env ...string) silentRun {
 			t.Fatal(err)
 		}
 	}
-	for _, tool := range []string{"pr.mjs", "record.mjs", "findings.mjs", "verify.mjs", "darwin.mjs", "outputs.mjs"} {
+	for _, tool := range []string{"pr.mjs", "record.mjs", "findings.mjs", "verify.mjs", "darwin.mjs", "outputs.mjs", "notes.mjs"} {
 		if err := os.WriteFile(filepath.Join(tools, tool), []byte("process.exit(0)\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -354,9 +289,10 @@ func TestACertToolThatExitsSilentlyNeverPasses(t *testing.T) {
 		{"cert-review-pr.yml", "plan", "plan"},
 		{"cert-review-pr.yml", "classify", "classify"},
 		{"cert-review-pr.yml", "group", "lookup"},
-		{"release.yml", "verify-rebuild", "Every linux, windows and wasm asset and install.sh byte for byte against the release's SHA256SUMS"},
-		{"release.yml", "verify-darwin", "codesign and Gatekeeper on the published darwin binaries"},
-		{"release.yml", "verify", "The release on npm and GitHub is what release.yml built from the tag on main, and its notes carry the certified lines"},
+		{"cert-verify.yml", "rebuild", "Every linux, windows and wasm asset and install.sh byte for byte against the release's SHA256SUMS"},
+		{"cert-verify.yml", "darwin", "codesign and Gatekeeper on the published darwin binaries"},
+		{"cert-verify.yml", "verify", "The release on npm and GitHub is what release.yml built from the tag on main"},
+		{"cert-verify.yml", "notes", "Only the notes edit, from verify's lines"},
 	} {
 		t.Run(c.job+"/"+c.step, func(t *testing.T) {
 			if r := runSilently(t, stepRun(t, c.workflow, c.job, c.step)); r.code == 0 {
@@ -376,4 +312,23 @@ func TestACertToolThatExitsSilentlyNeverPasses(t *testing.T) {
 			t.Fatalf("success without a certified line must post error and fail: exit %d, curl %s\n%s", r.code, r.curl, r.out)
 		}
 	})
+}
+
+func TestRenovatePullRequestsAskForTheirCertReview(t *testing.T) {
+	raw, err := os.ReadFile("../../renovate.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Labels []string `json:"labels"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range cfg.Labels {
+		if l == "merge-ok" {
+			return
+		}
+	}
+	t.Fatalf("Renovate's pull requests must carry merge-ok, so a dev pin's cert-review runs by itself: %v", cfg.Labels)
 }

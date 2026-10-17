@@ -127,7 +127,7 @@ function reproduce() {
     ...reproducedFrom(release, rebuilt),
     releaseSums: sha(values.release),
     rebuiltSums: sha(values.rebuilt),
-    go: execFileSync('go', ['version'], { encoding: 'utf8' }).trim(),
+    go: execFileSync('go', ['version'], { cwd: resolve(values.tree), encoding: 'utf8' }).trim(),
   };
   writeFileSync(values.out, `${JSON.stringify(result, null, 2)}\n`);
   console.log(result.match ? `reproduced ${result.files} files byte for byte (darwin is signed: ${result.signed.join(', ')})` : `different: ${result.differ.join(', ')}`);
