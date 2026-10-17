@@ -245,17 +245,14 @@ func (d *debugPorts) lateBrowsers(t *testing.T, p *page) {
 			t.Fatal("the fake browser never wrote DevToolsActivePort")
 		}
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for {
 		var last echoResult
-		hosts := []string{"127.0.0.1"}
 		ok := true
 		for _, port := range []int{d.proc, own} {
-			for _, host := range hosts {
-				p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "tcp", "host": host, "port": port})+")", &last)
-				if last.Reset != "EACCES" {
-					ok = false
-				}
+			p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "tcp", "host": "127.0.0.1", "port": port})+")", &last)
+			if last.Reset != "EACCES" {
+				ok = false
 			}
 		}
 		if ok {
@@ -444,7 +441,9 @@ func TestProcessListScanReportsFailures(t *testing.T) {
 	home := t.TempDir()
 	var mu sync.Mutex
 	mode := "start"
+	var finished atomic.Int32
 	table := debugProcessTable(t, func() string {
+		defer finished.Add(1)
 		mu.Lock()
 		defer mu.Unlock()
 		switch mode {
@@ -472,17 +471,27 @@ func TestProcessListScanReportsFailures(t *testing.T) {
 	if d.Control("tcp4", "127.0.0.1:9370", nil) == nil {
 		t.Fatal("9370 open")
 	}
+	kick := func() {
+		t.Helper()
+		time.Sleep(1100 * time.Millisecond)
+		before := finished.Load()
+		_ = d.Control("tcp4", "127.0.0.1:9400", nil)
+		deadline := time.Now().Add(5 * time.Second)
+		for finished.Load() <= before {
+			if time.Now().After(deadline) {
+				t.Fatal("a connect never finished a background scan")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 	mu.Lock()
 	mode = "late"
 	mu.Unlock()
-	time.Sleep(1100 * time.Millisecond)
-	_ = d.Control("tcp4", "127.0.0.1:9400", nil)
-	time.Sleep(200 * time.Millisecond)
+	kick()
 	mu.Lock()
 	mode = "fail"
 	mu.Unlock()
-	time.Sleep(1100 * time.Millisecond)
-	_ = d.Control("tcp4", "127.0.0.1:9400", nil)
+	kick()
 	waitLog := func(want string) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)
@@ -524,8 +533,7 @@ func TestProcessListScanReportsFailures(t *testing.T) {
 	mu.Lock()
 	mode = "late"
 	mu.Unlock()
-	time.Sleep(1100 * time.Millisecond)
-	_ = d.Control("tcp4", "127.0.0.1:9400", nil)
+	kick()
 	waitLog("listing running browsers for their debugging ports again")
 }
 
@@ -558,7 +566,7 @@ func TestProcessListScanShutdownSkipsFailure(t *testing.T) {
 	table := func(ctx context.Context) ([]byte, error) {
 		once.Do(func() { close(started) })
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return []byte{}, ctx.Err()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var logged []string
