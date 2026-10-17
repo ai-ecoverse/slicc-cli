@@ -194,8 +194,8 @@ jobs:
           node tools/cert-review/verify.mjs --repo "$GITHUB_REPOSITORY" --version "$VERSION" --run "$GITHUB_RUN_ID" \
             --wait 3600 --evidence "$RUNNER_TEMP/evidence" --out "$RUNNER_TEMP/out/verify.json" \
             --lines "$RUNNER_TEMP/out/lines.json" | tee "$RUNNER_TEMP/verify.log"
-          grep -qE "^certified slicc-cli@$VERSION binaries SHA256SUMS sha256=[0-9a-f]{64} " "$RUNNER_TEMP/verify.log" || {
-            echo "::error title=verify on npm::verify printed no certified line for slicc-cli@$VERSION"
+          grep -qE "^(certified|verified) slicc-cli@$VERSION binaries SHA256SUMS sha256=[0-9a-f]{64} " "$RUNNER_TEMP/verify.log" || {
+            echo "::error title=verify on npm::verify printed no certified or verified line for slicc-cli@$VERSION"
             exit 1
           }
 

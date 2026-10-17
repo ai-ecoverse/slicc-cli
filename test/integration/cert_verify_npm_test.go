@@ -119,6 +119,17 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	return f
 }
 
+func (f *verifyFixture) since(state, description string) {
+	f.api["repos/"+verifyRepo+"/tags"] = []any{map[string]any{"name": "v1.42.9"}, map[string]any{"name": "v" + verifyVersion}}
+	f.api["repos/"+verifyRepo+"/compare/v1.42.9...v"+verifyVersion] = map[string]any{"commits": []any{map[string]any{"commit": map[string]any{"message": "Merge pull request #5 from ai-ecoverse/x"}}}}
+	f.api["repos/"+verifyRepo+"/pulls/5"] = map[string]any{"head": map[string]any{"sha": "fake-head-0005"}}
+	statuses := []any{}
+	if state != "" {
+		statuses = append(statuses, map[string]any{"context": "cert-review", "state": state, "description": description})
+	}
+	f.api["repos/"+verifyRepo+"/commits/fake-head-0005/statuses"] = statuses
+}
+
 func (f *verifyFixture) sums() string {
 	names := []string{}
 	for n := range f.assets {
@@ -265,6 +276,12 @@ func TestCertVerifyCertifiesOnlyAReleaseThatVerifiesEverywhere(t *testing.T) {
 		{"a package its publish variable leaves out", "success", "not published: @ai-ecoverse/slicc", func(f *verifyFixture) {
 			f.env = []string{"SLICC_NPM_PUBLISH=", "SLICCY_NEXT_PUBLISH=", "WASI_SLICC_PUBLISH="}
 		}},
+		{"every pull request since the last tag certified in the pull request", "success", "certified @ai-ecoverse/wasi-slicc@1.43.0 sha256=", func(f *verifyFixture) {
+			f.since("success", "certified ai-ecoverse/slicc-cli PR #5 at fake-head-00")
+		}},
+		{"a pull request without a cert-review makes the lines verified, never certified", "success", "verified slicc-cli@1.43.0 binaries SHA256SUMS sha256=", func(f *verifyFixture) {
+			f.since("", "")
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -305,6 +322,7 @@ func TestCertVerifyWritesTheNotesOnceAndNeverOverAnotherSha(t *testing.T) {
 		lines                  []any
 		code                   int
 	}{
+		{"an earlier verified line with the same sha counts as written", block(strings.Replace(wasi["line"].(string), "certified", "verified", 1), strings.Replace(bins["line"].(string), "certified", "verified", 1)), "unchanged", "", []any{wasi, bins}, 0},
 		{"plain notes get the lines", "## Changes\n", "notes: wrote the 2 certified lines into v1.43.0's release notes", block(wasi["line"].(string), bins["line"].(string)), []any{wasi, bins}, 0},
 		{"notes that carry them stay as they are", block(wasi["line"].(string), bins["line"].(string)), "notes: v1.43.0 already carries the 2 certified lines, unchanged", "", []any{wasi, bins}, 0},
 		{"a line for a package outside this run's set is kept", block(sliccy, wasi["line"].(string)), "notes: wrote", block(sliccy, wasi["line"].(string), bins["line"].(string)), []any{wasi, bins}, 0},

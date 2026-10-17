@@ -2016,7 +2016,7 @@ semantic-release cuts releases from `main` in `.github/workflows/release.yml`, o
   - `certified <package>@<version> sha256=<the registry tarball's sha256> (covers …; ci: …; pr-certified: …; known: …)`;
   - `certified slicc-cli@<version> binaries SHA256SUMS sha256=<the SHA256SUMS file's sha256> (…)`.
 
-  `pr-certified` lists each pull request since the previous tag with its `cert-review` status on its head; it only reports, the required check gates. Notes that already carry the same lines stay unchanged, and lines in the block for packages outside this run's set are kept. Another sha writes nothing and fails with a `supply-chain alert`.
+  `pr-certified` lists each pull request since the previous tag with its `cert-review` status on its head. When one of them has none (a pull request from before the check was required), the lines start with `verified` instead of `certified`, since they then cover only the supply chain; readers take only `certified` as a cert. A `verified` line with the same sha counts as written. Notes that already carry the same lines stay unchanged, and lines in the block for packages outside this run's set are kept. Another sha writes nothing and fails with a `supply-chain alert`.
 
 **Go module versions.** In Go a pushed tag is the release: `proxy.golang.org` caches it, `sum.golang.org` records its hash for good, and `pkg.go.dev` indexes it.
 - **Never move or delete a pushed tag.** The checksum database would then reject that version for every user. A bad version gets a `retract` directive in `go.mod`, and a new release.

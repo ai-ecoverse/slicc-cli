@@ -230,6 +230,7 @@ function context() {
     }
   }
   const verdict = groupVerdict(prs);
+  facts.prAll = verdict.state === 'success';
   facts.prCertified = verdict.state === 'success' ? verdict.line : verdict.line.replace(/^not certified: /, 'not all: ');
   facts.known = ghAll(`repos/${repo}/issues?labels=known-issue&state=open`)
     .filter((i) => !i.pull_request)
@@ -270,16 +271,17 @@ if (problems.length)
   fail('failure', `supply-chain alert: slicc-cli v${version} doesn't verify: ${problems.join('; ')}${missing.length ? `; also missing: ${missing.join('; ')}` : ''} (ci: ${ci})`);
 if (missing.length) fail('error', `cert-ci: INCOMPLETE slicc-cli v${version} (${missing.join('; ')}; re-run the failed jobs) (ci: ${ci})`);
 const tail = `ci: ${ci}; pr-certified: ${facts.prCertified}; known: ${facts.known.length ? facts.known.join(', ') : 'none'}`;
+const word = facts.prAll ? 'certified' : 'verified';
 const lines = [
   ...packages.map((p) => ({
     prefix: `${p.name}@${p.version}`,
     sha256: facts.packages[p.name].sha256,
-    line: `certified ${p.name}@${p.version} sha256=${facts.packages[p.name].sha256} (covers ${p.version}; ${tail})`,
+    line: `${word} ${p.name}@${p.version} sha256=${facts.packages[p.name].sha256} (covers ${p.version}; ${tail})`,
   })),
   {
     prefix: `slicc-cli@${version} binaries SHA256SUMS`,
     sha256: facts.sums,
-    line: `certified slicc-cli@${version} binaries SHA256SUMS sha256=${facts.sums} (reproducible: ${facts.rebuild.files} files from a git archive of the tag; darwin: Developer ID ${facts.darwin.team}, notarized; attested by release.yml@refs/heads/main; installer: ${values.installer}; ${tail}${skipped.length ? `; not published: ${skipped.map((p) => p.name).join(', ')}` : ''})`,
+    line: `${word} slicc-cli@${version} binaries SHA256SUMS sha256=${facts.sums} (reproducible: ${facts.rebuild.files} files from a git archive of the tag; darwin: Developer ID ${facts.darwin.team}, notarized; attested by release.yml@refs/heads/main; installer: ${values.installer}; ${tail}${skipped.length ? `; not published: ${skipped.map((p) => p.name).join(', ')}` : ''})`,
   },
 ];
 let notes;

@@ -449,14 +449,14 @@ export function releaseNotes(body, lines) {
   const text = body ?? '';
   let all = lines.length > 0;
   for (const { prefix, sha256 } of lines) {
-    const found = [...text.matchAll(new RegExp(`certified ${escape(prefix)} sha256=([0-9a-f]{64})`, 'g'))].map((m) => m[1]);
+    const found = [...text.matchAll(new RegExp(`(?:certified|verified) ${escape(prefix)} sha256=([0-9a-f]{64})`, 'g'))].map((m) => m[1]);
     const other = found.find((s) => s !== sha256);
     if (other) return { conflict: `the release notes already certify ${prefix} sha256=${other}` };
     if (found.length === 0) all = false;
   }
   if (all) return { unchanged: true, body: text };
   const old = [...text.matchAll(/<!-- cert-verify -->\n([\s\S]*?)<!-- \/cert-verify -->/g)].flatMap((m) => m[1].split('\n'));
-  const kept = old.filter((l) => l.startsWith('certified ') && !lines.some((n) => l.startsWith(`certified ${n.prefix} sha256=`)));
+  const kept = old.filter((l) => /^(certified|verified) /.test(l) && !lines.some((n) => l.replace(/^\w+ /, '').startsWith(`${n.prefix} sha256=`)));
   const rest = text.replace(/\n*<!-- cert-verify -->[\s\S]*?<!-- \/cert-verify -->\n*/g, '').trimEnd();
   return {
     body: `${rest}${rest ? '\n\n' : ''}<!-- cert-verify -->\n${[...kept, ...lines.map((l) => l.line)].join('\n')}\n<!-- /cert-verify -->\n`,

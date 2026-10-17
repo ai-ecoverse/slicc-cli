@@ -20,8 +20,8 @@ const say = (text) => {
 };
 const sh = (args) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const lines = JSON.parse(readFileSync(values.lines, 'utf8'));
-const shape = /^certified \S+ (binaries SHA256SUMS )?sha256=[0-9a-f]{64} \(/;
-if (!Array.isArray(lines) || lines.length === 0 || !lines.every((l) => shape.test(l.line ?? '') && l.line.startsWith(`certified ${l.prefix} sha256=${l.sha256} `))) {
+const shape = /^(certified|verified) \S+ (binaries SHA256SUMS )?sha256=[0-9a-f]{64} \(/;
+if (!Array.isArray(lines) || lines.length === 0 || !lines.every((l) => shape.test(l.line ?? '') && l.line.replace(/^\w+ /, '').startsWith(`${l.prefix} sha256=${l.sha256} `))) {
   say(`cert-ci: INCOMPLETE slicc-cli v${version}: verify handed over no well-formed lines`);
   process.exit(1);
 }
