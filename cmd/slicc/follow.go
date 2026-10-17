@@ -60,9 +60,10 @@ flags:
 ` + exposeUsage + `  --name <name>        the name and host this link shows in seven
   --cdp <url>          let seven drive this browser over the link (cdp,
                        repeatable); seven gets full control of it, except
-                       tabs, cookies and storage on sliccy.ai, and its
-                       endpoint and port are denied to tcp, http, ws,
-                       udp and ssh
+                       tabs, cookies and storage on sliccy.ai and the
+                       browser's privileged pages (chrome://, extension
+                       pages, file:// and the like), and its endpoint and
+                       port are denied to tcp, http, ws, udp and ssh
 ` + jerkFollowUsage + mountUsage + computeUsage + `
 With --runner the link also offers ssh: seven's kernel reaches this machine's
 SSH server, which never listens on a port, and its forwarding goes through
