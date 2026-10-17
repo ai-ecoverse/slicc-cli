@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/agentctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/facade"
+	"github.com/ai-ecoverse/slicc-cli/internal/joinurl"
 )
 
 const (
@@ -162,7 +165,10 @@ func (t trayClient) status(asJSON bool, stdout, stderr io.Writer) int {
 		return trayFail(stderr, err)
 	}
 	if asJSON {
-		fmt.Fprintf(stdout, "%s\n", raw)
+		var v any
+		_ = json.Unmarshal(raw, &v)
+		body, _ := json.Marshal(scrubJSON(v))
+		fmt.Fprintf(stdout, "%s\n", body)
 		return 0
 	}
 	printTray(stdout, s)
@@ -174,19 +180,19 @@ func printTray(w io.Writer, s trayStatus) {
 	case s.Tray == "" || s.Tray == "idle":
 		fmt.Fprintln(w, "tray off")
 	case s.Hub != "":
-		fmt.Fprintf(w, "tray %s, hub %s\n", s.Tray, s.Hub)
+		fmt.Fprintf(w, "tray %s, hub %s\n", scrub(s.Tray), scrub(s.Hub))
 	default:
-		fmt.Fprintf(w, "tray %s\n", s.Tray)
+		fmt.Fprintf(w, "tray %s\n", scrub(s.Tray))
 	}
 	if s.Error != "" {
-		fmt.Fprintf(w, "error: %s\n", s.Error)
+		fmt.Fprintf(w, "error: %s\n", scrub(s.Error))
 	}
 	if e := s.Exit; e != nil {
 		switch e.Kind {
 		case "link":
 			fmt.Fprintf(w, "exit: %s\n", exitName(s.Devices, e.ID))
 		case "tailnet":
-			fmt.Fprintf(w, "exit: tailnet %s\n", e.Node)
+			fmt.Fprintf(w, "exit: tailnet %s\n", scrub(e.Node))
 		}
 	}
 	if len(s.Devices) == 0 {
@@ -200,7 +206,7 @@ func printTray(w io.Writer, s trayStatus) {
 		if d.Exit {
 			offers = strings.TrimPrefix(offers+",exit", ",")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", shortID(d.ID), d.Name, dash(d.Host), dash(d.Mode), dash(d.State), dash(offers))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", shortID(d.ID), dash(scrub(d.Name)), dash(scrub(d.Host)), dash(scrub(d.Mode)), dash(scrub(d.State)), dash(scrub(offers)))
 	}
 	_ = tw.Flush()
 }
@@ -208,17 +214,47 @@ func printTray(w io.Writer, s trayStatus) {
 func exitName(devices []trayDevice, id string) string {
 	for _, d := range devices {
 		if d.ID == id {
-			return d.Name + " (" + shortID(id) + ")"
+			return scrub(d.Name) + " (" + shortID(id) + ")"
 		}
 	}
 	return shortID(id)
 }
 
 func shortID(id string) string {
+	id = scrub(id)
 	if len(id) <= 12 {
 		return dash(id)
 	}
 	return id[:4] + "…" + id[len(id)-4:]
+}
+
+var joinURLs = regexp.MustCompile(`(?i)\bhttps?://[^\s"'<>]*/join/[A-Za-z0-9._~%+-]+`)
+
+var secretKeys = map[string]bool{"url": true, "join": true, "joinUrl": true, "joinCommand": true, "followUrl": true, "webhookUrl": true}
+
+func scrub(s string) string {
+	s = strings.Join(strings.Fields(agentctl.Clean(s)), " ")
+	return joinURLs.ReplaceAllString(s, "<join-url>")
+}
+
+func scrubJSON(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			if secretKeys[k] {
+				delete(x, k)
+				continue
+			}
+			x[k] = scrubJSON(e)
+		}
+	case []any:
+		for i, e := range x {
+			x[i] = scrubJSON(e)
+		}
+	case string:
+		return joinURLs.ReplaceAllString(agentctl.Clean(x), "<join-url>")
+	}
+	return v
 }
 
 func dash(s string) string {
@@ -239,7 +275,10 @@ func (t trayClient) joinURL(stdout, stderr io.Writer) int {
 	if json.Unmarshal(raw, &u) != nil || u.URL == "" {
 		return trayFail(stderr, errors.New("seven's link facade sent no join URL"))
 	}
-	fmt.Fprintln(stdout, u.URL)
+	if _, err := joinurl.Parse(u.URL); err != nil || strings.ContainsFunc(u.URL, unicode.IsControl) {
+		return trayFail(stderr, errors.New("seven's link facade sent something that isn't a join URL"))
+	}
+	fmt.Fprintln(stdout, strings.TrimSpace(u.URL))
 	return 0
 }
 
@@ -256,29 +295,29 @@ func (t trayClient) unlink(arg string, stderr io.Writer) int {
 	}
 	switch len(found) {
 	case 0:
-		fmt.Fprintf(stderr, "slicc tray: no device matches %s\n", arg)
+		fmt.Fprintf(stderr, "slicc tray: no device matches %s\n", scrub(arg))
 		return 1
 	case 1:
 	default:
-		fmt.Fprintf(stderr, "slicc tray: more than one device matches %s; give more of the fingerprint\n", arg)
+		fmt.Fprintf(stderr, "slicc tray: more than one device matches %s; give more of the fingerprint\n", scrub(arg))
 		return 1
 	}
 	d := found[0]
 	if _, err := t.call("unlink", d.ID, trayApprovalWait); err != nil {
 		return trayFail(stderr, err)
 	}
-	fmt.Fprintf(stderr, "slicc: unlinked %s (%s)\n", shortID(d.ID), d.Name)
+	fmt.Fprintf(stderr, "slicc: unlinked %s (%s)\n", shortID(d.ID), scrub(d.Name))
 	return 0
 }
 
 func matchDevice(id, arg string) bool {
 	norm := func(s string) string { return strings.ToLower(strings.ReplaceAll(s, ":", "")) }
-	id, arg = norm(id), norm(arg)
+	id, arg = norm(id), strings.ReplaceAll(norm(arg), "...", "…")
 	if arg == "" {
 		return false
 	}
-	if head, tail, ok := strings.Cut(arg, "…"); ok {
-		return head != "" && tail != "" && len(id) > len(head)+len(tail) && strings.HasPrefix(id, head) && strings.HasSuffix(id, tail)
+	if strings.Contains(arg, "…") {
+		return len(id) > 12 && arg == shortID(id)
 	}
 	return strings.HasPrefix(id, arg)
 }
@@ -293,12 +332,12 @@ var trayCodes = map[string]string{
 func trayFail(stderr io.Writer, err error) int {
 	var re *agentctl.ResetError
 	if errors.As(err, &re) && re.Remote {
-		msg := re.Message
+		msg := scrub(re.Message)
 		if msg == "" {
 			msg = trayCodes[re.Code]
 		}
 		if msg == "" {
-			msg = re.Code
+			msg = scrub(re.Code)
 		}
 		fmt.Fprintf(stderr, "slicc tray: %s\n", msg)
 		if re.Code == "EACCES" {

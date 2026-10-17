@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -26,10 +27,34 @@ func trayStatus() map[string]any {
 	)
 }
 
+func leakyStatus() map[string]any {
+	s := trayStatus()
+	s["tray"] = "failed"
+	s["hub"] = trayLeaderJU
+	s["error"] = "dial " + trayLeaderJU + ": refused"
+	s["joinUrl"] = trayLeaderJU
+	s["joinCommand"] = "slicc " + trayLeaderJU + " follow"
+	s["followUrl"] = "https://seven.example.test/#follow=" + trayLeaderJU
+	s["webhookUrl"] = "https://tray.example.test/hook/secret"
+	devices := s["devices"].([]any)
+	devices[0].(map[string]any)["name"] = "\x1b[31mevil\nDEVICE " + trayLeaderJU
+	return s
+}
+
+func checkNoLeak(t *testing.T, r wasiResult) {
+	t.Helper()
+	all := r.Stdout + r.Stderr
+	for _, bad := range []string{"leader.aabbccddeeff", "\x1b", "hook/secret"} {
+		if strings.Contains(all, bad) {
+			t.Fatalf("output shows %q:\nstdout %q\nstderr %q", bad, r.Stdout, r.Stderr)
+		}
+	}
+}
+
 func checkTrayOpen(t *testing.T, c wasiConn, want map[string]any) {
 	t.Helper()
-	if c.First == nil || c.First.Type != 1 || c.First.JSON.V != 1 || c.First.JSON.Join != "" {
-		t.Fatalf("first record %+v: want a control record, v 1, no join URL", c.First)
+	if c.First == nil || c.First.Type != 1 || c.First.JSON.V != 1 || slices.Contains(c.First.Keys, "join") {
+		t.Fatalf("first record %+v: want a control record, v 1, no join key", c.First)
 	}
 	got, _ := json.Marshal(c.First.JSON.Open)
 	exp, _ := json.Marshal(want)
@@ -59,16 +84,13 @@ func TestWasiTray(t *testing.T) {
 	runWasi(t, []wasiCase{
 		{Name: "status", Argv: []string{"slicc", "tray"}, Scenario: []map[string]any{status},
 			check: func(t *testing.T, r wasiResult) {
-				wantExit(t, r, 0, "tray ready, hub https://tray.example.test\nexit: slicc on mac (3fa9…c210)\n", "")
-				for _, want := range []string{
-					"DEVICE     NAME            HOST                  MODE    STATE      OFFERS\n",
-					"3fa9…c210  slicc on mac    mac.slicc.internal    remote  connected  net,ssh,fs,exit\n",
-					"3fa9…07be  slicc on linux  linux.slicc.internal  remote  offline    ssh\n",
-					"88d1…07be  SLICC on Linux  -                     remote  connected  -\n",
-				} {
-					if !strings.Contains(r.Stdout, want) {
-						t.Fatalf("stdout lacks %q:\n%s", want, r.Stdout)
-					}
+				want := "tray ready, hub https://tray.example.test\nexit: slicc on mac (3fa9…c210)\n" +
+					"DEVICE     NAME            HOST                  MODE    STATE      OFFERS\n" +
+					"3fa9…c210  slicc on mac    mac.slicc.internal    remote  connected  net,ssh,fs,exit\n" +
+					"3fa9…07be  slicc on linux  linux.slicc.internal  remote  offline    ssh\n" +
+					"88d1…07be  SLICC on Linux  -                     remote  connected  -\n"
+				if r.Status != 0 || r.Stdout != want || r.Stderr != "" {
+					t.Fatalf("exit %d\nstdout %q\nwant   %q\nstderr %q", r.Status, r.Stdout, want, r.Stderr)
 				}
 				checkTrayOpen(t, trayConns(t, r, 1)[0], ev("kind", "tray", "op", "status"))
 			}},
@@ -125,6 +147,16 @@ func TestWasiTray(t *testing.T) {
 				wantExit(t, r, 0, "", "slicc: unlinked 3fa9…07be (slicc on linux)\n")
 				checkTrayOpen(t, trayConns(t, r, 2)[1], ev("kind", "tray", "op", "unlink", "id", trayFP2))
 			}},
+		{Name: "unlink by a loose short form", Argv: []string{"slicc", "tray", "unlink", "88d…7be"}, Scenario: []map[string]any{status},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 1, "", "slicc tray: no device matches 88d…7be\n")
+				trayConns(t, r, 1)
+			}},
+		{Name: "unlink by a short form with dots", Argv: []string{"slicc", "tray", "unlink", "88d1...07be"}, Scenario: []map[string]any{status, opened(ev())},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 0, "", "slicc: unlinked 88d1…07be (SLICC on Linux)\n")
+				checkTrayOpen(t, trayConns(t, r, 2)[1], ev("kind", "tray", "op", "unlink", "id", trayFP3))
+			}},
 		{Name: "unlink ambiguous", Argv: []string{"slicc", "tray", "unlink", "3fa9"}, Scenario: []map[string]any{status},
 			check: func(t *testing.T, r wasiResult) {
 				wantExit(t, r, 1, "", "slicc tray: more than one device matches 3fa9; give more of the fingerprint\n")
@@ -134,6 +166,46 @@ func TestWasiTray(t *testing.T) {
 			check: func(t *testing.T, r wasiResult) {
 				wantExit(t, r, 1, "", "slicc tray: no device matches abcd\n")
 				trayConns(t, r, 1)
+			}},
+		{Name: "a status that leaks the join URL", Argv: []string{"slicc", "tray"}, Scenario: []map[string]any{opened(leakyStatus())},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 0, "tray failed, hub <join-url>\nerror: dial <join-url>: refused\n", "")
+				checkNoLeak(t, r)
+			}},
+		{Name: "a json status that leaks the join URL", Argv: []string{"slicc", "tray", "--json"}, Scenario: []map[string]any{opened(leakyStatus())},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 0, `"hub":"\u003cjoin-url\u003e"`, "")
+				checkNoLeak(t, r)
+				for _, key := range []string{`"joinUrl"`, `"joinCommand"`, `"followUrl"`, `"webhookUrl"`, `"url"`} {
+					if strings.Contains(r.Stdout, key) {
+						t.Fatalf("--json kept %s: %s", key, r.Stdout)
+					}
+				}
+				if strings.Count(r.Stdout, "\n") != 1 {
+					t.Fatalf("--json isn't one line: %q", r.Stdout)
+				}
+			}},
+		{Name: "a refusal that leaks the join URL", Argv: []string{"slicc", "tray", "retry"}, Scenario: []map[string]any{refused("EACCES: no, " + trayLeaderJU + "\x1b[2J")},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 3, "", "slicc tray: no, <join-url>\n")
+				checkNoLeak(t, r)
+			}},
+		{Name: "unlink of a device whose name leaks", Argv: []string{"slicc", "tray", "unlink", "3fa9…c210"}, Scenario: []map[string]any{opened(leakyStatus()), opened(ev())},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 0, "", "slicc: unlinked 3fa9…c210 (evil DEVICE <join-url>)\n")
+				checkNoLeak(t, r)
+			}},
+		{Name: "url that isn't a join URL", Argv: []string{"slicc", "tray", "url"}, Scenario: []map[string]any{opened(ev("url", "javascript:alert(1)"))},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 1, "", "slicc tray: seven's link facade sent something that isn't a join URL\n")
+				if r.Stdout != "" || strings.Contains(r.Stderr, "alert") {
+					t.Fatalf("stdout %q, stderr %q", r.Stdout, r.Stderr)
+				}
+			}},
+		{Name: "url with a second line", Argv: []string{"slicc", "tray", "url"}, Scenario: []map[string]any{opened(ev("url", trayLeaderJU+"\nrm -rf /"))},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 1, "", "slicc tray: seven's link facade sent something that isn't a join URL\n")
+				checkNoLeak(t, r)
 			}},
 		{Name: "a facade without a tray", Argv: []string{"slicc", "tray"}, Scenario: []map[string]any{refused("EOPNOTSUPP")},
 			check: func(t *testing.T, r wasiResult) {
@@ -192,7 +264,9 @@ func TestWasiTrayRealFacade(t *testing.T) {
 		{Name: "a cone in sudo prints the join URL", Argv: []string{"slicc", "tray", "url"}, User: "cone", Scenario: []map[string]any{opened(ev("url", trayLeaderJU))},
 			check: func(t *testing.T, r wasiResult) {
 				wantExit(t, r, 0, trayLeaderJU+"\n", "")
-				checkStamp(t, onlyConn(t, r), "cone", false)
+				c := onlyConn(t, r)
+				checkStamp(t, c, "cone", false)
+				checkTrayOpen(t, c, ev("kind", "tray", "op", "url"))
 			}},
 		{Name: "a scoop is refused", Argv: []string{"slicc", "tray", "url"}, User: "scoop-site", Scenario: []map[string]any{opened(ev("url", trayLeaderJU))},
 			check: func(t *testing.T, r wasiResult) {
@@ -200,7 +274,9 @@ func TestWasiTrayRealFacade(t *testing.T) {
 				if strings.Contains(r.Stdout+r.Stderr, "leader.aabbccddeeff") {
 					t.Fatalf("a scoop saw the join URL: %q %q", r.Stdout, r.Stderr)
 				}
-				checkStamp(t, onlyConn(t, r), "scoop-site", false)
+				c := onlyConn(t, r)
+				checkStamp(t, c, "scoop-site", false)
+				checkTrayOpen(t, c, ev("kind", "tray", "op", "url"))
 			}},
 	})
 }
