@@ -84,42 +84,27 @@ class SocketClient {
   }
 }
 
-function sessionBound(c, name) {
+function sessionBound(c) {
   const calls = new Map();
-  const tracked = { name, last: null, pending: new Set() };
   c.on?.((e) => {
     if (e.method !== 'Target.detachedFromTarget') return;
     for (const reject of calls.get(e.params.sessionId) ?? []) reject(new Error('the session detached'));
     calls.delete(e.params.sessionId);
   });
-  const sent = (method, sessionId, promise) => {
-    const call = { method, session: sessionId ?? '', at: Date.now(), answered: false };
-    tracked.last = call;
-    tracked.pending.add(call);
-    return promise.finally(() => {
-      call.answered = true;
-      tracked.pending.delete(call);
-    });
-  };
   return {
-    tracked,
     events: c.events,
     transport: c.transport,
     waitEvent: (match, timeout) => c.waitEvent(match, timeout),
     send(method, params, sessionId) {
-      if (!sessionId) return sent(method, sessionId, c.send(method, params));
-      return sent(
-        method,
-        sessionId,
-        new Promise((resolve, reject) => {
-          const set = calls.get(sessionId) ?? new Set();
-          calls.set(sessionId, set);
-          set.add(reject);
-          c.send(method, params, sessionId)
-            .then(resolve, reject)
-            .finally(() => set.delete(reject));
-        }),
-      );
+      if (!sessionId) return c.send(method, params);
+      return new Promise((resolve, reject) => {
+        const set = calls.get(sessionId) ?? new Set();
+        calls.set(sessionId, set);
+        set.add(reject);
+        c.send(method, params, sessionId)
+          .then(resolve, reject)
+          .finally(() => set.delete(reject));
+      });
     },
   };
 }
@@ -149,42 +134,45 @@ async function retried(open) {
   }
 }
 
-const state = { rows: [], inflight: new Map(), done: false, error: null, summary: null };
+const state = { launched: false, rows: [], started: new Map(), running: null, done: false, error: null, summary: null };
+
+const rowKey = (row) => `${row.id} ${row.target} ${row.variant}`;
 
 export function guardStart(getLink, opts) {
-  if (state.started) return { started: false };
-  state.started = true;
+  if (state.launched) return { started: false };
+  state.launched = true;
   const browsers = opts.browsers;
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
-    const execution = await run(set, {
-      clientFactory: async ({ slot, vector, target, variant }) => {
+    const running = run(set, {
+      clientFactory: async ({ slot }) => {
         const b = browsers[slot % browsers.length];
         const client = await retried(() => CdpClient.open(getLink(), b.id));
         client.transport = 'cli';
         const unguarded = await retried(() => SocketClient.open(b.ws));
-        const row = { id: vector.id, target, variant, slot, browser: b.id, started: Date.now() };
-        const guarded = sessionBound(client, 'guarded');
-        const observer = sessionBound(unguarded, 'unguarded');
-        row.clients = [guarded.tracked, observer.tracked];
-        state.inflight.set(slot, row);
         return {
-          client: guarded,
-          unguarded: observer,
+          client: sessionBound(client),
+          unguarded: sessionBound(unguarded),
           close: async () => {
-            state.inflight.delete(slot);
             unguarded.close();
             await client.close().catch(() => {});
           },
         };
       },
+      onStart: (row) => state.started.set(rowKey(row), Date.now()),
+      rowTimeoutMs: opts.rowTimeoutMs,
       targets: opts.targets,
       capabilities: opts.capabilities,
       variant: opts.variants,
       parallel: opts.parallel,
       fixture: fixtureLog(opts.log),
-      log: (row) => state.rows.push(row),
+      log: (row) => {
+        state.started.delete(rowKey(row));
+        state.rows.push(row);
+      },
     });
+    state.running = running;
+    const execution = await running;
     state.summary = execution.summary({ guard: 'slicc-cli', sha: opts.sha });
   })().then(
     () => {
@@ -200,14 +188,8 @@ export function guardStart(getLink, opts) {
 
 function inflight() {
   const now = Date.now();
-  return [...state.inflight.values()].map(({ clients, started, ...row }) => ({
-    ...row,
-    ms: now - started,
-    last: clients.map((c) => {
-      const call = [...c.pending][0] ?? c.last;
-      return call ? { client: c.name, method: call.method, session: call.session, answered: call.answered, ms: now - call.at } : { client: c.name };
-    }),
-  }));
+  const rows = state.running?.inFlight() ?? [];
+  return rows.map((row) => ({ ...row, ms: now - (state.started.get(rowKey(row)) ?? now) }));
 }
 
 export function guardProgress(since) {
