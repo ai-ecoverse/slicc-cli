@@ -195,10 +195,10 @@ func TestCertReviewPlanBuildsOnlyOnTheEventsThatMatter(t *testing.T) {
 		{name: "another label finds a pending status whose run ended", action: "labeled", label: "bug", guard: "PASS", state: "error", build: "false", files: files("cmd/slicc/main.go"), head: pending, runStatus: "completed"},
 		{name: "another label leaves a pending status whose run is still going", action: "labeled", label: "bug", guard: "PASS", build: "false", files: files("cmd/slicc/main.go"), head: pending, runStatus: "in_progress"},
 	}
-	for _, path := range []string{"scripts/npm-publish.mjs", "scripts/package.sh", "scripts/release-plan.mjs", "scripts/go-major.mjs", "scripts/go-warm.sh", "scripts/sliccy-next.mjs", "scripts/npm-stage.mjs", "install.sh", "npm/slicc.js", "npm/wasi-slicc/host/slicc-host.mjs", ".releaserc.json", ".github/workflows/ci.yml", ".github/runner.mjs"} {
+	for _, path := range []string{"scripts/npm-publish.mjs", "scripts/package.sh", "scripts/release-plan.mjs", "scripts/go-major.mjs", "scripts/go-warm.sh", "scripts/sliccy-next.mjs", "scripts/npm-stage.mjs", "install.sh", "npm/slicc.js", "npm/wasi-slicc/host/slicc-host.mjs", ".releaserc.json", "package.json", "package-lock.json", ".github/workflows/ci.yml", ".github/workflows/sigstore.yml", ".github/workflows/new-workflow.yml", ".github/actions/some-action/action.yml", ".github/runner.mjs", "tools/cert-review/lib.mjs"} {
 		cases = append(cases, planCase{name: "always behaviour: " + path, action: "synchronize", guard: "PASS", state: "pending", build: "true", forced: path, files: files(path, "README.md")})
 	}
-	for _, path := range []string{"README.md", "cmd/slicc/main.go", "go.mod", "package.json", "test/integration/cli_test.go"} {
+	for _, path := range []string{"README.md", "cmd/slicc/main.go", "go.mod", "go.sum", "renovate.json", "test/integration/cli_test.go"} {
 		cases = append(cases, planCase{name: "by build output: " + path, action: "synchronize", guard: "PASS", state: "pending", build: "true", forced: "", files: files(path)})
 	}
 	for _, c := range cases {
@@ -629,8 +629,8 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		if regexp.MustCompile(`ref:\s*\$\{\{[^}]*merge_group\.base_sha`).Match(data) {
-			t.Errorf("%s checks out merge_group.base_sha, which can be the group ahead's speculative commit", filepath.Base(w))
+		if m := regexp.MustCompile(`ref:\s*\$\{\{[^}]*(merge_group\.base_sha|merge_group\.head_sha|pull_request\.head\.)`).FindSubmatch(data); m != nil {
+			t.Errorf("%s checks out %s: tools come from main or the pull request's base, never from a speculative group commit or the code under test", filepath.Base(w), m[1])
 		}
 	}
 	if strings.Contains(jobs["group"], "claude") || strings.Contains(jobs["group"], "package.sh") {

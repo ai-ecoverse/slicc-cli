@@ -3,6 +3,9 @@
   "extends": [
     "github>ai-ecoverse/slicc-shared-web"
   ],
+  "labels": [
+    "merge-ok"
+  ],
   "customManagers": [
     {
       "customType": "regex",
