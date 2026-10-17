@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ import (
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
-const guardSetVersion = "1.7.5"
+const guardSetVersion = "1.7.8"
 
 func guardSlots() int {
 	return min(10, max(4, 2*runtime.NumCPU()))
@@ -168,38 +169,50 @@ type guardSummary struct {
 	Counts          json.RawMessage `json:"counts"`
 }
 
-const guardStall = 3 * time.Minute
+const (
+	guardRowTimeout = 3 * time.Minute
+	guardStall      = guardRowTimeout + time.Minute
+)
 
 type guardCall struct {
-	Client   string `json:"client"`
-	Method   string `json:"method"`
-	Session  string `json:"session"`
-	Answered bool   `json:"answered"`
-	MS       int    `json:"ms"`
+	Method  string `json:"method"`
+	Session string `json:"session"`
+	AgeMS   int    `json:"ageMs"`
 }
 
 type guardInflight struct {
-	ID      string      `json:"id"`
-	Target  string      `json:"target"`
-	Variant string      `json:"variant"`
-	Slot    int         `json:"slot"`
-	Browser string      `json:"browser"`
-	MS      int         `json:"ms"`
-	Last    []guardCall `json:"last"`
+	ID      string                 `json:"id"`
+	Target  string                 `json:"target"`
+	Variant string                 `json:"variant"`
+	Leg     string                 `json:"leg"`
+	Phase   string                 `json:"phase"`
+	Step    *int                   `json:"step"`
+	MS      int                    `json:"ms"`
+	Clients map[string][]guardCall `json:"clients"`
 }
 
 func (r guardInflight) String() string {
-	out := fmt.Sprintf("%s %s %s (slot %d, %s) running %s", r.ID, r.Target, r.Variant, r.Slot, r.Browser, time.Duration(r.MS)*time.Millisecond)
-	for _, c := range r.Last {
-		if c.Method == "" {
-			out += fmt.Sprintf("; %s: no command yet", c.Client)
+	out := fmt.Sprintf("%s %s %s running %s", r.ID, r.Target, r.Variant, time.Duration(r.MS)*time.Millisecond)
+	if r.Leg != "" {
+		out += fmt.Sprintf(", %s leg, %s", r.Leg, r.Phase)
+		if r.Step != nil {
+			out += fmt.Sprintf(" step %d", *r.Step)
+		}
+	}
+	names := make([]string, 0, len(r.Clients))
+	for name := range r.Clients {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		calls := r.Clients[name]
+		if len(calls) == 0 {
+			out += fmt.Sprintf("; %s: no pending call", name)
 			continue
 		}
-		state := "answered"
-		if !c.Answered {
-			state = "unanswered"
+		for _, c := range calls {
+			out += fmt.Sprintf("; %s: %s (session %q) pending for %s", name, c.Method, c.Session, time.Duration(c.AgeMS)*time.Millisecond)
 		}
-		out += fmt.Sprintf("; %s's oldest unanswered or last command %s (session %q) %s, sent %s ago", c.Client, c.Method, c.Session, state, time.Duration(c.MS)*time.Millisecond)
 	}
 	return out
 }
@@ -295,6 +308,7 @@ func runGuardVectors(t *testing.T, variant string) {
 		"parallel":     n,
 		"log":          "http://127.0.0.1:" + strconv.Itoa(fix.log),
 		"sha":          sha,
+		"rowTimeoutMs": guardRowTimeout.Milliseconds(),
 	}
 	var started struct {
 		Started bool `json:"started"`
@@ -370,6 +384,31 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		}
 	}
 	t.Logf("counts %s; not run %v", sum.Counts, sum.NotRun)
+	passed := map[string]int{}
+	for _, r := range sum.Results {
+		if r.Control == "pass" && r.Guarded == "pass" && r.Live == "pass" {
+			passed[r.ID]++
+		}
+	}
+	var set struct {
+		Vectors []struct {
+			ID   string `json:"id"`
+			Kind string `json:"kind"`
+		} `json:"vectors"`
+	}
+	_ = json.Unmarshal(sliccbrowsers.GuardVectorsJSON(), &set)
+	var ran []string
+	for _, v := range set.Vectors {
+		if v.Kind != "cdp" {
+			continue
+		}
+		if passed[v.ID] == 0 {
+			t.Errorf("%s: no row of the vector passed", v.ID)
+			continue
+		}
+		ran = append(ran, fmt.Sprintf("%s=%d", v.ID, passed[v.ID]))
+	}
+	t.Logf("passed rows per vector: %s", strings.Join(ran, " "))
 	if !sum.Pass {
 		t.Errorf("the guard set did not pass: %s", sum.Line)
 	}
