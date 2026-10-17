@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -12,11 +13,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 )
 
 const fakeDebugBody = "fake debugging port"
@@ -341,4 +344,151 @@ func TestABadProtectedPortRangeExits(t *testing.T) {
 	if code != 1 || !strings.Contains(errOut, browser.ProtectedPortsEnv) {
 		t.Fatalf("code %d, stderr %q", code, errOut)
 	}
+}
+
+func debugProcessTable(t *testing.T, lines func() string) func(context.Context) ([]byte, error) {
+	t.Helper()
+	return func(context.Context) ([]byte, error) {
+		s := lines()
+		if s == "fail" {
+			return nil, os.ErrNotExist
+		}
+		if runtime.GOOS != "windows" {
+			return []byte(s), nil
+		}
+		var rows []string
+		for _, l := range strings.Split(strings.TrimSpace(s), "\n") {
+			pid, cmd, _ := strings.Cut(strings.TrimSpace(l), " ")
+			rows = append(rows, fmt.Sprintf(`{"ProcessId":%s,"CommandLine":%q}`, pid, cmd))
+		}
+		return []byte("[" + strings.Join(rows, ",") + "]"), nil
+	}
+}
+
+func TestProcessListScanRunsInTheBackground(t *testing.T) {
+	t.Setenv(browser.DiscoveryEnv, "isolated")
+	t.Setenv(browser.ProtectedPortsEnv, "9300")
+	home := t.TempDir()
+	block := make(chan struct{})
+	var calls atomic.Int32
+	table := debugProcessTable(t, func() string {
+		n := calls.Add(1)
+		if n == 1 {
+			return "21 /opt/chrome --remote-debugging-port=9370\n"
+		}
+		<-block
+		return "21 /opt/chrome --remote-debugging-port=9370\n22 /opt/chrome --remote-debugging-port=9380\n"
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pol := policy.Local()
+	if err := browser.Guard(ctx, pol, browser.Options{Home: home, Processes: table}, nil, nil, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	d := policy.NewDialer(pol)
+	deadline := time.Now().Add(3 * time.Second)
+	for calls.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the background refresh never started a second scan")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	done := make(chan error, 1)
+	go func() { done <- d.Control("tcp4", "127.0.0.1:9370", nil) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("9370 open while the process scan is blocked")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("a connect waited on the process scan")
+	}
+	close(block)
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		if d.Control("tcp4", "127.0.0.1:9380", nil) != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("9380 stayed open after the background refresh")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestProcessListScanReportsFailures(t *testing.T) {
+	t.Setenv(browser.DiscoveryEnv, "isolated")
+	t.Setenv(browser.ProtectedPortsEnv, "9300")
+	home := t.TempDir()
+	var mu sync.Mutex
+	mode := "ok"
+	table := debugProcessTable(t, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		if mode == "fail" {
+			return "fail"
+		}
+		return "21 /opt/chrome --remote-debugging-port=9370\n"
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var logged []string
+	logf := func(format string, a ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, a...))
+	}
+	pol := policy.Local()
+	if err := browser.Guard(ctx, pol, browser.Options{Home: home, Processes: table}, nil, nil, logf); err != nil {
+		t.Fatal(err)
+	}
+	d := policy.NewDialer(pol)
+	if d.Control("tcp4", "127.0.0.1:9370", nil) == nil {
+		t.Fatal("9370 open")
+	}
+	mu.Lock()
+	mode = "fail"
+	mu.Unlock()
+	waitLog := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			mu.Lock()
+			ok := false
+			for _, line := range logged {
+				if strings.Contains(line, want) {
+					ok = true
+					break
+				}
+			}
+			mu.Unlock()
+			if ok {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%v", logged)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitLog("couldn't list running browsers for their debugging ports:")
+	if d.Control("tcp4", "127.0.0.1:9370", nil) == nil {
+		t.Fatal("a failed scan dropped the last process ports")
+	}
+	time.Sleep(1200 * time.Millisecond)
+	mu.Lock()
+	nFail := 0
+	for _, line := range logged {
+		if strings.Contains(line, "couldn't list running browsers for their debugging ports:") {
+			nFail++
+		}
+	}
+	mu.Unlock()
+	if nFail != 1 {
+		t.Fatalf("logged the failure %d times: %v", nFail, logged)
+	}
+	mu.Lock()
+	mode = "ok"
+	mu.Unlock()
+	waitLog("listing running browsers for their debugging ports again")
 }
