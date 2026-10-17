@@ -41,11 +41,25 @@ func readJoinRef(arg string, stdin io.Reader) (string, error) {
 		return line, nil
 	}
 	path := arg[1:]
+	link, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("can't read the join URL: %w", err)
+	}
+	if !link.Mode().IsRegular() {
+		return "", fmt.Errorf("%s isn't a regular file", path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("can't read the join URL: %w", err)
 	}
 	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil || !os.SameFile(link, fi) {
+		return "", fmt.Errorf("%s changed while slicc read it", path)
+	}
+	if err := privateFile(path, fi); err != nil {
+		return "", err
+	}
 	data, err := io.ReadAll(io.LimitReader(f, maxJoinFile+1))
 	if err != nil {
 		return "", fmt.Errorf("can't read the join URL from %s", path)

@@ -45,6 +45,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if isJoinRef(args[0]) {
 		join, err := readJoinRef(args[0], os.Stdin)
+		if err == nil {
+			_, err = joinurl.Parse(join)
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "slicc: %v\n", err)
 			return 2

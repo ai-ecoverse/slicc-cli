@@ -4,8 +4,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/signal/tray"
 )
@@ -88,6 +91,73 @@ func TestJoinURLFromStdinOrAFileIsNeverEchoed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAJoinURLFileMustBePrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes and symlinks")
+	}
+	env := configEnv(t)
+	dir := t.TempDir()
+	open := filepath.Join(dir, "open")
+	if err := os.WriteFile(open, []byte("https://www.sliccy.ai/join/trayx.5e5e5e5e5e5e5e5e\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	private := filepath.Join(dir, "private")
+	if err := os.WriteFile(private, []byte("https://www.sliccy.ai/join/trayx.5e5e5e5e5e5e5e5e\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(private, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ path, want string }{
+		{open, "slicc: " + open + " holds a secret, so others mustn't read it: chmod 600 " + open + "\n"},
+		{link, "slicc: " + link + " isn't a regular file\n"},
+		{dir, "slicc: " + dir + " isn't a regular file\n"},
+	} {
+		out, errOut, code := sliccStdin(t, env, "", "@"+c.path, "follow")
+		if code != 2 || out != "" || errOut != c.want || strings.Contains(errOut, "5e5e5e5e") {
+			t.Fatalf("@%s: code %d, stdout %q, stderr %q (want %q)", c.path, code, out, errOut, c.want)
+		}
+	}
+}
+
+func TestFollowFromStdinKeepsTheJoinURLOutOfItsCommandLine(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc/<pid>/cmdline")
+	}
+	env := configEnv(t)
+	h := newFakeHub(t)
+	tr := h.addTray("follow")
+	h.with(func() { tr.NoLeader = true })
+	cmd := exec.Command(binary, "-", "follow")
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader(h.joinURL(tr) + "\n")
+	var stderr syncBuffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(stderr.String(), "connecting to the tray hub") {
+		if time.Now().After(deadline) {
+			t.Fatalf("follow never dialed:\n%s", stderr.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cmdline, err := os.ReadFile("/proc/" + strconv.Itoa(cmd.Process.Pid) + "/cmdline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00"); len(got) != 3 || got[1] != "-" || got[2] != "follow" {
+		t.Fatalf("cmdline %q", got)
+	}
+	assertRedacted(t, string(cmdline)+stderr.String(), h, tr)
 }
 
 func TestAgentVerbsTakeTheJoinURLFromStdin(t *testing.T) {
