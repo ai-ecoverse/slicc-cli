@@ -71,6 +71,7 @@ export function protectTest(getLink, describe) {
     urlsShown: (browser, from, to) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(from);
+        await c.evaluate("new Promise((resolve) => (document.body ? resolve(true) : addEventListener('DOMContentLoaded', () => resolve(true))))", sessionId);
         await c.send('Page.enable', {}, sessionId);
         await c.send('Network.enable', {}, sessionId);
         const start = c.events.length;
