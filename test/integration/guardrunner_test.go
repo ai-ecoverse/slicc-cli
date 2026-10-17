@@ -25,8 +25,11 @@ import (
 const guardSetVersion = "1.7.12"
 
 func guardSettleScale() int {
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		return 1
+	case "darwin":
+		return 2
 	}
 	return 3
 }
