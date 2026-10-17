@@ -80,6 +80,7 @@ async function runCase (kernel, client, c, n) {
   const env = facade.env
   const hosts = c.hosts === undefined ? undefined : await kernel.readFile('/etc/hosts').catch(() => null)
   if (c.hosts !== undefined) await kernel.writeFile('/etc/hosts', c.hosts)
+  for (const [path, content] of Object.entries(c.files ?? {})) await kernel.writeFile(path, content)
   let stdout = ''
   let stderr = ''
   const started = Date.now()

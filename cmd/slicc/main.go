@@ -22,6 +22,8 @@ usage:
   slicc pair                the same, but only print the pairing URL
   slicc unpair [--all]      list or forget sevens paired with open or pair
   slicc <join-url> follow   follow a seven's tray from this machine
+                            (- or @<file> in place of <join-url> reads it
+                            from stdin or a file, out of sight of ps)
   slicc tray [-a] [-q]      list the slicc processes here that hold a link
   slicc <join-url> prompt <text>
                             send a prompt to seven's agent and stream the answer
@@ -69,6 +71,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "prompt", "watch", "abort":
 		return runAgent(args[0], "", args[1:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
 	default:
+		if isJoinRef(args[0]) {
+			join, err := readJoinRef(args[0], os.Stdin)
+			if err != nil {
+				fmt.Fprintf(stderr, "slicc: %v\n", err)
+				return 2
+			}
+			return joinCommand(append([]string{join}, args[1:]...), stdout, stderr)
+		}
 		if looksLikeURL(args[0]) {
 			return joinCommand(args, stdout, stderr)
 		}

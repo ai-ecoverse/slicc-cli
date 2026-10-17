@@ -106,7 +106,7 @@ type defaultFlags struct {
 }
 
 func isDefault(args []string) bool {
-	return len(args) == 0 || (strings.HasPrefix(args[0], "-") && !quietCommands[args[0]])
+	return len(args) == 0 || (strings.HasPrefix(args[0], "-") && args[0] != "-" && !quietCommands[args[0]])
 }
 
 func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {

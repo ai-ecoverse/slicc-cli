@@ -14,7 +14,7 @@
 | `slicc unpair [<fingerprint> \| --all]` | list or forget the sevens paired with `open` or `pair` |
 | `slicc tray [--json] [-q] [-a]` | list the `slicc` processes on this machine that hold a link: mode, seven, device, state and offers (works now; see [Running links](#running-links-slicc-tray)) |
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
-| `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)) |
+| `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)). `-` or `@<file>` in place of `<join-url>` reads it from stdin or a file, out of sight of `ps` |
 | `slicc <join-url> prompt <text>`, `watch`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-and-abort)) |
 | `slicc <join-url> prompt`, `watch`, `abort` inside seven | the same commands from seven's kernel, as `@ai-ecoverse/wasi-slicc` (works now; see [Inside seven](#inside-seven)) |
 | `slicc tray [url \| rotate \| unlink <device> \| retry]` inside seven | this seven's tray: its state and devices, the join URL on request, rotate it, drop a device, reconnect (see [Inside seven](#inside-seven)) |
@@ -1067,9 +1067,13 @@ A command that can't start exits 127 with the reason on stderr.
 slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]... [--name <name>] [--cdp <url>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
              [--mount <path>[:<name>][:ro]]... [--jerk] [--jerk-seal]
+slicc - follow [flags]
+slicc @<file> follow [flags]
 ```
 
 `follow` links this machine to a seven on another machine through the tray hub (see [Tray hub signaling](#tray-hub-signaling-remote-setup)). It serves the link until interrupted (`SIGINT`, `SIGTERM`) and reconnects when the link drops. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics. The join URL is never printed.
+
+**The join URL off the command line.** On the command line, `ps` shows the join URL to every user of this machine. In its place, `-` reads it from stdin and `@<file>` from a file: the first non-empty line, trimmed. From stdin slicc reads only up to that line's end, so the rest of stdin is left for `prompt -`. The file must be a regular file, not a symlink. On macOS and Linux it must also belong to you and be readable by no one else (`chmod 600`). Exit 2 follows when there's no join URL, when the file can't be read, breaks those rules or is over 64 KiB, or when what's there isn't a join URL. The message names the file but never shows what it holds, inside seven too. `prompt`, `watch` and `abort` take `-` and `@<file>` the same way, inside seven too. There is no environment variable for it, because `--runner`'s processes would inherit it.
 
 **Flags.**
 - `--exit`: offer this machine's network to seven, as `tcp` and `resolve` streams (cap `net`), `http` streams (cap `http`), `ws` streams (cap `ws`) and `udp` streams (cap `udp`) under the remote policy, so public addresses only by default. Without `--exit`, all five are refused with `EOPNOTSUPP`.
@@ -1958,7 +1962,7 @@ How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-
 - **Ties:** at a full tie, a **user flag beats a default rule**, so `--allow 192.168.0.0/16` opens exactly the range it names. Among the user's own flags, deny wins.
 - **Refusal:** `EACCES`.
 
-#### 6.3 Remote default (`slicc exit <join>`)
+#### 6.3 Remote default (`slicc <join-url> follow --exit`)
 
 The node allows public unicast and denies:
 - loopback: `127.0.0.0/8`, `::1/128`;
