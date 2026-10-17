@@ -50,12 +50,16 @@ async function serve (conn, script, entry, save) {
   entry.first = first ? { type: first.type, json: JSON.parse(decoder.decode(first.payload)) } : null
   await save()
   if (script.silent) {
+    entry.settled = true
+    await save()
     await sleep(script.silent)
     await conn.close()
     return
   }
   if (script.garbage) {
     await send(encoder.encode(script.garbage))
+    entry.settled = true
+    await save()
     await sleep(200)
     await conn.close()
     return
@@ -64,6 +68,8 @@ async function serve (conn, script, entry, save) {
   if (script.stall) {
     await sleep(300)
     await send(control({ reset: script.stall }))
+    entry.settled = true
+    await save()
     await sleep(30000)
     await conn.close()
     return
@@ -98,11 +104,15 @@ async function serve (conn, script, entry, save) {
     }
     entry.text = decoder.decode(all)
     entry.closed = true
+    entry.settled = true
+    await save()
     resolveEnd()
   })().catch(error => {
     entry.closed = true
+    entry.settled = true
     entry.readError = String(error?.code ?? error)
     resolveEnd()
+    return save()
   })
   if (script.garbageLater) {
     await sleep(200)
@@ -142,15 +152,34 @@ export default async function main (ctx) {
   const scripts = JSON.parse(decoder.decode(await ctx.fs.readFile(`${dir}/scenario.json`)))
   const listener = await ctx.net.listen({ port: 0 })
   const log = []
-  const save = () => ctx.fs.writeFile(`${dir}/log.json`, JSON.stringify(log))
+  let saves = 0
+  const publish = async (name, text) => {
+    const part = `${dir}/.${name}.${saves++}`
+    await ctx.fs.writeFile(part, text)
+    await ctx.fs.rename(part, `${dir}/${name}`)
+  }
+  let saved = Promise.resolve()
+  let queued = null
+  const save = () => {
+    if (!queued) {
+      queued = saved = saved.catch(() => {}).then(() => {
+        queued = null
+        return publish('log.json', JSON.stringify(log))
+      })
+    }
+    return queued
+  }
   await save()
-  await ctx.fs.writeFile(`${dir}/port`, String(listener.port))
+  await publish('port', String(listener.port))
   for (let n = 0; ; n++) {
     const conn = await listener.accept()
     const script = scripts[Math.min(n, scripts.length - 1)]
     const entry = { records: [], controls: [], bytes: 0, ended: false, closed: false }
     log.push(entry)
-    serve(conn, script, entry, save).catch(error => { entry.error = String(error?.message ?? error) }).finally(save)
+    serve(conn, script, entry, save).catch(error => { entry.error = String(error?.message ?? error) }).finally(() => {
+      entry.settled = true
+      return save()
+    })
     await save()
   }
 }
