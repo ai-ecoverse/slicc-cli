@@ -22,6 +22,8 @@ var gates = []gate{
 	{"npm-publish", "scripts/npm-publish.mjs"},
 	{"sliccy-next", "scripts/sliccy-next.mjs"},
 	{"install-check", "test/integration/testdata/install/check.sh"},
+	{"nightly", "scripts/nightly-gate.mjs"},
+	{"nightly-issue", "scripts/nightly-issue.mjs"},
 }
 
 type gateCall struct {
@@ -45,7 +47,7 @@ func gateCalls(t *testing.T) []gateCall {
 			}
 		}
 	}
-	for _, name := range []string{"ci.yml", "release.yml"} {
+	for _, name := range []string{"ci.yml", "release.yml", "nightly.yml"} {
 		raw, err := os.ReadFile("../../.github/workflows/" + name)
 		if err != nil {
 			t.Fatal(err)

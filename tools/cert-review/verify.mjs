@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   ASSETS,
+  artifactBinding,
+  declaredArtifacts,
   groupVerdict,
   mergedPrs,
   provenanceProblems,
@@ -22,6 +24,9 @@ const { values } = parseArgs({
     run: { type: 'string', default: '' },
     wait: { type: 'string', default: '3600' },
     lines: { type: 'string', default: '' },
+    rebuild: { type: 'string', default: '' },
+    darwin: { type: 'string', default: '' },
+    artifacts: { type: 'string' },
     evidence: { type: 'string', default: '' },
     installer: { type: 'string', default: 'https://get.sliccy.ai/slicc' },
     out: { type: 'string', default: '' },
@@ -37,7 +42,7 @@ const sh = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024, ...opts });
 const gh = (path) => JSON.parse(sh('gh', ['api', path]));
 const ghAll = (path) =>
-  JSON.parse(sh('gh', ['api', '--paginate', '--slurp', path])).flatMap((p) => (Array.isArray(p) ? p : (p.commits ?? [])));
+  JSON.parse(sh('gh', ['api', '--paginate', '--slurp', path])).flatMap((p) => (Array.isArray(p) ? p : (p.commits ?? p.artifacts ?? [])));
 const sha = (bytes, algo = 'sha256', enc = 'hex') => createHash(algo).update(bytes).digest(enc);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const summary = (text) => {
@@ -183,22 +188,33 @@ async function installer(sums) {
   return undefined;
 }
 
+function bound() {
+  if (values.artifacts === undefined) return;
+  try {
+    const since = gh(`repos/${repo}/actions/runs/${values.run}`).run_started_at;
+    const listed = ghAll(`repos/${repo}/actions/runs/${values.run}/artifacts`);
+    missing.push(...artifactBinding({ declared: declaredArtifacts(values.artifacts), listed, since }));
+  } catch (error) {
+    missing.push(`the run's artifacts couldn't be listed: ${one(error.stderr || error.message).slice(0, 200)}`);
+  }
+}
+
 function evidence() {
-  const read = (n) => {
+  const read = (file) => {
     try {
-      return JSON.parse(readFileSync(join(values.evidence, n), 'utf8'));
+      return JSON.parse(readFileSync(file, 'utf8'));
     } catch {
       return undefined;
     }
   };
-  const rebuild = read('rebuild.json');
+  const rebuild = read(values.rebuild || join(values.evidence, 'rebuild.json'));
   facts.rebuild = rebuild;
   if (!rebuild) missing.push('no rebuild from the tag');
   else if (rebuild.sums !== facts.sums && rebuild.releaseSums !== facts.sums)
     missing.push("the rebuild compared another SHA256SUMS than the release's");
   else if (!rebuild.match)
     problems.push(`not reproducible: a git archive of v${version} builds different ${rebuild.differ.join(', ')}`);
-  const darwin = read('darwin.json');
+  const darwin = read(values.darwin || join(values.evidence, 'darwin.json'));
   facts.darwin = darwin;
   if (!darwin) missing.push('no darwin signature check');
   else
@@ -243,6 +259,7 @@ if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) {
 }
 const packages = releasePackages(version).filter((p) => process.env[p.gate] === 'true' || process.env[p.gate] === undefined);
 const skipped = releasePackages(version).filter((p) => !packages.some((q) => q.name === p.name));
+bound();
 try {
   tagCommit();
   const { sums } = githubRelease();

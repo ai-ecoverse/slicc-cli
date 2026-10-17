@@ -120,6 +120,33 @@ func manifestOf(sums string, files map[string]string, packages map[string]string
 	return map[string]any{"version": "1.2.4-pr.7.1", "sums": sums, "files": files, "packages": pk, "problems": []string{}}
 }
 
+const certRunStart = "2026-01-01T10:00:00Z"
+
+func certArtifact(id int, name string) map[string]any {
+	return map[string]any{"id": id, "name": name, "digest": "sha256:" + shaHex([]byte(name)), "created_at": "2026-01-01T10:05:00Z"}
+}
+
+func declared(arts []map[string]any) string {
+	parts := []string{}
+	for _, a := range arts {
+		parts = append(parts, fmt.Sprintf("%v=%v:%s", a["name"], a["id"], strings.TrimPrefix(a["digest"].(string), "sha256:")))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func withRun(routes map[string]any, arts []map[string]any) map[string]any {
+	if routes == nil {
+		routes = map[string]any{}
+	}
+	routes["/repos/ai-ecoverse/slicc-cli/actions/runs/1"] = map[string]any{"run_attempt": 1, "run_started_at": certRunStart}
+	routes["/repos/ai-ecoverse/slicc-cli/actions/runs/1/artifacts"] = map[string]any{"total_count": len(arts), "artifacts": arts}
+	return routes
+}
+
+func buildArtifacts() []map[string]any {
+	return []map[string]any{certArtifact(201, "cert-build-candidate-1.2.4-pr.7.1"), certArtifact(202, "cert-build-base-1.2.4-pr.7.1")}
+}
+
 func onlyStatus(t *testing.T, f *certAPI) map[string]any {
 	t.Helper()
 	got := f.posted()
@@ -151,8 +178,9 @@ func TestCertReviewClassifiesAPullRequestByWhatShips(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			f := newCertAPI(t, nil)
-			r := certTool(t, f.srv.URL, "pr.mjs", "classify", "--pr", "7", "--head", "fake-head-0001", "--labels", c.labels, "--forced", c.forced, "--run", "1", "--base-manifest", same, "--candidate-manifest", c.candidate)
+			arts := buildArtifacts()
+			f := newCertAPI(t, withRun(nil, arts))
+			r := certTool(t, f.srv.URL, "pr.mjs", "classify", "--pr", "7", "--head", "fake-head-0001", "--labels", c.labels, "--forced", c.forced, "--run", "1", "--artifacts", declared(arts), "--base-manifest", same, "--candidate-manifest", c.candidate)
 			if r.code != c.exit {
 				t.Fatalf("exit %d, want %d:\n%s", r.code, c.exit, r.out)
 			}
@@ -358,6 +386,8 @@ func TestCertReviewTheNegativeFailsOnMainAndPassesOnThePullRequest(t *testing.T)
 
 type recordCase struct {
 	name, key, state, want string
+	downloads              string
+	artifacts              func(arts []map[string]any) []map[string]any
 	verdict                any
 	mutate                 func(dir string)
 	rebuildMatch           bool
@@ -389,6 +419,23 @@ func TestCertReviewRecordCertifiesOnlyTheBytesItBuiltWithEveryPieceOfEvidence(t 
 		{name: "a known issue that doesn't exist", key: "true", state: "error", want: "known issue ai-ecoverse/slicc-cli#404 not found", verdict: map[string]any{"verdict": "certified", "known": []string{"#404"}}, rebuildMatch: true, runs: green},
 		{name: "the known-issue list can't be read", key: "true", state: "error", want: "the known issues couldn't be read", verdict: certified, rebuildMatch: true, noIssues: true, runs: green},
 		{name: "the reviewer failed it", key: "true", state: "failure", want: "the reviewer: leaks the token", verdict: map[string]any{"verdict": "fail", "reason": "leaks the token"}, rebuildMatch: true, runs: green},
+		{name: "a planted artifact that no producer declared", key: "true", state: "error", want: "cert-review-suite-base-1.2.4-pr.7.1 (artifact 299) is in the run, but no producer declared it", verdict: certified, rebuildMatch: true, runs: green, artifacts: func(arts []map[string]any) []map[string]any {
+			return append(arts, certArtifact(299, "cert-review-suite-base-1.2.4-pr.7.1"))
+		}},
+		{name: "an artifact whose digest isn't its producer's", key: "true", state: "error", want: "cert-review-suite-base-1.2.4-pr.7.1's digest is sha256:" + shaHex([]byte("fake-forged")) + ", its producer said sha256:" + shaHex([]byte("cert-review-suite-base-1.2.4-pr.7.1")), verdict: certified, rebuildMatch: true, runs: green, artifacts: func(arts []map[string]any) []map[string]any {
+			arts[5]["digest"] = "sha256:" + shaHex([]byte("fake-forged"))
+			return arts
+		}},
+		{name: "an artifact under its producer's id with another name", key: "true", state: "error", want: "artifact 203 is cert-review-delta-1.2.4-pr.7.1, its producer declared cert-review-rebuild-1.2.4-pr.7.1", verdict: certified, rebuildMatch: true, runs: green, artifacts: func(arts []map[string]any) []map[string]any {
+			arts[2]["name"] = "cert-review-delta-1.2.4-pr.7.1"
+			return arts
+		}},
+		{name: "a download that failed its digest check", key: "true", state: "error", want: "the suite-base artifact didn't download whole (failure: a digest mismatch or an unknown id)", verdict: certified, rebuildMatch: true, runs: green, downloads: "verdict=success,build=success,delta=success,rebuild=success,suite-candidate=success,suite-base=failure"},
+		{name: "an earlier attempt's leftover is neither evidence nor an alarm", key: "true", state: "success", want: "certified ai-ecoverse/slicc-cli PR #7", verdict: certified, rebuildMatch: true, runs: green, artifacts: func(arts []map[string]any) []map[string]any {
+			old := certArtifact(150, "cert-review-suite-base-1.2.4-pr.7.1")
+			old["created_at"] = "2026-01-01T09:59:59Z"
+			return append(arts, old)
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { recordOnce(t, c) })
@@ -458,9 +505,21 @@ func recordOnce(t *testing.T, c recordCase) {
 	if c.noIssues {
 		delete(routes, "/repos/ai-ecoverse/slicc-cli/issues")
 	}
-	f := newCertAPI(t, routes)
+	arts := buildArtifacts()
+	for i, n := range []string{"cert-review-rebuild", "cert-review-delta", "cert-review-suite-candidate", "cert-review-suite-base", "cert-verdict", "cert-evidence"} {
+		arts = append(arts, certArtifact(203+i, n+"-1.2.4-pr.7.1"))
+	}
+	declare := declared(arts)
+	if c.artifacts != nil {
+		arts = c.artifacts(arts)
+	}
+	downloads := "verdict=success, build=success, delta=success, rebuild=success, suite-candidate=success, suite-base=success"
+	if c.downloads != "" {
+		downloads = c.downloads
+	}
+	f := newCertAPI(t, withRun(routes, arts))
 	out := filepath.Join(dir, "record")
-	r := certTool(t, f.srv.URL, "record.mjs", "--version", "1.2.4-pr.7.1", "--pr", "7", "--head", "fake-head-0007", "--commit", "fake-merge-0007", "--run", "https://example.invalid/run/1", "--artifact", art, "--sums", sumsSHA, "--findings", findings, "--review", review, "--jobs", "build=success,rebuild=success,delta=success,suite=success", "--key", c.key, "--out", out)
+	r := certTool(t, f.srv.URL, "record.mjs", "--version", "1.2.4-pr.7.1", "--pr", "7", "--head", "fake-head-0007", "--commit", "fake-merge-0007", "--run", "https://example.invalid/run/1", "--run-id", "1", "--artifacts", declare, "--downloads", downloads, "--artifact", art, "--sums", sumsSHA, "--findings", findings, "--review", review, "--jobs", "build=success,rebuild=success,delta=success,suite=success", "--key", c.key, "--out", out)
 	var rec struct {
 		State string `json:"state"`
 		Line  string `json:"line"`
@@ -651,5 +710,81 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 	}
 	if !strings.Contains(jobs["guard"], "          paths: |\n"+strings.Join(paths, "\n")+"\n") {
 		t.Fatal("the self-guard's paths must equal REVIEWER_GLOBS")
+	}
+}
+
+func TestCertReviewClassifiesOnlyTheBuildsItsProducersDeclared(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{"SHA256SUMS": "fake-sums-1", "slicc-linux-amd64": "fake-bin-1", "slicc-wasip1-wasm.wasm": "fake-wasm-1"}
+	base := writeJSON(t, filepath.Join(dir, "base.json"), manifestOf("fake-sums-1", files, map[string]string{"@ai-ecoverse/slicc": "fake-tgz-1"}))
+	forged := writeJSON(t, filepath.Join(dir, "forged.json"), manifestOf("fake-sums-1", files, map[string]string{"@ai-ecoverse/slicc": "fake-tgz-1"}))
+	cases := []struct {
+		name, want string
+		mutate     func(arts []map[string]any) []map[string]any
+	}{
+		{"a planted artifact", "cert-review-suite-base-1.2.4-pr.7.1 (artifact 299) is in the run, but no producer declared it", func(arts []map[string]any) []map[string]any {
+			return append(arts, certArtifact(299, "cert-review-suite-base-1.2.4-pr.7.1"))
+		}},
+		{"a base build whose digest isn't its producer's", "cert-build-base-1.2.4-pr.7.1's digest is sha256:" + shaHex([]byte("fake-forged")), func(arts []map[string]any) []map[string]any {
+			arts[1]["digest"] = "sha256:" + shaHex([]byte("fake-forged"))
+			return arts
+		}},
+		{"the run's artifacts can't be listed", "the run's artifacts couldn't be listed", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			arts := buildArtifacts()
+			declare := declared(arts)
+			routes := map[string]any{}
+			if c.mutate != nil {
+				routes = withRun(routes, c.mutate(arts))
+			}
+			f := newCertAPI(t, routes)
+			r := certTool(t, f.srv.URL, "pr.mjs", "classify", "--pr", "7", "--head", "fake-head-0001", "--labels", "merge-ok", "--run", "1", "--artifacts", declare, "--base-manifest", base, "--candidate-manifest", forged)
+			s := onlyStatus(t, f)
+			if r.code != 1 || s["state"] != "error" || !strings.HasPrefix(s["description"].(string), "INCOMPLETE: ") || !strings.Contains(r.out, c.want) || r.outputs["go"] != "" {
+				t.Fatalf("identical builds from unbound artifacts must never be not behaviour: exit %d, status %v\n%s", r.code, s, r.out)
+			}
+		})
+	}
+}
+
+func TestCertReviewGathersEachProducersOwnEvidenceOnly(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "art")
+	put := func(name, body string) {
+		p := filepath.Join(in, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("delta/delta.json", `{"row":"fake-delta"}`)
+	put("rebuild/rebuild.json", `{"match":true}`)
+	put("suite-candidate/candidate.json", `{"fake":"candidate"}`)
+	put("suite-candidate/candidate.log", "fake-candidate-log")
+	put("suite-candidate/prev.json", `{"fake":"forged negative"}`)
+	put("suite-candidate/rebuild.json", `{"fake":"forged rebuild"}`)
+	put("suite-base/prev.json", `{"fake":"main"}`)
+	put("suite-base/prev.retry.jsonl", "fake-retry")
+	out := filepath.Join(dir, "evidence")
+	r := certTool(t, "", "gather.mjs", "--in", in, "--downloads", "delta=success, rebuild=failure, suite-candidate=success, suite-base=success", "--out", out)
+	if r.code != 0 {
+		t.Fatalf("exit %d:\n%s", r.code, r.out)
+	}
+	want := map[string]string{"delta.json": `{"row":"fake-delta"}`, "candidate.json": `{"fake":"candidate"}`, "prev.json": `{"fake":"main"}`, "logs/candidate.log": "fake-candidate-log", "logs/prev.retry.jsonl": "fake-retry"}
+	got := map[string]string{}
+	_ = filepath.Walk(out, func(p string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			rel, _ := filepath.Rel(out, p)
+			data, _ := os.ReadFile(p)
+			got[filepath.ToSlash(rel)] = string(data)
+		}
+		return nil
+	})
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("a producer's artifact gives only its own evidence, and a failed download none:\n got %v\nwant %v\n%s", got, want, r.out)
 	}
 }

@@ -466,3 +466,46 @@ export function releaseNotes(body, lines) {
 export function notarized(answers) {
   return answers.some((a) => a.exit === 0 && /source=Notarized Developer ID/.test(a.output) && /\baccepted\b/.test(a.output));
 }
+
+const DECLARED = /^([\w.+-]+)=(\d*):(?:sha256:)?([0-9a-f]*)$/;
+const hexOf = (d) => String(d ?? '').trim().toLowerCase().replace(/^sha256:/, '');
+
+export function declaredArtifacts(text) {
+  return String(text ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((raw) => {
+      const m = DECLARED.exec(raw);
+      return m ? { name: m[1], id: m[2], digest: m[3] } : { raw };
+    });
+}
+
+export function artifactBinding({ declared, listed, since, prefix = 'cert-' }) {
+  const problems = [];
+  const ids = new Set();
+  if (!declared.length) problems.push('no producer declared its artifacts');
+  for (const d of declared) {
+    if (d.raw !== undefined) {
+      problems.push(`the artifact declaration "${d.raw}" isn't name=id:digest`);
+      continue;
+    }
+    if (!d.id) continue;
+    ids.add(d.id);
+    const a = listed.find((x) => String(x.id) === d.id);
+    if (!a) {
+      problems.push(`${d.name}: its producer's artifact ${d.id} isn't in the run`);
+      continue;
+    }
+    if (a.name !== d.name) problems.push(`artifact ${d.id} is ${a.name}, its producer declared ${d.name}`);
+    if (!d.digest || hexOf(a.digest) !== d.digest)
+      problems.push(`${d.name}'s digest is ${a.digest || 'missing'}, its producer said ${d.digest ? `sha256:${d.digest}` : 'nothing'}`);
+  }
+  const start = Date.parse(since ?? '');
+  for (const a of listed) {
+    if (!String(a.name ?? '').startsWith(prefix) || ids.has(String(a.id))) continue;
+    if (Number.isFinite(start) && Date.parse(a.created_at ?? '') < start) continue;
+    problems.push(`${a.name} (artifact ${a.id}) is in the run, but no producer declared it`);
+  }
+  return problems;
+}
