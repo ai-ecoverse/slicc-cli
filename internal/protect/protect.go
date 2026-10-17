@@ -103,14 +103,30 @@ func unwrap(u *whatwg.Url) *whatwg.Url {
 	return u
 }
 
+func alias(u *whatwg.Url) *whatwg.Url {
+	if u == nil || scheme(u) != "about" || rules.AboutScheme == "" {
+		return u
+	}
+	if slices.Contains(rules.Inheriting, "about:"+strings.ToLower(u.Pathname())) {
+		return u
+	}
+	if a := parse(rules.AboutScheme + "://" + u.Pathname() + u.Search() + u.Hash()); a != nil {
+		return a
+	}
+	return u
+}
+
 func (o *Origins) URL(raw string) bool {
-	u := unwrap(parse(raw))
+	u := alias(unwrap(parse(raw)))
 	if u == nil {
 		return false
 	}
 	s := scheme(u)
 	if slices.Contains(rules.AnySchemes, s) {
 		return true
+	}
+	if slices.Contains(rules.ProtectedSchemes, s) {
+		return !slices.Contains(rules.SchemeExceptions, s+"://"+hostOf(u))
 	}
 	if slices.Contains(rules.Schemes, s) {
 		h := hostOf(u)
@@ -135,7 +151,14 @@ func Inheriting(raw string) bool {
 	return u != nil && scheme(u) == "about" && slices.Contains(rules.Inheriting, "about:"+strings.ToLower(u.Pathname()))
 }
 
-func (o *Origins) Target(raw string, previous bool, opener Opener) bool {
+func HiddenType(typ string) bool {
+	return typ != "" && slices.Contains(rules.TargetTypes, typ)
+}
+
+func (o *Origins) Target(raw, typ string, previous bool, opener Opener) bool {
+	if HiddenType(typ) {
+		return true
+	}
 	if Inheriting(raw) {
 		return previous || opener == OpenerProtected || opener == OpenerUnknown
 	}

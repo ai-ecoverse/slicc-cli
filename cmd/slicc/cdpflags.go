@@ -92,7 +92,7 @@ func followBrowsers(n *node.Node, r *capcdp.Registry, status func(string, ...any
 	for _, b := range r.List() {
 		ids = append(ids, b.ID)
 	}
-	status("cdp on (%s): seven gets full control of these browsers, except tabs, cookies and storage on sliccy.ai", strings.Join(ids, ", "))
+	status("cdp on (%s): seven gets full control of these browsers, except tabs, cookies and storage on sliccy.ai and the browser's privileged pages", strings.Join(ids, ", "))
 }
 
 func serveBrowsers(ctx context.Context, n *node.Node, r *capcdp.Registry) {

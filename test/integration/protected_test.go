@@ -33,7 +33,7 @@ func TestProtectedVectors(t *testing.T) {
 		if !ok {
 			t.Fatalf("target vector %+v: unknown opener", c)
 		}
-		if got := o.Target(c.URL, c.Previous, op); got != c.Protected {
+		if got := o.Target(c.URL, c.Type, c.Previous, op); got != c.Protected {
 			t.Errorf("Target(%+v) = %v", c, got)
 		}
 	}
