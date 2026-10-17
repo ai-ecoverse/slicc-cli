@@ -19,6 +19,7 @@ const ProtectedPortsEnv = "SLICC_PROTECTED_PORTS"
 var (
 	watchEvery   = 5 * time.Second
 	processEvery = time.Second
+	processIdle  = 30 * time.Second
 )
 
 const (
@@ -90,23 +91,56 @@ type liveScan struct {
 	ctx    context.Context
 	o      Options
 	logf   func(string, ...any)
-	every  time.Duration
+	stale  time.Duration
+	idle   time.Duration
 	mu     sync.Mutex
 	proc   []uint16
+	procAt time.Time
+	busy   bool
 	failed bool
 }
 
-func (s *liveScan) ports() []uint16 {
+func (s *liveScan) snapshot() []uint16 {
 	s.mu.Lock()
 	proc := s.proc
 	s.mu.Unlock()
 	return union(ActivePorts(s.o), proc)
 }
 
+func (s *liveScan) ports() []uint16 {
+	s.kickIfStale()
+	return s.snapshot()
+}
+
+func (s *liveScan) kickIfStale() {
+	stale := s.stale
+	if stale <= 0 {
+		stale = processEvery
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.busy {
+		return
+	}
+	if !s.procAt.IsZero() && time.Since(s.procAt) < stale {
+		return
+	}
+	s.busy = true
+	go s.refreshDone()
+}
+
+func (s *liveScan) refreshDone() {
+	s.refresh()
+	s.mu.Lock()
+	s.busy = false
+	s.mu.Unlock()
+}
+
 func (s *liveScan) refresh() {
 	ports, err := ProcessPorts(s.ctx, s.o)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.procAt = time.Now()
 	if err != nil {
 		if s.ctx.Err() != nil {
 			return
@@ -127,19 +161,19 @@ func (s *liveScan) refresh() {
 	}
 }
 
-func (s *liveScan) loop() {
-	every := s.every
-	if every <= 0 {
-		every = processEvery
+func (s *liveScan) idleLoop() {
+	idle := s.idle
+	if idle <= 0 {
+		idle = processIdle
 	}
-	t := time.NewTicker(every)
+	t := time.NewTicker(idle)
 	defer t.Stop()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
-			s.refresh()
+			s.kickIfStale()
 		}
 	}
 }
@@ -149,10 +183,10 @@ func Guard(ctx context.Context, pol *policy.Policy, o Options, given, exposed []
 	if err != nil {
 		return err
 	}
-	procEvery, fileEvery := processEvery, watchEvery
-	scan := &liveScan{ctx: ctx, o: o, logf: logf, every: procEvery}
+	stale, idle, fileEvery := processEvery, processIdle, watchEvery
+	scan := &liveScan{ctx: ctx, o: o, logf: logf, stale: stale, idle: idle}
 	scan.refresh()
-	found := union(ports, scan.ports())
+	found := union(ports, scan.snapshot())
 	for _, p := range exposed {
 		switch {
 		case slices.Contains(given, p):
@@ -164,7 +198,7 @@ func Guard(ctx context.Context, pol *policy.Policy, o Options, given, exposed []
 	report := func(p uint16) { logf("denied new debugging port %d on every address of this machine", p) }
 	pol.Guard(policy.DebugPorts{Found: found, Given: given, Exposed: exposed})
 	pol.Live(scan.ports, report)
-	go scan.loop()
+	go scan.idleLoop()
 	go func() {
 		t := time.NewTicker(fileEvery)
 		defer t.Stop()
@@ -174,7 +208,7 @@ func Guard(ctx context.Context, pol *policy.Policy, o Options, given, exposed []
 				return
 			case <-t.C:
 			}
-			for _, p := range scan.ports() {
+			for _, p := range scan.snapshot() {
 				if pol.GuardPort(p) {
 					report(p)
 				}

@@ -245,8 +245,28 @@ func (d *debugPorts) lateBrowsers(t *testing.T, p *page) {
 			t.Fatal("the fake browser never wrote DevToolsActivePort")
 		}
 	}
-	time.Sleep(1100 * time.Millisecond)
-	refusedOverLink(t, p, d.proc, own)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var last echoResult
+		hosts := []string{"127.0.0.1"}
+		ok := true
+		for _, port := range []int{d.proc, own} {
+			for _, host := range hosts {
+				p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "tcp", "host": host, "port": port})+")", &last)
+				if last.Reset != "EACCES" {
+					ok = false
+				}
+			}
+		}
+		if ok {
+			refusedOverLink(t, p, d.proc, own)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("late process debugging ports still reachable: %+v", last)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func TestAttachDeniesTheHostsDebuggingPorts(t *testing.T) {
@@ -386,10 +406,12 @@ func TestProcessListScanRunsInTheBackground(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := policy.NewDialer(pol)
+	time.Sleep(1100 * time.Millisecond)
+	_ = d.Control("tcp4", "127.0.0.1:9400", nil)
 	deadline := time.Now().Add(3 * time.Second)
 	for calls.Load() < 2 {
 		if time.Now().After(deadline) {
-			t.Fatal("the background refresh never started a second scan")
+			t.Fatal("a connect never started a background scan")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -453,10 +475,14 @@ func TestProcessListScanReportsFailures(t *testing.T) {
 	mu.Lock()
 	mode = "late"
 	mu.Unlock()
-	time.Sleep(1200 * time.Millisecond)
+	time.Sleep(1100 * time.Millisecond)
+	_ = d.Control("tcp4", "127.0.0.1:9400", nil)
+	time.Sleep(200 * time.Millisecond)
 	mu.Lock()
 	mode = "fail"
 	mu.Unlock()
+	time.Sleep(1100 * time.Millisecond)
+	_ = d.Control("tcp4", "127.0.0.1:9400", nil)
 	waitLog := func(want string) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)
@@ -498,5 +524,74 @@ func TestProcessListScanReportsFailures(t *testing.T) {
 	mu.Lock()
 	mode = "late"
 	mu.Unlock()
+	time.Sleep(1100 * time.Millisecond)
+	_ = d.Control("tcp4", "127.0.0.1:9400", nil)
 	waitLog("listing running browsers for their debugging ports again")
+}
+
+func TestProcessListScanIdlesQuietly(t *testing.T) {
+	t.Setenv(browser.DiscoveryEnv, "isolated")
+	t.Setenv(browser.ProtectedPortsEnv, "9300")
+	home := t.TempDir()
+	var calls atomic.Int32
+	table := debugProcessTable(t, func() string {
+		calls.Add(1)
+		return "21 /opt/chrome --remote-debugging-port=9370\n"
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := browser.Guard(ctx, policy.Local(), browser.Options{Home: home, Processes: table}, nil, nil, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Second)
+	if n := calls.Load(); n > 2 {
+		t.Fatalf("idle Guard scanned the process list %d times in 5 s", n)
+	}
+}
+
+func TestProcessListScanShutdownSkipsFailure(t *testing.T) {
+	t.Setenv(browser.DiscoveryEnv, "isolated")
+	t.Setenv(browser.ProtectedPortsEnv, "9300")
+	home := t.TempDir()
+	started := make(chan struct{})
+	var once sync.Once
+	table := func(ctx context.Context) ([]byte, error) {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var logged []string
+	var mu sync.Mutex
+	logf := func(format string, a ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, a...))
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- browser.Guard(ctx, policy.Local(), browser.Options{Home: home, Processes: table}, nil, nil, logf)
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the initial scan never started")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Guard never returned")
+	}
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	for _, line := range logged {
+		if strings.Contains(line, "couldn't list running browsers") {
+			t.Fatalf("logged on shutdown: %v", logged)
+		}
+	}
 }
