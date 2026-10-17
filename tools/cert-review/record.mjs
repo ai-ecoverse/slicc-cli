@@ -165,10 +165,15 @@ async function stillOpen(entry) {
   if (!m) return false;
   try {
     const r = await fetch(`${API}/repos/${m[1]}/issues/${m[2]}`, { headers });
-    if (!r.ok) return true;
+    if (r.status === 404) {
+      missing.push(`known issue ${entry} not found`);
+      return false;
+    }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return (await r.json()).state === 'open';
-  } catch {
-    return true;
+  } catch (error) {
+    missing.push(`known issue ${entry} couldn't be read: ${one(error.message)}`);
+    return false;
   }
 }
 
@@ -180,7 +185,7 @@ async function knownList(review) {
       .filter((i) => !i.pull_request)
       .map((i) => `${repo}#${i.number}`);
   } catch (error) {
-    problems.push(`the known issues couldn't be read: ${one(error.message)}`);
+    missing.push(`the known issues couldn't be read: ${one(error.message)}`);
   }
   const out = [];
   for (const e of knownLine(repo, [...labelled, ...listed, ...(review?.known ?? [])]))
@@ -200,8 +205,8 @@ try {
 codedFindings();
 await ci();
 const review = readVerdict();
-const incomplete = withMissing(jobsEvidence(`${values.jobs},review=${values['review-result']}`), missing);
 const known = await knownList(review);
+const incomplete = withMissing(jobsEvidence(`${values.jobs},review=${values['review-result']}`), missing);
 const ci_ = values.run ? `ci: ${values.run}` : 'ci: local';
 const tag = `${NAME} PR #${pr} at ${values.head.slice(0, 12)}`;
 const gap = gaps.length ? `; test gaps: ${gaps.join(', ')}` : '';

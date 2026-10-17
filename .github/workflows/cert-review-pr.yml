@@ -442,10 +442,10 @@ jobs:
         with:
           node-version: 24
 
-      - name: gh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: tools/cert-review/gh.sh
+      - name: The runner's own gh, for the reviewer's read-only gh calls (none is ever downloaded here)
+        run: |
+          if ! command -v gh > /dev/null; then echo "::error::no gh on this runner: the review is INCOMPLETE"; exit 1; fi
+          gh --version
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         continue-on-error: true
@@ -466,7 +466,6 @@ jobs:
           printf '%s\n' "$BEHAVIOUR" | tr ',' '\n' > "$ev/classify.txt"
           node tools/cert-review/findings.mjs --delta "$ev/delta.json" --candidate "$ev/candidate.json" \
             --prev "$ev/prev.json" --rebuild "$ev/rebuild.json" --out "$ev/findings.json"
-          cp "$ev/findings.json" "$RUNNER_TEMP/cert-review/findings.json"
           {
             echo 'prompt<<CERT_PROMPT_END'
             EVIDENCE="$ev" OUT="$RUNNER_TEMP/cert-review" node tools/cert-review/prompt.mjs
@@ -513,7 +512,6 @@ jobs:
           path: |
             ${{ runner.temp }}/cert-review/verdict.json
             ${{ runner.temp }}/cert-review/comment.md
-            ${{ runner.temp }}/cert-review/findings.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -573,13 +571,23 @@ jobs:
           name: cert-build-candidate-${{ needs.plan.outputs.version }}
           path: ${{ runner.temp }}/build
 
-      - name: The line, from the build, the findings, CI's results on the head and the verdict
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        continue-on-error: true
+        with:
+          pattern: cert-review-*-${{ needs.plan.outputs.version }}
+          path: ${{ runner.temp }}/evidence
+          merge-multiple: true
+
+      - name: The line, from the build, the findings recomputed here from the code-made evidence, CI's results on the head and the verdict
         id: record
         run: |
-          mkdir -p "$RUNNER_TEMP/cert-review" "$RUNNER_TEMP/build"
+          mkdir -p "$RUNNER_TEMP/cert-review" "$RUNNER_TEMP/build" "$RUNNER_TEMP/evidence"
+          ev="$RUNNER_TEMP/evidence"
+          node tools/cert-review/findings.mjs --delta "$ev/delta.json" --candidate "$ev/candidate.json" \
+            --prev "$ev/prev.json" --rebuild "$ev/rebuild.json" --out "$RUNNER_TEMP/findings.json"
           if node tools/cert-review/record.mjs --version "$VERSION" --repo "$GITHUB_REPOSITORY" --pr "$PR" \
             --head "$HEAD_SHA" --commit "$COMMIT" --run "$RUN_URL" --artifact "$RUNNER_TEMP/build" --sums "$SUMS" \
-            --findings "$RUNNER_TEMP/cert-review/findings.json" --review "$RUNNER_TEMP/cert-review" \
+            --findings "$RUNNER_TEMP/findings.json" --review "$RUNNER_TEMP/cert-review" \
             --review-result "$REVIEW" --jobs "$JOBS" --key "${KEY:-false}" --ci-wait 3600 --out "$RUNNER_TEMP/record"; then
             echo "conclusion=success" >> "$GITHUB_OUTPUT"
           else

@@ -167,20 +167,46 @@ func TestCertReviewClassifiesAPullRequestByWhatShips(t *testing.T) {
 	}
 }
 
+type planCase struct {
+	name, action, label, guard, state, build, forced string
+	files                                            []map[string]any
+	head                                             []map[string]any
+	runStatus                                        string
+}
+
 func TestCertReviewPlanBuildsOnlyOnTheEventsThatMatter(t *testing.T) {
-	routes := map[string]any{"/repos/ai-ecoverse/slicc-cli/pulls/7/files": []map[string]any{{"filename": "cmd/slicc/main.go"}, {"filename": "tools/cert-review/lib.mjs"}, {"filename": ".github/workflows/release.yml"}}}
-	cases := []struct {
-		name, action, label, guard, state, build string
-	}{
-		{"a push", "synchronize", "", "PASS", "pending", "true"},
-		{"merge-ok added", "labeled", "merge-ok", "PASS", "pending", "true"},
-		{"another label", "labeled", "bug", "PASS", "", "false"},
-		{"ready for review", "ready_for_review", "", "PASS", "", "false"},
-		{"the self-guard refused", "synchronize", "", "FAIL", "failure", "false"},
-		{"the self-guard didn't finish", "synchronize", "", "", "error", "false"},
+	files := func(names ...string) []map[string]any {
+		out := []map[string]any{}
+		for _, n := range names {
+			out = append(out, map[string]any{"filename": n})
+		}
+		return out
+	}
+	statuses := "/repos/ai-ecoverse/slicc-cli/commits/fake-head-0001/statuses"
+	pending := []map[string]any{{"context": "cert-review", "state": "pending", "target_url": "https://github.com/ai-ecoverse/slicc-cli/actions/runs/5"}}
+	cases := []planCase{
+		{name: "a push", action: "synchronize", guard: "PASS", state: "pending", build: "true", forced: "tools/cert-review/lib.mjs,.github/workflows/release.yml", files: files("cmd/slicc/main.go", "tools/cert-review/lib.mjs", ".github/workflows/release.yml")},
+		{name: "merge-ok added", action: "labeled", label: "merge-ok", guard: "PASS", state: "pending", build: "true", files: files("cmd/slicc/main.go")},
+		{name: "another label", action: "labeled", label: "bug", guard: "PASS", build: "false", files: files("cmd/slicc/main.go")},
+		{name: "ready for review", action: "ready_for_review", guard: "PASS", build: "false", files: files("cmd/slicc/main.go")},
+		{name: "the self-guard refused", action: "synchronize", guard: "FAIL", state: "failure", build: "false", files: files("tools/cert-review/lib.mjs")},
+		{name: "the self-guard didn't finish", action: "synchronize", state: "error", build: "false", files: files("cmd/slicc/main.go")},
+		{name: "the approval label on a pull request that doesn't change the reviewer plans again", action: "labeled", label: "cert-review-approved", guard: "PASS", state: "pending", build: "true", files: files("cmd/slicc/main.go")},
+		{name: "another label finds a pending status whose run ended", action: "labeled", label: "bug", guard: "PASS", state: "error", build: "false", files: files("cmd/slicc/main.go"), head: pending, runStatus: "completed"},
+		{name: "another label leaves a pending status whose run is still going", action: "labeled", label: "bug", guard: "PASS", build: "false", files: files("cmd/slicc/main.go"), head: pending, runStatus: "in_progress"},
+	}
+	for _, path := range []string{"scripts/npm-publish.mjs", "scripts/package.sh", "scripts/release-plan.mjs", "scripts/go-major.mjs", "scripts/go-warm.sh", "scripts/sliccy-next.mjs", "scripts/npm-stage.mjs", "install.sh", "npm/slicc.js", "npm/wasi-slicc/host/slicc-host.mjs", ".releaserc.json", ".github/workflows/ci.yml", ".github/runner.mjs"} {
+		cases = append(cases, planCase{name: "always behaviour: " + path, action: "synchronize", guard: "PASS", state: "pending", build: "true", forced: path, files: files(path, "README.md")})
+	}
+	for _, path := range []string{"README.md", "cmd/slicc/main.go", "go.mod", "package.json", "test/integration/cli_test.go"} {
+		cases = append(cases, planCase{name: "by build output: " + path, action: "synchronize", guard: "PASS", state: "pending", build: "true", forced: "", files: files(path)})
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			routes := map[string]any{"/repos/ai-ecoverse/slicc-cli/pulls/7/files": c.files, "/repos/ai-ecoverse/slicc-cli/actions/runs/5": map[string]any{"status": c.runStatus}}
+			if c.head != nil {
+				routes[statuses] = c.head
+			}
 			f := newCertAPI(t, routes)
 			r := certTool(t, f.srv.URL, "pr.mjs", "plan", "--pr", "7", "--head", "fake-head-0001", "--action", c.action, "--label", c.label, "--labels", "merge-ok", "--run", "1", "--guard", c.guard)
 			if r.code != 0 {
@@ -193,8 +219,8 @@ func TestCertReviewPlanBuildsOnlyOnTheEventsThatMatter(t *testing.T) {
 			if r.outputs["build"] != c.build {
 				t.Fatalf("build=%q, want %q", r.outputs["build"], c.build)
 			}
-			if c.build == "true" && r.outputs["forced"] != "tools/cert-review/lib.mjs,.github/workflows/release.yml" {
-				t.Fatalf("forced=%q", r.outputs["forced"])
+			if c.build == "true" && r.outputs["forced"] != c.forced {
+				t.Fatalf("forced=%q, want %q", r.outputs["forced"], c.forced)
 			}
 		})
 	}
@@ -335,6 +361,8 @@ type recordCase struct {
 	verdict                any
 	mutate                 func(dir string)
 	rebuildMatch           bool
+	incomplete             bool
+	noIssues               bool
 	runs                   []map[string]any
 }
 
@@ -353,10 +381,13 @@ func TestCertReviewRecordCertifiesOnlyTheBytesItBuiltWithEveryPieceOfEvidence(t 
 		{name: "swapped bytes", key: "true", state: "failure", want: "slicc-linux-amd64 re-hashes to", verdict: certified, rebuildMatch: true, runs: green, mutate: func(dir string) {
 			_ = os.WriteFile(filepath.Join(dir, "release", "slicc-linux-amd64"), []byte("fake-other-bytes"), 0o644)
 		}},
-		{name: "not reproducible", key: "true", state: "failure", want: "not reproducible: a git archive of the merge commit builds different slicc-linux-amd64", verdict: certified, rebuildMatch: false, runs: green},
+		{name: "not reproducible, whatever the reviewer's folder says", key: "true", state: "failure", want: "not reproducible: a git archive of the merge commit builds different slicc-linux-amd64", verdict: certified, rebuildMatch: false, runs: green},
 		{name: "no reviewer key", key: "false", state: "error", want: "INCOMPLETE: no reviewer key", verdict: certified, rebuildMatch: true, runs: green},
 		{name: "no macOS result in CI", key: "true", state: "error", want: "CI has no macos-latest test run on the head", verdict: certified, rebuildMatch: true, runs: noMac},
 		{name: "the reviewer left nothing", key: "true", state: "error", want: "no readable verdict.json", rebuildMatch: true, runs: green},
+		{name: "a findings.json in the reviewer's folder can't clear a coded INCOMPLETE", key: "true", state: "error", want: "the candidate suite has no complete result", verdict: certified, rebuildMatch: true, incomplete: true, runs: green},
+		{name: "a known issue that doesn't exist", key: "true", state: "error", want: "known issue ai-ecoverse/slicc-cli#404 not found", verdict: map[string]any{"verdict": "certified", "known": []string{"#404"}}, rebuildMatch: true, runs: green},
+		{name: "the known-issue list can't be read", key: "true", state: "error", want: "the known issues couldn't be read", verdict: certified, rebuildMatch: true, noIssues: true, runs: green},
 		{name: "the reviewer failed it", key: "true", state: "failure", want: "the reviewer: leaks the token", verdict: map[string]any{"verdict": "fail", "reason": "leaks the token"}, rebuildMatch: true, runs: green},
 	}
 	for _, c := range cases {
@@ -402,16 +433,32 @@ func recordOnce(t *testing.T, c recordCase) {
 	if !c.rebuildMatch {
 		differ = []string{"slicc-linux-amd64"}
 	}
-	findings := writeJSON(t, filepath.Join(review, "findings.json"), map[string]any{
+	coded := []any{}
+	if !c.rebuildMatch {
+		coded = append(coded, map[string]any{"kind": "not-reproducible", "differ": differ})
+	}
+	if c.incomplete {
+		coded = append(coded, map[string]any{"kind": "missing-evidence", "what": "the candidate suite", "blocking": true})
+	}
+	findings := writeJSON(t, filepath.Join(dir, "coded", "findings.json"), map[string]any{
 		"row":      map[string]any{"decision": "negative"},
 		"rebuild":  map[string]any{"match": c.rebuildMatch, "files": 4, "differ": differ},
-		"findings": map[bool][]any{true: {}, false: {map[string]any{"kind": "not-reproducible", "differ": differ}}}[c.rebuildMatch],
+		"findings": coded,
 	})
-	f := newCertAPI(t, map[string]any{
+	writeJSON(t, filepath.Join(review, "findings.json"), map[string]any{
+		"row":      map[string]any{"decision": "negative"},
+		"rebuild":  map[string]any{"match": true, "files": 4, "differ": []string{}},
+		"findings": []any{},
+	})
+	routes := map[string]any{
 		"/repos/ai-ecoverse/slicc-cli/commits/fake-head-0007/check-runs": map[string]any{"check_runs": c.runs},
 		"/repos/ai-ecoverse/slicc-cli/issues":                            []any{},
 		"/repos/ai-ecoverse/slicc-cli/issues/5":                          map[string]any{"state": "open"},
-	})
+	}
+	if c.noIssues {
+		delete(routes, "/repos/ai-ecoverse/slicc-cli/issues")
+	}
+	f := newCertAPI(t, routes)
 	out := filepath.Join(dir, "record")
 	r := certTool(t, f.srv.URL, "record.mjs", "--version", "1.2.4-pr.7.1", "--pr", "7", "--head", "fake-head-0007", "--commit", "fake-merge-0007", "--run", "https://example.invalid/run/1", "--artifact", art, "--sums", sumsSHA, "--findings", findings, "--review", review, "--jobs", "build=success,rebuild=success,delta=success,suite=success", "--key", c.key, "--out", out)
 	var rec struct {
@@ -558,6 +605,17 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 	}
 	if !strings.Contains(jobs["record"], `--key "${KEY:-false}"`) {
 		t.Fatal("record must hear that the key was missing, and say INCOMPLETE")
+	}
+	if strings.Contains(text, "gh.sh") || strings.Contains(text, "cli/cli") || !strings.Contains(review, "if ! command -v gh > /dev/null; then") {
+		t.Fatal("no job downloads gh: the review uses the runner's own, or is INCOMPLETE")
+	}
+	if strings.Contains(review, "/cert-review/findings.json") || !strings.Contains(jobs["record"], "node tools/cert-review/findings.mjs") || !strings.Contains(jobs["record"], `--findings "$RUNNER_TEMP/findings.json"`) || !strings.Contains(jobs["record"], "pattern: cert-review-*-") {
+		t.Fatal("record recomputes the findings from the code-made evidence, never from the reviewer's folder")
+	}
+	for name, body := range jobs {
+		if name != "rebuild" && name != "delta" && name != "suite" && strings.Contains(body, "\n          name: cert-review-") {
+			t.Errorf("%s uploads into the code-made evidence (cert-review-*)", name)
+		}
 	}
 	if strings.Contains(jobs["group"], "claude") || strings.Contains(jobs["group"], "package.sh") {
 		t.Fatal("the merge group only looks up")

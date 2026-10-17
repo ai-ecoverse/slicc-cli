@@ -17,7 +17,15 @@ export const REVIEWER_GLOBS = [
   '.github/runner.mjs',
 ];
 
-const FORCED_GLOBS = ['.github/workflows/release.yml', '.github/workflows/ci.yml', '.releaserc*'];
+export const FORCED_GLOBS = [
+  'scripts/**',
+  'install.sh',
+  'npm/**',
+  '.releaserc*',
+  '.github/workflows/release.yml',
+  '.github/workflows/ci.yml',
+  '.github/runner.mjs',
+];
 
 const names = (files) =>
   (files ?? []).flatMap((f) => [

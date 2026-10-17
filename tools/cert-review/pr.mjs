@@ -75,11 +75,37 @@ async function status(sha, state, description) {
 const GUARD_FAIL = (label) => `reviewer change: needs coordinator review (${label} on this head)`;
 const GUARD_INCOMPLETE = 'the certification self-guard did not finish: re-run the failed jobs';
 
+async function dangling() {
+  try {
+    await settle();
+  } catch (error) {
+    console.log(`couldn't check the head's ${context} status: ${error.message}`);
+  }
+}
+
+async function settle() {
+  const statuses = await all(`repos/${repo}/commits/${values.head}/statuses`);
+  const latest = statuses.find((s) => s.context === context);
+  if (latest?.state !== 'pending') return;
+  const run = /\/actions\/runs\/(\d+)/.exec(latest.target_url ?? '')?.[1];
+  if (run === values.run) return;
+  let done = true;
+  if (run) {
+    try {
+      done = (await (await request(`repos/${repo}/actions/runs/${run}`)).json()).status === 'completed';
+    } catch {
+      done = true;
+    }
+  }
+  if (done) await status(values.head, 'error', `cert-review's run ${run ?? '?'} ended without a result: re-run the failed jobs`);
+}
+
 async function plan() {
   const { action, label, approval } = values;
   const starts = action === 'labeled' ? ['merge-ok', approval] : action === 'unlabeled' ? [approval] : [];
   if (action === 'ready_for_review' || ((action === 'labeled' || action === 'unlabeled') && !starts.includes(label))) {
     summary(`#${values.pr}: ${action} ${label} doesn't start or change a review`);
+    await dangling();
     return output({ build: 'false', forced: '', self: 'false' });
   }
   const files = await all(`repos/${repo}/pulls/${values.pr}/files`);
@@ -91,10 +117,8 @@ async function plan() {
     summary(`#${values.pr}: the certification self-guard says ${values.guard || 'nothing'}: not reviewed`);
     return output({ build: 'false', forced: forced.join(','), self: String(self) });
   }
-  if (label === approval && !self) {
-    summary(`#${values.pr} doesn't change the reviewer: ${action} ${label} changes nothing`);
-    return output({ build: 'false', forced: forced.join(','), self: 'false' });
-  }
+  if (label === approval && !self)
+    summary(`#${values.pr} doesn't change the reviewer: ${action} ${label} may have cancelled a run, so it plans again`);
   await status(values.head, 'pending', `building #${values.pr} at ${values.head.slice(0, 12)} and main, to compare what ships`);
   return output({ build: 'true', forced: forced.join(','), self: String(self) });
 }
