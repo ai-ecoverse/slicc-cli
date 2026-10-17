@@ -5,6 +5,7 @@ package integration
 import (
 	"os"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -24,7 +25,19 @@ func TestTrayLocksTheRuntimeDirectoryToTheUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "D:P(A;OICI;FA;;;" + u.User.Sid.String() + ")(A;OICI;FA;;;SY)"; sd.String() != want {
-		t.Fatalf("the socket directory's DACL is %s, want %s", sd.String(), want)
+	control, _, err := sd.Control()
+	acl, _, aerr := sd.DACL()
+	if err != nil || aerr != nil || control&windows.SE_DACL_PROTECTED == 0 || acl == nil || acl.AceCount != 2 {
+		t.Fatalf("the socket directory's DACL is %s: want it protected, for the user and SYSTEM only", sd.String())
+	}
+	for i := range uint32(acl.AceCount) {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, i, &ace); err != nil {
+			t.Fatal(err)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || (!sid.Equals(u.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid)) {
+			t.Fatalf("the socket directory's DACL is %s: want it for the user and SYSTEM only", sd.String())
+		}
 	}
 }

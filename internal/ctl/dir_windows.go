@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -84,12 +85,33 @@ func ownDir(dir string) bool {
 	if err != nil || !fi.IsDir() {
 		return false
 	}
-	want, err := privateDACL()
+	u, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return false
 	}
 	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
-	return err == nil && sd.String() == want
+	if err != nil {
+		return false
+	}
+	control, _, err := sd.Control()
+	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
+		return false
+	}
+	acl, _, err := sd.DACL()
+	if err != nil || acl == nil || acl.AceCount == 0 {
+		return false
+	}
+	for i := range uint32(acl.AceCount) {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if windows.GetAce(acl, i, &ace) != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return false
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if !sid.Equals(u.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) {
+			return false
+		}
+	}
+	return true
 }
 
 func refused(err error) bool {
