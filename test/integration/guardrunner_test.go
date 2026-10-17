@@ -312,6 +312,7 @@ func runGuardVectors(t *testing.T, variant string) {
 		"only":         os.Getenv("EXP_ONLY"),
 		"repeat":       os.Getenv("EXP_REPEAT"),
 		"direct":       os.Getenv("EXP_DIRECT") != "",
+		"delay":        os.Getenv("EXP_DELAY") != "",
 	}
 	var started struct {
 		Started bool `json:"started"`

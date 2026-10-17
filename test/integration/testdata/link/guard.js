@@ -122,6 +122,8 @@ function describeSessions(row) {
   return out;
 }
 
+let delayAutoAttach = false;
+
 function sessionBound(c, name) {
   const calls = new Map();
   c.on?.((e) => {
@@ -135,7 +137,11 @@ function sessionBound(c, name) {
     transport: c.transport,
     waitEvent: (match, timeout) => c.waitEvent(match, timeout),
     send(method, params, sessionId) {
-      if (!sessionId) return c.send(method, params);
+      if (!sessionId) {
+        const sent = c.send(method, params);
+        if (delayAutoAttach && method === 'Target.setAutoAttach' && params?.autoAttach) return sent.then((r) => new Promise((resolve) => setTimeout(() => resolve(r), 100)));
+        return sent;
+      }
       return new Promise((resolve, reject) => {
         const set = calls.get(sessionId) ?? new Set();
         calls.set(sessionId, set);
@@ -183,6 +189,7 @@ export function guardStart(getLink, opts) {
   const browsers = opts.browsers;
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
+    delayAutoAttach = Boolean(opts.delay);
     if (opts.only) {
       const re = new RegExp(opts.only);
       const picked = set.vectors.filter((v) => re.test(v.id));
