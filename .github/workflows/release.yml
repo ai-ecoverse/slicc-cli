@@ -10,6 +10,8 @@ on:
       - .github/workflows/release.yml
       - .releaserc.json
       - scripts/go-*
+      - scripts/is-main.mjs
+      - scripts/verdict.sh
       - scripts/npm-*.mjs
       - scripts/package.sh
       - scripts/release-plan.mjs
@@ -74,7 +76,7 @@ jobs:
     runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
-      stale: ${{ steps.head.outputs.stale }}
+      verdict: ${{ steps.head.outputs.verdict }}
     steps:
       - name: Compare the tested commit with main
         id: head
@@ -84,16 +86,17 @@ jobs:
         run: |
           head="$(git ls-remote "$REPO" refs/heads/main | cut -f1)" || head=""
           if [ -n "$head" ] && [ "$head" != "$SHA" ]; then
-            echo "main is at $head, past $SHA; the newer commit's CI releases"
-            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "fresh: PASS stale: main is at $head, past $SHA; the newer commit's CI releases"
+            echo "verdict=stale" >> "$GITHUB_OUTPUT"
           else
-            echo "main is at ${head:-an unknown commit}; releasing $SHA"
+            echo "fresh: PASS current: main is at ${head:-an unknown commit}; releasing $SHA"
+            echo "verdict=current" >> "$GITHUB_OUTPUT"
           fi
 
   release:
     needs: [ci, fresh]
     if: >-
-      ${{ !cancelled() && needs.fresh.outputs.stale != 'true' && (needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'
+      ${{ !cancelled() && (github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current') && (needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'
       && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
       && github.event.workflow_run.head_repository.full_name == github.repository) }}
     runs-on: macos-latest
@@ -133,7 +136,7 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then
             echo "version=0.0.0-dry-run.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
           else
-            node scripts/release-plan.mjs
+            sh scripts/verdict.sh release-plan node scripts/release-plan.mjs
           fi
 
       - name: Build unsigned
@@ -166,9 +169,9 @@ jobs:
       - name: Check npm packages
         if: steps.plan.outputs.version != '' && env.DRY_RUN == 'true'
         run: |
-          node scripts/npm-publish.mjs --dry-run
-          node scripts/npm-publish.mjs --dir dist/npm-next --tag next --dry-run
-          node scripts/sliccy-next.mjs --dry-run
+          sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dry-run
+          sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dir dist/npm-next --tag next --dry-run
+          sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs --dry-run
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: steps.plan.outputs.version != ''
@@ -221,7 +224,7 @@ jobs:
       - name: Publish sliccy@next for the latest release
         env:
           SLICCY_NEXT_PUBLISH: ${{ vars.SLICCY_NEXT_PUBLISH }}
-        run: node scripts/sliccy-next.mjs
+        run: sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs
 
   smoke:
     needs: release

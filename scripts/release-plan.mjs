@@ -15,3 +15,4 @@ const result = await semanticRelease(
 );
 if (result) checkMajor(result.nextRelease.version, readFileSync('go.mod', 'utf8'));
 output('version', result ? result.nextRelease.version : '');
+process.stdout.write(`release-plan: PASS ${result ? `release ${result.nextRelease.version}` : 'no release due'}\n`);

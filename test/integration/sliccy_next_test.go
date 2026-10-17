@@ -155,7 +155,7 @@ func TestReleaseWorkflowOffersTheSliccyNextRecovery(t *testing.T) {
 		"sliccy_next_only:",
 		"node scripts/sliccy-next.mjs --dry-run",
 		"inputs.sliccy_next_only && github.ref == 'refs/heads/main'",
-		"run: node scripts/sliccy-next.mjs\n",
+		"run: sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs\n",
 	} {
 		if !strings.Contains(data, want) {
 			t.Fatalf("release.yml lacks %q", want)

@@ -170,4 +170,4 @@ if [ "$fails" -gt 0 ]; then
   echo "$fails check(s) failed" >&2
   exit 1
 fi
-echo "all installer checks passed"
+echo "install-check: PASS all installer checks passed"

@@ -99,6 +99,7 @@ const packages = readdirSync(values.dir)
   .map((dir) => ({ dir, pkg: JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) }))
   .sort((a, b) => Number(Boolean(a.pkg.optionalDependencies)) - Number(Boolean(b.pkg.optionalDependencies)));
 
+if (packages.length === 0) fail(`no packages in ${values.dir}`);
 for (const { pkg } of packages) check(pkg);
 
 const enabled = packages.filter(({ pkg }) => {
@@ -109,9 +110,11 @@ const enabled = packages.filter(({ pkg }) => {
 });
 
 if (!dryRun && enabled.length) minimumNpm();
+let already = 0;
 for (const { dir, pkg } of enabled) {
   if (!dryRun && published(pkg.name, pkg.version)) {
     process.stdout.write(`${pkg.name}@${pkg.version} is already published\n`);
+    already += 1;
     continue;
   }
   if (!dryRun || values['require-registry']) await requireDependencies(pkg);
@@ -120,3 +123,6 @@ for (const { dir, pkg } of enabled) {
   const res = npm(args, { stdio: 'inherit' });
   if (res.status !== 0) fail(`npm publish ${pkg.name}@${pkg.version} failed`);
 }
+process.stdout.write(
+  `npm-publish: PASS ${tag}: ${dryRun ? `checked ${enabled.length}` : `published ${enabled.length - already}, ${already} already published`}, ${packages.length - enabled.length} held by their gates, of ${packages.length} packages\n`,
+);

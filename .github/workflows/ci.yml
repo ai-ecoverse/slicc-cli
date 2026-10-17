@@ -131,7 +131,8 @@ jobs:
           $took = Measure-Command { foreach ($f in $files) { $null = [IO.File]::ReadAllBytes($f.FullName) } }
           '{0:N0} MB of {1} read in {2:N1} s' -f (($files | Measure-Object Length -Sum).Sum / 1MB), $dir, $took.TotalSeconds
 
-      - run: node scripts/test-shard.mjs ${{ matrix.shard }} ${{ (github.event_name == 'push' || matrix.os == 'ubuntu-latest') && '-race' || '' }} -count=1 -timeout ${{ matrix.shard == '1/1' && '25m' || '12m' }} -v ./test/integration/...
+      - shell: bash
+        run: sh scripts/verdict.sh test-shard node scripts/test-shard.mjs ${{ matrix.shard }} ${{ (github.event_name == 'push' || matrix.os == 'ubuntu-latest') && '-race' || '' }} -count=1 -timeout ${{ matrix.shard == '1/1' && '25m' || '12m' }} -v ./test/integration/...
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
@@ -170,9 +171,9 @@ jobs:
           node scripts/npm-stage.mjs --version "$VERSION" --companions --wasi
           node scripts/npm-stage.mjs --name sliccy --launcher-only --out dist/npm-next \
             --version "7.0.0-next.$VERSION" --deps-version "$VERSION" --companions
-          node scripts/npm-publish.mjs --dry-run
-          node scripts/npm-publish.mjs --dir dist/npm-next --tag next --dry-run
-          node scripts/sliccy-next.mjs --dry-run
+          sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dry-run
+          sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dir dist/npm-next --tag next --dry-run
+          sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs --dry-run
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -219,9 +220,9 @@ jobs:
           CI_VERSION: 0.0.0-ci.${{ github.run_number }}
         run: |
           if [ -z "$IMAGE" ]; then
-            sh test/integration/testdata/install/check.sh "$ROOT" http://127.0.0.1:8765 "$CI_VERSION"
+            sh scripts/verdict.sh install-check sh test/integration/testdata/install/check.sh "$ROOT" http://127.0.0.1:8765 "$CI_VERSION"
           else
-            docker run --rm --network host -e SLICC_CHECK_WGET=1 \
+            sh scripts/verdict.sh install-check docker run --rm --network host -e SLICC_CHECK_WGET=1 \
               -v "$PWD:/src:ro" -v "$ROOT:$ROOT" "$IMAGE" \
               sh /src/test/integration/testdata/install/check.sh "$ROOT" http://127.0.0.1:8765 "$CI_VERSION"
           fi

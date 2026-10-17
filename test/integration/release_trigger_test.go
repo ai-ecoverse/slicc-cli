@@ -42,7 +42,7 @@ func TestReleaseFollowsAGreenCIPushOnMain(t *testing.T) {
 		"    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.sliccy_next_only }}\n    name: CI on this commit\n",
 		"(needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'",
 		"    needs: [ci, fresh]\n",
-		"${{ !cancelled() && needs.fresh.outputs.stale != 'true' && ",
+		"${{ !cancelled() && (github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current') && ",
 		"git ls-remote \"$REPO\" refs/heads/main",
 	} {
 		if !strings.Contains(release, want) {
