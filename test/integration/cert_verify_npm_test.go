@@ -60,16 +60,24 @@ const (
 )
 
 type verifyFixture struct {
-	dir      string
-	assets   map[string][]byte
-	api      map[string]any
-	npm      map[string]any
-	rebuild  map[string]any
-	darwin   map[string]any
-	tgz      []byte
-	redirect string
-	env      []string
-	badSRI   bool
+	dir       string
+	assets    map[string][]byte
+	api       map[string]any
+	npm       map[string]any
+	rebuild   map[string]any
+	darwin    map[string]any
+	tgz       []byte
+	redirect  string
+	env       []string
+	badSRI    bool
+	artifacts []map[string]any
+	declared  string
+}
+
+const verifyRunStart = "2026-01-01T10:00:00Z"
+
+func verifyArtifact(id int, name, created string) map[string]any {
+	return map[string]any{"id": id, "name": name, "digest": "sha256:" + sha256Hex([]byte(name)), "created_at": created}
 }
 
 func wasiTarball(t *testing.T, wasm []byte, version string) []byte {
@@ -116,6 +124,9 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 		"repos/" + verifyRepo + "/issues":                          []any{},
 	}
 	f.env = []string{"SLICC_NPM_PUBLISH=", "SLICCY_NEXT_PUBLISH=", "WASI_SLICC_PUBLISH=true"}
+	f.api["repos/"+verifyRepo+"/actions/runs/1"] = map[string]any{"run_attempt": 1, "run_started_at": verifyRunStart}
+	f.artifacts = []map[string]any{verifyArtifact(101, "cert-verify-rebuild", "2026-01-01T10:05:00Z"), verifyArtifact(102, "cert-verify-darwin", "2026-01-01T10:06:00Z")}
+	f.declared = "cert-verify-rebuild=101:" + sha256Hex([]byte("cert-verify-rebuild")) + ", cert-verify-darwin=102:" + sha256Hex([]byte("cert-verify-darwin"))
 	return f
 }
 
@@ -206,13 +217,14 @@ func (f *verifyFixture) run(t *testing.T, mutate func(f *verifyFixture)) (int, s
 	rel = append(rel, map[string]any{"name": "SHA256SUMS"})
 	tagged := f.api["repos/"+verifyRepo+"/releases/tags/v"+verifyVersion].(map[string]any)
 	tagged["assets"] = rel
+	f.api["repos/"+verifyRepo+"/actions/runs/1/artifacts"] = map[string]any{"total_count": len(f.artifacts), "artifacts": f.artifacts}
 	writeJSON(t, filepath.Join(f.dir, "api.json"), f.api)
 	writeJSON(t, filepath.Join(f.dir, "npm.json"), f.npm)
 	if f.rebuild != nil {
-		writeJSON(t, filepath.Join(f.dir, "evidence", "rebuild.json"), f.rebuild)
+		writeJSON(t, filepath.Join(f.dir, "evidence", "rebuild", "rebuild.json"), f.rebuild)
 	}
 	if f.darwin != nil {
-		writeJSON(t, filepath.Join(f.dir, "evidence", "darwin.json"), f.darwin)
+		writeJSON(t, filepath.Join(f.dir, "evidence", "darwin", "darwin.json"), f.darwin)
 	}
 	node := requireNode(t)
 	for name, src := range map[string]string{"gh": fakeGH, "npm": fakeNPM} {
@@ -223,7 +235,7 @@ func (f *verifyFixture) run(t *testing.T, mutate func(f *verifyFixture)) (int, s
 	}
 	out := filepath.Join(f.dir, "verify.json")
 	_ = os.Remove(out)
-	cmd := exec.Command(node, certTools+"verify.mjs", "--version", verifyVersion, "--run", "1", "--wait", "1", "--evidence", filepath.Join(f.dir, "evidence"), "--installer", srv.URL+"/slicc", "--out", out, "--lines", filepath.Join(f.dir, "lines.json"))
+	cmd := exec.Command(node, certTools+"verify.mjs", "--version", verifyVersion, "--run", "1", "--wait", "1", "--rebuild", filepath.Join(f.dir, "evidence", "rebuild", "rebuild.json"), "--darwin", filepath.Join(f.dir, "evidence", "darwin", "darwin.json"), "--artifacts", f.declared, "--installer", srv.URL+"/slicc", "--out", out, "--lines", filepath.Join(f.dir, "lines.json"))
 	cmd.Env = append(os.Environ(), append([]string{"PATH=" + filepath.Join(f.dir, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_DIR=" + f.dir, "CERT_NPM_REGISTRY=" + srv.URL, "RUNNER_TEMP=" + filepath.Join(f.dir, "tmp"), "GITHUB_STEP_SUMMARY="}, f.env...)...)
 	msg, err := cmd.CombinedOutput()
 	code := 0
@@ -282,6 +294,19 @@ func TestCertVerifyCertifiesOnlyAReleaseThatVerifiesEverywhere(t *testing.T) {
 		{"a pull request without a cert-review makes the lines verified, never certified", "success", "verified slicc-cli@1.43.0 binaries SHA256SUMS sha256=", func(f *verifyFixture) {
 			f.since("", "")
 		}},
+		{"an artifact in the run that no producer declared", "error", "cert-ci: INCOMPLETE slicc-cli v1.43.0 (cert-verify-planted (artifact 103) is in the run, but no producer declared it", func(f *verifyFixture) {
+			f.artifacts = append(f.artifacts, verifyArtifact(103, "cert-verify-planted", "2026-01-01T10:07:00Z"))
+		}},
+		{"an evidence artifact whose digest isn't its producer's", "error", "cert-verify-darwin's digest is sha256:" + sha256Hex([]byte("fake-forged")) + ", its producer said sha256:" + sha256Hex([]byte("cert-verify-darwin")), func(f *verifyFixture) {
+			f.artifacts[1]["digest"] = "sha256:" + sha256Hex([]byte("fake-forged"))
+		}},
+		{"an evidence artifact under another id than its producer's", "error", "cert-verify-rebuild: its producer's artifact 101 isn't in the run", func(f *verifyFixture) {
+			f.artifacts[0]["id"] = 104
+		}},
+		{"an earlier attempt's artifact is no evidence and no alarm", "success", "certified slicc-cli@1.43.0 binaries SHA256SUMS sha256=", func(f *verifyFixture) {
+			f.artifacts = append(f.artifacts, verifyArtifact(99, "cert-record", "2026-01-01T09:59:59Z"))
+		}},
+		{"no declared artifacts", "error", "no producer declared its artifacts", func(f *verifyFixture) { f.declared = "" }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
