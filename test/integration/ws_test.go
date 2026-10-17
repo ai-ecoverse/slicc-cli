@@ -418,7 +418,7 @@ func (e *linkEnv) testWSFragments(t *testing.T, up *wsUpstream) {
 		{"wait": 1}, {"close": 1000}, {"end": true},
 	}})
 	if len(r.Records) != 2 || r.Records[0].Type != 1 || r.Records[0].Text != strings.Repeat(wsFancyText, 3000) {
-		t.Fatalf("text records: %d, first %d bytes", len(r.Records), r.Records[0].Bytes)
+		t.Fatalf("text records: %d, want 2: %+v", len(r.Records), r)
 	}
 }
 
@@ -448,6 +448,9 @@ func (e *linkEnv) testWSProtocolErrors(t *testing.T, up *wsUpstream) {
 	}
 	for _, c := range cases {
 		r := e.ws(t, map[string]any{"open": wsOpen(up.url("/echo?tag=" + c.tag)), "steps": c.steps})
+		if len(r.Records) == 0 {
+			t.Fatalf("%s: no records, want a close 1002 last: %+v", c.tag, r)
+		}
 		last := r.Records[len(r.Records)-1]
 		if last.Type != 8 || last.Code != 1002 || !r.Ended {
 			t.Fatalf("%s: %+v", c.tag, r)
