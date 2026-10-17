@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,7 +29,7 @@ func (p *Policy) isHard(port uint16) bool {
 
 func (p *Policy) Guard(d DebugPorts) *Policy {
 	for _, port := range d.Exposed {
-		if port != 0 && !slices.Contains(p.exposed, port) && !slices.Contains(d.Given, port) {
+		if port != 0 && !slices.Contains(p.exposed, port) && !slices.Contains(d.Given, port) && slices.Contains(d.Found, port) {
 			p.exposed = append(p.exposed, port)
 		}
 	}
@@ -42,6 +43,40 @@ func (p *Policy) Guard(d DebugPorts) *Policy {
 	}
 	p.hosts = hostAddrs
 	return p
+}
+
+type live struct {
+	scan  func() []uint16
+	found func(uint16)
+}
+
+func (p *Policy) Live(scan func() []uint16, found func(uint16)) {
+	p.live = &live{scan: scan, found: found}
+}
+
+func (p *Policy) checkStream(ap netip.AddrPort) error {
+	if err := p.check(ap); err != nil || p.live == nil || ap.Port() == 0 || slices.Contains(p.exposed, ap.Port()) {
+		return err
+	}
+	addr, _ := normalize(ap.Addr())
+	if !p.onThisMachine(addr) || !slices.Contains(p.live.scan(), ap.Port()) {
+		return nil
+	}
+	if p.GuardPort(ap.Port()) && p.live.found != nil {
+		p.live.found(ap.Port())
+	}
+	return p.check(ap)
+}
+
+func (p *Policy) onThisMachine(addr netip.Addr) bool {
+	if addr.IsLoopback() {
+		return true
+	}
+	if p.hosts == nil {
+		return false
+	}
+	isHost, err := p.hosts.isHost(addr)
+	return err != nil || isHost
 }
 
 func (p *Policy) Exposed() []uint16 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -73,10 +74,13 @@ func dialHosts(ctx context.Context, nd *net.Dialer, network, host, port string, 
 	return nil, first
 }
 
-func (d *Dialer) Control(_, address string, _ syscall.RawConn) error {
+func (d *Dialer) Control(network, address string, _ syscall.RawConn) error {
 	ap, err := netip.ParseAddrPort(address)
 	if err != nil {
 		return &Error{Reason: address + " is not an IP address and port"}
+	}
+	if strings.HasPrefix(network, "tcp") {
+		return d.Policy.checkStream(ap)
 	}
 	return d.Policy.check(ap)
 }

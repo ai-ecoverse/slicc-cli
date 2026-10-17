@@ -73,7 +73,7 @@ flags for slicc with no command:
                       share this folder with seven's kernel (repeatable)
   --allow <rule>      allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>       deny CIDR or CIDR:port (repeatable, comma-separated)
-` + exposeUsage + `  --yes               no picker: take the best match
+` + exposeUsageDefault + `  --yes               no picker: take the best match
   --plain             no picker and no dashboard: plain status lines
   --json              NDJSON events on stdout (see README.md)
 ` + computeUsage + debugPortsHelp + `

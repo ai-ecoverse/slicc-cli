@@ -317,7 +317,7 @@ func TestLoopbackLinksSevenWithoutCDP(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(late, "DevToolsActivePort"), []byte(fmt.Sprintf("%d\n/devtools/browser/late\n", latePort)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		o.waitStderr(t, fmt.Sprintf("denied new DevToolsActivePort port %d on every address of this machine", latePort))
+		o.waitStderr(t, fmt.Sprintf("denied new debugging port %d on every address of this machine", latePort))
 		hosts := []string{"127.0.0.1", "127.0.0.2"}
 		if lan, ok := findLANAddress(); ok {
 			hosts = append(hosts, lan.String())

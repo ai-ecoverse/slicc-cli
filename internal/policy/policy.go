@@ -27,6 +27,7 @@ type Policy struct {
 	hosts     *addrCache
 	endpoints *endpoints
 	late      *latePorts
+	live      *live
 }
 
 var remoteDeny = []string{
@@ -124,6 +125,7 @@ func (p *Policy) With(allow, deny []Rule) *Policy {
 		hosts:     p.hosts,
 		endpoints: p.endpoints,
 		late:      p.late,
+		live:      p.live,
 	}
 	for _, r := range allow {
 		q.entries = append(q.entries, entry{rule: r, user: true})

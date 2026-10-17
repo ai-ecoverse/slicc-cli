@@ -57,11 +57,10 @@ addresses, this machine and the local network, but not link-local addresses,
 the debugging ports (below), or the browsers' endpoints. With --runner it
 also offers ssh: seven's kernel reaches this machine's SSH server, which
 never listens on a port, and its forwarding goes through the same policy.
-With --cdp or
---cdp-extra it also offers cdp: seven gets full control of every browser
-listed, except tabs, cookies and storage on seven's own origins (sliccy.ai
-and --origin). With --mount it also offers fs: seven's kernel can mount the
-folders listed, read-only with :ro.
+With --cdp or --cdp-extra it also offers cdp: seven gets full control of
+every browser listed, except tabs, cookies and storage on seven's own
+origins (sliccy.ai and --origin). With --mount it also offers fs: seven's
+kernel can mount the folders listed, read-only with :ro.
 
 When seven offers kernel-in, slicc listens on 127.0.0.1:<kernel port> and
 carries navigations and WebSockets to http://<port>.kernel.localhost/ into
