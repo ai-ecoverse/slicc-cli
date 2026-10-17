@@ -216,6 +216,12 @@ var methodRules = map[string]func(g *guard, c *command) string{
 	"Extensions.loadUnpacked": func(*guard, *command) string {
 		return "Extensions.loadUnpacked could load an extension into seven's origin"
 	},
+	"Target.getTargetInfo": func(g *guard, c *command) string {
+		if g.hiddenTargetLocked(c.str("targetId")) {
+			return refusedTarget
+		}
+		return ""
+	},
 	"Fetch.enable":                (*guard).fetchRule,
 	"IO.read":                     (*guard).streamRule,
 	"Network.replayXHR":           (*guard).replayRule,

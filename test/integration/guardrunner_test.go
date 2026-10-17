@@ -22,7 +22,17 @@ import (
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
-const guardSetVersion = "1.7.8"
+const guardSetVersion = "1.8.1"
+
+func guardSettleScale() int {
+	switch runtime.GOOS {
+	case "linux":
+		return 1
+	case "darwin":
+		return 2
+	}
+	return 3
+}
 
 func guardSlots() int {
 	return min(10, max(4, 2*runtime.NumCPU()))
@@ -244,7 +254,23 @@ func TestCDPProtectVectorsLagging(t *testing.T) {
 	runGuardVectors(t, "lagging")
 }
 
+type guardRun struct {
+	variant    string
+	slots      int
+	only       string
+	inject     string
+	rowTimeout time.Duration
+}
+
 func runGuardVectors(t *testing.T, variant string) {
+	sum := runGuard(t, guardRun{variant: variant, slots: guardSlots(), rowTimeout: guardRowTimeout})
+	checkGuardSummary(t, sum)
+	fmt.Println(sum.Line)
+	t.Log(sum.Line)
+}
+
+func runGuard(t *testing.T, run guardRun) *guardSummary {
+	t.Helper()
 	if os.Getenv("SLICC_GUARD_VECTORS") == "0" {
 		t.Skip("the guard vectors run on Linux for pull requests and on every OS on main")
 	}
@@ -264,7 +290,7 @@ func runGuardVectors(t *testing.T, variant string) {
 		"ordinary-same-site": "http://page.guard.test:" + fp,
 		"cross":              "http://cross.test:" + fp,
 	}
-	n := guardSlots()
+	n := run.slots
 	rules := "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1,MAP sliccy.ai 127.0.0.1,MAP *.test 127.0.0.1"
 	chromes := make([]*chromeProc, n)
 	for i := range chromes {
@@ -304,11 +330,14 @@ func runGuardVectors(t *testing.T, variant string) {
 		"browsers":     slots,
 		"targets":      targets,
 		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true},
-		"variants":     []string{variant},
+		"variants":     []string{run.variant},
 		"parallel":     n,
 		"log":          "http://127.0.0.1:" + strconv.Itoa(fix.log),
 		"sha":          sha,
-		"rowTimeoutMs": guardRowTimeout.Milliseconds(),
+		"rowTimeoutMs": run.rowTimeout.Milliseconds(),
+		"only":         run.only,
+		"inject":       run.inject,
+		"settleScale":  guardSettleScale(),
 	}
 	var started struct {
 		Started bool `json:"started"`
@@ -350,9 +379,23 @@ func runGuardVectors(t *testing.T, variant string) {
 		}
 	}
 	t.Logf("%d rows in %s with %d slots on %s", len(sum.Results), time.Since(begin).Round(time.Second), n, runtime.GOOS)
-	checkGuardSummary(t, sum)
-	fmt.Println(sum.Line)
-	t.Log(sum.Line)
+	return sum
+}
+
+func TestCDPProtectVectorsIgnoreChromeUITargets(t *testing.T) {
+	const id = "C3.redirect-popup-stays-out"
+	sum := runGuard(t, guardRun{variant: "prompt", slots: 2, only: id, inject: "browser_ui", rowTimeout: 45 * time.Second})
+	if len(sum.Results) == 0 {
+		t.Fatalf("no rows for %s", id)
+	}
+	for _, r := range sum.Results {
+		if r.ID != id {
+			t.Errorf("the run has a row for %s, want only %s", r.ID, id)
+		}
+		if r.Control != "pass" || r.Guarded != "pass" || r.Live != "pass" {
+			t.Errorf("%s %s: control %s, guarded %s, live %s\n  why %s\n  errors %v", r.ID, r.Target, r.Control, r.Guarded, r.Live, r.Why, r.Errors)
+		}
+	}
 }
 
 func checkGuardSummary(t *testing.T, sum *guardSummary) {

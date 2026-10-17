@@ -71,6 +71,7 @@ export function protectTest(getLink, describe) {
     urlsShown: (browser, from, to) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(from);
+        await c.evaluate("new Promise((resolve) => (document.body ? resolve(true) : addEventListener('DOMContentLoaded', () => resolve(true))))", sessionId);
         await c.send('Page.enable', {}, sessionId);
         await c.send('Network.enable', {}, sessionId);
         const start = c.events.length;
@@ -110,6 +111,48 @@ export function protectTest(getLink, describe) {
         const href = await c.evaluate('location.href', sessionId);
         await c.send('Target.closeTarget', { targetId });
         return { ...r, href };
+      }),
+    privileged: (browser, urls) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo('about:blank');
+        const navigate = {};
+        for (const url of urls) {
+          const r = await outcome(c.send('Page.navigate', { url }, sessionId));
+          await sleep(300);
+          navigate[url] = { ...r, href: await c.evaluate('location.href', sessionId).catch((e) => `unknown: ${e?.message ?? e}`) };
+        }
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        const create = {};
+        for (const url of urls) {
+          const r = await outcome(c.send('Target.createTarget', { url }));
+          if (r.ok) await outcome(c.send('Target.closeTarget', { targetId: r.result.targetId }));
+          create[url] = r;
+        }
+        return { navigate, create };
+      }),
+    browserUI: (browser, uiId) =>
+      run(browser, async (c) => {
+        const isUI = (info) => info?.type === 'browser_ui' || info?.targetId === uiId;
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await c.send('Target.setAutoAttach', { autoAttach: true, flatten: true, waitForDebuggerOnStart: false });
+        await sleep(1500);
+        const { targetInfos } = await c.send('Target.getTargets');
+        const out = {
+          listed: targetInfos.filter(isUI).length,
+          discovered: c.events.filter((e) => e.method === 'Target.targetCreated' && isUI(e.params.targetInfo)).length,
+          autoAttached: c.events.filter((e) => e.method === 'Target.attachedToTarget' && isUI(e.params.targetInfo)).length,
+        };
+        await c.send('Target.setAutoAttach', { autoAttach: false, flatten: true, waitForDebuggerOnStart: false });
+        await c.send('Target.setDiscoverTargets', { discover: false });
+        for (const [method, params] of [
+          ['Target.attachToTarget', { targetId: uiId, flatten: true }],
+          ['Target.getTargetInfo', { targetId: uiId }],
+          ['Target.activateTarget', { targetId: uiId }],
+          ['Browser.getWindowForTarget', { targetId: uiId }],
+        ]) {
+          out[method] = await outcome(c.send(method, params));
+        }
+        return out;
       }),
     attach: (browser, targetId) =>
       run(browser, async (c) => {
