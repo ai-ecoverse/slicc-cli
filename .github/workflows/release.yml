@@ -88,15 +88,18 @@ jobs:
           if [ -n "$head" ] && [ "$head" != "$SHA" ]; then
             echo "fresh: PASS stale: main is at $head, past $SHA; the newer commit's CI releases"
             echo "verdict=stale" >> "$GITHUB_OUTPUT"
+          elif [ -z "$head" ]; then
+            echo "fresh: PASS unknown (semantic-release decides): git ls-remote could not read main; releasing $SHA"
+            echo "verdict=unknown" >> "$GITHUB_OUTPUT"
           else
-            echo "fresh: PASS current: main is at ${head:-an unknown commit}; releasing $SHA"
+            echo "fresh: PASS current: main is at $head; releasing $SHA"
             echo "verdict=current" >> "$GITHUB_OUTPUT"
           fi
 
   release:
     needs: [ci, fresh]
     if: >-
-      ${{ !cancelled() && (github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current') && (needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'
+      ${{ !cancelled() && (github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown') && (needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'
       && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
       && github.event.workflow_run.head_repository.full_name == github.repository) }}
     runs-on: macos-latest

@@ -115,7 +115,7 @@ func TestEveryGateCallerRequiresItsVerdict(t *testing.T) {
 			t.Errorf("the fresh job lacks %q", want)
 		}
 	}
-	if cond := workflowJobs(t, release)["release"].cond; !strings.Contains(cond, "(github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current')") {
+	if cond := workflowJobs(t, release)["release"].cond; !strings.Contains(cond, "(github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown')") {
 		t.Errorf("a release after CI does not require the fresh job's verdict: %s", cond)
 	}
 }
@@ -216,6 +216,57 @@ func TestVerdictPassesTheRealGates(t *testing.T) {
 		}
 		if code != c.code || !strings.Contains(string(out), c.want) {
 			t.Errorf("verdict.sh %v: exit %d, want %d and %q:\n%s", c.args, code, c.code, c.want, out)
+		}
+	}
+}
+
+func TestFreshPrintsAVerdictForEveryAnswer(t *testing.T) {
+	sh := requireSh(t)
+	raw, err := os.ReadFile("../../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := workflowJobs(t, strings.ReplaceAll(string(raw), "\r\n", "\n"))["fresh"].body
+	at := strings.Index(body, "        run: |\n")
+	if at < 0 {
+		t.Fatalf("the fresh job has no run block:\n%s", body)
+	}
+	var script strings.Builder
+	for _, line := range strings.Split(body[at+len("        run: |\n"):], "\n") {
+		if !strings.HasPrefix(line, "          ") && strings.TrimSpace(line) != "" {
+			break
+		}
+		script.WriteString(strings.TrimPrefix(line, "          ") + "\n")
+	}
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=fake", "-c", "user.email=fake@example.invalid", "-c", "commit.gpgsign=false"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "one")
+	first := git("rev-parse", "HEAD")
+	git("commit", "-q", "--allow-empty", "-m", "two")
+	head := git("rev-parse", "HEAD")
+	cases := []struct {
+		repo, sha, verdict, line string
+	}{
+		{repo, head, "current", "fresh: PASS current: main is at " + head},
+		{repo, first, "stale", "fresh: PASS stale: main is at " + head + ", past " + first},
+		{filepath.Join(t.TempDir(), "missing"), head, "unknown", "fresh: PASS unknown (semantic-release decides)"},
+	}
+	for _, c := range cases {
+		output := filepath.Join(t.TempDir(), "output")
+		cmd := exec.Command(sh, "-c", script.String())
+		cmd.Env = append(os.Environ(), "REPO="+c.repo, "SHA="+c.sha, "GITHUB_OUTPUT="+output)
+		out, err := cmd.CombinedOutput()
+		got, _ := os.ReadFile(output)
+		if err != nil || !strings.Contains(string(out), c.line) || string(got) != "verdict="+c.verdict+"\n" {
+			t.Errorf("fresh with %s at %s: %v, wrote %q:\n%s", c.repo, c.sha, err, got, out)
 		}
 	}
 }

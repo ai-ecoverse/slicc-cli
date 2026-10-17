@@ -42,7 +42,7 @@ func TestReleaseFollowsAGreenCIPushOnMain(t *testing.T) {
 		"    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.sliccy_next_only }}\n    name: CI on this commit\n",
 		"(needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'",
 		"    needs: [ci, fresh]\n",
-		"${{ !cancelled() && (github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current') && ",
+		"${{ !cancelled() && (github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown') && ",
 		"git ls-remote \"$REPO\" refs/heads/main",
 	} {
 		if !strings.Contains(release, want) {
@@ -132,7 +132,7 @@ func TestReleasePublishesOnlyFromMain(t *testing.T) {
 	}
 	publishes := func(body string) string {
 		for _, line := range strings.Split(body, "\n") {
-			if strings.Contains(line, "--dry-run") {
+			if strings.Contains(line, "--dry-run") || strings.HasPrefix(strings.TrimSpace(line), "echo \"") {
 				continue
 			}
 			for _, marker := range []string{"semantic-release", "scripts/npm-publish.mjs", "scripts/sliccy-next.mjs", "actions/attest-build-provenance", "scripts/go-warm.sh", "releases/latest"} {
