@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift (see [Coming from slicc-node](#coming-from-slicc-node)).
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, remote control with `prompt`, `watch` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), `slicc tray` inside seven, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, `slicc tray` (on a machine and inside seven), remote control with `prompt`, `watch` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
 
 ## Commands (planned)
 
@@ -12,6 +12,7 @@
 | `slicc attach --cdp <url>` | link a seven that is open in an already-running CDP browser (works now; see [Local setup](#local-setup-slicc-attach)) |
 | `slicc open`, `slicc --default-browser`, `slicc pair` | link a seven in your everyday browser, without CDP: open or print a pairing URL (works now; see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)) |
 | `slicc unpair [<fingerprint> \| --all]` | list or forget the sevens paired with `open` or `pair` |
+| `slicc tray [--json] [-q] [-a]` | list the `slicc` processes on this machine that hold a link: mode, seven, device, state and offers (works now; see [Running links](#running-links-slicc-tray)) |
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)). `-` or `@<file>` in place of `<join-url>` reads it from stdin or a file, out of sight of `ps` |
 | `slicc <join-url> prompt <text>`, `watch`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-and-abort)) |
@@ -1198,6 +1199,46 @@ Summaries are one line of at most 200 characters. Escape sequences and control c
 - **Ids:** `id` is the transcript entry id, and `delta` lines for one `id` arrive in order.
 - **Limits:** `summary` is at most 200 characters. Credentials and tool output beyond the summary are never sent.
 - **Unknown events:** the node ignores events and fields it doesn't know.
+
+## Running links: `slicc tray`
+
+```
+slicc tray [--json] [-q] [-a]
+```
+
+`slicc tray` lists the `slicc` processes on this machine that hold a link, as `screen -ls` and `tmux ls` do: `follow` (remote, through the tray hub), and the default flow, `attach`, `open` and `pair` (local). It replaces SLICC six's `host` on the machine side. Inside seven, `slicc tray` is that seven's own tray instead (see [Inside seven](#inside-seven)).
+
+```
+PID   MODE    SEVEN           DEVICE     STATE                   OFFERS
+4121  follow  SLICC on macOS  3fa9…c210  connected 2h            exit,ssh,fs:proj
+5530  follow  SLICC on Linux  88d1…07be  reconnecting (#4, 30s)  ssh
+6012  attach  seven           -          connected 1d            exit,cdp,kernel:80
+```
+
+- **`SEVEN`:** the name from seven's HELLO, else its origin's host, else the hub's host in parentheses. Never the join URL.
+- **`DEVICE`:** this machine's device, as `follow` and seven's tray see it: for `follow`, the DTLS certificate for that hub, and for `open` and `pair`, the loopback identity. It is the SHA-256 fingerprint, shown as its first and last four hex digits, so a row here matches a row in the leader's `slicc tray`. Over CDP there is none (`-`).
+- **`STATE`:** `waiting` (a local mode, until seven links), `dialing`, `waiting for offer`, `connecting`, `connected` with how long, `reconnecting (#<attempt>, <next wait>)`, or `stopped (<code>)` with the hub's or seven's code (`TRAY_EXPIRED`, `UNLINKED`, …) as the process exits.
+- **`OFFERS`:** `exit` (the network, `--exit` for `follow`), `ssh`, `cdp`, `jerk`, `fs:<name>` per folder, and `kernel:<port>`.
+- **`--json`:** a JSON array, one object per process: `{ "v": 1, "pid", "mode", "version", "started", "seven"?, "origin"?, "hub"?, "device"?, "state", "since", "attempt"?, "retryAt"?, "code"?, "error"?, "offers", "dials", "links", "lastLinked"? }`. `hub` is the hub's origin, `error` the last failure with secrets redacted, `dials` the dials so far and `links` the links that came up. These are SLICC six's follower counters.
+- **`-q`:** only the PIDs, one per line, for `slicc tray -q | xargs kill`. There's no `stop`.
+- **`-a`:** also the trays this machine knows but isn't following now, from `tray-certs.json` and `tray-join.json`, as `docker ps -a` does: PID `-`, state `not running`, the leader's name from the last link and the device for that hub. Neither file's join URL is shown.
+
+**Control sockets.** Each of those processes serves a control socket while it runs, `<dir>/<pid>.sock`, and removes it on exit.
+- **Where `<dir>` is:**
+  - **Linux:** `$XDG_RUNTIME_DIR/slicc`, otherwise `$TMPDIR/slicc-<uid>`.
+  - **macOS:** `$TMPDIR/slicc-<uid>`.
+  - **Either, when that path is too long for a socket:** `/tmp/slicc-<uid>`.
+  - **Windows:** `%LocalAppData%\slicc\run`, or `%UserProfile%\.slicc-run` when that is too long, as AF_UNIX (Windows 10 and later).
+- **Who can reach it:**
+  - **macOS and Linux:** the directory is `0700`, must belong to the user and not be a symlink, and is tightened when it's more open. Each connection checks the peer's uid (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS) and closes on anyone else.
+  - **Windows:** slicc sets the directory's DACL to the user and SYSTEM only, protected from inheritance, so the sockets in it inherit it. `slicc tray` skips a directory whose DACL is anything else.
+  - **Either way,** a process that can't serve a socket there runs on without one.
+- **The protocol:** one line of JSON each way, `{ "v": 1, "op": "status" }` and the status object above, then the process closes the connection.
+- **Stale sockets:** liveness comes from connecting, not from the PID, so a reused PID can't fool `slicc tray`. A socket that refuses a connection is stale, and `slicc tray` removes it and says so on stderr, as `screen -wipe` does.
+  - **The lock:** each process holds an `flock` on `<pid>.sock.lock` while it runs, and `slicc tray` removes a socket only while it holds that lock itself and the socket still refuses. So it never removes a live socket.
+  - **A lock file deleted underneath:** both sides check after locking that the lock file on disk is still the one they hold, and start over when it isn't.
+- **Untrusted text:** `slicc tray` and `--json` strip control characters and terminal escapes from what a process reports, and replace any join URL with `<join-url>`.
+- **Why sockets:** link state changes all the time, and a socket answers with the current state where a state file would lag. A `ps` scan sees no link state.
 
 ## Inside seven
 

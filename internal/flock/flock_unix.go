@@ -1,13 +1,13 @@
-//go:build !windows
+//go:build unix
 
-package loopback
+package flock
 
 import (
 	"os"
 	"syscall"
 )
 
-func tryLock(f *os.File) (bool, error) {
+func TryLock(f *os.File) (bool, error) {
 	err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err == syscall.EWOULDBLOCK {
 		return false, nil
@@ -15,4 +15,4 @@ func tryLock(f *os.File) (bool, error) {
 	return err == nil, err
 }
 
-func unlock(f *os.File) { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }
+func Unlock(f *os.File) { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }

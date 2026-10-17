@@ -24,6 +24,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
 	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
+	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
@@ -196,6 +197,8 @@ type followRun struct {
 	status   func(format string, a ...any)
 	events   chan followEvent
 	closeSSH func()
+	ctl      *ctl.Holder
+	device   string
 
 	mu   sync.Mutex
 	conn *tray.Conn
@@ -269,6 +272,11 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	}
 	r.node.Handle(capJoin, "join", r.handleJoin)
 	r.node.Handle(capJoin, "unlink", r.handleUnlink)
+	h, closeCtl := serveCtl("follow", r.node, 0, logf)
+	h.Update(func(s *ctl.Status) { s.Hub, s.Device, s.Seven = r.hub, r.device, r.certs.Leader(r.hub) })
+	r.ctl = h
+	closeRest := r.closeSSH
+	r.closeSSH = func() { closeCtl(); closeRest() }
 	return r, nil
 }
 
@@ -289,6 +297,7 @@ func (r *followRun) certificate() (webrtc.Certificate, error) {
 	if err != nil || len(fps) == 0 {
 		return webrtc.Certificate{}, errors.New("the device certificate has no fingerprint")
 	}
+	r.device = strings.ToLower(strings.ReplaceAll(fps[0].Value, ":", ""))
 	verb := "device"
 	if created {
 		verb = "new device"
@@ -327,6 +336,7 @@ func (r *followRun) onLink(l *link.Link) {
 		return
 	}
 	nonce := conn.Session().BootstrapID()
+	r.ctl.SetState(ctl.StateConnecting)
 	go func() {
 		timer := time.NewTimer(followSetupTimeout)
 		defer timer.Stop()
@@ -393,6 +403,7 @@ func (r *followRun) unlink(name string) int {
 	}
 	_ = r.state.ForgetHub(r.joinURL)
 	_ = r.certs.Delete(r.hub)
+	r.ctl.Update(func(s *ctl.Status) { s.State, s.Code, s.RetryAt = ctl.StateStopped, "UNLINKED", nil })
 	r.status("unlinked by %s", name)
 	return 0
 }
@@ -410,7 +421,9 @@ func (r *followRun) run(ctx context.Context) int {
 		go r.cdp.Watch(ctx, 2*time.Second)
 	}
 	backoff := followBackoffBase
+	attempt := 0
 	for {
+		r.ctl.Update(func(s *ctl.Status) { s.State, s.RetryAt = ctl.StateDialing, nil; s.Dials++ })
 		r.status("connecting to the tray hub")
 		code, outcome := r.once(ctx)
 		if outcome == outcomeStop {
@@ -418,8 +431,12 @@ func (r *followRun) run(ctx context.Context) int {
 		}
 		if outcome == outcomeUp {
 			backoff = followBackoffBase
+			attempt = 0
 		}
 		wait := jitter(backoff)
+		attempt++
+		at := time.Now().Add(wait).UTC()
+		r.ctl.Update(func(s *ctl.Status) { s.State, s.Attempt, s.RetryAt = ctl.StateReconnecting, attempt, &at })
 		r.status("reconnecting in %s", wait.Round(100*time.Millisecond))
 		select {
 		case <-ctx.Done():
@@ -437,6 +454,7 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 	if err != nil {
 		return r.failed(ctx, err, false)
 	}
+	r.ctl.SetState(ctl.StateOffer)
 	conn := tray.NewConn(sess)
 	r.mu.Lock()
 	r.conn = conn
@@ -464,6 +482,12 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 			switch ev.kind {
 			case evUp:
 				up = true
+				r.ctl.Update(func(s *ctl.Status) {
+					now := time.Now().UTC()
+					s.State, s.Seven, s.Attempt, s.Code, s.Error = ctl.StateConnected, ev.name, 0, "", ""
+					s.Links++
+					s.LastLinked = &now
+				})
 				r.status("linked to %s", ev.name)
 			case evDown:
 				if !up {
@@ -521,7 +545,9 @@ func (r *followRun) failed(ctx context.Context, err error, up bool) (int, follow
 		return r.unlink(""), outcomeStop
 	}
 	telemetry.ReportError(telemetry.Signal, err)
+	r.ctl.Update(func(s *ctl.Status) { s.Code, s.Error = code, r.f.Redact(err.Error()) })
 	if msg, ok := fatalFollowCodes[code]; ok {
+		r.ctl.Update(func(s *ctl.Status) { s.State, s.RetryAt = ctl.StateStopped, nil })
 		r.status("%s (%s)", msg, code)
 		return 1, outcomeStop
 	}

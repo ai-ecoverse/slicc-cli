@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/flock"
 )
 
 type Peer struct {
@@ -74,9 +76,9 @@ func lockFile(path string) (func(), error) {
 	}
 	deadline := time.Now().Add(lockWait)
 	for {
-		ok, err := tryLock(f)
+		ok, err := flock.TryLock(f)
 		if ok {
-			return func() { unlock(f); _ = f.Close() }, nil
+			return func() { flock.Unlock(f); _ = f.Close() }, nil
 		}
 		if err != nil || time.Now().After(deadline) {
 			_ = f.Close()

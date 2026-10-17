@@ -4,8 +4,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
@@ -198,4 +200,27 @@ func newCertPEM() (string, error) {
 	_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: der})
 	_ = pem.Encode(&b, &pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	return b.String(), nil
+}
+
+type KnownHub struct {
+	Origin      string
+	Leader      string
+	Fingerprint string
+	CreatedAt   string
+}
+
+func (c *Certs) Known() []KnownHub {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []KnownHub
+	for _, e := range c.load().Hubs {
+		block, _ := pem.Decode([]byte(e.PEM))
+		fp := ""
+		if block != nil && block.Type == "CERTIFICATE" {
+			sum := sha256.Sum256(block.Bytes)
+			fp = hex.EncodeToString(sum[:])
+		}
+		out = append(out, KnownHub{Origin: e.Origin, Leader: e.Leader, Fingerprint: fp, CreatedAt: e.CreatedAt})
+	}
+	return out
 }

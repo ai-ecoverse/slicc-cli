@@ -198,7 +198,7 @@ func (f *defaultFlags) parseProfile(stderr io.Writer) int {
 	return -1
 }
 
-func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), mounts []hostfs.Mount, withJerk bool) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
+func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), mounts []hostfs.Mount, withJerk bool, kernelPort int) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
 	return func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []flow.Browser) (flow.Caps, error) {
 		tcp.Register(n)
 		resolve.Register(n)
@@ -238,6 +238,8 @@ func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), 
 		}
 		wctx, cancel := context.WithCancel(ctx)
 		serveBrowsers(wctx, n, reg)
+		h, closeCtl := serveCtl("default", n, kernelPort, logf)
+		unwatch := watchLocal(h, n, kernelPort)
 		live := func() map[string]bool {
 			out := map[string]bool{}
 			for _, b := range reg.List() {
@@ -247,7 +249,7 @@ func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), 
 			}
 			return out
 		}
-		return flow.Caps{Release: func() { cancel(); closeSSH(); closeMounts() }, Live: live}, nil
+		return flow.Caps{Release: func() { unwatch(); closeCtl(); cancel(); closeSSH(); closeMounts() }, Live: live}, nil
 	}
 }
 
@@ -279,7 +281,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	mounts := hostfs.Load(f.mounts, func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) })
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts, !f.noJerk), Compute: f.compute.dashboard(), Logf: logf,
+		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts, !f.noJerk, f.kernel), Compute: f.compute.dashboard(), Logf: logf,
 	}
 	origins, _ := flow.PageOrigins(f.page, f.origins)
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}

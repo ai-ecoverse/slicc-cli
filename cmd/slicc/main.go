@@ -24,6 +24,7 @@ usage:
   slicc <join-url> follow   follow a seven's tray from this machine
                             (- or @<file> in place of <join-url> reads it
                             from stdin or a file, out of sight of ps)
+  slicc tray [-a] [-q]      list the slicc processes here that hold a link
   slicc <join-url> prompt <text>
                             send a prompt to seven's agent and stream the answer
   slicc <join-url> watch    follow seven's agent as it works
@@ -65,6 +66,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runOpen(args[0], args[1:], os.Stdin, stdout, stderr)
 	case "unpair":
 		return runUnpair(args[1:], stdout, stderr)
+	case "tray":
+		return runTray(args[1:], stdout, stderr)
 	case "prompt", "watch", "abort":
 		return runAgent(args[0], "", args[1:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
 	default:

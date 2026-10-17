@@ -28,6 +28,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
 	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
+	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
@@ -90,6 +91,7 @@ type openFlags struct {
 }
 
 type openOptions struct {
+	mode   string
 	open   bool
 	json   bool
 	notice string
@@ -221,7 +223,7 @@ func runOpen(verb string, args []string, stdin io.Reader, stdout, stderr io.Writ
 	if code >= 0 {
 		return code
 	}
-	return serveOpen(f, openOptions{open: verb == "open"}, stdin, stdout, stderr)
+	return serveOpen(f, openOptions{mode: verb, open: verb == "open"}, stdin, stdout, stderr)
 }
 
 func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -395,7 +397,14 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	})
 	n.API()
 	r.status("offering %s; policy: %s", strings.Join(n.Caps(), ", "), r.pol.Summary())
-	return func() { closeKernel(); closeMounts(); closeSSH() }, nil
+	kernelPort := r.f.kernelPort
+	if r.f.noKernel {
+		kernelPort = 0
+	}
+	h, closeCtl := serveCtl(r.opts.mode, n, kernelPort, r.logf)
+	h.Update(func(s *ctl.Status) { s.Device = r.id.Fingerprint })
+	unwatch := watchLocal(h, n, kernelPort)
+	return func() { unwatch(); closeCtl(); closeKernel(); closeMounts(); closeSSH() }, nil
 }
 
 func (r *openRun) mint() (string, error) {

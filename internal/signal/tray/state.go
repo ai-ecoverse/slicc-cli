@@ -199,3 +199,17 @@ func (s *JoinState) ForgetHub(origin string) error {
 	}
 	return writePrivateJSON(s.path, stateFile{Version: stateVersion, Trays: trays})
 }
+
+func (s *JoinState) Hubs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range s.load().Trays {
+		if h := HubOrigin(e.JoinURL); h != "" && !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	return out
+}

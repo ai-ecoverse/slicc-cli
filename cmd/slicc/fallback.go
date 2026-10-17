@@ -31,5 +31,5 @@ func (f defaultFlags) openFlags(mounts []hostfs.Mount) openFlags {
 
 func runFallback(f defaultFlags, mounts []hostfs.Mount, stdout, stderr io.Writer) int {
 	tty := isTerminal(os.Stdin) && isTerminal(stdout)
-	return serveOpen(f.openFlags(mounts), openOptions{open: tty || f.open, json: f.json, notice: flow.FallbackNotice}, os.Stdin, stdout, stderr)
+	return serveOpen(f.openFlags(mounts), openOptions{mode: "default", open: tty || f.open, json: f.json, notice: flow.FallbackNotice}, os.Stdin, stdout, stderr)
 }
