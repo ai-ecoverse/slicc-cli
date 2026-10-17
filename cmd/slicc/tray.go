@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/agentctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/signal/tray"
 )
@@ -85,6 +87,9 @@ func runTray(args []string, stdout, stderr io.Writer) int {
 	if *all {
 		rows = append(rows, knownTrays(rows)...)
 	}
+	for i := range rows {
+		scrubRow(&rows[i])
+	}
 	if *asJSON {
 		if rows == nil {
 			rows = []ctl.Status{}
@@ -109,6 +114,22 @@ func runTray(args []string, stdout, stderr io.Writer) int {
 	}
 	_ = tw.Flush()
 	return 0
+}
+
+var joinURLs = regexp.MustCompile(`(?i)\bhttps?://[^\s"'<>]*/join/[A-Za-z0-9._~%+-]+`)
+
+func scrub(s string) string {
+	s = strings.Join(strings.Fields(agentctl.Clean(s)), " ")
+	return joinURLs.ReplaceAllString(s, "<join-url>")
+}
+
+func scrubRow(r *ctl.Status) {
+	for _, f := range []*string{&r.Mode, &r.Version, &r.Seven, &r.Origin, &r.Hub, &r.Device, &r.State, &r.Code, &r.Error} {
+		*f = scrub(*f)
+	}
+	for i := range r.Offers {
+		r.Offers[i] = scrub(r.Offers[i])
+	}
 }
 
 func knownTrays(running []ctl.Status) []ctl.Status {

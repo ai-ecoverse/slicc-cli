@@ -226,6 +226,7 @@ func echoOverLink(t *testing.T, p *page) {
 }
 
 func TestDefaultJSONLaunchesLinksAndCloses(t *testing.T) {
+	trayRuntime(t)
 	env, _ := launchEnv(t)
 	profile := "it-default-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	env, id := testChrome(t, env)
@@ -263,6 +264,10 @@ func TestDefaultJSONLaunchesLinksAndCloses(t *testing.T) {
 	p.eval("linkTest.hello()", &hello)
 	if hello.Name != "it-default" || len(hello.Browsers) != 1 || !hello.Browsers[0].Seven {
 		t.Fatalf("node HELLO %+v", hello)
+	}
+	row := trayRowFor(t, env, f.cmd.Process.Pid, "connected")
+	if row.Mode != "default" || row.Seven != "link test page" || !contains(row.Offers, "exit") || !contains(row.Offers, "cdp") {
+		t.Fatalf("slicc tray row %+v", row)
 	}
 
 	if err := interrupt(f.cmd); err != nil {

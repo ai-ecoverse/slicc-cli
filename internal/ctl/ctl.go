@@ -112,12 +112,11 @@ func Serve(h *Holder) (*Server, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, strconv.Itoa(os.Getpid())+".sock")
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := holdLock(path+".lock", ioTimeout)
 	if err != nil {
 		return nil, err
 	}
-	if !lockWithin(lock, ioTimeout) {
-		_ = lock.Close()
+	if lock == nil {
 		return nil, fmt.Errorf("%s is locked", path)
 	}
 	_ = os.Remove(path)
@@ -132,6 +131,34 @@ func Serve(h *Holder) (*Server, error) {
 	s.wg.Add(1)
 	go s.accept()
 	return s, nil
+}
+
+func holdLock(path string, wait time.Duration) (*os.File, error) {
+	for range 5 {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		if !lockWithin(f, wait) {
+			_ = f.Close()
+			return nil, nil
+		}
+		if current(f, path) {
+			return f, nil
+		}
+		flock.Unlock(f)
+		_ = f.Close()
+	}
+	return nil, fmt.Errorf("%s keeps changing", path)
+}
+
+func current(f *os.File, path string) bool {
+	held, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	now, err := os.Stat(path)
+	return err == nil && os.SameFile(held, now)
 }
 
 func lockWithin(f *os.File, d time.Duration) bool {
@@ -154,8 +181,9 @@ func (s *Server) Close() {
 	s.once.Do(func() {
 		_ = s.ln.Close()
 		s.wg.Wait()
-		_ = os.Remove(s.path)
-		_ = os.Remove(s.path + ".lock")
+		if err := os.Remove(s.path); err == nil || errors.Is(err, os.ErrNotExist) {
+			_ = os.Remove(s.path + ".lock")
+		}
 		flock.Unlock(s.lock)
 		_ = s.lock.Close()
 	})
@@ -278,23 +306,20 @@ func Query(ctx context.Context, path string) (*Status, error) {
 }
 
 func Wipe(path string) (bool, error) {
-	lock, err := os.OpenFile(path+".lock", os.O_RDWR, 0)
-	if err == nil {
-		defer func() { _ = lock.Close() }()
-		ok, err := flock.TryLock(lock)
-		if err != nil || !ok {
-			return false, err
-		}
-		defer flock.Unlock(lock)
+	lock, err := holdLock(path+".lock", 0)
+	if err != nil || lock == nil {
+		return false, err
 	}
+	defer func() {
+		flock.Unlock(lock)
+		_ = lock.Close()
+	}()
 	if _, err := Query(context.Background(), path); !errors.Is(err, ErrStale) {
 		return false, nil
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
-	if lock != nil {
-		_ = os.Remove(path + ".lock")
-	}
+	_ = os.Remove(path + ".lock")
 	return true, nil
 }

@@ -1219,10 +1219,20 @@ PID   MODE    SEVEN           DEVICE     STATE                   OFFERS
 - **`-a`:** also the trays this machine knows but isn't following now, from `tray-certs.json` and `tray-join.json`, as `docker ps -a` does: PID `-`, state `not running`, the leader's name from the last link and the device for that hub. Neither file's join URL is shown.
 
 **Control sockets.** Each of those processes serves a control socket while it runs, `<dir>/<pid>.sock`, and removes it on exit.
-- **Where `<dir>` is:** `$XDG_RUNTIME_DIR/slicc` on Linux, otherwise `$TMPDIR/slicc-<uid>` (`/tmp/slicc-<uid>` when that path would be too long for a socket), and `%LocalAppData%\slicc\run` on Windows, as AF_UNIX (Windows 10 and later).
-- **Who can reach it:** the directory is `0700` and must belong to the user, not be a symlink, and is tightened when it's more open. A process that can't serve a socket there runs on without one. Each connection checks the peer's uid (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS) and closes on anyone else; on Windows the directory's ACL keeps other users out.
+- **Where `<dir>` is:**
+  - **Linux:** `$XDG_RUNTIME_DIR/slicc`, otherwise `$TMPDIR/slicc-<uid>`.
+  - **macOS:** `$TMPDIR/slicc-<uid>`.
+  - **Either, when that path is too long for a socket:** `/tmp/slicc-<uid>`.
+  - **Windows:** `%LocalAppData%\slicc\run`, or `%UserProfile%\.slicc-run` when that is too long, as AF_UNIX (Windows 10 and later).
+- **Who can reach it:**
+  - **macOS and Linux:** the directory is `0700`, must belong to the user and not be a symlink, and is tightened when it's more open. Each connection checks the peer's uid (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS) and closes on anyone else.
+  - **Windows:** slicc sets the directory's DACL to the user and SYSTEM only, protected from inheritance, so the sockets in it inherit it. `slicc tray` skips a directory whose DACL is anything else.
+  - **Either way,** a process that can't serve a socket there runs on without one.
 - **The protocol:** one line of JSON each way, `{ "v": 1, "op": "status" }` and the status object above, then the process closes the connection.
-- **Stale sockets:** liveness comes from connecting, not from the PID, so a reused PID can't fool `slicc tray`. A socket that refuses a connection is stale, and `slicc tray` removes it and says so on stderr, as `screen -wipe` does. Each process holds an `flock` on `<pid>.sock.lock` while it runs, so `slicc tray` never removes a live socket.
+- **Stale sockets:** liveness comes from connecting, not from the PID, so a reused PID can't fool `slicc tray`. A socket that refuses a connection is stale, and `slicc tray` removes it and says so on stderr, as `screen -wipe` does.
+  - **The lock:** each process holds an `flock` on `<pid>.sock.lock` while it runs, and `slicc tray` removes a socket only while it holds that lock itself and the socket still refuses. So it never removes a live socket.
+  - **A lock file deleted underneath:** both sides check after locking that the lock file on disk is still the one they hold, and start over when it isn't.
+- **Untrusted text:** `slicc tray` and `--json` strip control characters and terminal escapes from what a process reports, and replace any join URL with `<join-url>`.
 - **Why sockets:** link state changes all the time, and a socket answers with the current state where a state file would lag. A `ps` scan sees no link state.
 
 ## Inside seven

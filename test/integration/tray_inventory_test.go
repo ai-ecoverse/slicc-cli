@@ -1,7 +1,9 @@
 package integration
 
 import (
+	"bufio"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/flock"
 )
 
 type trayRow struct {
@@ -243,6 +247,83 @@ func TestTrayTightensAnOpenRuntimeDirectory(t *testing.T) {
 	trayRowFor(t, env, a.cmd.Process.Pid, "")
 	if fi, err := os.Stat(sockets); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Fatalf("socket directory %v %v", fi, err)
+	}
+}
+
+func TestTrayKeepsASocketWhoseLockIsHeld(t *testing.T) {
+	sockets := trayRuntime(t)
+	a := startAttachEnv(t, true, nil, "--signal", "stdio")
+	env := append(os.Environ(), "SLICC_NO_TELEMETRY=1")
+	pid := a.cmd.Process.Pid
+	trayRowFor(t, env, pid, "")
+	sock := filepath.Join(sockets, strconv.Itoa(pid)+".sock")
+	if err := a.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.cmd.Wait()
+	lock, err := os.OpenFile(sock+".lock", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("no lock file beside the socket: %v", err)
+	}
+	defer func() { _ = lock.Close() }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ok, err := flock.TryLock(lock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the killed process's lock was never released")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := os.Stat(sock); err != nil {
+		t.Skipf("the killed process left no socket to test with: %v", err)
+	}
+	out, errOut, _ := sliccEnv(t, env, "tray")
+	if _, err := os.Stat(sock); err != nil || strings.Contains(errOut, "removed the stale socket") || strings.Contains(out, strconv.Itoa(pid)) {
+		t.Fatalf("slicc tray touched a socket whose lock is held: %v\n%s\n%s", err, out, errOut)
+	}
+	flock.Unlock(lock)
+	_, errOut, _ = sliccEnv(t, env, "tray")
+	if _, err := os.Stat(sock); err == nil || !strings.Contains(errOut, "removed the stale socket of PID "+strconv.Itoa(pid)) {
+		t.Fatalf("slicc tray kept the stale socket once the lock was free: %v\n%s", err, errOut)
+	}
+}
+
+func TestTrayScrubsWhatAProcessReports(t *testing.T) {
+	sockets := trayRuntime(t)
+	a := startAttachEnv(t, true, nil, "--signal", "stdio")
+	env := append(os.Environ(), "SLICC_NO_TELEMETRY=1")
+	trayRowFor(t, env, a.cmd.Process.Pid, "")
+	ln, err := net.Listen("unix", filepath.Join(sockets, "999999.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	secret := "https://tray.example.test/join/tok.5e5e5e5e5e5e"
+	status := map[string]any{"v": 1, "pid": 999999, "mode": "follow", "version": "x", "state": "connected", "since": time.Now().UTC(),
+		"seven": "\x1b[31mevil\nPID " + secret, "hub": secret, "error": "dial " + secret + ": refused", "offers": []string{"exit\x1b[2J"}}
+	body, _ := json.Marshal(status)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = bufio.NewReader(c).ReadString('\n')
+			_, _ = c.Write(append(body, '\n'))
+			_ = c.Close()
+		}
+	}()
+	out, errOut, code := sliccEnv(t, env, "tray")
+	raw, _, _ := sliccEnv(t, env, "tray", "--json")
+	all := out + errOut + raw
+	if code != 0 || !strings.Contains(out, "999999") || !strings.Contains(out, "evil PID <join-url>") || strings.Contains(all, "5e5e5e5e") || strings.Contains(all, "\x1b") || strings.Contains(raw, `\u001b`) {
+		t.Fatalf("code %d\n%s\n%s\n%s", code, out, errOut, raw)
 	}
 }
 
