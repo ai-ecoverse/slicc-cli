@@ -32,7 +32,7 @@ usage:
   slicc launch              launch a browser with CDP in a separate SLICC profile
   slicc update [--check]    replace this binary with the latest release
   slicc install jerk        install slicc-jerk into slicc's data folder
-  slicc --version           print the version
+  slicc --version           print the version and exit
   slicc --help              print this help
 ` + defaultHelp
 
