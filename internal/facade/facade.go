@@ -89,7 +89,7 @@ func (f *Facade) lost() { f.once.Do(func() { close(f.done) }) }
 
 type hello struct {
 	V    int    `json:"v"`
-	Join string `json:"join"`
+	Join string `json:"join,omitempty"`
 	Open any    `json:"open"`
 }
 
@@ -99,37 +99,58 @@ type answer struct {
 }
 
 func (f *Facade) Open(ctx context.Context, open any) (agentctl.Pipe, error) {
-	body, err := json.Marshal(hello{V: version, Join: f.join, Open: open})
+	c, opened, err := f.open(ctx, open, answerTimeout)
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > maxControl {
-		return nil, errors.New("the stream's opening doesn't fit in a facade control record")
+	return newPipe(c, opened), nil
+}
+
+func Call(ctx context.Context, rawURL string, open any, wait time.Duration, dial Dialer) (json.RawMessage, error) {
+	f, err := New(rawURL, "", dial)
+	if err != nil {
+		return nil, err
 	}
-	hctx, cancel := context.WithTimeout(ctx, answerTimeout)
+	c, opened, err := f.open(ctx, open, wait)
+	if err != nil {
+		return nil, err
+	}
+	_ = c.Close()
+	return opened, nil
+}
+
+func (f *Facade) open(ctx context.Context, open any, wait time.Duration) (Conn, json.RawMessage, error) {
+	body, err := json.Marshal(hello{V: version, Join: f.join, Open: open})
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(body) > maxControl {
+		return nil, nil, errors.New("the stream's opening doesn't fit in a facade control record")
+	}
+	hctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	c, err := f.dial(hctx, f.addr)
 	if err != nil {
 		f.lost()
-		return nil, fmt.Errorf("can't reach seven's link facade: %w", err)
+		return nil, nil, fmt.Errorf("can't reach seven's link facade: %w", err)
 	}
 	stop := context.AfterFunc(hctx, func() { _ = c.Close() })
-	p, err := f.handshake(c, body)
+	opened, err := f.handshake(c, body)
 	stopped := stop()
 	if err == nil {
-		return p, nil
+		return c, opened, nil
 	}
 	_ = c.Close()
 	switch {
 	case stopped || hctx.Err() == nil:
-		return nil, err
+		return nil, nil, err
 	case ctx.Err() != nil:
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	}
-	return nil, fmt.Errorf("seven's link facade didn't answer within %s", answerTimeout)
+	return nil, nil, fmt.Errorf("seven's link facade didn't answer within %s", wait)
 }
 
-func (f *Facade) handshake(c Conn, body []byte) (*pipe, error) {
+func (f *Facade) handshake(c Conn, body []byte) (json.RawMessage, error) {
 	if err := writeRecord(c, recControl, body); err != nil {
 		f.lost()
 		return nil, fmt.Errorf("can't reach seven's link facade: %w", err)
@@ -159,7 +180,7 @@ func (f *Facade) handshake(c Conn, body []byte) (*pipe, error) {
 		}
 		return nil, re
 	}
-	return newPipe(c, a.Opened), nil
+	return a.Opened, nil
 }
 
 func parseReset(s string) *agentctl.ResetError {
