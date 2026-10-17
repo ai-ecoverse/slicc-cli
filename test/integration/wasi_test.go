@@ -191,6 +191,60 @@ func TestWasiWatch(t *testing.T) {
 	})
 }
 
+func TestWasiLocalhostIsLoopback(t *testing.T) {
+	runWasi(t, []wasiCase{
+		{Name: "localhost mapped elsewhere", Argv: []string{"slicc", wasiJoin, "abort"}, LinkHost: "localhost",
+			Hosts:    "203.0.113.5 localhost\n",
+			Scenario: []map[string]any{opened(ev("aborted", true), "end", true)},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 0, "", "slicc: aborted the run\n")
+				checkOpen(t, onlyConn(t, r), ev("kind", "agent", "op", "abort"))
+			}},
+	})
+}
+
+func TestWasiHostModuleConnectsLocalhostAsLoopback(t *testing.T) {
+	node := requireNode(t)
+	pkg := wasiPackage(t, node)
+	want := map[string]string{"localhost": "127.0.0.1", "127.0.0.1": "127.0.0.1", "127.3.4.5": "127.3.4.5", "LOCALHOST": "", "localhost.": "", "example.test": "", "10.0.0.1": ""}
+	names := make([]string, 0, len(want))
+	for name := range want {
+		names = append(names, name)
+	}
+	input, err := json.Marshal(map[string]any{"package": pkg, "hosts": names})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(node, "testdata/wasi/hostmodule.mjs")
+	cmd.Stdin = bytes.NewReader(input)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("the host module harness: %v\n%s", err, stderr.String())
+	}
+	var results []struct {
+		Name  string  `json:"name"`
+		FD    int     `json:"fd"`
+		Asked *string `json:"asked"`
+	}
+	if err := json.Unmarshal(out, &results); err != nil || len(results) != len(names) {
+		t.Fatalf("the host module harness answered %q: %v", out, err)
+	}
+	for _, r := range results {
+		asked := "nothing"
+		if r.Asked != nil {
+			asked = *r.Asked
+		}
+		switch w := want[r.Name]; {
+		case w == "" && (r.Asked != nil || r.FD != -2):
+			t.Errorf("connect(%q) = %d and asked ctx.net for %s, want EACCES (-2) without asking", r.Name, r.FD, asked)
+		case w != "" && (asked != w || r.FD != 7):
+			t.Errorf("connect(%q) = %d and asked ctx.net for %s, want %s", r.Name, r.FD, asked, w)
+		}
+	}
+}
+
 func TestWasiAbortAndRefusals(t *testing.T) {
 	runWasi(t, []wasiCase{
 		{Name: "abort", Argv: []string{"slicc", wasiJoin, "abort"},

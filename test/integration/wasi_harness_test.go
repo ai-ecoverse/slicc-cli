@@ -57,6 +57,8 @@ type wasiCase struct {
 	Name           string            `json:"name"`
 	Argv           []string          `json:"argv"`
 	Env            map[string]string `json:"env,omitempty"`
+	LinkHost       string            `json:"linkHost,omitempty"`
+	Hosts          string            `json:"hosts,omitempty"`
 	User           string            `json:"user,omitempty"`
 	Stdin          *string           `json:"stdin,omitempty"`
 	TTY            bool              `json:"tty,omitempty"`

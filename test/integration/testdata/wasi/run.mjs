@@ -49,7 +49,7 @@ async function fakeFacade (kernel, client, c, n) {
     }
   })
   const env = { PATH: '/usr/bin:/bin', HOME: '/root', ...(c.env ?? {}) }
-  if (c.env?.SLICC_LINK_URL === undefined) env.SLICC_LINK_URL = `tcp://127.0.0.1:${port}`
+  if (c.env?.SLICC_LINK_URL === undefined) env.SLICC_LINK_URL = `tcp://${c.linkHost ?? '127.0.0.1'}:${port}`
   if (c.env?.SLICC_LINK_URL === '') delete env.SLICC_LINK_URL
   return {
     env,
@@ -78,6 +78,8 @@ function groupId (text, name) {
 async function runCase (kernel, client, c, n) {
   const facade = page ? realFacade(page, c) : await fakeFacade(kernel, client, c, n)
   const env = facade.env
+  const hosts = c.hosts === undefined ? undefined : await kernel.readFile('/etc/hosts').catch(() => null)
+  if (c.hosts !== undefined) await kernel.writeFile('/etc/hosts', c.hosts)
   let stdout = ''
   let stderr = ''
   const started = Date.now()
@@ -104,6 +106,7 @@ async function runCase (kernel, client, c, n) {
   const ended = await Promise.race([proc.ended, sleep(c.timeout ?? 60000).then(() => null)])
   if (!ended) await signal(proc, 'SIGKILL')
   await sleep(200)
+  if (hosts !== undefined) await kernel.writeFile('/etc/hosts', hosts ?? '')
   const log = await facade.log()
   await facade.stop()
   return { name: c.name, status: ended ? ended.status : -1, interrupted, ms: Date.now() - started, stdout, stderr, log }
