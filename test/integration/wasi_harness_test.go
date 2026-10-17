@@ -186,7 +186,7 @@ func wantExit(t *testing.T, r wasiResult, code int, stdout, stderr string) {
 func onlyConn(t *testing.T, r wasiResult) wasiConn {
 	t.Helper()
 	if len(r.Log) != 1 || r.Log[0].First == nil {
-		t.Fatalf("facade connections: %+v", r.Log)
+		t.Fatalf("facade connections: %+v (exit %d, stdout %q, stderr %q)", r.Log, r.Status, r.Stdout, r.Stderr)
 	}
 	return r.Log[0]
 }

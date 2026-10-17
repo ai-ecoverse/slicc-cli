@@ -142,9 +142,19 @@ export default async function main (ctx) {
   const scripts = JSON.parse(decoder.decode(await ctx.fs.readFile(`${dir}/scenario.json`)))
   const listener = await ctx.net.listen({ port: 0 })
   const log = []
-  const save = () => ctx.fs.writeFile(`${dir}/log.json`, JSON.stringify(log))
+  let saves = 0
+  const publish = async (name, text) => {
+    const part = `${dir}/.${name}.${saves++}`
+    await ctx.fs.writeFile(part, text)
+    await ctx.fs.rename(part, `${dir}/${name}`)
+  }
+  let saved = Promise.resolve()
+  const save = () => {
+    saved = saved.catch(() => {}).then(() => publish('log.json', JSON.stringify(log)))
+    return saved
+  }
   await save()
-  await ctx.fs.writeFile(`${dir}/port`, String(listener.port))
+  await publish('port', String(listener.port))
   for (let n = 0; ; n++) {
     const conn = await listener.accept()
     const script = scripts[Math.min(n, scripts.length - 1)]
