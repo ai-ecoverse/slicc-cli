@@ -63,15 +63,15 @@ flags:
   --name <name>        the name and host this link shows in seven
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
-  --kernel-port <n>    serve http://<port>.kernel.localhost on this local
+` + exposeUsage + `  --kernel-port <n>    serve http://<port>.kernel.localhost on this local
                        port instead of 80
   --no-kernel          don't serve <port>.kernel.localhost at all
 ` + jerkLocalUsage + mountUsage + computeUsage + `
 The link offers net (tcp and resolve), http and ws under the local policy:
 public addresses, this machine and the local network, but not link-local
-addresses, ports 9222-9229, the ports in any DevToolsActivePort file, or
-slicc's own listeners. There is no cdp: slicc controls no browser here.
-`
+addresses, the debugging ports (below), or slicc's own listeners. There is
+no cdp: slicc controls no browser here.
+` + debugPortsHelp
 
 type openFlags struct {
 	page       string
@@ -79,6 +79,7 @@ type openFlags struct {
 	name       string
 	allow      policy.Rules
 	deny       policy.Rules
+	expose     policy.Ports
 	kernelPort int
 	noKernel   bool
 	mounts     stringList
@@ -111,6 +112,7 @@ func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags,
 	fs.StringVar(&f.name, "name", "", "")
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
+	fs.Var(&f.expose, "expose-debug-port", "")
 	fs.IntVar(&f.kernelPort, "kernel-port", kernelin.DefaultPort, "")
 	fs.BoolVar(&f.noKernel, "no-kernel", false, "")
 	fs.Var(&f.mounts, "mount", "")
@@ -211,7 +213,6 @@ type openRun struct {
 	node   *node.Node
 	pol    *policy.Policy
 	host   string
-	ports  []uint16
 	token  string
 }
 
@@ -242,13 +243,12 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 		return 1
 	}
 	defer func() { _ = r.ln.Close() }()
-	release, err := r.serveCaps()
+	release, err := r.serveCaps(ctx)
 	if err != nil {
 		r.status("%v", err)
 		return 1
 	}
 	defer release()
-	go r.watchActivePorts(ctx)
 	if err := r.pair(); err != nil {
 		r.status("%v", err)
 		return 1
@@ -336,25 +336,20 @@ func (r *openRun) listen() error {
 	return nil
 }
 
-func (r *openRun) protectedPorts() []uint16 {
-	if r.ports != nil {
-		return r.ports
-	}
-	var ports []uint16
-	for p := uint16(9222); p <= 9229; p++ {
-		ports = append(ports, p)
-	}
-	ports = append(ports, browser.ActivePorts(browser.Options{})...)
-	ports = append(ports, uint16(r.ln.Port()))
+func (r *openRun) ownPorts() []uint16 {
+	ports := []uint16{uint16(r.ln.Port())}
 	if !r.f.noKernel {
 		ports = append(ports, uint16(r.f.kernelPort))
 	}
-	r.ports = ports
 	return ports
 }
 
-func (r *openRun) serveCaps() (func(), error) {
-	r.pol = policy.Local(r.protectedPorts()...).With(r.f.allow, r.f.deny)
+func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
+	r.pol = policy.Local(r.ownPorts()...).With(r.f.allow, r.f.deny)
+	loopLog := func(format string, a ...any) { r.logf("loopback: "+format, a...) }
+	if err := browser.Guard(ctx, r.pol, browser.Options{}, nil, r.f.expose, loopLog); err != nil {
+		return nil, err
+	}
 	n := node.New(node.Config{
 		Name: r.f.name, Host: r.f.name, Version: version, Mode: "local", Policy: r.pol, Hosts: r.f.hosts.hosts, Exit: true,
 		Logf: r.logf, Status: r.status, Certificates: []webrtc.Certificate{r.id.Certificate},
@@ -401,29 +396,6 @@ func (r *openRun) serveCaps() (func(), error) {
 	n.API()
 	r.status("offering %s; policy: %s", strings.Join(n.Caps(), ", "), r.pol.Summary())
 	return func() { closeKernel(); closeMounts(); closeSSH() }, nil
-}
-
-func (r *openRun) watchActivePorts(ctx context.Context) {
-	known := map[uint16]bool{}
-	for _, p := range r.protectedPorts() {
-		known[p] = true
-	}
-	t := time.NewTicker(5 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		for _, p := range browser.ActivePorts(browser.Options{}) {
-			if !known[p] {
-				known[p] = true
-				r.pol.ProtectPort(p)
-				r.logf("loopback: denied new DevToolsActivePort port %d on every address of this machine", p)
-			}
-		}
-	}
 }
 
 func (r *openRun) mint() (string, error) {

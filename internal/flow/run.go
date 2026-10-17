@@ -42,6 +42,7 @@ type Config struct {
 	Version  string
 	Allow    policy.Rules
 	Deny     policy.Rules
+	Expose   []uint16
 	Browser  browser.Options
 	Chosen   bool
 	Register func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []Browser) (Caps, error)
@@ -296,17 +297,22 @@ func (r *run) setupExtra(ctx context.Context, e browser.Entry) error {
 	return nil
 }
 
-func (r *run) policy() *policy.Policy {
-	var ports []uint16
+func (r *run) policy(ctx context.Context) (*policy.Policy, error) {
+	var given []uint16
 	for _, b := range r.browsers {
 		if p := portOf(b.CDP); p != 0 {
-			ports = append(ports, p)
+			given = append(given, p)
 		}
 	}
+	var kernel uint16
 	if r.cfg.Kernel > 0 {
-		ports = append(ports, uint16(r.cfg.Kernel))
+		kernel = uint16(r.cfg.Kernel)
 	}
-	return policy.Local(ports...).With(r.cfg.Allow, r.cfg.Deny)
+	pol := policy.Local(kernel).With(r.cfg.Allow, r.cfg.Deny)
+	if err := browser.Guard(ctx, pol, r.cfg.Browser, given, r.cfg.Expose, r.cfg.Logf); err != nil {
+		return nil, err
+	}
+	return pol, nil
 }
 
 func portOf(raw string) uint16 {
@@ -319,7 +325,10 @@ func portOf(raw string) uint16 {
 }
 
 func (r *run) serve(ctx context.Context) error {
-	pol := r.policy()
+	pol, err := r.policy(ctx)
+	if err != nil {
+		return err
+	}
 	n := node.New(node.Config{Name: r.cfg.Name, Host: r.cfg.Name, Version: r.cfg.Version, Mode: "local", Policy: pol, Exit: true, Logf: r.cfg.Logf, Status: r.cfg.Logf})
 	caps, err := r.cfg.Register(ctx, n, pol, append([]Browser(nil), r.browsers...))
 	if err != nil {

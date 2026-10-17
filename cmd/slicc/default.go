@@ -73,10 +73,10 @@ flags for slicc with no command:
                       share this folder with seven's kernel (repeatable)
   --allow <rule>      allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>       deny CIDR or CIDR:port (repeatable, comma-separated)
-  --yes               no picker: take the best match
+` + exposeUsageDefault + `  --yes               no picker: take the best match
   --plain             no picker and no dashboard: plain status lines
   --json              NDJSON events on stdout (see README.md)
-` + computeUsage + `
+` + computeUsage + debugPortsHelp + `
 SLICC six's flags (such as --electron, --lead, --serve-only or -v) print
 how to run six with npx sliccy@6, and exit 2.
 `
@@ -94,6 +94,7 @@ type defaultFlags struct {
 	name       string
 	allow      policy.Rules
 	deny       policy.Rules
+	expose     policy.Ports
 	yes        bool
 	plain      bool
 	json       bool
@@ -131,6 +132,7 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	fs.BoolVar(&f.noKernel, "no-kernel", false, "")
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
+	fs.Var(&f.expose, "expose-debug-port", "")
 	fs.BoolVar(&f.yes, "yes", false, "")
 	fs.BoolVar(&f.plain, "plain", false, "")
 	fs.BoolVar(&f.json, "json", false, "")
@@ -277,7 +279,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	mounts := hostfs.Load(f.mounts, func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) })
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts, !f.noJerk), Compute: f.compute.dashboard(), Logf: logf,
+		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts, !f.noJerk), Compute: f.compute.dashboard(), Logf: logf,
 	}
 	origins, _ := flow.PageOrigins(f.page, f.origins)
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}

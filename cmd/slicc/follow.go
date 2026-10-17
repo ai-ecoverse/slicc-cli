@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 	capcdp "github.com/ai-ecoverse/slicc-cli/internal/caps/cdp"
 	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
@@ -51,7 +52,7 @@ flags:
                        public addresses only
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
-  --name <name>        the name and host this link shows in seven
+` + exposeUsage + `  --name <name>        the name and host this link shows in seven
   --cdp <url>          let seven drive this browser over the link (cdp,
                        repeatable); seven gets full control of it, except
                        tabs, cookies and storage on sliccy.ai, and its
@@ -62,13 +63,14 @@ With --runner the link also offers ssh: seven's kernel reaches this machine's
 SSH server, which never listens on a port, and its forwarding goes through
 the remote policy. With --mount it also offers fs: the seven on the other
 machine can read, and unless :ro, change the folders listed.
-`
+` + debugPortsHelp
 
 type followFlags struct {
 	exit       bool
 	name       string
 	allow      policy.Rules
 	deny       policy.Rules
+	expose     policy.Ports
 	signalOnly bool
 	timeout    time.Duration
 	compute    computeFlags
@@ -110,6 +112,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.StringVar(&f.name, "name", "", "")
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
+	fs.Var(&f.expose, "expose-debug-port", "")
 	fs.Var(&f.hosts, "hosts", "")
 	fs.Var(&f.cdp, "cdp", "")
 	fs.Var(&f.mounts, "mount", "")
@@ -216,9 +219,15 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	if err != nil {
 		return nil, err
 	}
-	pol := policy.Remote(cdpPorts(ff.cdp...)...).With(ff.allow, ff.deny)
+	pol := policy.Remote().With(ff.allow, ff.deny)
+	guardCtx, stopGuard := context.WithCancel(context.Background())
+	if err := browser.Guard(guardCtx, pol, browser.Options{}, cdpPorts(ff.cdp...), ff.expose, logf); err != nil {
+		stopGuard()
+		return nil, err
+	}
 	if len(ff.cdp) > 0 {
 		if r.cdp, err = cdpBrowsers(context.Background(), "", ff.cdp, nil, pol, ff.hosts.hosts, logf); err != nil {
+			stopGuard()
 			return nil, err
 		}
 	}
@@ -243,13 +252,14 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	}
 	closeSSH, err := ff.compute.serve(r.node, status)
 	if err != nil {
+		stopGuard()
 		return nil, err
 	}
 	if ff.jerk || ff.jerkSeal {
 		serveJerk(r.node, ff.jerkSeal, true, status)
 	}
 	closeMounts := serveMounts(r.node, hostfs.Load(ff.mounts, status), status)
-	r.closeSSH = func() { closeMounts(); closeSSH() }
+	r.closeSSH = func() { stopGuard(); closeMounts(); closeSSH() }
 	if r.cdp != nil {
 		followBrowsers(r.node, r.cdp, status)
 	}

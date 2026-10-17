@@ -29,15 +29,17 @@ func (l *latePorts) list() []uint16 {
 	return slices.Clone(l.ports)
 }
 
-func (p *Policy) ProtectPort(port uint16) {
-	if p == nil || p.late == nil || port == 0 || slices.Contains(p.hostPorts, port) {
-		return
+func (p *Policy) GuardPort(port uint16) bool {
+	if p == nil || p.late == nil || port == 0 || slices.Contains(p.hard, port) || slices.Contains(p.exposed, port) {
+		return false
 	}
 	p.late.mu.Lock()
 	defer p.late.mu.Unlock()
-	if !slices.Contains(p.late.ports, port) {
-		p.late.ports = append(p.late.ports, port)
+	if slices.Contains(p.late.ports, port) {
+		return false
 	}
+	p.late.ports = append(p.late.ports, port)
+	return true
 }
 
 func (p *Policy) lateEntries(addr netip.Addr, port uint16) []entry {
@@ -48,7 +50,7 @@ func (p *Policy) lateEntries(addr netip.Addr, port uint16) []entry {
 	for _, host := range loopbackHosts {
 		r := Rule{Prefix: netip.MustParsePrefix(host), Port: port}
 		if r.matches(addr, port) {
-			out = append(out, entry{rule: r, deny: true})
+			out = append(out, entry{rule: r, deny: true, hard: true, why: debugWhy})
 		}
 	}
 	return out
