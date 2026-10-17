@@ -22,6 +22,7 @@ usage:
   slicc pair                the same, but only print the pairing URL
   slicc unpair [--all]      list or forget sevens paired with open or pair
   slicc <join-url> follow   follow a seven's tray from this machine
+  slicc tray [-a] [-q]      list the slicc processes here that hold a link
   slicc <join-url> prompt <text>
                             send a prompt to seven's agent and stream the answer
   slicc <join-url> watch    follow seven's agent as it works
@@ -63,6 +64,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runOpen(args[0], args[1:], os.Stdin, stdout, stderr)
 	case "unpair":
 		return runUnpair(args[1:], stdout, stderr)
+	case "tray":
+		return runTray(args[1:], stdout, stderr)
 	case "prompt", "watch", "abort":
 		return runAgent(args[0], "", args[1:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
 	default:

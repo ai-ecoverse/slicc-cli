@@ -201,6 +201,13 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	defer closeSSH()
 	defer serveMounts(n, hostfs.Load(f.mounts, status), status)()
 	serveBrowsers(ctx, n, browsers)
+	kernelPort := f.kernelPort
+	if f.noKernel {
+		kernelPort = 0
+	}
+	h, closeCtl := serveCtl("attach", n, kernelPort, logf)
+	defer closeCtl()
+	defer watchLocal(h, n, kernelPort)()
 	if !f.noKernel {
 		kern := kernelin.New(kernelin.Config{Port: f.kernelPort, Logf: logf, Status: status})
 		defer func() { _ = kern.Close() }()
