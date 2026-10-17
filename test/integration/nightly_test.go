@@ -562,6 +562,18 @@ func newFakeActionsAPI(t *testing.T) *fakeActionsAPI {
 	return f
 }
 
+func (f *fakeActionsAPI) set(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn()
+}
+
+func (f *fakeActionsAPI) body(call string) map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.bodies[call]
+}
+
 func (f *fakeActionsAPI) writes() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -621,7 +633,7 @@ func TestNightlyGateRefusesUnlessTheLatestNightlyPassed(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			api := newFakeActionsAPI(t)
-			api.runs, api.fail = c.runs, c.fail
+			api.set(func() { api.runs, api.fail = c.runs, c.fail })
 			out, code := runStep(t, line, "GITHUB_API_URL="+api.srv.URL)
 			if code != c.code || !regexp.MustCompile(c.want).MatchString(out) {
 				t.Fatalf("exit %d, want %d and /%s/:\n%s", code, c.code, c.want, out)
@@ -660,7 +672,7 @@ func TestNightlyReportOpensCommentsAndClosesTheIssue(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			api := newFakeActionsAPI(t)
-			api.issues, api.label, api.jobs = c.issues, c.label, jobs
+			api.set(func() { api.issues, api.label, api.jobs = c.issues, c.label, jobs })
 			out, code := runStep(t, line, "GITHUB_API_URL="+api.srv.URL, "GITHUB_SERVER_URL=https://github.com", "GITHUB_RUN_ID=4242", "GITHUB_SHA="+sha, "RESULT="+c.result)
 			if code != 0 || !strings.Contains(out, c.want) {
 				t.Fatalf("exit %d, want 0 and %q:\n%s", code, c.want, out)
@@ -669,7 +681,7 @@ func TestNightlyReportOpensCommentsAndClosesTheIssue(t *testing.T) {
 				t.Errorf("wrote %q, want %q", got, c.writes)
 			}
 			if c.body != "" {
-				text := ghString(api.bodies[c.body]["body"])
+				text := ghString(api.body(c.body)["body"])
 				for _, want := range []string{"https://github.com/ai-ecoverse/slicc-cli/actions/runs/4242", sha, "full / test (macos-latest, 2/4)", "full / test (windows-latest, 3/3)", "**" + c.result + "**", "gh workflow run nightly.yml --ref main"} {
 					if !strings.Contains(text, want) {
 						t.Errorf("%s body lacks %q:\n%s", c.body, want, text)
@@ -679,11 +691,11 @@ func TestNightlyReportOpensCommentsAndClosesTheIssue(t *testing.T) {
 					t.Errorf("%s body lists a job that didn't fail:\n%s", c.body, text)
 				}
 			}
-			if c.body == "POST /issues" && fmt.Sprint(api.bodies["POST /issues"]["labels"]) != "[nightly-red]" {
-				t.Errorf("the new issue is labelled %v, want [nightly-red]", api.bodies["POST /issues"]["labels"])
+			if c.body == "POST /issues" && fmt.Sprint(api.body("POST /issues")["labels"]) != "[nightly-red]" {
+				t.Errorf("the new issue is labelled %v, want [nightly-red]", api.body("POST /issues")["labels"])
 			}
-			if strings.Contains(c.writes, "PATCH") && ghString(api.bodies["PATCH /issues/5"]["state"]) != "closed" {
-				t.Errorf("the green nightly sent %v, want state closed", api.bodies["PATCH /issues/5"])
+			if strings.Contains(c.writes, "PATCH") && ghString(api.body("PATCH /issues/5")["state"]) != "closed" {
+				t.Errorf("the green nightly sent %v, want state closed", api.body("PATCH /issues/5"))
 			}
 		})
 	}
