@@ -3,6 +3,8 @@ package cdp
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
 type browserVerdict struct {
@@ -82,9 +84,14 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	switch kind {
 	case kindTargets:
 		list, _ := res["targetInfos"].([]any)
+		kept := make([]any, 0, len(list))
 		for _, item := range list {
 			send = append(send, g.infoLocked(item)...)
+			if info, _ := toInfo(item); !protect.HiddenType(info.Type) {
+				kept = append(kept, item)
+			}
 		}
+		res["targetInfos"] = kept
 	case kindTargetInfo:
 		send = g.infoLocked(res["targetInfo"])
 	case kindCookies:
@@ -164,6 +171,8 @@ type eventHandler func(g *guard, m *message, data []byte) browserVerdict
 var eventHandlers = map[string]eventHandler{
 	"Target.targetCreated":                       (*guard).targetEvent,
 	"Target.targetInfoChanged":                   (*guard).targetEvent,
+	"Target.targetDestroyed":                     (*guard).targetGoneEvent,
+	"Target.targetCrashed":                       (*guard).targetGoneEvent,
 	"Target.attachedToTarget":                    (*guard).attachedEvent,
 	"Target.detachedFromTarget":                  (*guard).detachedEvent,
 	"Target.receivedMessageFromTarget":           (*guard).innerMessageEvent,
@@ -210,8 +219,24 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
 		send := g.infoLocked(p["targetInfo"])
 		info, _ := toInfo(p["targetInfo"])
-		return true, g.targetProtectedLocked(info.TargetID), send
+		return !protect.HiddenType(info.Type), g.targetProtectedLocked(info.TargetID), send
 	})
+}
+
+func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
+	var p struct {
+		TargetID string `json:"targetId"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	if g.hiddenTargetLocked(p.TargetID) {
+		return browserVerdict{}
+	}
+	return browserVerdict{forward: data}
+}
+
+func (g *guard) hiddenTargetLocked(id string) bool {
+	t, ok := g.targets[id]
+	return ok && protect.HiddenType(t.typ)
 }
 
 func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
