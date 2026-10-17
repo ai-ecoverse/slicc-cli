@@ -19,6 +19,7 @@ var privilegedURLs = []string{
 	"chrome://password-manager/",
 	"CHROME://Settings/passwords",
 	"chrome-untrusted://print/",
+	"chrome-untrusted://new-tab-page.evil/",
 	pdfViewerPage,
 	"file:///",
 	"devtools://devtools/bundled/inspector.html",
@@ -78,7 +79,7 @@ func (e *protectEnv) testPrivilegedRefused(t *testing.T) {
 		} `json:"navigate"`
 		Create map[string]cdpOutcome `json:"create"`
 	}
-	allowed := []string{"about:blank#ok", e.allowed + "/?n=privileged"}
+	allowed := []string{"about:blank#ok", "chrome://new-tab-page/", e.allowed + "/?n=privileged"}
 	e.evalJSON(t, "linkTest.protect.privileged("+jsArgs("chrome", allowed)+")", &ok)
 	for _, u := range allowed {
 		if !ok.Navigate[u].OK || !ok.Create[u].OK {

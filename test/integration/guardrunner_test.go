@@ -22,7 +22,7 @@ import (
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
-const guardSetVersion = "1.8.1"
+const guardSetVersion = "1.8.2"
 
 func guardSettleScale() int {
 	switch runtime.GOOS {
