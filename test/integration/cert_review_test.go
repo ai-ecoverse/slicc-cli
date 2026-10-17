@@ -629,8 +629,8 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		if regexp.MustCompile(`ref:\s*\$\{\{[^}]*merge_group\.base_sha`).Match(data) {
-			t.Errorf("%s checks out merge_group.base_sha, which can be the group ahead's speculative commit", filepath.Base(w))
+		if m := regexp.MustCompile(`ref:\s*\$\{\{[^}]*(merge_group\.base_sha|merge_group\.head_sha|pull_request\.head\.)`).FindSubmatch(data); m != nil {
+			t.Errorf("%s checks out %s: tools come from main or the pull request's base, never from a speculative group commit or the code under test", filepath.Base(w), m[1])
 		}
 	}
 	if strings.Contains(jobs["group"], "claude") || strings.Contains(jobs["group"], "package.sh") {

@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  CERT_CONTEXT: cert-review-pr
+  CERT_CONTEXT: cert-review
 
 jobs:
   guard:
@@ -91,6 +91,7 @@ jobs:
           node tools/cert-review/pr.mjs plan --repo "$GITHUB_REPOSITORY" --pr "$PR" --head "$HEAD_SHA" \
             --action "$ACTION" --label "$LABEL" --labels "$LABELS" --run "$GITHUB_RUN_ID" --context "$CERT_CONTEXT" \
             --guard "$GUARD" --approval cert-review-approved
+          grep -qE '^build=(true|false)$' "$GITHUB_OUTPUT" || { echo "::error::plan printed no verdict"; exit 1; }
 
       - id: versions
         if: steps.plan.outputs.build == 'true'
@@ -229,6 +230,7 @@ jobs:
             --labels "$LABELS" --forced "$FORCED" --run "$GITHUB_RUN_ID" --context "$CERT_CONTEXT" \
             --base-manifest "$RUNNER_TEMP/builds/cert-build-base-$VERSION/manifest.json" \
             --candidate-manifest "$RUNNER_TEMP/builds/cert-build-candidate-$VERSION/manifest.json"
+          grep -q '^posted=true$' "$GITHUB_OUTPUT" || { echo "::error::classify posted no status"; exit 1; }
 
       - name: A classification that failed still leaves a status, so the check never waits forever
         if: failure() && steps.classify.outputs.posted != 'true'
@@ -589,13 +591,23 @@ jobs:
             --head "$HEAD_SHA" --commit "$COMMIT" --run "$RUN_URL" --artifact "$RUNNER_TEMP/build" --sums "$SUMS" \
             --findings "$RUNNER_TEMP/findings.json" --review "$RUNNER_TEMP/cert-review" \
             --review-result "$REVIEW" --jobs "$JOBS" --key "${KEY:-false}" --ci-wait 3600 --out "$RUNNER_TEMP/record"; then
-            echo "conclusion=success" >> "$GITHUB_OUTPUT"
+            ok=true
           else
-            state=$(node -p 'require(process.argv[1]).state || "failure"' "$RUNNER_TEMP/record/record.json" 2> /dev/null || echo failure)
-            echo "conclusion=$state" >> "$GITHUB_OUTPUT"
+            ok=false
           fi
-          echo "line=$(head -1 "$RUNNER_TEMP/record/line.txt")" >> "$GITHUB_OUTPUT"
-          { echo '```'; cat "$RUNNER_TEMP/record/line.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          line=$(head -1 "$RUNNER_TEMP/record/line.txt" 2> /dev/null || true)
+          state=$(node -p 'require(process.argv[1]).state || ""' "$RUNNER_TEMP/record/record.json" 2> /dev/null || true)
+          if [ "$ok" = true ] && [ "$state" = success ] && [[ "$line" == "certified "* ]]; then
+            conclusion=success
+          elif [ -z "$line" ] || [ -z "$state" ] || [ "$state" = success ]; then
+            conclusion=error
+            line="cert-ci: INCOMPLETE #$PR: record printed no verdict (re-run the failed jobs)"
+          else
+            conclusion=$state
+          fi
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+          { echo '```'; echo "$line"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -637,6 +649,10 @@ jobs:
           set -euo pipefail
           state=${CONCLUSION:-error}
           line=${LINE:-"cert-ci: INCOMPLETE #$PR: no record (re-run the failed jobs)"}
+          if [ "$state" = success ] && [[ "$line" != "certified "* ]]; then
+            state=error
+            line="cert-ci: INCOMPLETE #$PR: the record printed no certified line (re-run the failed jobs)"
+          fi
           desc=$(printf '%s' "$line" | cut -c1-140)
           curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
             "$GITHUB_API_URL/repos/$GH_REPO/statuses/$HEAD_SHA" \
@@ -684,6 +700,7 @@ jobs:
         run: |
           node tools/cert-review/pr.mjs lookup --repo "$GITHUB_REPOSITORY" --base "$BASE_SHA" --head "$HEAD_SHA" \
             --run "$GITHUB_RUN_ID" --context "$CERT_CONTEXT" --guard "$GUARD" --approval cert-review-approved
+          grep -q '^posted=true$' "$GITHUB_OUTPUT" || { echo "::error::the lookup posted no status"; exit 1; }
 
       - name: A lookup that failed still leaves a status, so the check never waits forever
         if: failure() && steps.lookup.outputs.posted != 'true'

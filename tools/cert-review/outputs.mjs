@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { outputDiff } from './lib.mjs';
+import { outputDiff, reproducedFrom } from './lib.mjs';
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -24,6 +24,8 @@ const { positionals, values } = parseArgs({
     base: { type: 'string', default: '' },
     candidate: { type: 'string', default: '' },
     'files-only': { type: 'boolean', default: false },
+    release: { type: 'string', default: '' },
+    rebuilt: { type: 'string', default: '' },
   },
 });
 
@@ -118,9 +120,23 @@ function diff() {
   console.log(result.match ? 'identical outputs' : `different: ${differ.join(', ')}`);
 }
 
+function reproduce() {
+  const release = readFileSync(values.release, 'utf8');
+  const rebuilt = readFileSync(values.rebuilt, 'utf8');
+  const result = {
+    ...reproducedFrom(release, rebuilt),
+    releaseSums: sha(values.release),
+    rebuiltSums: sha(values.rebuilt),
+    go: execFileSync('go', ['version'], { encoding: 'utf8' }).trim(),
+  };
+  writeFileSync(values.out, `${JSON.stringify(result, null, 2)}\n`);
+  console.log(result.match ? `reproduced ${result.files} files byte for byte (darwin is signed: ${result.signed.join(', ')})` : `different: ${result.differ.join(', ')}`);
+}
+
 if (positionals[0] === 'manifest') manifest();
+else if (positionals[0] === 'reproduce') reproduce();
 else if (positionals[0] === 'diff') diff();
 else {
-  console.error('outputs.mjs manifest|diff');
+  console.error('outputs.mjs manifest|diff|reproduce');
   process.exit(2);
 }

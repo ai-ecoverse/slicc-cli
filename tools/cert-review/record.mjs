@@ -224,7 +224,7 @@ const comment =
     ? readFileSync(join(values.review, 'comment.md'), 'utf8').trim()
     : '**Cert review:** the reviewer wrote no comment.';
 const checks = [
-  `- the reviewed build: ${version}, SHA256SUMS sha256 ${facts.sums ?? '?'} (${facts.files ?? '?'} files, ${facts.packages ?? '?'} npm packages), re-hashed here from the artifact; the build job said ${values.sums || '?'}; ${facts.go ?? '?'}`,
+  `- the reviewed build: ${version}, SHA256SUMS sha256 ${facts.sums ?? '?'} (${facts.files ?? '?'} files and SHA256SUMS, ${facts.packages ?? '?'} npm packages), re-hashed here from the artifact; the build job said ${values.sums || '?'}; ${facts.go ?? '?'}`,
   `- reproducible from a git archive of the merge commit: ${facts.rebuild ? (facts.rebuild.match ? 'yes, byte for byte' : 'NO') : '?'}`,
   `- the NEGATIVE: ${facts.decision ?? '?'}`,
   `- CI at the head: ${facts.ci ? Object.entries(facts.ci).map(([os, legs]) => `${os} ${legs.length ? legs.map((l) => l.split('=')[1]).join('/') : 'none'}`).join(', ') : '?'}`,

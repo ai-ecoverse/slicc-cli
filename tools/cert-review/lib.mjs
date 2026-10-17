@@ -381,3 +381,93 @@ export function prVersion(latest, pr, run) {
   if (!m) throw new Error(`npm's latest reads as '${latest}'`);
   return `${m[1]}.${m[2]}.${Number(m[3]) + 1}-pr.${pr}.${run}`;
 }
+
+export const PLATFORMS = [
+  'darwin-arm64',
+  'darwin-amd64',
+  'linux-arm64',
+  'linux-amd64',
+  'windows-arm64',
+  'windows-amd64',
+];
+
+export const ASSETS = [
+  ...PLATFORMS.map((p) => `slicc-${p}${p.startsWith('windows') ? '.exe' : ''}`),
+  'slicc-wasip1-wasm.wasm',
+  'install.sh',
+];
+
+export function releasePackages(version) {
+  return [
+    { name: '@ai-ecoverse/slicc', version, gate: 'SLICC_NPM_PUBLISH' },
+    ...PLATFORMS.map((p) => ({
+      name: `@ai-ecoverse/slicc-${p}`,
+      version,
+      gate: 'SLICC_NPM_PUBLISH',
+      asset: `slicc-${p}${p.startsWith('windows') ? '.exe' : ''}`,
+    })),
+    { name: '@ai-ecoverse/wasi-slicc', version, gate: 'WASI_SLICC_PUBLISH', asset: 'slicc-wasip1-wasm.wasm' },
+    { name: 'sliccy', version: `7.0.0-next.${version}`, gate: 'SLICCY_NEXT_PUBLISH' },
+  ];
+}
+
+export function provenanceProblems(statement, { repo, name, version, sha512, commit }) {
+  const problems = [];
+  const subject = statement.subject?.find((s) => s.name === `pkg:npm/${name.replace('@', '%40')}@${version}`);
+  if (subject?.digest?.sha512 !== sha512)
+    problems.push(`${name}@${version}: the provenance subject isn't this tarball's sha512`);
+  const build = statement.predicate?.buildDefinition ?? {};
+  const workflow = build.externalParameters?.workflow ?? {};
+  const gitCommit = build.resolvedDependencies?.[0]?.digest?.gitCommit;
+  const builder = statement.predicate?.runDetails?.builder?.id ?? '';
+  if (workflow.repository !== `https://github.com/${repo}`)
+    problems.push(`${name}@${version}: provenance repository is ${workflow.repository}`);
+  if (workflow.path !== '.github/workflows/release.yml')
+    problems.push(`${name}@${version}: provenance workflow is ${workflow.path}`);
+  if (workflow.ref !== 'refs/heads/main') problems.push(`${name}@${version}: provenance ref is ${workflow.ref}`);
+  if (!builder.endsWith('/github-hosted'))
+    problems.push(`${name}@${version}: provenance builder is ${builder || 'missing'}`);
+  if (gitCommit !== commit)
+    problems.push(`${name}@${version}: provenance gitCommit ${gitCommit} isn't the tag's commit ${commit}`);
+  return { problems, facts: { workflow: `${workflow.path}@${workflow.ref}`, gitCommit, builder } };
+}
+
+export function sumsOf(text) {
+  const out = {};
+  for (const line of String(text ?? '').split('\n')) {
+    const m = /^([0-9a-f]{64}) [ *]?(.+)$/.exec(line.trim());
+    if (m) out[m[2]] = m[1];
+  }
+  return out;
+}
+
+export function reproducedFrom(release, rebuilt) {
+  const a = sumsOf(release);
+  const b = sumsOf(rebuilt);
+  const names = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
+  const differ = names.filter((n) => !n.includes('-darwin-') && a[n] !== b[n]);
+  const signed = names.filter((n) => n.includes('-darwin-'));
+  return { match: differ.length === 0 && names.length > 0, differ, signed, files: names.length - signed.length };
+}
+
+const escape = (t) => t.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+
+export function releaseNotes(body, lines) {
+  const text = body ?? '';
+  let all = lines.length > 0;
+  for (const { prefix, sha256 } of lines) {
+    const found = [...text.matchAll(new RegExp(`certified ${escape(prefix)} sha256=([0-9a-f]{64})`, 'g'))].map((m) => m[1]);
+    const other = found.find((s) => s !== sha256);
+    if (other) return { conflict: `the release notes already certify ${prefix} sha256=${other}` };
+    if (found.length === 0) all = false;
+  }
+  if (all) return { unchanged: true, body: text };
+  const kept = text.replace(/\n*<!-- cert-verify -->[\s\S]*?<!-- \/cert-verify -->\n*/g, '').trimEnd();
+  return {
+    body: `${kept}${kept ? '\n\n' : ''}<!-- cert-verify -->\n${lines.map((l) => l.line).join('\n')}\n<!-- /cert-verify -->\n`,
+  };
+}
+
+export function notarized(answers) {
+  return answers.some((a) => a.exit === 0 && /source=Notarized Developer ID/.test(a.output) && /\baccepted\b/.test(a.output));
+}
