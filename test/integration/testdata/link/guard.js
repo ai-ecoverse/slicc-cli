@@ -84,9 +84,48 @@ class SocketClient {
   }
 }
 
-function sessionBound(c) {
+const seenSessions = new Map();
+
+function noteSession(name, e) {
+  if (e.method === 'Target.attachedToTarget') {
+    const info = e.params.targetInfo ?? {};
+    seenSessions.set(e.params.sessionId, {
+      client: name,
+      type: info.type,
+      url: info.url,
+      opener: info.openerId ?? '',
+      context: info.browserContextId ?? '',
+      waitingForDebugger: e.params.waitingForDebugger,
+      parent: e.sessionId ?? '',
+      attached: Date.now(),
+    });
+  } else if (e.method === 'Target.detachedFromTarget' && seenSessions.has(e.params.sessionId)) {
+    seenSessions.get(e.params.sessionId).detached = Date.now();
+  }
+}
+
+function describeSessions(row) {
+  const now = Date.now();
+  const out = [];
+  for (const calls of Object.values(row.inFlight?.clients ?? {})) {
+    for (const call of calls ?? []) {
+      if (!call.session) continue;
+      const seen = seenSessions.get(call.session);
+      if (!seen) {
+        out.push(`session ${call.session}: the page never saw it attach`);
+        continue;
+      }
+      const { attached, detached, ...info } = seen;
+      out.push(`session ${call.session}: ${JSON.stringify({ ...info, attachedMsAgo: now - attached, detachedMsAgo: detached ? now - detached : null })}`);
+    }
+  }
+  return out;
+}
+
+function sessionBound(c, name) {
   const calls = new Map();
   c.on?.((e) => {
+    noteSession(name, e);
     if (e.method !== 'Target.detachedFromTarget') return;
     for (const reject of calls.get(e.params.sessionId) ?? []) reject(new Error('the session detached'));
     calls.delete(e.params.sessionId);
@@ -151,8 +190,8 @@ export function guardStart(getLink, opts) {
         client.transport = 'cli';
         const unguarded = await retried(() => SocketClient.open(b.ws));
         return {
-          client: sessionBound(client),
-          unguarded: sessionBound(unguarded),
+          client: sessionBound(client, 'client'),
+          unguarded: sessionBound(unguarded, 'unguarded'),
           close: async () => {
             unguarded.close();
             await client.close().catch(() => {});
@@ -168,6 +207,7 @@ export function guardStart(getLink, opts) {
       fixture: fixtureLog(opts.log),
       log: (row) => {
         state.started.delete(rowKey(row));
+        if (row.inFlight) row.errors = [...(row.errors ?? []), ...describeSessions(row)];
         state.rows.push(row);
       },
     });
