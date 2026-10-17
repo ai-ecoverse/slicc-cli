@@ -244,7 +244,7 @@ func runSilently(t *testing.T, script string, env ...string) silentRun {
 			t.Fatal(err)
 		}
 	}
-	for _, tool := range []string{"pr.mjs", "record.mjs", "findings.mjs", "verify.mjs", "darwin.mjs", "outputs.mjs", "notes.mjs"} {
+	for _, tool := range []string{"pr.mjs", "record.mjs", "findings.mjs", "gather.mjs", "verify.mjs", "darwin.mjs", "outputs.mjs", "notes.mjs"} {
 		if err := os.WriteFile(filepath.Join(tools, tool), []byte("process.exit(0)\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}

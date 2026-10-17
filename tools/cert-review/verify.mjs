@@ -26,8 +26,7 @@ const { values } = parseArgs({
     lines: { type: 'string', default: '' },
     rebuild: { type: 'string', default: '' },
     darwin: { type: 'string', default: '' },
-    artifacts: { type: 'string' },
-    evidence: { type: 'string', default: '' },
+    artifacts: { type: 'string', default: '' },
     installer: { type: 'string', default: 'https://get.sliccy.ai/slicc' },
     out: { type: 'string', default: '' },
   },
@@ -189,7 +188,6 @@ async function installer(sums) {
 }
 
 function bound() {
-  if (values.artifacts === undefined) return;
   try {
     const since = gh(`repos/${repo}/actions/runs/${values.run}`).run_started_at;
     const listed = ghAll(`repos/${repo}/actions/runs/${values.run}/artifacts`);
@@ -207,14 +205,14 @@ function evidence() {
       return undefined;
     }
   };
-  const rebuild = read(values.rebuild || join(values.evidence, 'rebuild.json'));
+  const rebuild = read(values.rebuild);
   facts.rebuild = rebuild;
   if (!rebuild) missing.push('no rebuild from the tag');
   else if (rebuild.sums !== facts.sums && rebuild.releaseSums !== facts.sums)
     missing.push("the rebuild compared another SHA256SUMS than the release's");
   else if (!rebuild.match)
     problems.push(`not reproducible: a git archive of v${version} builds different ${rebuild.differ.join(', ')}`);
-  const darwin = read(values.darwin || join(values.evidence, 'darwin.json'));
+  const darwin = read(values.darwin);
   facts.darwin = darwin;
   if (!darwin) missing.push('no darwin signature check');
   else

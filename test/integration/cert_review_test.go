@@ -387,6 +387,8 @@ func TestCertReviewTheNegativeFailsOnMainAndPassesOnThePullRequest(t *testing.T)
 type recordCase struct {
 	name, key, state, want string
 	downloads              string
+	bare                   bool
+	declare                func(string) string
 	artifacts              func(arts []map[string]any) []map[string]any
 	verdict                any
 	mutate                 func(dir string)
@@ -429,6 +431,10 @@ func TestCertReviewRecordCertifiesOnlyTheBytesItBuiltWithEveryPieceOfEvidence(t 
 		{name: "an artifact under its producer's id with another name", key: "true", state: "error", want: "artifact 203 is cert-review-delta-1.2.4-pr.7.1, its producer declared cert-review-rebuild-1.2.4-pr.7.1", verdict: certified, rebuildMatch: true, runs: green, artifacts: func(arts []map[string]any) []map[string]any {
 			arts[2]["name"] = "cert-review-delta-1.2.4-pr.7.1"
 			return arts
+		}},
+		{name: "no declarations at all", key: "true", state: "error", want: "no producer declared its artifacts", verdict: certified, rebuildMatch: true, runs: green, bare: true},
+		{name: "a producer that declared no artifact", key: "true", state: "error", want: "cert-review-delta-1.2.4-pr.7.1 has no artifact from its producer", verdict: certified, rebuildMatch: true, runs: green, declare: func(d string) string {
+			return regexp.MustCompile(`cert-review-delta-1\.2\.4-pr\.7\.1=\d+:[0-9a-f]+`).ReplaceAllString(d, "cert-review-delta-1.2.4-pr.7.1=:")
 		}},
 		{name: "a download that failed its digest check", key: "true", state: "error", want: "the suite-base artifact didn't download whole (failure: a digest mismatch or an unknown id)", verdict: certified, rebuildMatch: true, runs: green, downloads: "verdict=success,build=success,delta=success,rebuild=success,suite-candidate=success,suite-base=failure"},
 		{name: "an earlier attempt's leftover is neither evidence nor an alarm", key: "true", state: "success", want: "certified ai-ecoverse/slicc-cli PR #7", verdict: certified, rebuildMatch: true, runs: green, artifacts: func(arts []map[string]any) []map[string]any {
@@ -510,6 +516,9 @@ func recordOnce(t *testing.T, c recordCase) {
 		arts = append(arts, certArtifact(203+i, n+"-1.2.4-pr.7.1"))
 	}
 	declare := declared(arts)
+	if c.declare != nil {
+		declare = c.declare(declare)
+	}
 	if c.artifacts != nil {
 		arts = c.artifacts(arts)
 	}
@@ -519,7 +528,11 @@ func recordOnce(t *testing.T, c recordCase) {
 	}
 	f := newCertAPI(t, withRun(routes, arts))
 	out := filepath.Join(dir, "record")
-	r := certTool(t, f.srv.URL, "record.mjs", "--version", "1.2.4-pr.7.1", "--pr", "7", "--head", "fake-head-0007", "--commit", "fake-merge-0007", "--run", "https://example.invalid/run/1", "--run-id", "1", "--artifacts", declare, "--downloads", downloads, "--artifact", art, "--sums", sumsSHA, "--findings", findings, "--review", review, "--jobs", "build=success,rebuild=success,delta=success,suite=success", "--key", c.key, "--out", out)
+	args := []string{"--version", "1.2.4-pr.7.1", "--pr", "7", "--head", "fake-head-0007", "--commit", "fake-merge-0007", "--run", "https://example.invalid/run/1", "--run-id", "1", "--downloads", downloads}
+	if !c.bare {
+		args = append(args, "--artifacts", declare)
+	}
+	r := certTool(t, f.srv.URL, "record.mjs", append(args, "--artifact", art, "--sums", sumsSHA, "--findings", findings, "--review", review, "--jobs", "build=success,rebuild=success,delta=success,suite=success", "--key", c.key, "--out", out)...)
 	var rec struct {
 		State string `json:"state"`
 		Line  string `json:"line"`
@@ -668,7 +681,7 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 	if strings.Contains(text, "gh.sh") || strings.Contains(text, "cli/cli") || !strings.Contains(review, "if ! command -v gh > /dev/null; then") {
 		t.Fatal("no job downloads gh: the review uses the runner's own, or is INCOMPLETE")
 	}
-	if strings.Contains(review, "/cert-review/findings.json") || !strings.Contains(jobs["record"], "node tools/cert-review/findings.mjs") || !strings.Contains(jobs["record"], `--findings "$RUNNER_TEMP/findings.json"`) || !strings.Contains(jobs["record"], "pattern: cert-review-*-") {
+	if strings.Contains(review, "/cert-review/findings.json") || !strings.Contains(jobs["record"], "node tools/cert-review/findings.mjs") || !strings.Contains(jobs["record"], `--findings "$RUNNER_TEMP/findings.json"`) || !strings.Contains(jobs["record"], "node tools/cert-review/gather.mjs") {
 		t.Fatal("record recomputes the findings from the code-made evidence, never from the reviewer's folder")
 	}
 	for name, body := range jobs {
@@ -730,17 +743,21 @@ func TestCertReviewClassifiesOnlyTheBuildsItsProducersDeclared(t *testing.T) {
 			return arts
 		}},
 		{"the run's artifacts can't be listed", "the run's artifacts couldn't be listed", nil},
+		{"no declarations at all", "no producer declared its artifacts", func(arts []map[string]any) []map[string]any { return arts }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			arts := buildArtifacts()
-			declare := declared(arts)
+			args := []string{"classify", "--pr", "7", "--head", "fake-head-0001", "--labels", "merge-ok", "--run", "1", "--base-manifest", base, "--candidate-manifest", forged}
+			if !strings.HasPrefix(c.name, "no declarations") {
+				args = append(args, "--artifacts", declared(arts))
+			}
 			routes := map[string]any{}
 			if c.mutate != nil {
 				routes = withRun(routes, c.mutate(arts))
 			}
 			f := newCertAPI(t, routes)
-			r := certTool(t, f.srv.URL, "pr.mjs", "classify", "--pr", "7", "--head", "fake-head-0001", "--labels", "merge-ok", "--run", "1", "--artifacts", declare, "--base-manifest", base, "--candidate-manifest", forged)
+			r := certTool(t, f.srv.URL, "pr.mjs", args...)
 			s := onlyStatus(t, f)
 			if r.code != 1 || s["state"] != "error" || !strings.HasPrefix(s["description"].(string), "INCOMPLETE: ") || !strings.Contains(r.out, c.want) || r.outputs["go"] != "" {
 				t.Fatalf("identical builds from unbound artifacts must never be not behaviour: exit %d, status %v\n%s", r.code, s, r.out)
@@ -786,5 +803,149 @@ func TestCertReviewGathersEachProducersOwnEvidenceOnly(t *testing.T) {
 	})
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("a producer's artifact gives only its own evidence, and a failed download none:\n got %v\nwant %v\n%s", got, want, r.out)
+	}
+}
+
+type workflowStep struct{ job, text string }
+
+func workflowSteps(t *testing.T, file string) (string, map[string]string, []workflowStep) {
+	t.Helper()
+	raw, err := os.ReadFile("../../.github/workflows/" + file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	jobs := jobsOf(t, text)
+	steps := []workflowStep{}
+	for name, body := range jobs {
+		parts := strings.Split(body, "\n      - ")
+		for _, p := range parts[1:] {
+			steps = append(steps, workflowStep{name, "        " + p})
+		}
+	}
+	return text, jobs, steps
+}
+
+func stepField(step, key string) string {
+	m := regexp.MustCompile(`(?m)^ {8}(?:  )?` + regexp.QuoteMeta(key) + `: (.*)$`).FindStringSubmatch(step)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+func TestCertWorkflowsBindEveryArtifactByIdAndDigest(t *testing.T) {
+	binders := map[string]map[string]string{
+		"cert-review-pr.yml": {"record": "record", "classify": "build"},
+		"cert-verify.yml":    {"verify": "verify"},
+	}
+	for file, bind := range binders {
+		t.Run(file, func(t *testing.T) {
+			text, jobs, steps := workflowSteps(t, file)
+			for _, banned := range []string{"overwrite:", "pattern:", "merge-multiple:"} {
+				if strings.Contains(text, banned) {
+					t.Errorf("%s has %q: every upload is new and every download is by id", file, banned)
+				}
+			}
+			uploads := map[string][]string{}
+			for _, s := range steps {
+				switch {
+				case strings.Contains(s.text, "uses: actions/download-artifact@"):
+					ids := regexp.MustCompile(`(?m)^ {10}artifact-ids: \$\{\{ (\S+) \}\}$`).FindStringSubmatch(s.text)
+					if ids == nil || stepField(s.text, "name") != "" || stepField(s.text, "digest-mismatch") != "error" {
+						t.Errorf("%s downloads without artifact-ids and digest-mismatch: error, or by name:\n%s", s.job, s.text)
+						continue
+					}
+					if stepField(s.text, "if") != ids[1]+" != ''" {
+						t.Errorf("%s: an empty artifact-ids downloads every artifact in the run, so the step needs if: %s != ''", s.job, ids[1])
+					}
+					if !strings.HasPrefix(ids[1], "needs.") {
+						t.Errorf("%s downloads %s, not a producer job's output", s.job, ids[1])
+					}
+					if stepField(s.text, "continue-on-error") == "true" {
+						id := stepField(s.text, "id")
+						if id == "" || !strings.Contains(jobs[s.job], "${{ steps."+id+".outcome }}") {
+							t.Errorf("%s goes on after a failed download without reading its outcome:\n%s", s.job, s.text)
+						}
+					}
+				case strings.Contains(s.text, "uses: actions/upload-artifact@"):
+					id := stepField(s.text, "id")
+					name := stepField(s.text, "name")
+					if id == "" || !strings.HasPrefix(name, "cert-") {
+						t.Errorf("%s uploads %q without an id, or outside cert-*", s.job, name)
+						continue
+					}
+					outputs := regexp.MustCompile(`(?m)^      ([a-z-]+): (.*steps\.`+regexp.QuoteMeta(id)+`\.outputs\.artifact-(id|digest).*)$`).FindAllStringSubmatch(jobs[s.job], -1)
+					matrix := regexp.MustCompile(`\$\{\{ matrix\.(\w+) \}\}`).FindStringSubmatch(name)
+					sides := []string{""}
+					if matrix != nil {
+						m := regexp.MustCompile(`(?m)^        ` + matrix[1] + `: \[(.*)\]$`).FindStringSubmatch(jobs[s.job])
+						if m == nil {
+							t.Fatalf("%s has no matrix %s", s.job, matrix[1])
+						}
+						sides = strings.Split(m[1], ", ")
+					}
+					for _, side := range sides {
+						key := map[string]string{}
+						for _, o := range outputs {
+							if matrix == nil || strings.Contains(o[2], "matrix."+matrix[1]+" == '"+side+"' && ") {
+								key[o[3]] = o[1]
+							}
+						}
+						if key["id"] == "" || key["digest"] == "" {
+							t.Errorf("%s doesn't hand on %s's artifact-id and artifact-digest for %q as its own outputs", s.job, name, side)
+							continue
+						}
+						full := name
+						if matrix != nil {
+							full = strings.ReplaceAll(name, "${{ matrix."+matrix[1]+" }}", side)
+						}
+						uploads[s.job] = append(uploads[s.job], full+"=${{ needs."+s.job+".outputs."+key["id"]+" }}:${{ needs."+s.job+".outputs."+key["digest"]+" }}")
+					}
+				}
+			}
+			for binder, of := range bind {
+				body := jobs[binder]
+				if !strings.Contains(body, "      actions: read\n") || !strings.Contains(body, `--artifacts "$ARTIFACTS"`) {
+					t.Errorf("%s must list the run's artifacts (actions: read) and get every declared one (--artifacts)", binder)
+				}
+				want := []string{}
+				for job, decl := range uploads {
+					if job != binder && (of == binder || job == of) {
+						want = append(want, decl...)
+					}
+				}
+				if len(want) == 0 {
+					t.Errorf("%s binds nothing", binder)
+				}
+				for _, d := range want {
+					if !strings.Contains(body, d) {
+						t.Errorf("%s doesn't declare %s", binder, d)
+					}
+				}
+			}
+			if file == "cert-review-pr.yml" {
+				record := jobs["record"]
+				for _, flag := range []string{`--run-id "$GITHUB_RUN_ID"`, `--downloads "$DOWNLOADS"`, `node tools/cert-review/gather.mjs --in "$RUNNER_TEMP/art" --downloads "$DOWNLOADS" --out "$ev"`} {
+					if !strings.Contains(record, flag) {
+						t.Errorf("record lacks %s", flag)
+					}
+				}
+				if !strings.Contains(jobs["review"], `node tools/cert-review/gather.mjs --in "$RUNNER_TEMP/art" --downloads "$DOWNLOADS" --out "$ev"`) {
+					t.Error("the review reads each producer's own evidence only, through gather")
+				}
+				for _, job := range []string{"review", "record"} {
+					for _, s := range steps {
+						if s.job != job || !strings.Contains(s.text, "uses: actions/download-artifact@") || !strings.Contains(s.text, "/art/") {
+							continue
+						}
+						id := strings.TrimPrefix(stepField(s.text, "id"), "dl-")
+						if !strings.Contains(jobs[job], id+"=${{ steps.dl-"+id+".outcome }}") {
+							t.Errorf("%s doesn't tell gather and record how %s downloaded", job, id)
+						}
+					}
+				}
+			}
+		})
 	}
 }

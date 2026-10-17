@@ -16,7 +16,7 @@ const { values } = parseArgs({
     commit: { type: 'string', default: '' },
     run: { type: 'string', default: '' },
     'run-id': { type: 'string', default: '' },
-    artifacts: { type: 'string' },
+    artifacts: { type: 'string', default: '' },
     downloads: { type: 'string', default: '' },
     artifact: { type: 'string', default: '' },
     sums: { type: 'string', default: '' },
@@ -103,7 +103,6 @@ async function bound() {
   for (const [what, outcome] of values.downloads.split(',').map((x) => x.trim().split('=')))
     if (what && outcome !== 'success' && outcome !== 'skipped')
       missing.push(`the ${what} artifact didn't download whole (${outcome || 'no outcome'}: a digest mismatch or an unknown id)`);
-  if (values.artifacts === undefined) return undefined;
   const run = values['run-id'];
   if (!/^\d+$/.test(run)) return missing.push("record has no --run-id to list the run's artifacts");
   try {
