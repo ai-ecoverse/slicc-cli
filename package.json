@@ -40,7 +40,7 @@
   "devDependencies": {
     "@ai-ecoverse/slicc-browsers": "1.8.3",
     "@ai-ecoverse/slicc-kernel": "1.124.2",
-    "@ai-ecoverse/slicc-shared-web": "1.23.2",
+    "@ai-ecoverse/slicc-shared-web": "1.23.3",
     "@semantic-release/exec": "7.1.0",
     "semantic-release": "25.0.9"
   }
