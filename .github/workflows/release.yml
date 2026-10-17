@@ -13,6 +13,7 @@ on:
       - scripts/is-main.mjs
       - scripts/verdict.sh
       - scripts/npm-*.mjs
+      - scripts/nightly-gate.mjs
       - scripts/package.sh
       - scripts/release-plan.mjs
       - scripts/sliccy-next.mjs
@@ -96,12 +97,39 @@ jobs:
             echo "verdict=current" >> "$GITHUB_OUTPUT"
           fi
 
+  nightly:
+    needs: fresh
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && !inputs.sliccy_next_only
+      || github.event_name == 'workflow_run' && (needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown')) }}
+    name: Latest nightly passed
+    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Refuse the release unless the latest nightly on main passed within 36 hours
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh scripts/verdict.sh nightly node scripts/nightly-gate.mjs
+
   release:
-    needs: [ci, fresh]
+    needs: [ci, fresh, nightly]
     if: >-
       ${{ !cancelled() && (github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown') && (needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'
       && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
-      && github.event.workflow_run.head_repository.full_name == github.repository) }}
+      && github.event.workflow_run.head_repository.full_name == github.repository) && (github.ref != 'refs/heads/main' || needs.nightly.result == 'success') }}
     runs-on: macos-latest
     timeout-minutes: 90
     permissions:
