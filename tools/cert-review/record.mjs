@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { ciEvidence, GAPS, jobsEvidence, knownLine, NAME, verdictLine, withMissing } from './lib.mjs';
+import { artifactBinding, ciEvidence, declaredArtifacts, GAPS, jobsEvidence, knownLine, NAME, verdictLine, withMissing } from './lib.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { values } = parseArgs({
@@ -15,6 +15,9 @@ const { values } = parseArgs({
     head: { type: 'string', default: '' },
     commit: { type: 'string', default: '' },
     run: { type: 'string', default: '' },
+    'run-id': { type: 'string', default: '' },
+    artifacts: { type: 'string' },
+    downloads: { type: 'string', default: '' },
     artifact: { type: 'string', default: '' },
     sums: { type: 'string', default: '' },
     findings: { type: 'string', default: '' },
@@ -46,7 +49,7 @@ async function all(path) {
     const r = await fetch(url, { headers });
     if (!r.ok) throw new Error(`GET ${path}: HTTP ${r.status}`);
     const page = await r.json();
-    out.push(...(Array.isArray(page) ? page : (page.check_runs ?? [])));
+    out.push(...(Array.isArray(page) ? page : (page.check_runs ?? page.artifacts ?? [])));
     url = /<([^>]+)>;\s*rel="next"/.exec(r.headers.get('link') ?? '')?.[1];
   }
   return out;
@@ -92,6 +95,26 @@ function artifact() {
     const tgz = join(dir, 'npm', p.file);
     if (!existsSync(tgz)) problems.push(`${name}'s tarball ${p.file} is missing`);
     else if (sha(tgz) !== p.sha256) problems.push(`${name}'s tarball re-hashes to ${sha(tgz)}, the build said ${p.sha256}`);
+  }
+  return undefined;
+}
+
+async function bound() {
+  for (const [what, outcome] of values.downloads.split(',').map((x) => x.trim().split('=')))
+    if (what && outcome !== 'success' && outcome !== 'skipped')
+      missing.push(`the ${what} artifact didn't download whole (${outcome || 'no outcome'}: a digest mismatch or an unknown id)`);
+  if (values.artifacts === undefined) return undefined;
+  const run = values['run-id'];
+  if (!/^\d+$/.test(run)) return missing.push("record has no --run-id to list the run's artifacts");
+  try {
+    const r = await fetch(`${API}/repos/${repo}/actions/runs/${run}`, { headers });
+    if (!r.ok) throw new Error(`GET the run: HTTP ${r.status}`);
+    const since = (await r.json()).run_started_at;
+    const listed = await all(`repos/${repo}/actions/runs/${run}/artifacts`);
+    facts.artifacts = listed.filter((a) => String(a.name).startsWith('cert-')).length;
+    missing.push(...artifactBinding({ declared: declaredArtifacts(values.artifacts), listed, since }));
+  } catch (error) {
+    missing.push(`the run's artifacts couldn't be listed: ${one(error.message)}`);
   }
   return undefined;
 }
@@ -203,6 +226,7 @@ try {
   problems.push(`the build check failed: ${one(error.message).slice(0, 300)}`);
 }
 codedFindings();
+await bound();
 await ci();
 const review = readVerdict();
 const known = await knownList(review);

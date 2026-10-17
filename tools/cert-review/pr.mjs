@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { forcedFiles, groupVerdict, mergedPrs, outputDiff, reviewsItself } from './lib.mjs';
+import { artifactBinding, declaredArtifacts, forcedFiles, groupVerdict, mergedPrs, outputDiff, reviewsItself } from './lib.mjs';
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -18,6 +18,7 @@ const { positionals, values } = parseArgs({
     guard: { type: 'string', default: '' },
     approval: { type: 'string', default: 'cert-review-approved' },
     forced: { type: 'string', default: '' },
+    artifacts: { type: 'string' },
     'base-manifest': { type: 'string', default: '' },
     'candidate-manifest': { type: 'string', default: '' },
   },
@@ -45,7 +46,7 @@ async function all(path) {
   while (url) {
     const r = await request(url);
     const page = await r.json();
-    out.push(...(Array.isArray(page) ? page : (page.commits ?? [])));
+    out.push(...(Array.isArray(page) ? page : (page.commits ?? page.artifacts ?? [])));
     url = /<([^>]+)>;\s*rel="next"/.exec(r.headers.get('link') ?? '')?.[1];
   }
   return out;
@@ -133,7 +134,24 @@ function readManifest(file) {
   }
 }
 
+async function bound() {
+  if (values.artifacts === undefined) return [];
+  try {
+    const run = await (await request(`repos/${repo}/actions/runs/${values.run}`)).json();
+    const listed = await all(`repos/${repo}/actions/runs/${values.run}/artifacts`);
+    return artifactBinding({ declared: declaredArtifacts(values.artifacts), listed, since: run.run_started_at });
+  } catch (error) {
+    return [`the run's artifacts couldn't be listed: ${error.message}`];
+  }
+}
+
 async function classify() {
+  const unbound = await bound();
+  if (unbound.length) {
+    await status(values.head, 'error', `INCOMPLETE: ${unbound.join('; ')}`);
+    summary(`#${values.pr}: the builds aren't their producers' artifacts: ${unbound.join('; ')}`);
+    process.exit(1);
+  }
   const base = readManifest(values['base-manifest']);
   const candidate = readManifest(values['candidate-manifest']);
   const forced = values.forced.split(',').filter(Boolean);
