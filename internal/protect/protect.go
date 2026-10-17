@@ -155,10 +155,11 @@ func HiddenType(typ string) bool {
 	return typ != "" && slices.Contains(rules.TargetTypes, typ)
 }
 
-func (o *Origins) Target(raw, typ string, previous bool, opener Opener) bool {
-	if HiddenType(typ) {
-		return true
-	}
+func (o *Origins) TargetOf(raw, typ string, previous bool, opener Opener) bool {
+	return HiddenType(typ) || o.Target(raw, previous, opener)
+}
+
+func (o *Origins) Target(raw string, previous bool, opener Opener) bool {
 	if Inheriting(raw) {
 		return previous || opener == OpenerProtected || opener == OpenerUnknown
 	}

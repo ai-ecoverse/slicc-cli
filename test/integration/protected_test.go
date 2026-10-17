@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"testing"
 
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
@@ -14,10 +15,29 @@ var openers = map[string]protect.Opener{
 	sliccbrowsers.OpenerUnknown:     protect.OpenerUnknown,
 }
 
+type typedTargets interface {
+	TargetOf(raw, typ string, previous bool, opener protect.Opener) bool
+}
+
+func targetProtected(o *protect.Origins, url, typ string, previous bool, opener protect.Opener) bool {
+	if tt, ok := any(o).(typedTargets); ok {
+		return tt.TargetOf(url, typ, previous, opener)
+	}
+	return o.Target(url, previous, opener)
+}
+
 func TestProtectedVectors(t *testing.T) {
 	v, err := sliccbrowsers.Protected()
 	if err != nil {
 		t.Fatal(err)
+	}
+	var typed struct {
+		Targets []struct {
+			Type string `json:"type"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(sliccbrowsers.ProtectedJSON(), &typed); err != nil || len(typed.Targets) != len(v.Targets) {
+		t.Fatalf("protected.json targets: %v", err)
 	}
 	o, err := protect.New(v.Origins)
 	if err != nil {
@@ -28,13 +48,14 @@ func TestProtectedVectors(t *testing.T) {
 			t.Errorf("URL(%q) = %v, want %v", c.URL, got, c.Protected)
 		}
 	}
-	for _, c := range v.Targets {
+	for i, c := range v.Targets {
 		op, ok := openers[c.Opener]
 		if !ok {
 			t.Fatalf("target vector %+v: unknown opener", c)
 		}
-		if got := o.Target(c.URL, c.Type, c.Previous, op); got != c.Protected {
-			t.Errorf("Target(%+v) = %v", c, got)
+		typ := typed.Targets[i].Type
+		if got := targetProtected(o, c.URL, typ, c.Previous, op); got != c.Protected {
+			t.Errorf("Target(%+v, type %q) = %v", c, typ, got)
 		}
 	}
 	for _, c := range v.CookieDomains {
