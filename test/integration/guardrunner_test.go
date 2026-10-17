@@ -309,6 +309,8 @@ func runGuardVectors(t *testing.T, variant string) {
 		"log":          "http://127.0.0.1:" + strconv.Itoa(fix.log),
 		"sha":          sha,
 		"rowTimeoutMs": guardRowTimeout.Milliseconds(),
+		"only":         os.Getenv("EXP_ONLY"),
+		"repeat":       os.Getenv("EXP_REPEAT"),
 	}
 	var started struct {
 		Started bool `json:"started"`

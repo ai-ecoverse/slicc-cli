@@ -183,6 +183,11 @@ export function guardStart(getLink, opts) {
   const browsers = opts.browsers;
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
+    if (opts.only) {
+      const re = new RegExp(opts.only);
+      const picked = set.vectors.filter((v) => re.test(v.id));
+      set.vectors = Array.from({ length: Number(opts.repeat || 1) }, () => picked).flat();
+    }
     const running = run(set, {
       clientFactory: async ({ slot }) => {
         const b = browsers[slot % browsers.length];
