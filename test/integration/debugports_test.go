@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,10 +35,28 @@ type debugPorts struct {
 
 func serveFakeDebug(t *testing.T, ln net.Listener) int {
 	t.Helper()
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, fakeDebugBody) }), ReadHeaderTimeout: 5 * time.Second}
+	port := ln.Addr().(*net.TCPAddr).Port
+	var conns, requests atomic.Int32
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			_, _ = io.WriteString(w, fakeDebugBody)
+		}),
+		ConnState: func(_ net.Conn, st http.ConnState) {
+			if st == http.StateNew {
+				conns.Add(1)
+			}
+		},
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
-	return ln.Addr().(*net.TCPAddr).Port
+	t.Cleanup(func() {
+		_ = srv.Close()
+		if t.Failed() {
+			t.Logf("fake debugging port %d: %d connections, %d requests", port, conns.Load(), requests.Load())
+		}
+	})
+	return port
 }
 
 func fakeDebugPair(t *testing.T) (int, int) {
@@ -77,6 +96,7 @@ func newDebugPorts(t *testing.T) *debugPorts {
 		"XDG_CONFIG_HOME": filepath.Join(root, ".config"),
 		"APPDATA":         filepath.Join(root, "Roaming"),
 		"LOCALAPPDATA":    filepath.Join(root, "Local"),
+		"SLICC_DEBUG":     "1",
 	}
 	config := set["XDG_CONFIG_HOME"]
 	switch runtime.GOOS {
