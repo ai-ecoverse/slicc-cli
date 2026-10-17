@@ -246,7 +246,7 @@ func (g *guard) decide(t *target, previous bool) bool {
 	if t.typ == "browser" {
 		return false
 	}
-	return g.o.Target(t.url, t.typ, previous, g.openerState(t))
+	return g.o.TargetOf(t.url, t.typ, previous, g.openerState(t))
 }
 
 func (g *guard) record(info targetInfo) *target {
