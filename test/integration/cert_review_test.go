@@ -617,6 +617,22 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 			t.Errorf("%s uploads into the code-made evidence (cert-review-*)", name)
 		}
 	}
+	if !strings.Contains(jobs["group"], "          ref: ${{ github.event.merge_group.base_ref }}\n") {
+		t.Fatal("the merge group's tools come from main (base_ref), never from the group's speculative parent")
+	}
+	workflows, err := filepath.Glob("../../.github/workflows/*.yml")
+	if err != nil || len(workflows) == 0 {
+		t.Fatalf("workflows: %v", err)
+	}
+	for _, w := range workflows {
+		data, err := os.ReadFile(w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if regexp.MustCompile(`ref:\s*\$\{\{[^}]*merge_group\.base_sha`).Match(data) {
+			t.Errorf("%s checks out merge_group.base_sha, which can be the group ahead's speculative commit", filepath.Base(w))
+		}
+	}
 	if strings.Contains(jobs["group"], "claude") || strings.Contains(jobs["group"], "package.sh") {
 		t.Fatal("the merge group only looks up")
 	}
