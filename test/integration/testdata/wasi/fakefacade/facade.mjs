@@ -50,12 +50,16 @@ async function serve (conn, script, entry, save) {
   entry.first = first ? { type: first.type, json: JSON.parse(decoder.decode(first.payload)) } : null
   await save()
   if (script.silent) {
+    entry.settled = true
+    await save()
     await sleep(script.silent)
     await conn.close()
     return
   }
   if (script.garbage) {
     await send(encoder.encode(script.garbage))
+    entry.settled = true
+    await save()
     await sleep(200)
     await conn.close()
     return
@@ -64,6 +68,8 @@ async function serve (conn, script, entry, save) {
   if (script.stall) {
     await sleep(300)
     await send(control({ reset: script.stall }))
+    entry.settled = true
+    await save()
     await sleep(30000)
     await conn.close()
     return
@@ -98,11 +104,15 @@ async function serve (conn, script, entry, save) {
     }
     entry.text = decoder.decode(all)
     entry.closed = true
+    entry.settled = true
+    await save()
     resolveEnd()
   })().catch(error => {
     entry.closed = true
+    entry.settled = true
     entry.readError = String(error?.code ?? error)
     resolveEnd()
+    return save()
   })
   if (script.garbageLater) {
     await sleep(200)
@@ -149,9 +159,15 @@ export default async function main (ctx) {
     await ctx.fs.rename(part, `${dir}/${name}`)
   }
   let saved = Promise.resolve()
+  let queued = null
   const save = () => {
-    saved = saved.catch(() => {}).then(() => publish('log.json', JSON.stringify(log)))
-    return saved
+    if (!queued) {
+      queued = saved = saved.catch(() => {}).then(() => {
+        queued = null
+        return publish('log.json', JSON.stringify(log))
+      })
+    }
+    return queued
   }
   await save()
   await publish('port', String(listener.port))
@@ -160,7 +176,10 @@ export default async function main (ctx) {
     const script = scripts[Math.min(n, scripts.length - 1)]
     const entry = { records: [], controls: [], bytes: 0, ended: false, closed: false }
     log.push(entry)
-    serve(conn, script, entry, save).catch(error => { entry.error = String(error?.message ?? error) }).finally(save)
+    serve(conn, script, entry, save).catch(error => { entry.error = String(error?.message ?? error) }).finally(() => {
+      entry.settled = true
+      return save()
+    })
     await save()
   }
 }

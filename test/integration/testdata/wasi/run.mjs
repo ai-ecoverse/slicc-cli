@@ -54,6 +54,7 @@ async function fakeFacade (kernel, client, c, n) {
   return {
     env,
     log: () => readJSON(kernel, `${dir}/log.json`),
+    settles: true,
     stop: async () => {
       await signal(facade, 'SIGKILL')
       await Promise.race([facade.ended, sleep(2000)]).catch(() => {})
@@ -105,7 +106,12 @@ async function runCase (kernel, client, c, n) {
   }
   const ended = await Promise.race([proc.ended, sleep(c.timeout ?? 60000).then(() => null)])
   if (!ended) await signal(proc, 'SIGKILL')
-  await sleep(200)
+  if (facade.settles) {
+    await waitFor('the facade to record the connections', async () => {
+      const log = await facade.log()
+      return log && log.every(e => e.settled)
+    }, 15000).catch(() => {})
+  } else await sleep(200)
   if (hosts !== undefined) await kernel.writeFile('/etc/hosts', hosts ?? '')
   const log = await facade.log()
   await facade.stop()
