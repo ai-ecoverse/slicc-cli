@@ -20,6 +20,25 @@ type wasiFirst struct {
 		Join string         `json:"join"`
 		Open map[string]any `json:"open"`
 	} `json:"json"`
+	Keys []string `json:"-"`
+}
+
+func (f *wasiFirst) UnmarshalJSON(b []byte) error {
+	type plain wasiFirst
+	if err := json.Unmarshal(b, (*plain)(f)); err != nil {
+		return err
+	}
+	var raw struct {
+		JSON map[string]json.RawMessage `json:"json"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	f.Keys = f.Keys[:0]
+	for k := range raw.JSON {
+		f.Keys = append(f.Keys, k)
+	}
+	return nil
 }
 
 type wasiStamp struct {

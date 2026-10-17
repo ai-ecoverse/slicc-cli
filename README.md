@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift (see [Coming from slicc-node](#coming-from-slicc-node)).
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, `slicc tray`, remote control with `prompt`, `watch` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, `slicc tray` (on a machine and inside seven), remote control with `prompt`, `watch` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
 
 ## Commands (planned)
 
@@ -17,6 +17,7 @@
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)) |
 | `slicc <join-url> prompt <text>`, `watch`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-and-abort)) |
 | `slicc <join-url> prompt`, `watch`, `abort` inside seven | the same commands from seven's kernel, as `@ai-ecoverse/wasi-slicc` (works now; see [Inside seven](#inside-seven)) |
+| `slicc tray [url \| rotate \| unlink <device> \| retry]` inside seven | this seven's tray: its state and devices, the join URL on request, rotate it, drop a device, reconnect (see [Inside seven](#inside-seven)) |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
 | `slicc update [--check]` | replace this binary with the latest release (works now; see [Updates](#updates)) |
 | `slicc install jerk` | install slicc-jerk into slicc's data folder (works now; see [Companion tools](#companion-tools)) |
@@ -1237,12 +1238,17 @@ PID   MODE    SEVEN           DEVICE     STATE                   OFFERS
 
 ## Inside seven
 
-`slicc` also runs inside seven's kernel, so that one seven's agent or user can prompt, watch and abort another seven's agent. That build is `slicc.wasm`, slicc-cli's client commands compiled with `GOOS=wasip1 GOARCH=wasm` and `CGO_ENABLED=0`, and it ships as the npm package `@ai-ecoverse/wasi-slicc`, at slicc-cli's own version. seven's page holds the WebRTC link; slicc only reaches the page's link facade.
+`slicc` also runs inside seven's kernel, so that one seven's agent or user can prompt, watch and abort another seven's agent, and see and manage this seven's own tray. That build is `slicc.wasm`, slicc-cli's client commands compiled with `GOOS=wasip1 GOARCH=wasm` and `CGO_ENABLED=0`, and it ships as the npm package `@ai-ecoverse/wasi-slicc`, at slicc-cli's own version. seven's page holds the WebRTC link; slicc only reaches the page's link facade.
 
 ```
 slicc <join-url> prompt [--steer | --reject] [--thinking] [--json] [--plain] <text>|@file|-
 slicc <join-url> watch [--thinking] [--json] [--plain]
 slicc <join-url> abort
+slicc tray [--json]
+slicc tray url
+slicc tray rotate
+slicc tray unlink <device>
+slicc tray retry
 slicc --version
 slicc --help
 ```
@@ -1251,14 +1257,24 @@ slicc --help
   - **Ctrl-C** ends slicc with 130 (the kernel's default for `SIGINT`), `watch` included, and a running prompt goes on in the other seven. `--abort-on-interrupt` isn't offered.
   - **Exit 3** covers the facade's own refusals too. When the facade gives a message (`unlock the vault to continue`, or the other seven's refusal), slicc prints it instead of the Linked devices hint.
   - **A terminal** is a standard stream that is a character device. Styling then follows `TERM`, `NO_COLOR` and `--plain` as usual.
+- **`slicc tray`:** this seven's tray, the leader's view (SLICC six's `host`). It asks the facade with the `tray` kind ([§5.16](#516-the-link-facade-page-side-not-on-the-wire-the-in-kernel-slicc)), so it takes no join URL.
+  - **`slicc tray`** prints the tray's state (`off`, `connecting`, `ready`, `reconnecting` or `failed`) and its hub origin, the current exit when it is a device or a tailnet node, and one line per device: `DEVICE` (its fingerprint, as `3fa9…c210`), `NAME`, `HOST` (`<label>.slicc.internal`), `MODE`, `STATE` (`connecting`, `connected` or `offline`) and `OFFERS` (`exit` when the device offers to be the exit). `--json` prints seven's answer as one line of JSON.
+  - **`slicc tray url`** prints the join URL and nothing else, so `slicc tray url > /dev/clipboard` copies it. It is the one deliberate exception to "the join URL is never printed": nothing else prints it, `slicc tray` and `--json` included, so it reaches a transcript only when asked for. It prints only an answer that is a valid join URL without control characters, and exits 1 otherwise.
+  - **Whatever seven answers**, slicc doesn't trust it to keep the rule. `slicc tray`, `--json` and the error messages replace any join URL in the answer with `<join-url>`, and strip control characters and terminal escapes from names and messages. `--json` also drops `url`, `join`, `joinUrl`, `joinCommand`, `followUrl` and `webhookUrl` keys, wherever they are, and prints one line.
+  - **`slicc tray rotate`** makes a new join URL; the old one stops working (SLICC six's `host reset`). It prints nothing on stdout, and `made a new join URL; …` on stderr. `unlink` and `retry` also confirm on stderr.
+  - **`slicc tray unlink <device>`** drops one device, as Linked devices' Unlink does. `<device>` is a fingerprint, a unique prefix of one (colons and case ignored), or exactly the short form `slicc tray` shows (`3fa9…c210`, or `3fa9...c210`). slicc asks for the status first and matches there, then sends the full id. No match or more than one exits 1.
+  - **`slicc tray retry`** reconnects the tray's links, as the Reconnect button does.
+  - **Not here:** choosing the exit (that's routing, not tray state), and SLICC six's `host join` and `host leave`: a seven follower runs no kernel or agent of its own, so following stays with `#follow=` and the UI's Leave.
+  - **Exit status:** 0, 1 on failure (`ENOTCONN` when the tray isn't connected, a facade that doesn't answer within 1 minute, or 5 minutes for `rotate` and `unlink`, which seven may ask you to approve), 2 for bad usage, 3 when seven refuses (`EACCES`).
 - **Everything else** exits 2 with `slicc: <command> isn't available inside seven`: `follow`, `attach`, `open`, `browsers`, the default flow, `update`, `install`, and `prompt`, `watch` or `abort` without a join URL. `--help` lists only what works there.
 - **What the build leaves out** (build constraints): pion and the link, CDP, SSH, mounts, the kernel listener, the policy, browser discovery, telemetry and updates.
 
 **The link facade.** slicc reads its address from `SLICC_LINK_URL` only, as `tcp://127.0.0.1:<port>` on the kernel's loopback (any `127.x` address, or `localhost`). Without it, or with another shape, slicc exits 1. Each `agent` stream (see [`agent`](#agent-page-cap-agent-node--page)) is one connection, carrying records of a `u8` type, a `u32` big-endian length and the payload, both ways:
 - **`1`, control:** JSON, at most 64 KiB.
   - slicc's first record is `{ "v": 1, "join": "<join-url>", "open": { "kind": "agent", "op": … } }`, where `open` is the stream's OPEN, `length` for long prompts included. The join URL goes only there, never in an address, a log or an error.
+  - For `slicc tray`, it is `{ "v": 1, "open": { "kind": "tray", "op": … } }`, without `join`. The page answers with one control record, `{ "opened": <result> }` or a `reset`, and slicc closes the connection (see [§5.16](#516-the-link-facade-page-side-not-on-the-wire-the-in-kernel-slicc)).
   - The page answers `{ "opened": { … } }` (the OPENED) or `{ "reset": "ERRNO: message" }`. A `reset` may also come later, as the stream's RESET.
-  - Without an answer within 1 minute, slicc gives up: `seven's link facade didn't answer within 1m0s`, exit 1 (`watch` reconnects).
+  - Without an answer within 1 minute, slicc gives up: `seven's link facade didn't answer within 1m0s`, exit 1 (`watch` reconnects). `slicc tray rotate` and `unlink` wait 5 minutes, since seven may ask for approval first.
 - **`2`, data:** the stream's DATA: a long prompt's bytes up, and NDJSON events down. slicc sends records of at most 64 KiB, and takes records of up to 16 MiB; record boundaries carry no meaning.
 - **`3`, end:** that side's END. slicc closes the connection after both ends or a reset.
 - **Errors:** an unknown type, a control record over 64 KiB, any record over 16 MiB, a control record that isn't JSON, or a later control record that isn't a `reset` makes slicc send `{ "reset": "EPROTO" }` and fail the stream. `ENOTCONN` (the tray can't be reached) fails `prompt` and `abort` with exit 1; `watch` says `lost the link to seven; reconnecting` and retries with its usual backoff, as it does when a connection drops.
@@ -1267,13 +1283,13 @@ slicc --help
 
 **The package.** `@ai-ecoverse/wasi-slicc` holds `bin/slicc.wasm`, `host/slicc-host.mjs`, this section as its README, and the LICENSE. Its `package.json` has `"slicc": { "abi": "wasi", "commands": { "slicc": { "wasm": "bin/slicc.wasm", "imports": "host/slicc-host.mjs" } } }` and `engines.slicc-kernel`. The release attaches `slicc.wasm` as `slicc-wasip1-wasm.wasm`, in `SHA256SUMS` and its attestation (see [Releases](#releases)).
 
-**Tests.** `test/integration/wasi_test.go` builds `slicc.wasm`, stages the package with `npm-stage.mjs --wasi-only`, and runs it in `@ai-ecoverse/slicc-kernel`'s Node kernel (an exact-pinned devDependency, so `npm ci` first) against a fake facade, a kernel JS program in `testdata/wasi/fakefacade/`. One case writes `/etc/hosts` as root to map `localhost` to `203.0.113.5` and connects to `tcp://localhost:<port>`; `testdata/wasi/hostmodule.mjs` also loads the staged `host/slicc-host.mjs` with a `ctx.net` that records the host it is asked for. `wasi_realfacade_test.go` runs it against the kernel's own link facade (`createNodeKernel({ facades: { link } })`), served by a test page hook, `testdata/wasi/page.mjs`, that implements [§5.16](#516-the-link-facade-page-side-not-on-the-wire-the-in-kernel-slicc): it checks the stamp the hook receives (root and a cone in `sudo` pass, a scoop gets `EACCES`) and that the kernel sets `SLICC_LINK_URL`. `cmd/slicc` builds for both: a file there that needs a native-only package carries `//go:build !wasip1`, and `wasi_test.go` fails when the `wasip1` build breaks or links one of the left-out packages.
+**Tests.** `test/integration/wasi_test.go` builds `slicc.wasm`, stages the package with `npm-stage.mjs --wasi-only`, and runs it in `@ai-ecoverse/slicc-kernel`'s Node kernel (an exact-pinned devDependency, so `npm ci` first) against a fake facade, a kernel JS program in `testdata/wasi/fakefacade/`. One case writes `/etc/hosts` as root to map `localhost` to `203.0.113.5` and connects to `tcp://localhost:<port>`; `testdata/wasi/hostmodule.mjs` also loads the staged `host/slicc-host.mjs` with a `ctx.net` that records the host it is asked for. `wasi_realfacade_test.go` runs it against the kernel's own link facade (`createNodeKernel({ facades: { link } })`), served by a test page hook, `testdata/wasi/page.mjs`, that implements [§5.16](#516-the-link-facade-page-side-not-on-the-wire-the-in-kernel-slicc): it checks the stamp the hook receives (root and a cone in `sudo` pass, a scoop gets `EACCES`) and that the kernel sets `SLICC_LINK_URL`. `wasi_tray_test.go` runs `slicc tray` against both, and checks that its openings carry no join URL. `cmd/slicc` builds for both: a file there that needs a native-only package carries `//go:build !wasip1`, and `wasi_test.go` fails when the `wasip1` build breaks or links one of the left-out packages.
 
 ## Tray hub signaling (remote setup)
 
 A node on another machine sets up its link through the tray hub, the `slicc-tray-hub` worker on `www.sliccy.ai`. seven is the tray leader and the node is a follower. The wire contract is six's `packages/shared-ts/src/tray-signaling.ts`. The node only signals over it and never speaks six's tray-sync messages.
 
-**Join URL.** `https://<host>/join/<token>`. Plain `http` is accepted only for loopback hosts. The join URL is the secret: the node never prints it, its token, or the token's secret part, in output, logs or errors.
+**Join URL.** `https://<host>/join/<token>`. Plain `http` is accepted only for loopback hosts. The join URL is the secret: the node never prints it, its token, or the token's secret part, in output, logs or errors. The one exception is `slicc tray url` inside seven, which prints the leader's own join URL when asked to (see [Inside seven](#inside-seven)).
 
 **Attach.** `POST <join-url>` with `{ "controllerId", "runtime": "slicc-link/1" }`. The runtime tag lets seven tell link nodes from six's followers; the hub passes it on in `follower.join_requested`, and the node sends it again on `retry`. `wait` is retried after `retryAfterMs` (clamped to 50 ms–30 s) with the same controller id. `signal` starts a bootstrap and carries the TURN and STUN `iceServers` for the peer connection. `fail` (`INVALID_JOIN_CAPABILITY`, `TRAY_EXPIRED`) is terminal.
 
@@ -1880,10 +1896,10 @@ From [slicc-bios#360](https://github.com/ai-ecoverse/slicc-bios/pull/360) and [s
 
 #### 5.16 The link facade (page side, not on the wire): the in-kernel `slicc`
 
-How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-leader). This isn't a link stream. It's seven's page serving its own kernel. The page holds the WebRTC; the program never sees the hub, the join state or the peer connection.
+How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-leader), and this seven's own tray. This isn't a link stream. It's seven's page serving its own kernel. The page holds the WebRTC; the program never sees the hub, the join state or the peer connection.
 
 - **The program:** `@ai-ecoverse/wasi-slicc`, slicc-cli's client command layer built for `GOOS=wasip1` (published by slicc-cli, offered by bios's catalog).
-  - **Commands:** `slicc <join-url> prompt|watch|abort`, with the CLI's own flags, output and `--json` events.
+  - **Commands:** `slicc <join-url> prompt|watch|abort`, with the CLI's own flags, output and `--json` events, and `slicc tray` (below).
   - **Anything else** exits 2 with `slicc: <command> isn't available inside seven`. A prompt without a join URL is refused the same way.
   - **How it reaches the facade:** through its host module, at `SLICC_LINK_URL` (below).
 - **Where it's served:** a page-served kernel facade with the caller's stamp on each connection, mirroring the CDP facade on `127.0.0.1:9222`. The mechanism is [slicc-kernel#526](https://github.com/ai-ecoverse/slicc-kernel/issues/526), shipped in [slicc-kernel 1.90.0](https://github.com/ai-ecoverse/slicc-kernel/tree/v1.90.0#page-facades) ([#556](https://github.com/ai-ecoverse/slicc-kernel/pull/556)):
@@ -1892,15 +1908,24 @@ How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-
   - **The port:** reserved from boot, so a program's `bind()` to it fails with `EADDRINUSE`, and kernel-only, so the page's `kernel.dial`, a client's `dial` and `loopbackFetch` are refused with `ECONNREFUSED`.
   - **The limit:** bytes from the page wait in the kernel until the program reads them, up to 16 MiB per connection. Past that, the kernel closes the connection, and the hook's `close(reason)` gets `slicc-kernel: more than 16777216 bytes are waiting for the program to read`.
 - **The connection:** a raw byte stream on the kernel's loopback, reached at `SLICC_LINK_URL` (`tcp://127.0.0.1:<port>`). The kernel hands the connection and the connector's stamp to the page's hook, as `SO_PEERCRED` would. The program's host module connects with the imports-module API's `ctx.net.connect` (slicc-kernel 1.92.0 or later).
-- **Framing, one connection per [§5.11](#511-agent-page-cap-agent-node--page-remote-control) stream:** records of `u8 type`, a `u32` BE length, then the payload (as [§5.15](#515-ws-cap-ws-page--node-websockets-for-kernel-programs)), in both directions.
+- **Framing, one connection per [§5.11](#511-agent-page-cap-agent-node--page-remote-control) stream or `tray` request:** records of `u8 type`, a `u32` BE length, then the payload (as [§5.15](#515-ws-cap-ws-page--node-websockets-for-kernel-programs)), in both directions.
   - **`1` control (JSON):**
     - the program's first record is `{ "v": 1, "join": "<join-url>", "open": { "kind": "agent", "op": "prompt" | "watch" | "abort", … } }`. `open` is exactly [§5.11](#511-agent-page-cap-agent-node--page-remote-control)'s OPEN, `length` for long prompts included;
+    - or, for this seven's own tray, `{ "v": 1, "open": { "kind": "tray", "op": "status" | "url" | "rotate" | "unlink" | "retry", "id"? } }`, without `join` (below);
     - the page answers with `{ "opened": { … } }` ([§5.11](#511-agent-page-cap-agent-node--page-remote-control)'s OPENED) or `{ "reset": "ERRNO: message" }`. After a `reset`, it closes the connection.
   - **`2` data:** the stream's DATA, prompt bytes up and NDJSON down.
   - **`3` end:** that side's END. The page closes the connection after both ends, or after a `reset`.
   - **After the first exchange, the only control record allowed is a `reset`,** at any point: it's that stream's RESET. Any other later control record gets `reset` `EPROTO`.
   - **Limits:** a control record is at most 64 KiB. A data record is at most 16 MiB, and senders keep them at 64 KiB or less. Any other type, or an oversized or malformed record, gets a `reset` with `EPROTO`.
   - **Ctrl-C inside seven** ends the program with status 130 (the kernel's default), `watch` included. Go on `wasip1` can't catch signals, so `--abort-on-interrupt` isn't offered there.
+- **The `tray` kind:** this seven's own tray, the leader's view, with no join URL and no link stream behind it. The page serves it from what its Network port already has (`status().links`, `status().exit`, `rotateJoinUrl`, `unlink(id)`, `retryLinks`). One request per connection: the page answers with one control record, `{ "opened": <result> }` or `{ "reset": "ERRNO: message" }`, sends nothing else, and closes; slicc closes after the answer too.
+  - **`status`:** `{ "tray": "idle" | "connecting" | "ready" | "reconnecting" | "failed", "error"?, "hub"?, "exit", "devices": [ … ] }`. `tray` is the tray's state (`idle` when it is off), `error` its last error, `hub` the hub's origin (never the join URL), and `exit` the Network port's current exit (`null`, `{ "kind": "link", "id" }` or `{ "kind": "tailnet", "node" }`). `devices` holds the Network port's devices, live and away, each `{ "id", "name", "kind"?, "host", "address", "mode", "offers", "policy"?, "exit", "state", "access"? }`; a remote device's `id` is its DTLS fingerprint, SHA-256 in lowercase hex without colons, the same id the device's own `slicc` shows. The answer never holds the join URL, `joinCommand`, `followUrl` or the webhook URL.
+  - **`url`:** `{ "url": "<join-url>" }`, or `ENOTCONN` when the tray isn't `ready`. It is the only answer that carries the join URL.
+  - **`rotate`:** `rotateJoinUrl`; `{}`. The new URL isn't in the answer.
+  - **`unlink`:** `unlink(id)` for the device whose `id` equals `"id"` exactly; `{}`, or `ENOENT` when there's none. Matching a prefix is slicc's job.
+  - **`retry`:** `retryLinks`; `{}`.
+  - **Approval:** the page may ask the user to approve `rotate` and `unlink` first, as `sudo` does; a refusal is `EACCES: …`. slicc waits 5 minutes for those, and 1 minute for the others.
+  - **Anything else** (another `op`, a `join` with `kind: "tray"`, a missing `id` for `unlink`) is `EINVAL`. A page without a tray answers every op with `EOPNOTSUPP`.
 - **Who may:**
   - **only under kernel users `enforce`;**
   - **only uid 0 and members of `sudo`** (cones), from the stamp. Scoops are refused;
