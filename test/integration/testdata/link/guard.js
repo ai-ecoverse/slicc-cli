@@ -191,7 +191,7 @@ export function guardStart(getLink, opts) {
     const running = run(set, {
       clientFactory: async ({ slot }) => {
         const b = browsers[slot % browsers.length];
-        const client = await retried(() => CdpClient.open(getLink(), b.id));
+        const client = opts.direct ? await retried(() => SocketClient.open(b.ws)) : await retried(() => CdpClient.open(getLink(), b.id));
         client.transport = 'cli';
         const unguarded = await retried(() => SocketClient.open(b.ws));
         return {
@@ -199,7 +199,7 @@ export function guardStart(getLink, opts) {
           unguarded: sessionBound(unguarded, 'unguarded'),
           close: async () => {
             unguarded.close();
-            await client.close().catch(() => {});
+            await Promise.resolve(client.close()).catch(() => {});
           },
         };
       },

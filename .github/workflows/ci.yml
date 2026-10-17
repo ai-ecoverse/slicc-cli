@@ -12,14 +12,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, only: '', repeat: '1', n: a }
-          - { os: windows-latest, only: '', repeat: '1', n: b }
-          - { os: windows-latest, only: '', repeat: '1', n: c }
-          - { os: windows-latest, only: '^C3\.', repeat: '6', n: d }
-          - { os: windows-latest, only: '^C3\.', repeat: '6', n: e }
-          - { os: windows-latest, only: '^C3\.', repeat: '6', n: f }
-          - { os: macos-latest, only: '^C3\.', repeat: '6', n: g }
-          - { os: ubuntu-latest, only: '^C3\.', repeat: '6', n: h }
+          - { os: windows-latest, only: '^C3\.', repeat: '6', n: d1, direct: '1' }
+          - { os: windows-latest, only: '^C3\.', repeat: '6', n: d2, direct: '1' }
+          - { os: windows-latest, only: '^C3\.', repeat: '6', n: d3, direct: '1' }
+          - { os: windows-latest, only: '', repeat: '1', n: d4, direct: '1' }
+          - { os: windows-latest, only: '', repeat: '1', n: d5, direct: '1' }
+          - { os: windows-latest, only: '', repeat: '1', n: s1, direct: '' }
     runs-on: ${{ matrix.os }}
     name: stress (${{ matrix.os }}, ${{ matrix.n }})
     timeout-minutes: 70
@@ -49,6 +47,7 @@ jobs:
           SLICC_GUARD_VECTORS: '1'
           EXP_ONLY: ${{ matrix.only }}
           EXP_REPEAT: ${{ matrix.repeat }}
+          EXP_DIRECT: ${{ matrix.direct }}
 
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
