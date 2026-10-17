@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMain } from './is-main.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const suite = process.env.SLICC_TEST_SHARD_SUITE || join(root, 'test', 'integration');
@@ -62,7 +63,7 @@ export function shardFlag(shards, { index, count }) {
   return ['-skip', `^(${others.sort().join('|')})$`];
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   const [spec, ...rest] = process.argv.slice(2);
   let flag;
   let shard;
@@ -75,15 +76,39 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.stderr.write(`test-shard: ${err.message}\nusage: test-shard.mjs <index>/<count> [--print | go test flags and packages]\n`);
     process.exit(2);
   }
+  if (shard.tests.length === 0) {
+    process.stderr.write(`test-shard ${spec}: no tests in ${suite}; a shard that runs nothing would pass\n`);
+    process.exit(1);
+  }
   if (rest.length === 1 && rest[0] === '--print') {
     process.stdout.write(flag.join('\n') + '\n');
     process.exit(0);
   }
   process.stderr.write(`test-shard ${spec}: ${shard.tests.length} tests, about ${Math.round(shard.seconds)} s by the ${platform} times\n`);
-  const run = spawnSync('go', ['test', ...flag, ...rest], { stdio: 'inherit' });
-  if (run.error) {
-    process.stderr.write(`test-shard: go test: ${run.error.message}\n`);
+  const verbose = rest.some((a) => /^--?(test\.)?v(=true)?$/.test(a));
+  const run = spawn('go', ['test', ...flag, ...rest], { stdio: ['inherit', 'pipe', 'inherit'] });
+  let ran = 0;
+  let tail = '';
+  run.stdout.on('data', (chunk) => {
+    process.stdout.write(chunk);
+    const lines = (tail + chunk.toString('utf8')).split('\n');
+    tail = lines.pop();
+    for (const line of lines) if (/^--- (PASS|FAIL|SKIP): Test/.test(line)) ran += 1;
+  });
+  run.on('error', (err) => {
+    process.stderr.write(`test-shard: go test: ${err.message}\n`);
     process.exit(1);
-  }
-  process.exit(run.status ?? 1);
+  });
+  run.on('close', (code, signal) => {
+    if (/^--- (PASS|FAIL|SKIP): Test/.test(tail)) ran += 1;
+    if (code !== 0) {
+      process.stderr.write(`test-shard: FAIL ${platform} ${spec}: go test exited ${code ?? signal}\n`);
+      process.exit(code || 1);
+    }
+    if (verbose && ran === 0) {
+      process.stderr.write(`test-shard: FAIL ${platform} ${spec}: go test ran no tests of the ${shard.tests.length} selected\n`);
+      process.exit(1);
+    }
+    process.stdout.write(`test-shard: PASS ${platform} ${spec} ${verbose ? `ran ${ran} tests` : `selected ${shard.tests.length} tests`}\n`);
+  });
 }

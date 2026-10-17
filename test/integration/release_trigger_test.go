@@ -2,6 +2,7 @@ package integration
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -42,7 +43,7 @@ func TestReleaseFollowsAGreenCIPushOnMain(t *testing.T) {
 		"    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.sliccy_next_only }}\n    name: CI on this commit\n",
 		"(needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'",
 		"    needs: [ci, fresh]\n",
-		"${{ !cancelled() && needs.fresh.outputs.stale != 'true' && ",
+		"${{ !cancelled() && (github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown') && ",
 		"git ls-remote \"$REPO\" refs/heads/main",
 	} {
 		if !strings.Contains(release, want) {
@@ -119,6 +120,8 @@ func jobSteps(body string) []workflowBlock {
 	return steps
 }
 
+var onlyEcho = regexp.MustCompile(`^echo "(?:[^"$\\` + "`" + `]|\$[A-Za-z_{])*"(?: >> "\$GITHUB_OUTPUT")?$`)
+
 func TestReleasePublishesOnlyFromMain(t *testing.T) {
 	raw, err := os.ReadFile("../../.github/workflows/release.yml")
 	if err != nil {
@@ -132,7 +135,7 @@ func TestReleasePublishesOnlyFromMain(t *testing.T) {
 	}
 	publishes := func(body string) string {
 		for _, line := range strings.Split(body, "\n") {
-			if strings.Contains(line, "--dry-run") {
+			if strings.Contains(line, "--dry-run") || onlyEcho.MatchString(strings.TrimSpace(line)) {
 				continue
 			}
 			for _, marker := range []string{"semantic-release", "scripts/npm-publish.mjs", "scripts/sliccy-next.mjs", "actions/attest-build-provenance", "scripts/go-warm.sh", "releases/latest"} {
@@ -142,6 +145,17 @@ func TestReleasePublishesOnlyFromMain(t *testing.T) {
 			}
 		}
 		return ""
+	}
+	for line, want := range map[string]string{
+		`echo "fresh: PASS unknown (semantic-release decides); releasing $SHA"`: "",
+		`echo "verdict=unknown" >> "$GITHUB_OUTPUT"`:                            "",
+		`echo "go" && node scripts/npm-publish.mjs`:                             "scripts/npm-publish.mjs",
+		`echo "go"; npx semantic-release`:                                       "semantic-release",
+		`echo "$(npx semantic-release)"`:                                        "semantic-release",
+	} {
+		if got := publishes(line); got != want {
+			t.Errorf("publishes(%q) = %q, want %q", line, got, want)
+		}
 	}
 	jobs := workflowJobs(t, text)
 	if jobs["release"].body == "" || jobs["sliccy-next"].body == "" || jobs["install-smoke"].body == "" {

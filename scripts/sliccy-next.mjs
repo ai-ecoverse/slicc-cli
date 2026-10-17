@@ -57,3 +57,4 @@ try {
   rmSync(work, { recursive: true, force: true });
 }
 node('npm-publish.mjs', ['--dir', values.out, '--tag', 'next', '--require-registry', ...(values['dry-run'] ? ['--dry-run'] : [])]);
+process.stdout.write(`sliccy-next: PASS sliccy@7.0.0-next.${version}${values['dry-run'] ? ' (dry run)' : ''}\n`);

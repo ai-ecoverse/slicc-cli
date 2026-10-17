@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMain } from './is-main.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const usage = 'usage: shard-times.mjs [--out <file>] (--run <CI run id> [--repo <owner/name>] | <platform>=<go test -v log>...)';
@@ -60,7 +61,7 @@ function runLogs(run, repo) {
   return logs;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   const args = process.argv.slice(2);
   let out = join(root, 'test', 'integration', 'shard-times.json');
   let run = '';

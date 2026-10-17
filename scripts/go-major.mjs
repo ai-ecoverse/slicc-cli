@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMain } from './is-main.mjs';
 import { parseArgs } from 'node:util';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -37,7 +38,7 @@ export function checkMajor(version, gomod) {
   return { major, path };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: { 'go-mod': { type: 'string', default: join(root, 'go.mod') } },
@@ -48,9 +49,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   }
   try {
     const { major, path } = checkMajor(positionals[0], readFileSync(values['go-mod'], 'utf8'));
-    process.stdout.write(`go-major: ${positionals[0]} (major ${major}) fits module path ${path}\n`);
+    process.stdout.write(`go-major: PASS ${positionals[0]} (major ${major}) fits module path ${path}\n`);
   } catch (err) {
-    process.stderr.write(`go-major: ${err.message}\n`);
+    process.stderr.write(`go-major: FAIL ${err.message}\n`);
     process.exit(1);
   }
 }

@@ -6,7 +6,7 @@
     [
       "@semantic-release/exec",
       {
-        "verifyReleaseCmd": "test \"$(cat dist/VERSION)\" = '${nextRelease.version}' && node scripts/go-major.mjs '${nextRelease.version}'"
+        "verifyReleaseCmd": "test \"$(cat dist/VERSION)\" = '${nextRelease.version}' && sh scripts/verdict.sh go-major node scripts/go-major.mjs '${nextRelease.version}'"
       }
     ],
     [
@@ -22,7 +22,7 @@
     [
       "@semantic-release/exec",
       {
-        "publishCmd": "node scripts/npm-publish.mjs && node scripts/npm-publish.mjs --dir dist/npm-next --tag next"
+        "publishCmd": "sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs && sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dir dist/npm-next --tag next"
       }
     ]
   ]
