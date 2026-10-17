@@ -394,11 +394,11 @@ func TestProcessListScanRunsInTheBackground(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	done := make(chan error, 1)
-	go func() { done <- d.Control("tcp4", "127.0.0.1:9370", nil) }()
+	go func() { done <- d.Control("tcp4", "127.0.0.1:9380", nil) }()
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("9370 open while the process scan is blocked")
+		if err != nil {
+			t.Fatalf("9380 was denied before the blocked scan finished: %v", err)
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("a connect waited on the process scan")
@@ -421,14 +421,18 @@ func TestProcessListScanReportsFailures(t *testing.T) {
 	t.Setenv(browser.ProtectedPortsEnv, "9300")
 	home := t.TempDir()
 	var mu sync.Mutex
-	mode := "ok"
+	mode := "start"
 	table := debugProcessTable(t, func() string {
 		mu.Lock()
 		defer mu.Unlock()
-		if mode == "fail" {
+		switch mode {
+		case "fail":
 			return "fail"
+		case "late":
+			return "21 /opt/chrome --remote-debugging-port=9370\n22 /opt/chrome --remote-debugging-port=9380\n"
+		default:
+			return "21 /opt/chrome --remote-debugging-port=9370\n"
 		}
-		return "21 /opt/chrome --remote-debugging-port=9370\n"
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -446,6 +450,10 @@ func TestProcessListScanReportsFailures(t *testing.T) {
 	if d.Control("tcp4", "127.0.0.1:9370", nil) == nil {
 		t.Fatal("9370 open")
 	}
+	mu.Lock()
+	mode = "late"
+	mu.Unlock()
+	time.Sleep(1200 * time.Millisecond)
 	mu.Lock()
 	mode = "fail"
 	mu.Unlock()
@@ -472,8 +480,8 @@ func TestProcessListScanReportsFailures(t *testing.T) {
 		}
 	}
 	waitLog("couldn't list running browsers for their debugging ports:")
-	if d.Control("tcp4", "127.0.0.1:9370", nil) == nil {
-		t.Fatal("a failed scan dropped the last process ports")
+	if d.Control("tcp4", "127.0.0.1:9380", nil) == nil {
+		t.Fatal("a failed scan dropped a process port that was only in the last successful list")
 	}
 	time.Sleep(1200 * time.Millisecond)
 	mu.Lock()
@@ -488,7 +496,7 @@ func TestProcessListScanReportsFailures(t *testing.T) {
 		t.Fatalf("logged the failure %d times: %v", nFail, logged)
 	}
 	mu.Lock()
-	mode = "ok"
+	mode = "late"
 	mu.Unlock()
 	waitLog("listing running browsers for their debugging ports again")
 }

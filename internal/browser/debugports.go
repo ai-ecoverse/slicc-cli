@@ -108,6 +108,9 @@ func (s *liveScan) refresh() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
+		if s.ctx.Err() != nil {
+			return
+		}
 		if !s.failed {
 			s.failed = true
 			if s.logf != nil {
