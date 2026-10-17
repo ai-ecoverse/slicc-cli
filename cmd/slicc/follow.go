@@ -40,11 +40,15 @@ const (
 )
 
 const followUsage = `usage: slicc <join-url> follow [flags]
+       slicc - follow [flags]
+       slicc @<file> follow [flags]
 
 Follow a seven's tray from this machine. slicc attaches to the tray hub with
 the join URL, answers seven's offer with a WebRTC link, and serves the link
 until interrupted, reconnecting when it drops. Status lines go to stderr.
-The join URL is never printed.
+The join URL is never printed. With - slicc reads it from the first line of
+stdin, and with @<file> from the first line of that file, so it stays out of
+the command line, where ps shows it to every user of this machine.
 
 flags:
   --exit               offer this machine's network to seven (tcp, resolve,
