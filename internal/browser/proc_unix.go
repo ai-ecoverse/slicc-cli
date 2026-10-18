@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -66,17 +65,4 @@ func listProcesses(ctx context.Context, argv []string, goos, root string) ([]byt
 		return nil, fmt.Errorf("%v; %s: %v", err, root, perr)
 	}
 	return out, nil
-}
-
-func commandError(name string, err error) error {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		if line, _, _ := strings.Cut(strings.TrimSpace(string(exit.Stderr)), "\n"); line != "" {
-			return fmt.Errorf("%s: %v: %s", name, err, line)
-		}
-	}
-	if strings.HasPrefix(err.Error(), name) || strings.Contains(err.Error(), `"`+name+`"`) {
-		return err
-	}
-	return fmt.Errorf("%s: %v", name, err)
 }

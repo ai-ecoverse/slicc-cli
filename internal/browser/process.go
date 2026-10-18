@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -287,4 +290,17 @@ func processCandidates(ctx context.Context, o Options, d discovery, six sixMatch
 		cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), wsPath: ws, source: SourceProcess, dir: h.dir, six: isSix})
 	}
 	return cands
+}
+
+func commandError(name string, err error) error {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		if line, _, _ := strings.Cut(strings.TrimSpace(string(exit.Stderr)), "\n"); line != "" {
+			return fmt.Errorf("%s: %v: %s", name, err, line)
+		}
+	}
+	if strings.HasPrefix(err.Error(), name) || strings.Contains(err.Error(), `"`+name+`"`) {
+		return err
+	}
+	return fmt.Errorf("%s: %v", name, err)
 }
