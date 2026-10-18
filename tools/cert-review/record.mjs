@@ -165,14 +165,15 @@ function bios() {
     return lack("the canary's counts are malformed");
   const tests = Array.isArray(r.tests) ? r.tests : [];
   const shards = new Set(tests.map((t) => t?.shard));
-  const absent = pin.shards.filter((s) => !shards.has(s) || r.missingShards?.includes(s));
+  const list = (v) => (Array.isArray(v) ? v : []);
+  const absent = pin.shards.filter((s) => !shards.has(s) || list(r.missingShards).includes(s));
   if (!Array.isArray(r.missingShards) || absent.length || [...shards].some((s) => !pin.shards.includes(s)))
     lack(`the shards that ran aren't ${pin.shards.join(', ')}${absent.length ? ` (no result from ${absent.join(', ')})` : ''}`);
   for (const k of ['unexplainedExits', 'refused', 'ambiguous'])
     if (!Array.isArray(r[k]) || r[k].length) lack(`the canary has ${k} ${one(JSON.stringify(r[k] ?? null)).slice(0, 200)}`);
   const failing = counts.fail + counts.regression;
   if (failing) {
-    const named = [...(r.regressions ?? []), ...(r.failures ?? [])].slice(0, 3).map((t) => `${one(t?.test).slice(0, 100)} (${one(t?.shard)})`);
+    const named = [...list(r.regressions), ...list(r.failures)].slice(0, 3).map((t) => `${one(t?.test).slice(0, 100)} (${one(t?.shard)})`);
     fail(`${failing} failing in ${pin.shards.join(', ')}: ${named.join('; ') || 'unnamed'}`);
   }
   if (counts.flaky) lack(`${counts.flaky} flaky in ${pin.shards.join(', ')}`);

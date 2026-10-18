@@ -448,6 +448,17 @@ func TestCertReviewRecordCertifiesOnlyTheBytesItBuiltWithEveryPieceOfEvidence(t 
 			r["missingShards"] = []any{"follow-chat"}
 			r["tests"] = []any{}
 		}},
+		{name: "the canary's missingShards isn't a list", key: "true", state: "error", want: "bios: the shards that ran aren't follow-chat", bios: "true", verdict: certified, rebuildMatch: true, runs: green, canary: func(r map[string]any) {
+			r["missingShards"] = map[string]any{"follow-chat": true}
+		}},
+		{name: "a failing shard whose names aren't a list", key: "true", state: "failure", want: "bios: 1 failing in follow-chat: unnamed", bios: "true", verdict: certified, rebuildMatch: true, runs: green, canary: func(r map[string]any) {
+			r["ok"] = false
+			r["counts"].(map[string]any)["pass"] = 1
+			r["counts"].(map[string]any)["fail"] = 1
+			r["regressions"] = map[string]any{"test": "fake"}
+			r["failures"] = "fake"
+			r["tests"].([]any)[1].(map[string]any)["verdict"] = "fail"
+		}},
 		{name: "the canary ran another bios", key: "true", state: "error", want: "bios: the canary ran slicc-bios@" + strings.Repeat("f", 40) + ", not the pinned", bios: "true", verdict: certified, rebuildMatch: true, runs: green, canary: func(r map[string]any) {
 			r["biosRef"] = strings.Repeat("f", 40)
 		}},
