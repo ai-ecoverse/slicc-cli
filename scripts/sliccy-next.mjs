@@ -38,6 +38,9 @@ const tags = git(['tag', '--merged', 'HEAD', '--list', 'v[0-9]*', '--sort=-v:ref
 if (!tags.length) fail('no release tag (vX.Y.Z) is reachable from HEAD');
 const tag = tags[0];
 const version = tag.slice(1);
+const head = git(['rev-parse', 'HEAD']).trim();
+const tagged = git(['rev-parse', `${tag}^{commit}`]).trim();
+if (head !== tagged && !values['dry-run']) fail(`HEAD ${head} isn't ${tag}'s commit ${tagged}; sliccy@next for ${tag} is published from that commit only, or its provenance never matches the tag`);
 process.stdout.write(`sliccy-next: the latest release is ${tag}; staging sliccy@7.0.0-next.${version} from its launcher\n`);
 
 const work = mkdtempSync(join(tmpdir(), 'sliccy-next-'));

@@ -237,24 +237,29 @@ jobs:
         run: scripts/go-warm.sh "$VERSION"
 
   sliccy-next:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only && github.ref == 'refs/heads/main' }}
+    needs: release
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && inputs.sliccy_next_only
+      || github.event_name != 'pull_request' && needs.release.result == 'success' && needs.release.outputs.version != '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24
 
-      - name: Publish sliccy@next for the latest release
+      - name: Publish sliccy@next for the latest release, once npm serves its platform packages
         env:
           SLICCY_NEXT_PUBLISH: ${{ vars.SLICCY_NEXT_PUBLISH }}
+          SLICC_REGISTRY_WAIT_SECONDS: '3600'
         run: sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs
 
   smoke:

@@ -22,7 +22,7 @@
     [
       "@semantic-release/exec",
       {
-        "publishCmd": "sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs && sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dir dist/npm-next --tag next"
+        "publishCmd": "sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs"
       }
     ]
   ]

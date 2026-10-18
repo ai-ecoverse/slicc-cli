@@ -167,8 +167,11 @@ func TestCertVerifyRunsCodeOnlyAfterTheReleaseOutsideItsConcurrency(t *testing.T
 			t.Errorf("%s runs only for a release", name)
 		}
 	}
-	if !strings.Contains(jobs["tag"], "github.ref == 'refs/heads/main'") || !strings.Contains(jobs["tag"], "github.event.workflow_run.conclusion == 'success'") {
-		t.Fatal("only a successful Release run on main is verified")
+	_, cond, _ := strings.Cut(jobs["tag"], "    if: >-\n")
+	cond, _, _ = strings.Cut(cond, "\n    runs-on:")
+	want := "${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_repository.full_name == github.repository && (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')) }}"
+	if strings.Join(strings.Fields(cond), " ") != want {
+		t.Fatalf("which release follows every completed Release run on main of this repository, whatever its conclusion:\n%s", cond)
 	}
 	if strings.Contains(jobs["rebuild"], "GH_TOKEN") || strings.Contains(jobs["rebuild"], "gh ") {
 		t.Fatal("the pool runner that rebuilds gets no token")
@@ -192,6 +195,109 @@ func TestCertVerifyRunsCodeOnlyAfterTheReleaseOutsideItsConcurrency(t *testing.T
 	}
 	if !strings.Contains(strings.ReplaceAll(string(wf), "\r\n", "\n"), "\nenv:\n  CERT_CONTEXT: cert-review\n") {
 		t.Fatal("the pull request check posts the required context cert-review")
+	}
+}
+
+func TestCertVerifyIsRedForAReleaseRunThatTaggedAndFailed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the workflow steps are bash")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	server := t.TempDir()
+	repo := filepath.Join(server, "ai-ecoverse", "slicc-cli.git")
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git("init", "-q")
+	commit := func(msg string) string {
+		git("commit", "-q", "--allow-empty", "-m", msg)
+		return git("rev-parse", "HEAD")
+	}
+	published := commit("published 1.44.3")
+	git("tag", "v1.44.3")
+	partial := commit("published 1.44.4, then failed")
+	git("tag", "-a", "-m", "v1.44.4", "v1.44.4")
+	untagged := commit("failed before tagging")
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq is not installed")
+	}
+	step := stepRun(t, "cert-verify.yml", "tag", "tag")
+	const api = "repos/ai-ecoverse/slicc-cli/"
+	release := func(published string) map[string]any {
+		return map[string]any{api + "releases/tags/v1.44.4": map[string]any{"published_at": published}}
+	}
+	withJobs := func(fixture map[string]any, attempt string, jobs ...string) map[string]any {
+		list := []any{}
+		for i := 0; i+1 < len(jobs); i += 2 {
+			list = append(list, map[string]any{"name": jobs[i], "conclusion": jobs[i+1]})
+		}
+		fixture[api+"actions/runs/20/attempts/"+attempt+"/jobs?per_page=100"] = map[string]any{"total_count": len(list), "jobs": list}
+		return fixture
+	}
+	during, before := "2026-10-18T03:10:42Z", "2026-10-18T02:00:00Z"
+	red := " It is not verified or certified; find out why."
+	for _, c := range []struct {
+		name, sha, conclusion, input, version, says string
+		api                                         map[string]any
+		fails, asks                                 bool
+	}{
+		{"a successful release is verified", published, "success", "", "1.44.3", "release: 1.44.3\n", nil, false, false},
+		{"a release run that tagged and then failed is red, naming the release, the run and the failed job", partial, "failure", "", "", "v1.44.4 is tagged on " + partial + ", but the Release run that tagged it ended failure in release: https://github.invalid/run/20." + red, withJobs(release(during), "1", "Still the head of main", "success", "release", "failure", "sliccy-next", "skipped", "smoke (macos-latest, slicc-darwin-arm64)", "skipped"), true, true},
+		{"failed smoke tests after tagging are red, naming them", partial, "failure", "", "", "ended failure in smoke (windows-latest, slicc-windows-amd64.exe),install-smoke (alpine-wget):", withJobs(release(during), "1", "release", "success", "smoke (windows-latest, slicc-windows-amd64.exe)", "failure", "install-smoke (alpine-wget)", "timed_out"), true, true},
+		{"a run cancelled after tagging is red", partial, "cancelled", "", "", "ended cancelled in sliccy-next:", withJobs(release(during), "1", "release", "success", "sliccy-next", "cancelled"), true, true},
+		{"a tag with no GitHub release after a failed run is red", partial, "failure", "", "", "the Release run that tagged it ended failure in release:", withJobs(map[string]any{}, "1", "release", "failure"), true, true},
+		{"a failed run whose jobs can't be read is still red", partial, "failure", "", "", "the Release run that tagged it ended failure: https://github.invalid/run/20." + red, release(during), true, true},
+		{"a re-run attempt that failed after tagging is red, with that attempt's jobs", partial, "failure", "", "", "the Release run that tagged it ended failure in smoke (windows-latest, slicc-windows-amd64.exe):", withJobs(release(during), "2", "release", "success", "smoke (windows-latest, slicc-windows-amd64.exe)", "failure"), true, true},
+		{"a queued run cancelled before its release job is quiet and verifies nothing", partial, "cancelled", "", "", "release: this Release run on " + partial + " ended cancelled before its release job ran, so it didn't make v1.44.4; nothing to verify", withJobs(release(during), "1", "Still the head of main", "success", "Latest nightly passed", "cancelled"), false, true},
+		{"a run whose gate failed and skipped its release job is quiet", partial, "failure", "", "", "ended failure before its release job ran", withJobs(release(during), "1", "Latest nightly passed", "failure", "release", "skipped"), false, true},
+		{"a failed run on a commit released before it is quiet and verifies nothing", partial, "failure", "", "", "release: v1.44.4 was released on " + partial + " before this Release run, which ended failure; nothing to verify", release(before), false, true},
+		{"a failed run that tagged nothing is quiet", untagged, "failure", "", "", "release: none on " + untagged + "; its Release run ended failure and tagged nothing", nil, false, false},
+		{"a cert-verify dispatch verifies the version asked for", "", "", "1.44.3", "1.44.3", "release: 1.44.3\n", nil, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			fixtures := filepath.Join(bin, "api")
+			if err := os.MkdirAll(fixtures, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for path, v := range c.api {
+				writeJSON(t, filepath.Join(fixtures, strings.NewReplacer("/", "_", "?", "_", "&", "_", "=", "_").Replace(path)), v)
+			}
+			attempt := "1"
+			for path := range c.api {
+				if strings.Contains(path, "/attempts/2/") {
+					attempt = "2"
+				}
+			}
+			log := filepath.Join(bin, "gh.log")
+			fakeTool(t, bin, "gh", `printf '%s\n' "$*" >> "$GH_LOG"
+path=""; filter="."
+while [ $# -gt 0 ]; do case "$1" in repos/*) path=$1 ;; --jq) filter=$2; shift ;; esac; shift; done
+f="$API/$(printf '%s' "$path" | tr '/?&=' '____')"
+[ -f "$f" ] || { echo "HTTP 404: $path" >&2; exit 1; }
+exec jq -r "$filter" "$f"
+`)
+			r := runSilently(t, step, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "GH_LOG="+log, "API="+fixtures,
+				"GITHUB_SERVER_URL=file://"+server, "SHA="+c.sha, "CONCLUSION="+c.conclusion, "STARTED=2026-10-18T03:00:00Z", "RUN=20", "ATTEMPT="+attempt, "RUN_URL=https://github.invalid/run/20", "INPUT="+c.input)
+			asked, _ := os.ReadFile(log)
+			if (r.code != 0) != c.fails || r.outputs["version"] != c.version || !strings.Contains(r.out, c.says) {
+				t.Fatalf("exit %d, version %q, want failing %v and %q saying %q:\n%s", r.code, r.outputs["version"], c.fails, c.version, c.says, r.out)
+			}
+			if (len(asked) != 0) != c.asks {
+				t.Fatalf("GitHub is asked only about a tagged commit whose Release run didn't succeed: %q", asked)
+			}
+		})
 	}
 }
 

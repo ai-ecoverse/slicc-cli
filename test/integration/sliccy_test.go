@@ -119,6 +119,14 @@ type fakeRegistry struct {
 	mu        sync.Mutex
 	published map[string]bool
 	asked     map[string]bool
+	misses    map[string]int
+}
+
+func (f *fakeRegistry) late(dep string, misses int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.published[dep] = true
+	f.misses[dep] = misses
 }
 
 func (f *fakeRegistry) wasAsked(dep string) bool {
@@ -129,7 +137,7 @@ func (f *fakeRegistry) wasAsked(dep string) bool {
 
 func newFakeRegistry(t *testing.T, published ...string) *fakeRegistry {
 	t.Helper()
-	f := &fakeRegistry{published: map[string]bool{}, asked: map[string]bool{}}
+	f := &fakeRegistry{published: map[string]bool{}, asked: map[string]bool{}, misses: map[string]int{}}
 	for _, p := range published {
 		f.published[p] = true
 	}
@@ -141,7 +149,14 @@ func newFakeRegistry(t *testing.T, published ...string) *fakeRegistry {
 			f.asked[path[:at]+"@"+path[at+1:]] = true
 			f.mu.Unlock()
 		}
-		if r.Method == http.MethodGet && at > 0 && f.published[path[:at]+"@"+path[at+1:]] {
+		f.mu.Lock()
+		dep := path[:max(at, 0)] + "@" + path[at+1:]
+		seen := r.Method == http.MethodGet && at > 0 && f.published[dep] && f.misses[dep] == 0
+		if f.misses[dep] > 0 {
+			f.misses[dep]--
+		}
+		f.mu.Unlock()
+		if seen {
 			_ = json.NewEncoder(w).Encode(map[string]string{"name": path[:at], "version": path[at+1:]})
 			return
 		}

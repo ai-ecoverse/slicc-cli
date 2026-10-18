@@ -23,20 +23,27 @@ jobs:
     name: release / which release
     if: >-
       ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch'
-      || github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+      || github.event.workflow_run.head_repository.full_name == github.repository
       && (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')) }}
     runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
     outputs:
       version: ${{ steps.tag.outputs.version }}
     steps:
       - id: tag
-        name: The version tagged on the commit the release run built, or the one asked for
+        name: The version tagged on the commit the release run built, or the one asked for; a release run that tagged and then failed is red, never verified
         env:
           SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          STARTED: ${{ github.event.workflow_run.run_started_at }}
+          RUN: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
           INPUT: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ -n "$INPUT" ]; then
@@ -46,6 +53,25 @@ jobs:
             version=$(git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" 'refs/tags/v*' \
               | awk -v sha="$SHA" '$1 == sha { n = $2; sub("^refs/tags/v", "", n); sub("\\^\\{\\}$", "", n); print n }' \
               | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+          fi
+          if [ -z "$INPUT" ] && [ "$CONCLUSION" != success ]; then
+            [ -n "$version" ] || { echo "release: none on $SHA; its Release run ended $CONCLUSION and tagged nothing" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+            published=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$version" --jq '.published_at // empty' 2> /dev/null || true)
+            if [ -n "$published" ] && [[ "$published" < "$STARTED" ]]; then
+              echo "release: v$version was released on $SHA before this Release run, which ended $CONCLUSION; nothing to verify" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            jobs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT/jobs?per_page=100" \
+              --jq '.jobs[] | "\(.conclusion // "none")\t\(.name)"') || jobs=""
+            if [ -n "$jobs" ] && ! grep -qE $'^(success|failure|cancelled|timed_out)\trelease$' <<< "$jobs"; then
+              echo "release: this Release run on $SHA ended $CONCLUSION before its release job ran, so it didn't make v$version; nothing to verify" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            failed=$(awk -F '\t' '$1 != "success" && $1 != "skipped" { print $2 }' <<< "$jobs" | paste -sd, -)
+            line="v$version is tagged on $SHA, but the Release run that tagged it ended $CONCLUSION${failed:+ in $failed}: $RUN_URL. It is not verified or certified; find out why."
+            echo "$line" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=release / which release::$line"
+            exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "release: ${version:-none on $SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
