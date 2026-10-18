@@ -236,10 +236,14 @@ func (s *liveScan) loop() {
 	}
 }
 
-func Guard(ctx context.Context, pol *policy.Policy, o Options, given, exposed []uint16, logf, status func(string, ...any)) error {
+func Guard(ctx context.Context, pol *policy.Policy, o Options, given, exposed []uint16, logf func(string, ...any)) error {
 	ports, err := DebugPortRange()
 	if err != nil {
 		return err
+	}
+	status := o.Status
+	if status == nil {
+		status = logf
 	}
 	scan := newLiveScan(ctx, o, status)
 	first := &scanRun{start: time.Now(), done: make(chan struct{})}

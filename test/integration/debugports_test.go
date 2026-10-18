@@ -417,7 +417,7 @@ func startGuard(t *testing.T, table func(context.Context) ([]byte, error), logf 
 	pol := policy.Local()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- browser.Guard(ctx, pol, browser.Options{Home: t.TempDir(), Processes: table}, nil, nil, t.Logf, logf)
+		errCh <- browser.Guard(ctx, pol, browser.Options{Home: t.TempDir(), Processes: table}, nil, nil, logf)
 	}()
 	select {
 	case err := <-errCh:
@@ -639,7 +639,7 @@ func withoutPS(t *testing.T, procRoot string) []string {
 	if err := os.WriteFile(filepath.Join(dir, "ps"), []byte("#!/bin/sh\necho 'ps: unrecognized option: x' >&2\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"), browser.ProcRootEnv + "=" + procRoot}
+	return []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"), "SLICC_PROC_ROOT=" + procRoot}
 }
 
 func writeFakeProc(t *testing.T, root string, pid int, args ...string) {

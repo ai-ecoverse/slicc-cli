@@ -229,7 +229,7 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	}
 	pol := policy.Remote().With(ff.allow, ff.deny)
 	guardCtx, stopGuard := context.WithCancel(context.Background())
-	if err := browser.Guard(guardCtx, pol, browser.Options{}, cdpPorts(ff.cdp...), ff.expose, logf, status); err != nil {
+	if err := browser.Guard(guardCtx, pol, browser.Options{Status: status}, cdpPorts(ff.cdp...), ff.expose, logf); err != nil {
 		stopGuard()
 		return nil, err
 	}

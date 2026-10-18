@@ -178,7 +178,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer closer()
 	pol := policy.Local(kernelPolicyPort(f)).With(f.allow, f.deny)
-	if err := browser.Guard(ctx, pol, browser.Options{}, cdpPorts(append([]string{f.cdp}, f.extra...)...), f.expose, logf, status); err != nil {
+	if err := browser.Guard(ctx, pol, browser.Options{Status: status}, cdpPorts(append([]string{f.cdp}, f.extra...)...), f.expose, logf); err != nil {
 		status("%v", err)
 		return 1
 	}

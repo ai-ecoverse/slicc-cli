@@ -349,7 +349,7 @@ func (r *openRun) ownPorts() []uint16 {
 func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	r.pol = policy.Local(r.ownPorts()...).With(r.f.allow, r.f.deny)
 	loopLog := func(format string, a ...any) { r.logf("loopback: "+format, a...) }
-	if err := browser.Guard(ctx, r.pol, browser.Options{}, nil, r.f.expose, loopLog, r.status); err != nil {
+	if err := browser.Guard(ctx, r.pol, browser.Options{Status: r.status}, nil, r.f.expose, loopLog); err != nil {
 		return nil, err
 	}
 	n := node.New(node.Config{
