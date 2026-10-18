@@ -171,13 +171,18 @@ func extraInfoScript(seven, allowed string) []string {
 
 func setupFakeProtect(t *testing.T, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
 	t.Helper()
+	return setupFakeProtectEnv(t, nil, script)
+}
+
+func setupFakeProtectEnv(t *testing.T, attachEnv []string, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
+	t.Helper()
 	b := launchBrowser(t)
 	srv := pageServer(t)
 	plain := plainServer(t)
 	allowed := strings.Replace(plain.URL, "127.0.0.1", "localhost", 1)
 	fake := newFakeCDPBrowser(t, script(plain.URL, allowed))
 	env := &protectEnv{linkEnv: &linkEnv{t: t, b: b, origin: srv.URL}, plain: plain, allowed: allowed, seven: srv.URL}
-	env.a = startAttach(t, "--cdp", b.endpoint, "--cdp-extra", fake.srv.URL, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
+	env.a = startAttachEnv(t, false, attachEnv, "--cdp", b.endpoint, "--cdp-extra", fake.srv.URL, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	return env, fake

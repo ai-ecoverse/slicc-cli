@@ -275,7 +275,12 @@ func userDataFiles(dir string) string {
 
 func (p *page) eval(expr string, out any) {
 	p.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	p.evalWithin(expr, out, 90*time.Second)
+}
+
+func (p *page) evalWithin(expr string, out any, timeout time.Duration) {
+	p.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := p.session.Evaluate(ctx, expr, cdp.EvaluateOptions{AwaitPromise: true, ReturnByValue: true}, out); err != nil {
 		p.t.Fatalf("evaluate %s: %v", expr, err)
