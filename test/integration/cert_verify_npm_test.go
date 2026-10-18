@@ -292,6 +292,13 @@ func TestCertVerifyCertifiesOnlyAReleaseThatVerifiesEverywhere(t *testing.T) {
 		{"a package its publish variable leaves out", "success", "not published: @ai-ecoverse/slicc", func(f *verifyFixture) {
 			f.env = []string{"SLICC_NPM_PUBLISH=", "SLICCY_NEXT_PUBLISH=", "WASI_SLICC_PUBLISH="}
 		}},
+		{"a package of the set that isn't on npm is INCOMPLETE and named, and nothing is certified", "error", "cert-ci: INCOMPLETE slicc-cli v1.43.0 (sliccy@7.0.0-next.1.43.0 isn't on npm after 1 s; publish sliccy@7.0.0-next.1.43.0, then dispatch cert-verify with version=1.43.0)", func(f *verifyFixture) {
+			f.env = []string{"SLICC_NPM_PUBLISH=", "SLICCY_NEXT_PUBLISH=true", "WASI_SLICC_PUBLISH=true"}
+		}},
+		{"a package that isn't on npm hides no alert in the rest of the release", "failure", "/slicc answers 302 → https://example.invalid/install.sh, not https://github.com/" + verifyRepo + "/releases/latest/download/install.sh; also missing: sliccy@7.0.0-next.1.43.0 isn't on npm after 1 s", func(f *verifyFixture) {
+			f.env = []string{"SLICC_NPM_PUBLISH=", "SLICCY_NEXT_PUBLISH=true", "WASI_SLICC_PUBLISH=true"}
+			f.redirect = "https://example.invalid/install.sh"
+		}},
 		{"every pull request since the last tag certified in the pull request", "success", "certified @ai-ecoverse/wasi-slicc@1.43.0 sha256=", func(f *verifyFixture) {
 			f.since("success", "certified ai-ecoverse/slicc-cli PR #5 at fake-head-00")
 		}},

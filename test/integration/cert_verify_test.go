@@ -167,8 +167,13 @@ func TestCertVerifyRunsCodeOnlyAfterTheReleaseOutsideItsConcurrency(t *testing.T
 			t.Errorf("%s runs only for a release", name)
 		}
 	}
-	if !strings.Contains(jobs["tag"], "github.ref == 'refs/heads/main'") || !strings.Contains(jobs["tag"], "github.event.workflow_run.conclusion == 'success'") {
-		t.Fatal("only a successful Release run on main is verified")
+	if !strings.Contains(jobs["tag"], "github.ref == 'refs/heads/main'") || !strings.Contains(jobs["tag"], "(github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure')\n      && ") {
+		t.Fatal("a Release run on main that succeeded, or failed after tagging, is verified")
+	}
+	for _, other := range []string{"cancelled", "skipped", "timed_out", "action_required", "neutral", "stale"} {
+		if strings.Contains(jobs["tag"], other) {
+			t.Fatalf("a Release run that ended %s is not verified", other)
+		}
 	}
 	if strings.Contains(jobs["rebuild"], "GH_TOKEN") || strings.Contains(jobs["rebuild"], "gh ") {
 		t.Fatal("the pool runner that rebuilds gets no token")
@@ -192,6 +197,54 @@ func TestCertVerifyRunsCodeOnlyAfterTheReleaseOutsideItsConcurrency(t *testing.T
 	}
 	if !strings.Contains(strings.ReplaceAll(string(wf), "\r\n", "\n"), "\nenv:\n  CERT_CONTEXT: cert-review\n") {
 		t.Fatal("the pull request check posts the required context cert-review")
+	}
+}
+
+func TestCertVerifyFindsTheTagOfAReleaseRunThatFailedAfterTagging(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the workflow steps are bash")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	server := t.TempDir()
+	repo := filepath.Join(server, "ai-ecoverse", "slicc-cli.git")
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git("init", "-q")
+	commit := func(msg string) string {
+		git("commit", "-q", "--allow-empty", "-m", msg)
+		return git("rev-parse", "HEAD")
+	}
+	published := commit("published 1.44.3")
+	git("tag", "v1.44.3")
+	partial := commit("published 1.44.4, then failed")
+	git("tag", "-a", "-m", "v1.44.4", "v1.44.4")
+	untagged := commit("failed before tagging")
+	step := stepRun(t, "cert-verify.yml", "tag", "tag")
+	for _, c := range []struct {
+		name, sha, conclusion, version, says string
+	}{
+		{"a successful release", published, "success", "1.44.3", "release: 1.44.3\n"},
+		{"a release run that failed after tagging", partial, "failure", "1.44.4", "release: 1.44.4, tagged on " + partial + ", whose Release run failed; verifying what is published"},
+		{"a release run that failed before tagging", untagged, "failure", "", "release: none on " + untagged},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := runSilently(t, step, "GITHUB_SERVER_URL=file://"+server, "SHA="+c.sha, "CONCLUSION="+c.conclusion, "INPUT=")
+			if r.code != 0 || r.outputs["version"] != c.version || !strings.Contains(r.out, c.says) {
+				t.Fatalf("exit %d, version %q, want %q saying %q:\n%s", r.code, r.outputs["version"], c.version, c.says, r.out)
+			}
+		})
 	}
 }
 

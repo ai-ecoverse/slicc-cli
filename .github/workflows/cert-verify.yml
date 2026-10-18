@@ -23,7 +23,8 @@ jobs:
     name: release / which release
     if: >-
       ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch'
-      || github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+      || (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure')
+      && github.event.workflow_run.head_repository.full_name == github.repository
       && (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')) }}
     runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -33,9 +34,10 @@ jobs:
       version: ${{ steps.tag.outputs.version }}
     steps:
       - id: tag
-        name: The version tagged on the commit the release run built, or the one asked for
+        name: The version tagged on the commit the release run built, even if the run failed after tagging, or the one asked for
         env:
           SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
@@ -48,7 +50,11 @@ jobs:
               | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "release: ${version:-none on $SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -n "$version" ] && [ "$CONCLUSION" = failure ]; then
+            echo "release: $version, tagged on $SHA, whose Release run failed; verifying what is published" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "release: ${version:-none on $SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
   rebuild:
     name: release / reproduce from the tag

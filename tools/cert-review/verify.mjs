@@ -35,6 +35,7 @@ const { version, repo } = values;
 const REGISTRY = new URL(process.env.CERT_NPM_REGISTRY || 'https://registry.npmjs.org').origin;
 const problems = [];
 const missing = [];
+const absent = [];
 const facts = { packages: {}, assets: {} };
 const one = (t) => String(t ?? '').replace(/\s+/g, ' ').trim();
 const sh = (cmd, args, opts = {}) =>
@@ -63,9 +64,9 @@ async function served(p, until) {
   for (let waited = false; ; waited = true) {
     const m = npmView(`${p.name}@${p.version}`);
     if (m?.version === p.version && m.dist?.tarball && (await fetch(m.dist.tarball, { method: 'HEAD' })).ok) return m;
-    if (Date.now() > until) throw new Error(`npm doesn't serve ${p.name}@${p.version} after ${values.wait} s`);
+    if (Date.now() > until) return undefined;
     if (!waited) console.log(`waiting for npm to serve ${p.name}@${p.version}`);
-    await sleep(15_000);
+    await sleep(Math.min(15_000, Math.max(0, until - Date.now()) + 1));
   }
 }
 
@@ -80,6 +81,10 @@ function tagCommit() {
 
 async function npmPackage(p, until, sums) {
   const m = await served(p, until);
+  if (!m) {
+    absent.push(p);
+    return missing.push(`${p.name}@${p.version} isn't on npm after ${values.wait} s`);
+  }
   const f = { tarball: m.dist.tarball };
   facts.packages[p.name] = f;
   const url = new URL(m.dist.tarball);
@@ -264,7 +269,8 @@ try {
   evidence();
   const until = Date.now() + Number(values.wait) * 1000;
   for (const p of packages) await npmPackage(p, until, sums);
-  if (packages.length) signatures(packages);
+  const present = packages.filter((p) => !absent.includes(p));
+  if (present.length) signatures(present);
   await installer(sums);
   context();
 } catch (error) {
@@ -284,7 +290,10 @@ const fail = (state, line) => {
 };
 if (problems.length)
   fail('failure', `supply-chain alert: slicc-cli v${version} doesn't verify: ${problems.join('; ')}${missing.length ? `; also missing: ${missing.join('; ')}` : ''} (ci: ${ci})`);
-if (missing.length) fail('error', `cert-ci: INCOMPLETE slicc-cli v${version} (${missing.join('; ')}; re-run the failed jobs) (ci: ${ci})`);
+const redo = absent.length
+  ? `publish ${absent.map((p) => `${p.name}@${p.version}`).join(', ')}, then dispatch cert-verify with version=${version}`
+  : 're-run the failed jobs';
+if (missing.length) fail('error', `cert-ci: INCOMPLETE slicc-cli v${version} (${missing.join('; ')}; ${redo}) (ci: ${ci})`);
 const tail = `ci: ${ci}; pr-certified: ${facts.prCertified}; known: ${facts.known.length ? facts.known.join(', ') : 'none'}`;
 const word = facts.prAll ? 'certified' : 'verified';
 const lines = [
