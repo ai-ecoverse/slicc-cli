@@ -105,6 +105,9 @@ type guard struct {
 	heldAnswers     map[callKey]*heldAnswer
 	streams         map[string]bool
 	streamOrder     []string
+	bounds          guardBounds
+	answered        time.Time
+	probing         bool
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -138,6 +141,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		bodyCalls:       map[callKey]bodyCall{},
 		heldAnswers:     map[callKey]*heldAnswer{},
 		streams:         map[string]bool{},
+		bounds:          boundsFromEnv(),
 	}
 	g.patterns = g.documentPatterns()
 	return g
