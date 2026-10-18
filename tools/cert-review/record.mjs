@@ -26,10 +26,17 @@ const { values } = parseArgs({
     jobs: { type: 'string', default: '' },
     key: { type: 'string', default: 'true' },
     'ci-wait': { type: 'string', default: '0' },
+    bios: { type: 'string', default: '' },
+    'bios-job': { type: 'string', default: '' },
+    'bios-artifact': { type: 'string', default: '' },
+    'bios-dir': { type: 'string', default: '' },
     out: { type: 'string' },
   },
 });
 const { version, repo, pr } = values;
+const pin = JSON.parse(readFileSync(join(here, 'bios.json'), 'utf8'));
+const biosNeed = values.bios === 'true';
+let wasiPkg;
 const API = process.env.GITHUB_API_URL ?? 'https://api.github.com';
 const headers = {
   accept: 'application/vnd.github+json',
@@ -89,6 +96,7 @@ function artifact() {
   if (!facts.wasm) problems.push('the build has no slicc-wasip1-wasm.wasm');
   const pkgs = m.packages ?? {};
   facts.packages = Object.keys(pkgs).length;
+  wasiPkg = pkgs[pin.package];
   for (const [name, p] of Object.entries(pkgs)) {
     const want = name === 'sliccy' ? `7.0.0-next.${version}` : version;
     if (p.version !== want) problems.push(`${name} is staged as ${p.version}, not ${want}`);
@@ -111,10 +119,71 @@ async function bound() {
     const since = (await r.json()).run_started_at;
     const listed = await all(`repos/${repo}/actions/runs/${run}/artifacts`);
     facts.artifacts = listed.filter((a) => String(a.name).startsWith('cert-')).length;
-    missing.push(...artifactBinding({ declared: declaredArtifacts(values.artifacts), listed, since }));
+    const declared = declaredArtifacts(values.artifacts);
+    if (biosNeed) declared.push(...declaredArtifacts(`${pin.label}-canary=${values['bios-artifact']}`));
+    missing.push(...artifactBinding({ declared, listed, since }));
   } catch (error) {
     missing.push(`the run's artifacts couldn't be listed: ${one(error.message)}`);
   }
+  return undefined;
+}
+
+function bios() {
+  if (values.bios === '') return undefined;
+  if (values.bios === 'false') return (facts.bios = 'bios: not needed, wasm unchanged');
+  if (!biosNeed) return missing.push(`classify said bios=${one(values.bios)}, so whether bios's canary was needed is unknown`);
+  const before = problems.length + missing.length;
+  const fail = (t) => problems.push(`bios: ${t}`);
+  const lack = (t) => missing.push(`bios: ${t}`);
+  const file = join(values['bios-dir'], 'result.json');
+  if (!values['bios-dir'] || !existsSync(file))
+    return lack(`the canary left no result (its job ended ${values['bios-job'] || 'without a result'})`);
+  let r;
+  try {
+    r = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    return lack(`the canary's result.json doesn't parse (${one(error.message)})`);
+  }
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return lack("the canary's result.json isn't a result");
+  const runUrl = `${process.env.GITHUB_SERVER_URL ?? 'https://github.com'}/${repo}/actions/runs/${values['run-id']}`;
+  if (r.biosRef !== pin.commit) lack(`the canary ran slicc-bios@${one(r.biosRef) || '?'}, not the pinned ${pin.commit}`);
+  if (r.url !== runUrl || r.run !== 'canary' || r.repeat !== pin.repeat)
+    lack(`the canary's run is ${one(r.url) || '?'} (${one(r.run) || '?'}, repeat ${r.repeat ?? '?'}), not this run's (canary, repeat ${pin.repeat})`);
+  const wasi = wasiPkg;
+  if (!wasi?.sha256) return fail(`the build has no ${pin.package} tarball`);
+  const name = `cert-build-wasi-slicc-${version}`;
+  const want = `candidate (artifact ${values['run-id']}/${name}, sha256 ${wasi.sha256})`;
+  const rows = (Array.isArray(r.candidates) ? r.candidates : []).filter((c) => c?.package === `${pin.package}@${version}`);
+  if (rows.length !== 1 || rows[0].via !== 'artifact' || rows[0].status !== want)
+    lack(`the canary didn't take this build's ${pin.package} from ${name} (sha256 ${wasi.sha256})`);
+  const over = Array.isArray(r.overrides) ? r.overrides : [];
+  if (over.length !== 1 || over[0]?.name !== pin.package || over[0]?.version !== version)
+    lack(`the canary's override isn't ${pin.package}@${version} alone`);
+  else if (over[0].sha256 !== wasi.sha256) fail(`the canary ran ${pin.package} sha256 ${one(over[0].sha256)}, this build's is ${wasi.sha256}`);
+  const counts = r.counts ?? {};
+  if (['pass', 'skip', 'fail', 'regression', 'both', 'flaky'].some((k) => !Number.isSafeInteger(counts[k]) || counts[k] < 0))
+    return lack("the canary's counts are malformed");
+  const tests = Array.isArray(r.tests) ? r.tests : [];
+  const shards = new Set(tests.map((t) => t?.shard));
+  const absent = pin.shards.filter((s) => !shards.has(s) || r.missingShards?.includes(s));
+  if (!Array.isArray(r.missingShards) || absent.length || [...shards].some((s) => !pin.shards.includes(s)))
+    lack(`the shards that ran aren't ${pin.shards.join(', ')}${absent.length ? ` (no result from ${absent.join(', ')})` : ''}`);
+  for (const k of ['unexplainedExits', 'refused', 'ambiguous'])
+    if (!Array.isArray(r[k]) || r[k].length) lack(`the canary has ${k} ${one(JSON.stringify(r[k] ?? null)).slice(0, 200)}`);
+  const failing = counts.fail + counts.regression;
+  if (failing) {
+    const named = [...(r.regressions ?? []), ...(r.failures ?? [])].slice(0, 3).map((t) => `${one(t?.test).slice(0, 100)} (${one(t?.shard)})`);
+    fail(`${failing} failing in ${pin.shards.join(', ')}: ${named.join('; ') || 'unnamed'}`);
+  }
+  if (counts.flaky) lack(`${counts.flaky} flaky in ${pin.shards.join(', ')}`);
+  if (counts.both) lack(`${counts.both} failing with bios's own pins too, so the smoke shows nothing about this build`);
+  for (const t of pin.tests)
+    if (!tests.some((x) => pin.shards.includes(x?.shard) && `${x?.key} ${x?.test}`.includes(t) && x?.verdict === 'pass'))
+      lack(`${t} didn't pass`);
+  if (problems.length + missing.length === before && r.ok !== true)
+    lack(`the canary didn't accept the smoke: ${one(r.verdict).slice(0, 200) || 'no verdict'}`);
+  if (problems.length + missing.length === before)
+    facts.bios = `bios: ${pin.shards.join(', ')} pass at slicc-bios@${pin.commit}`;
   return undefined;
 }
 
@@ -226,6 +295,7 @@ try {
 }
 codedFindings();
 await bound();
+bios();
 await ci();
 const review = readVerdict();
 const known = await knownList(review);
@@ -240,7 +310,7 @@ const { line, state } = verdictLine({
   review,
   incomplete,
   known,
-  certified: `certified ${tag}, build ${version} SHA256SUMS sha256=${facts.sums} (wasm sha256=${facts.wasm}; reproducible: ${facts.rebuild?.files ?? '?'} files from git archive; ${ci_}; known: ${known.length ? known.join(', ') : 'none'}${gap})`,
+  certified: `certified ${tag}, build ${version} SHA256SUMS sha256=${facts.sums} (wasm sha256=${facts.wasm}; ${facts.bios ? `${facts.bios}; ` : ''}reproducible: ${facts.rebuild?.files ?? '?'} files from git archive; ${ci_}; known: ${known.length ? known.join(', ') : 'none'}${gap})`,
 });
 const comment =
   values.review && existsSync(join(values.review, 'comment.md'))
@@ -250,6 +320,7 @@ const checks = [
   `- the reviewed build: ${version}, SHA256SUMS sha256 ${facts.sums ?? '?'} (${facts.files ?? '?'} files and SHA256SUMS, ${facts.packages ?? '?'} npm packages), re-hashed here from the artifact; the build job said ${values.sums || '?'}; ${facts.go ?? '?'}`,
   `- reproducible from a git archive of the merge commit: ${facts.rebuild ? (facts.rebuild.match ? 'yes, byte for byte' : 'NO') : '?'}`,
   `- the NEGATIVE: ${facts.decision ?? '?'}`,
+  ...(values.bios === '' ? [] : [`- seven's canary on the wasm: ${facts.bios ?? 'NO'}`]),
   `- CI at the head: ${facts.ci ? Object.entries(facts.ci).map(([os, legs]) => `${os} ${legs.length ? legs.map((l) => l.split('=')[1]).join('/') : 'none'}`).join(', ') : '?'}`,
   `- pull request #${pr}, head ${values.head || '?'}, reviewed as merged onto main (${values.commit || '?'})`,
 ].join('\n');

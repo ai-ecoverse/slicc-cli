@@ -59,6 +59,10 @@ export function outputDiff(base, candidate) {
   return out;
 }
 
+export const BIOS_OUTPUTS = ['slicc-wasip1-wasm.wasm', 'npm @ai-ecoverse/wasi-slicc'];
+
+export const biosNeeded = (differ) => (differ ?? []).some((d) => BIOS_OUTPUTS.includes(d));
+
 export function mergedPrs(commits) {
   const seen = new Set();
   const out = [];
