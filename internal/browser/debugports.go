@@ -224,7 +224,7 @@ func (s *liveScan) loop() {
 		s.mu.Lock()
 		next := s.idle
 		if s.busy = time.Since(s.touched) < s.active; s.busy {
-			next = max(time.Until(r.start.Add(s.every-s.took-s.every/4)), 0)
+			next = max(time.Until(r.start.Add(s.every-s.every/4-s.took)), s.took)
 		}
 		s.mu.Unlock()
 		t.Reset(next)
