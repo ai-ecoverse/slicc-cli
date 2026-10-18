@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -22,7 +23,49 @@ import (
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
-const guardSetVersion = "1.8.4"
+const (
+	guardNPMPackage = "@ai-ecoverse/slicc-browsers"
+	guardGoModule   = "github.com/ai-ecoverse/slicc-browsers"
+)
+
+var guardExactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
+func guardSetVersion(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join("..", "..")
+	b, err := os.ReadFile(filepath.Join(root, "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pkg struct {
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal(b, &pkg); err != nil {
+		t.Fatalf("package.json: %v", err)
+	}
+	npm := pkg.DevDependencies[guardNPMPackage]
+	if !guardExactVersion.MatchString(npm) {
+		t.Fatalf("package.json pins %s at %q, want an exact x.y.z version", guardNPMPackage, npm)
+	}
+	b, err = os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gomod []string
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "require "))
+		if len(f) >= 2 && f[0] == guardGoModule {
+			gomod = append(gomod, f[1])
+		}
+	}
+	if len(gomod) != 1 {
+		t.Fatalf("go.mod requires %s %d times (%v), want once", guardGoModule, len(gomod), gomod)
+	}
+	if gomod[0] != "v"+npm {
+		t.Fatalf("package.json pins %s@%s but go.mod requires %s %s; move both pins to the same release", guardNPMPackage, npm, guardGoModule, gomod[0])
+	}
+	return npm
+}
 
 func guardSettleScale() int {
 	switch runtime.GOOS {
@@ -55,8 +98,8 @@ func guardPackage(t *testing.T) string {
 		Version string `json:"version"`
 	}
 	_ = json.Unmarshal(b, &pkg)
-	if pkg.Version != guardSetVersion {
-		t.Fatalf("node_modules has @ai-ecoverse/slicc-browsers@%s, want %s; run npm ci", pkg.Version, guardSetVersion)
+	if want := guardSetVersion(t); pkg.Version != want {
+		t.Fatalf("node_modules has %s@%s, but package.json pins %s; run npm ci", guardNPMPackage, pkg.Version, want)
 	}
 	b, err = os.ReadFile(filepath.Join(dir, "guard-vectors.json"))
 	if err != nil {
@@ -400,8 +443,8 @@ func TestCDPProtectVectorsIgnoreChromeUITargets(t *testing.T) {
 
 func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	t.Helper()
-	if sum.Set != "@ai-ecoverse/slicc-browsers@"+guardSetVersion {
-		t.Errorf("the run used %s, want @ai-ecoverse/slicc-browsers@%s", sum.Set, guardSetVersion)
+	if want := guardNPMPackage + "@" + guardSetVersion(t); sum.Set != want {
+		t.Errorf("the run used %s, want %s", sum.Set, want)
 	}
 	if string(sum.Missing) != "[]" {
 		t.Errorf("rows missing from the run: %s", sum.Missing)
