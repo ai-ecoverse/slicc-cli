@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -62,8 +63,7 @@ func TestSliccyNextStagesTheLatestRelease(t *testing.T) {
 	repo, run := gitRepo(t)
 	commitLauncher(t, repo, run, "launcher 1.2.3\n", "v1.2.3")
 	commitLauncher(t, repo, run, "launcher 1.2.4\n", "v1.2.4")
-	commitLauncher(t, repo, run, "launcher 1.2.5-rc\n", "v1.2.5-rc.1")
-	commitLauncher(t, repo, run, "unreleased\n", "")
+	run("tag", "v1.2.5-rc.1")
 	if err := os.WriteFile(filepath.Join(repo, "npm", "slicc.js"), []byte("working tree\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +108,21 @@ func TestSliccyNextStagesTheLatestRelease(t *testing.T) {
 	}
 }
 
+func TestSliccyNextPublishesOnlyFromTheTagsCommit(t *testing.T) {
+	node := requireNode(t)
+	repo, run := gitRepo(t)
+	commitLauncher(t, repo, run, "launcher 1.2.4\n", "v1.2.4")
+	commitLauncher(t, repo, run, "unreleased\n", "")
+	reg := newFakeRegistry(t, platformDeps()...)
+	r := sliccyNext(t, node, repo, filepath.Join(t.TempDir(), "out"), registryEnv(t, reg))
+	if r.code == 0 || !strings.Contains(r.stderr, "isn't v1.2.4's commit") || strings.Contains(r.stdout, "staging") || reg.wasAsked(platformDeps()[0]) {
+		t.Fatalf("main past the tag: npm would record main's commit, and cert-verify requires the tag's: %+v", r)
+	}
+	if r := sliccyNext(t, node, repo, filepath.Join(t.TempDir(), "out"), registryEnv(t, reg), "--dry-run"); r.code != 0 || !strings.Contains(r.stdout, "sliccy-next: PASS sliccy@7.0.0-next.1.2.4 (dry run)") {
+		t.Fatalf("the pull request's dry run checks from a commit past the tag: %+v", r)
+	}
+}
+
 func TestSliccyNextChecksTheRegistryEvenInADryRun(t *testing.T) {
 	node := requireNode(t)
 	repo, run := gitRepo(t)
@@ -146,19 +161,108 @@ func TestSliccyNextIsGuardedLikeTheRelease(t *testing.T) {
 }
 
 func TestReleaseWorkflowOffersTheSliccyNextRecovery(t *testing.T) {
-	raw, err := os.ReadFile("../../.github/workflows/release.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	data := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	data := readWorkflow(t, "release.yml")
 	for _, want := range []string{
 		"sliccy_next_only:",
 		"node scripts/sliccy-next.mjs --dry-run",
-		"inputs.sliccy_next_only && github.ref == 'refs/heads/main'",
 		"run: sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs\n",
 	} {
 		if !strings.Contains(data, want) {
 			t.Fatalf("release.yml lacks %q", want)
 		}
+	}
+}
+
+func TestSliccyNextWaitsForNpmOnAnUbuntuRunnerAfterTheRelease(t *testing.T) {
+	raw, err := os.ReadFile("../../.releaserc.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "--tag next") || strings.Contains(string(raw), "npm-next") {
+		t.Fatal("semantic-release on the macOS release job publishes only latest; sliccy@next waits for npm in the sliccy-next job")
+	}
+	job := workflowJobs(t, readWorkflow(t, "release.yml"))["sliccy-next"]
+	for _, want := range []string{"    needs: release\n", "    runs-on: ubuntu-latest\n", "          ref: ${{ github.event.workflow_run.head_sha }}\n          fetch-depth: 0\n"} {
+		if !strings.Contains(job.body, want) {
+			t.Fatalf("the sliccy-next job lacks %q:\n%s", want, job.body)
+		}
+	}
+	wait, minutes := 0, 0
+	for _, line := range strings.Split(job.body, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "SLICC_REGISTRY_WAIT_SECONDS: "); ok {
+			wait, _ = strconv.Atoi(strings.Trim(v, "'"))
+		}
+		if v, ok := strings.CutPrefix(line, "    timeout-minutes: "); ok {
+			minutes, _ = strconv.Atoi(v)
+		}
+	}
+	if wait < 1800 || minutes*60 < wait+600 {
+		t.Fatalf("npm took 25 min to serve @ai-ecoverse/slicc-linux-arm64@1.44.4; the job waits %d s within %d min", wait, minutes)
+	}
+	base := func(event, ref string) ghCtx {
+		return ghCtx{"cancelled()": false, "github.event_name": event, "github.ref": ref, "inputs.sliccy_next_only": nil, "needs.release.result": "skipped", "needs.release.outputs.version": ""}
+	}
+	released := base("workflow_run", "refs/heads/main")
+	released["needs.release.result"], released["needs.release.outputs.version"] = "success", "1.44.4"
+	nothing := base("workflow_run", "refs/heads/main")
+	nothing["needs.release.result"] = "success"
+	failed := base("workflow_run", "refs/heads/main")
+	failed["needs.release.result"] = "failure"
+	recovery := base("workflow_dispatch", "refs/heads/main")
+	recovery["inputs.sliccy_next_only"] = true
+	manual := base("workflow_dispatch", "refs/heads/main")
+	manual["inputs.sliccy_next_only"], manual["needs.release.result"], manual["needs.release.outputs.version"] = false, "success", "1.44.4"
+	branch := base("workflow_dispatch", "refs/heads/other")
+	branch["inputs.sliccy_next_only"] = true
+	stale := base("workflow_run", "refs/heads/main")
+	cancelled := base("workflow_run", "refs/heads/main")
+	cancelled["cancelled()"], cancelled["needs.release.result"], cancelled["needs.release.outputs.version"] = true, "success", "1.44.4"
+	pr := base("pull_request", "refs/pull/7/merge")
+	pr["needs.release.result"], pr["needs.release.outputs.version"] = "success", "0.0.0-dry-run.7"
+	for _, c := range []struct {
+		name string
+		ctx  ghCtx
+		runs bool
+	}{
+		{"after a release on main", released, true},
+		{"after a release run that released nothing", nothing, false},
+		{"after a failed release", failed, false},
+		{"after a release skipped as stale", stale, false},
+		{"a cancelled run", cancelled, false},
+		{"the sliccy_next_only recovery", recovery, true},
+		{"a manual release on main", manual, true},
+		{"the recovery on a branch", branch, false},
+		{"a pull request dry run", pr, false},
+	} {
+		if got := ghTruthy(ghTemplate(t, job.cond, c.ctx)); got != c.runs {
+			t.Errorf("%s: the sliccy-next job runs: %v, want %v", c.name, got, c.runs)
+		}
+	}
+}
+
+func TestSliccyNextWaitsForAPlatformPackageNpmServesLate(t *testing.T) {
+	node := requireNode(t)
+	repo, run := gitRepo(t)
+	commitLauncher(t, repo, run, "launcher\n", "v1.2.4")
+	deps := platformDeps()
+	for _, c := range []struct {
+		name string
+		wait int
+		ok   bool
+	}{
+		{"a wait shorter than npm takes refuses, naming why", 0, false},
+		{"a wait long enough publishes", 3, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			reg := newFakeRegistry(t, deps...)
+			reg.late(deps[2], 1)
+			r := sliccyNext(t, node, repo, filepath.Join(t.TempDir(), "out"), registryEnvWaiting(t, reg, c.wait), "--dry-run")
+			if c.ok && (r.code != 0 || !strings.Contains(r.stdout, "waiting for "+deps[2]+" (HTTP 404) to appear on the registry") || !strings.Contains(r.stdout, "every optional dependency of sliccy@7.0.0-next.1.2.4 is on the registry")) {
+				t.Fatalf("%+v", r)
+			}
+			if !c.ok && (r.code == 0 || !strings.Contains(r.stderr, "refusing to publish sliccy@7.0.0-next.1.2.4; not on the registry: "+deps[2]+" (HTTP 404)")) {
+				t.Fatalf("%+v", r)
+			}
+		})
 	}
 }

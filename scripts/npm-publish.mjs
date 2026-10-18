@@ -55,10 +55,11 @@ async function onRegistry(base, name, version, timeoutMs) {
       headers: { accept: 'application/json', 'cache-control': 'no-cache' },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return false;
-    return (await res.json()).version === version;
-  } catch {
-    return false;
+    if (!res.ok) return `HTTP ${res.status}`;
+    const got = (await res.json()).version;
+    return got === version ? '' : `answers ${got ?? 'no version'}`;
+  } catch (error) {
+    return error.name === 'TimeoutError' ? `no answer in ${Math.round(timeoutMs / 1000)} s` : error.cause?.code ?? error.cause?.message ?? error.message;
   }
 }
 
@@ -72,7 +73,8 @@ async function requireDependencies(pkg) {
     const missing = [];
     for (const [name, version] of deps) {
       const timeoutMs = Math.min(30000, Math.max(5000, deadline - Date.now()));
-      if (!(await onRegistry(base, name, version, timeoutMs))) missing.push(`${name}@${version}`);
+      const why = await onRegistry(base, name, version, timeoutMs);
+      if (why) missing.push(`${name}@${version} (${why})`);
     }
     if (!missing.length) break;
     if (Date.now() >= deadline) fail(`refusing to publish ${pkg.name}@${pkg.version}; not on the registry: ${missing.join(', ')}`);
