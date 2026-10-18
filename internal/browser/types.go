@@ -109,6 +109,7 @@ type Options struct {
 	Processes    func(context.Context) ([]byte, error)
 	Transport    http.RoundTripper
 	Dial         func(ctx context.Context, network, addr string) (net.Conn, error)
+	Status       func(format string, a ...any)
 }
 
 type Report struct {
