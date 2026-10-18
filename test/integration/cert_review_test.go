@@ -724,6 +724,9 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 	if !strings.Contains(jobs["guard"], "          paths: |\n"+strings.Join(paths, "\n")+"\n") {
 		t.Fatal("the self-guard's paths must equal REVIEWER_GLOBS")
 	}
+	if !strings.Contains(jobs["guard"], "        uses: ai-ecoverse/slicc-shared-web/.github/actions/cert-self-guard@f342d7cf558c817ce517bbbbc4cc46df6eac2f97\n") {
+		t.Fatal("the self-guard is slicc-shared-web v1.24.2 or later, whose globs cross dot segments: an older pin lets a pull request touching tools/cert-review/a/.b/c.mjs pass without cert-review-approved")
+	}
 }
 
 func TestCertReviewClassifiesOnlyTheBuildsItsProducersDeclared(t *testing.T) {
