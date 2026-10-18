@@ -29,6 +29,7 @@ jobs:
     runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
     outputs:
       version: ${{ steps.tag.outputs.version }}
@@ -38,7 +39,9 @@ jobs:
         env:
           SHA: ${{ github.event.workflow_run.head_sha }}
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN: ${{ github.event.workflow_run.id }}
           INPUT: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ -n "$INPUT" ]; then
@@ -48,6 +51,12 @@ jobs:
             version=$(git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" 'refs/tags/v*' \
               | awk -v sha="$SHA" '$1 == sha { n = $2; sub("^refs/tags/v", "", n); sub("\\^\\{\\}$", "", n); print n }' \
               | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+          fi
+          if [ -n "$version" ] && [ "$CONCLUSION" = failure ]; then
+            failed=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN/jobs?per_page=100" --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | .name')
+            [ -n "$failed" ] || { echo "::error::Release run $RUN failed, but no job of it did"; exit 1; }
+            smoke=$(grep -E '^(smoke|install-smoke)( |$)' <<< "$failed" | paste -sd, - || true)
+            [ -z "$smoke" ] || { echo "::error::v$version's Release run $RUN didn't pass its smoke tests ($smoke); a release whose binaries didn't pass them is never verified"; exit 1; }
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ -n "$version" ] && [ "$CONCLUSION" = failure ]; then

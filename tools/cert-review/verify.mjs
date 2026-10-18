@@ -36,6 +36,7 @@ const REGISTRY = new URL(process.env.CERT_NPM_REGISTRY || 'https://registry.npmj
 const problems = [];
 const missing = [];
 const absent = [];
+const unchecked = [];
 const facts = { packages: {}, assets: {} };
 const one = (t) => String(t ?? '').replace(/\s+/g, ' ').trim();
 const sh = (cmd, args, opts = {}) =>
@@ -63,8 +64,9 @@ function npmView(spec) {
 async function served(p, until) {
   for (let waited = false; ; waited = true) {
     const m = npmView(`${p.name}@${p.version}`);
-    if (m?.version === p.version && m.dist?.tarball && (await fetch(m.dist.tarball, { method: 'HEAD' })).ok) return m;
-    if (Date.now() > until) return undefined;
+    const listed = m?.version === p.version && Boolean(m.dist?.tarball);
+    if (listed && (new URL(m.dist.tarball).origin !== REGISTRY || (await fetch(m.dist.tarball, { method: 'HEAD' })).ok)) return { m };
+    if (Date.now() > until) return { listed };
     if (!waited) console.log(`waiting for npm to serve ${p.name}@${p.version}`);
     await sleep(Math.min(15_000, Math.max(0, until - Date.now()) + 1));
   }
@@ -80,7 +82,8 @@ function tagCommit() {
 }
 
 async function npmPackage(p, until, sums) {
-  const m = await served(p, until);
+  const { m, listed } = await served(p, until);
+  if (listed) return missing.push(`${p.name}@${p.version}: npm lists it, but doesn't serve its tarball after ${values.wait} s`);
   if (!m) {
     absent.push(p);
     return missing.push(`${p.name}@${p.version} isn't on npm after ${values.wait} s`);
@@ -268,8 +271,14 @@ try {
   const { sums } = githubRelease();
   evidence();
   const until = Date.now() + Number(values.wait) * 1000;
-  for (const p of packages) await npmPackage(p, until, sums);
-  const present = packages.filter((p) => !absent.includes(p));
+  for (const p of packages)
+    try {
+      await npmPackage(p, until, sums);
+    } catch (error) {
+      unchecked.push(p);
+      missing.push(`${p.name}@${p.version}: a check didn't finish: ${one(error.stderr || error.message).slice(0, 200)}`);
+    }
+  const present = packages.filter((p) => facts.packages[p.name] && !unchecked.includes(p));
   if (present.length) signatures(present);
   await installer(sums);
   context();

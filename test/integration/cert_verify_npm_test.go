@@ -46,6 +46,7 @@ const args = process.argv.slice(2);
 if (args[0] === 'view') {
   const meta = JSON.parse(readFileSync(join(process.env.FAKE_DIR, 'npm.json'), 'utf8'))[args[1]];
   if (!meta) { console.error('npm error code E404'); process.exit(1); }
+  if (typeof meta === 'string') { console.error('npm error code ' + meta); process.exit(1); }
   console.log(JSON.stringify(meta));
 } else if (args[0] === 'install') {
 } else if (args[0] === 'audit') {
@@ -72,6 +73,7 @@ type verifyFixture struct {
 	badSRI    bool
 	artifacts []map[string]any
 	declared  string
+	moreNPM   func(registry string) map[string]any
 }
 
 const verifyRunStart = "2026-01-01T10:00:00Z"
@@ -199,6 +201,11 @@ func (f *verifyFixture) run(t *testing.T, mutate func(f *verifyFixture)) (int, s
 			f.npm["@ai-ecoverse/wasi-slicc@"+verifyVersion].(map[string]any)["dist"].(map[string]any)["integrity"] = "sha512-ZmFrZQ=="
 		}
 	}
+	if f.moreNPM != nil {
+		for k, v := range f.moreNPM(srv.URL) {
+			f.npm[k] = v
+		}
+	}
 	for _, d := range []string{"assets", "bin", "evidence", "tmp"} {
 		if err := os.MkdirAll(filepath.Join(f.dir, d), 0o755); err != nil {
 			t.Fatal(err)
@@ -298,6 +305,23 @@ func TestCertVerifyCertifiesOnlyAReleaseThatVerifiesEverywhere(t *testing.T) {
 		{"a package that isn't on npm hides no alert in the rest of the release", "failure", "/slicc answers 302 → https://example.invalid/install.sh, not https://github.com/" + verifyRepo + "/releases/latest/download/install.sh; also missing: sliccy@7.0.0-next.1.43.0 isn't on npm after 1 s", func(f *verifyFixture) {
 			f.env = []string{"SLICC_NPM_PUBLISH=", "SLICCY_NEXT_PUBLISH=true", "WASI_SLICC_PUBLISH=true"}
 			f.redirect = "https://example.invalid/install.sh"
+		}},
+		{"npm failing on a package hides no alert in the rest of the release", "failure", "/slicc answers 302 → https://example.invalid/install.sh, not https://github.com/" + verifyRepo + "/releases/latest/download/install.sh; also missing: sliccy@7.0.0-next.1.43.0: a check didn't finish: npm error code E500", func(f *verifyFixture) {
+			f.env = []string{"SLICC_NPM_PUBLISH=", "SLICCY_NEXT_PUBLISH=true", "WASI_SLICC_PUBLISH=true"}
+			f.redirect = "https://example.invalid/install.sh"
+			f.moreNPM = func(string) map[string]any { return map[string]any{"sliccy@7.0.0-next.1.43.0": "E500"} }
+		}},
+		{"a package npm lists without serving its tarball is INCOMPLETE, not unpublished", "error", "cert-ci: INCOMPLETE slicc-cli v1.43.0 (sliccy@7.0.0-next.1.43.0: npm lists it, but doesn't serve its tarball after 1 s; re-run the failed jobs)", func(f *verifyFixture) {
+			f.env = []string{"SLICC_NPM_PUBLISH=", "SLICCY_NEXT_PUBLISH=true", "WASI_SLICC_PUBLISH=true"}
+			f.moreNPM = func(registry string) map[string]any {
+				return map[string]any{"sliccy@7.0.0-next.1.43.0": map[string]any{"version": "7.0.0-next.1.43.0", "dist": map[string]any{"tarball": registry + "/sliccy-unserved.tgz"}}}
+			}
+		}},
+		{"a tarball on another host is an alert, even when it doesn't answer", "failure", "sliccy: the tarball is at http://127.0.0.1:9", func(f *verifyFixture) {
+			f.env = []string{"SLICC_NPM_PUBLISH=", "SLICCY_NEXT_PUBLISH=true", "WASI_SLICC_PUBLISH=true"}
+			f.moreNPM = func(string) map[string]any {
+				return map[string]any{"sliccy@7.0.0-next.1.43.0": map[string]any{"version": "7.0.0-next.1.43.0", "dist": map[string]any{"tarball": "http://127.0.0.1:9/sliccy.tgz"}}}
+			}
 		}},
 		{"every pull request since the last tag certified in the pull request", "success", "certified @ai-ecoverse/wasi-slicc@1.43.0 sha256=", func(f *verifyFixture) {
 			f.since("success", "certified ai-ecoverse/slicc-cli PR #5 at fake-head-00")

@@ -167,13 +167,11 @@ func TestCertVerifyRunsCodeOnlyAfterTheReleaseOutsideItsConcurrency(t *testing.T
 			t.Errorf("%s runs only for a release", name)
 		}
 	}
-	if !strings.Contains(jobs["tag"], "github.ref == 'refs/heads/main'") || !strings.Contains(jobs["tag"], "(github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure')\n      && ") {
-		t.Fatal("a Release run on main that succeeded, or failed after tagging, is verified")
-	}
-	for _, other := range []string{"cancelled", "skipped", "timed_out", "action_required", "neutral", "stale"} {
-		if strings.Contains(jobs["tag"], other) {
-			t.Fatalf("a Release run that ended %s is not verified", other)
-		}
+	_, cond, _ := strings.Cut(jobs["tag"], "    if: >-\n")
+	cond, _, _ = strings.Cut(cond, "\n    runs-on:")
+	want := "${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure') && github.event.workflow_run.head_repository.full_name == github.repository && (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')) }}"
+	if strings.Join(strings.Fields(cond), " ") != want {
+		t.Fatalf("only a Release run on main of this repository that succeeded, or failed after tagging, is verified:\n%s", cond)
 	}
 	if strings.Contains(jobs["rebuild"], "GH_TOKEN") || strings.Contains(jobs["rebuild"], "gh ") {
 		t.Fatal("the pool runner that rebuilds gets no token")
@@ -231,18 +229,51 @@ func TestCertVerifyFindsTheTagOfAReleaseRunThatFailedAfterTagging(t *testing.T) 
 	partial := commit("published 1.44.4, then failed")
 	git("tag", "-a", "-m", "v1.44.4", "v1.44.4")
 	untagged := commit("failed before tagging")
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq is not installed")
+	}
 	step := stepRun(t, "cert-verify.yml", "tag", "tag")
+	jobs := func(conclusions ...string) string {
+		list := []map[string]string{}
+		for i := 0; i+1 < len(conclusions); i += 2 {
+			list = append(list, map[string]string{"name": conclusions[i], "conclusion": conclusions[i+1]})
+		}
+		data, _ := json.Marshal(map[string]any{"total_count": len(list), "jobs": list})
+		return string(data)
+	}
+	releaseFailed := jobs("Still the head of main", "success", "Latest nightly passed", "success", "release", "failure", "smoke (macos-latest, slicc-darwin-arm64)", "skipped", "install-smoke (ubuntu-curl)", "skipped")
 	for _, c := range []struct {
-		name, sha, conclusion, version, says string
+		name, sha, conclusion, jobs, version, says string
+		fails, asks                                bool
 	}{
-		{"a successful release", published, "success", "1.44.3", "release: 1.44.3\n"},
-		{"a release run that failed after tagging", partial, "failure", "1.44.4", "release: 1.44.4, tagged on " + partial + ", whose Release run failed; verifying what is published"},
-		{"a release run that failed before tagging", untagged, "failure", "", "release: none on " + untagged},
+		{"a successful release", published, "success", "", "1.44.3", "release: 1.44.3\n", false, false},
+		{"a release run that failed after tagging", partial, "failure", releaseFailed, "1.44.4", "release: 1.44.4, tagged on " + partial + ", whose Release run failed; verifying what is published", false, true},
+		{"a release run that failed before tagging", untagged, "failure", "", "", "release: none on " + untagged, false, false},
+		{"a tagged release run whose smoke test failed", partial, "failure", jobs("release", "success", "smoke (windows-latest, slicc-windows-amd64.exe)", "failure", "install-smoke (alpine-wget)", "timed_out"), "", "v1.44.4's Release run 77 didn't pass its smoke tests (smoke (windows-latest, slicc-windows-amd64.exe),install-smoke (alpine-wget))", true, true},
+		{"a tagged release run whose jobs can't be read", partial, "failure", "-", "", "", true, true},
+		{"a tagged release run with no failed job", partial, "failure", jobs("release", "success"), "", "Release run 77 failed, but no job of it did", true, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := runSilently(t, step, "GITHUB_SERVER_URL=file://"+server, "SHA="+c.sha, "CONCLUSION="+c.conclusion, "INPUT=")
-			if r.code != 0 || r.outputs["version"] != c.version || !strings.Contains(r.out, c.says) {
-				t.Fatalf("exit %d, version %q, want %q saying %q:\n%s", r.code, r.outputs["version"], c.version, c.says, r.out)
+			bin := t.TempDir()
+			fixture := filepath.Join(bin, "jobs.json")
+			if c.jobs != "-" {
+				if err := os.WriteFile(fixture, []byte(c.jobs), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			log := filepath.Join(bin, "gh.log")
+			fakeTool(t, bin, "gh", `printf '%s\n' "$*" >> "$GH_LOG"
+while [ $# -gt 0 ]; do [ "$1" = --jq ] && exec jq -r "$2" "$JOBS"; shift; done
+exit 1
+`)
+			r := runSilently(t, step, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "GH_LOG="+log, "JOBS="+fixture,
+				"GITHUB_SERVER_URL=file://"+server, "SHA="+c.sha, "CONCLUSION="+c.conclusion, "RUN=77", "INPUT=")
+			asked, _ := os.ReadFile(log)
+			if (r.code != 0) != c.fails || r.outputs["version"] != c.version || !strings.Contains(r.out, c.says) {
+				t.Fatalf("exit %d, version %q, want failing %v and %q saying %q:\n%s", r.code, r.outputs["version"], c.fails, c.version, c.says, r.out)
+			}
+			if (len(asked) != 0) != c.asks || c.asks && !strings.Contains(string(asked), "api --paginate repos/ai-ecoverse/slicc-cli/actions/runs/77/jobs?per_page=100 --jq") {
+				t.Fatalf("the Release run's jobs are read only for a failed run that tagged: %q", asked)
 			}
 		})
 	}
