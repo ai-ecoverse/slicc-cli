@@ -318,7 +318,7 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 | `SLICC_DISCOVERY` | test-only: limits browser discovery, see [Development](#development) |
 | `SLICC_OPEN_COMMAND` | test-only: `slicc open` runs this program with the pairing URL as its only argument instead of opening the default browser; the integration tests always set it |
 | `SLICC_PROTECTED_PORTS` | test-only: `<first>-<last>` (or one port), more [debugging ports](#network-policy) denied in every mode on top of 9222-9229 (never instead of them), so tests can prove the range on fake ports without touching the real ones. A malformed value exits 1 |
-| `SLICC_CDP_GUARD_IDLE`, `SLICC_CDP_GUARD_LIMIT` | test-only: Go durations (such as `2s`) for the [`cdp`](#cdp-browser-control) guard's idle bound (default 30 s) and outer bound (default 5 min) on a target's setup. A value that isn't a positive duration is ignored |
+| `SLICC_CDP_GUARD_IDLE`, `SLICC_CDP_GUARD_LIMIT` | test-only: Go durations (such as `2s`) that shorten the [`cdp`](#cdp-browser-control) guard's idle bound (30 s) and outer bound (5 min) on a target's setup. A longer value counts as the default, and so does 0, a negative value or one that doesn't parse, so the variables can never widen or turn off the guard |
 | `SLICC_LOOPBACK_PORTS` | test-only: `<first>-<last>`, the port range of the [loopback listener](#linking-seven-in-your-everyday-browser) instead of 17117-17126 |
 | `SLICC_LINK_URL` | inside seven only: the link facade's address, `tcp://127.0.0.1:<port>` (see [Inside seven](#inside-seven)) |
 | `SLICC_USER_DATA_DIR`, `XDG_STATE_HOME` | read, as SLICC six reads them, only to find six's Chrome profile (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)) |
