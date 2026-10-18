@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { artifactBinding, declaredArtifacts, forcedFiles, groupVerdict, mergedPrs, outputDiff, reviewsItself } from './lib.mjs';
+import { artifactBinding, biosNeeded, declaredArtifacts, forcedFiles, groupVerdict, mergedPrs, outputDiff, reviewsItself } from './lib.mjs';
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -161,19 +161,20 @@ async function classify() {
   }
   const differ = outputDiff(base, candidate);
   const behaviour = [...forced, ...differ];
+  const bios = String(biosNeeded(differ));
   const labelled = values.labels.split(',').includes('merge-ok');
   summary(`#${values.pr}: ${differ.length ? `ships differently: ${differ.join(', ')}` : 'identical build outputs'}${forced.length ? `; behaviour by path: ${forced.join(', ')}` : ''}`);
   if (behaviour.length === 0) {
     const n = Object.keys(candidate.files).length + Object.keys(candidate.packages).length;
     await status(values.head, 'success', `not behaviour: identical build outputs (${n} files and packages, SHA256SUMS ${candidate.sums.slice(0, 12)})`);
-    return output({ go: 'false', behaviour: '' });
+    return output({ go: 'false', behaviour: '', bios });
   }
   if (!labelled) {
     await status(values.head, 'failure', `waits for merge-ok to be reviewed (changes ${behaviour.slice(0, 4).join(', ')}${behaviour.length > 4 ? ', …' : ''})`);
-    return output({ go: 'false', behaviour: behaviour.join(',') });
+    return output({ go: 'false', behaviour: behaviour.join(','), bios });
   }
   await status(values.head, 'pending', `reviewing #${values.pr} at ${values.head.slice(0, 12)}`);
-  return output({ go: 'true', behaviour: behaviour.join(',') });
+  return output({ go: 'true', behaviour: behaviour.join(','), bios });
 }
 
 async function lookup() {

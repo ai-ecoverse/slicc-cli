@@ -132,6 +132,9 @@ jobs:
       candidate-digest: ${{ matrix.side == 'candidate' && steps.upload.outputs.artifact-digest || '' }}
       base-id: ${{ matrix.side == 'base' && steps.upload.outputs.artifact-id || '' }}
       base-digest: ${{ matrix.side == 'base' && steps.upload.outputs.artifact-digest || '' }}
+      wasi-id: ${{ matrix.side == 'candidate' && steps.wasi.outputs.artifact-id || '' }}
+      wasi-digest: ${{ matrix.side == 'candidate' && steps.wasi.outputs.artifact-digest || '' }}
+      wasi-sha256: ${{ matrix.side == 'candidate' && steps.manifest.outputs.wasi || '' }}
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       REF: ${{ matrix.side == 'candidate' && needs.plan.outputs.commit || needs.plan.outputs.parent }}
@@ -179,6 +182,7 @@ jobs:
           cat "$RUNNER_TEMP/manifest.log"
           if [ "$SIDE" = candidate ]; then
             echo "sums=$(node -p 'require(process.argv[1]).sums' "$RUNNER_TEMP/out/manifest.json")" >> "$GITHUB_OUTPUT"
+            echo "wasi=$(node -p 'require(process.argv[1]).packages["@ai-ecoverse/wasi-slicc"].sha256' "$RUNNER_TEMP/out/manifest.json")" >> "$GITHUB_OUTPUT"
           fi
 
       - id: upload
@@ -186,6 +190,15 @@ jobs:
         with:
           name: cert-build-${{ matrix.side }}-${{ needs.plan.outputs.version }}
           path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+          retention-days: 7
+
+      - id: wasi
+        if: matrix.side == 'candidate'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cert-build-wasi-slicc-${{ needs.plan.outputs.version }}
+          path: ${{ runner.temp }}/out/npm/ai-ecoverse-wasi-slicc-${{ needs.plan.outputs.version }}.tgz
           if-no-files-found: error
           retention-days: 7
 
@@ -202,6 +215,7 @@ jobs:
     outputs:
       go: ${{ steps.classify.outputs.go }}
       behaviour: ${{ steps.classify.outputs.behaviour }}
+      bios: ${{ steps.classify.outputs.bios }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -238,7 +252,8 @@ jobs:
           DL_CANDIDATE: ${{ steps.dl-candidate.outcome }}
           ARTIFACTS: >-
             cert-build-candidate-${{ needs.plan.outputs.version }}=${{ needs.build.outputs.candidate-id }}:${{ needs.build.outputs.candidate-digest }},
-            cert-build-base-${{ needs.plan.outputs.version }}=${{ needs.build.outputs.base-id }}:${{ needs.build.outputs.base-digest }}
+            cert-build-base-${{ needs.plan.outputs.version }}=${{ needs.build.outputs.base-id }}:${{ needs.build.outputs.base-digest }},
+            cert-build-wasi-slicc-${{ needs.plan.outputs.version }}=${{ needs.build.outputs.wasi-id }}:${{ needs.build.outputs.wasi-digest }}
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -451,6 +466,28 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  bios:
+    name: cert-review-pr / bios canary
+    needs: [plan, build, classify]
+    if: ${{ !cancelled() && needs.classify.outputs.go == 'true' && needs.classify.outputs.bios == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ai-ecoverse/slicc-bios/.github/workflows/canary.yml@b43553b05780d2e2a6d8334688e068a76a67912a
+    with:
+      bios-ref: b43553b05780d2e2a6d8334688e068a76a67912a
+      shards: '["follow-chat"]'
+      repeat: 1
+      label: bios
+      candidate-package: '@ai-ecoverse/wasi-slicc'
+      candidate-artifact: cert-build-wasi-slicc-${{ needs.plan.outputs.version }}
+      candidate-run: ${{ github.run_id }}
+      candidate-repo: ${{ github.repository }}
+      candidate-sha256: ${{ needs.build.outputs.wasi-sha256 }}
+      candidate-artifact-id: ${{ needs.build.outputs.wasi-id }}
+      candidate-artifact-digest: ${{ needs.build.outputs.wasi-digest }}
+      candidate-binding: strict
+
   review:
     name: cert-review-pr / review
     needs: [plan, classify, delta, suite, rebuild]
@@ -598,7 +635,7 @@ jobs:
 
   record:
     name: cert-review-pr / record
-    needs: [plan, build, classify, rebuild, delta, suite, review]
+    needs: [plan, build, classify, rebuild, delta, suite, review, bios]
     if: ${{ !cancelled() && needs.classify.outputs.go == 'true' && needs.review.result != 'cancelled' }}
     runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 75
@@ -621,6 +658,9 @@ jobs:
       SUMS: ${{ needs.build.outputs.sums }}
       REVIEW: ${{ needs.review.result }}
       KEY: ${{ needs.review.outputs.key }}
+      BIOS: ${{ needs.classify.outputs.bios }}
+      BIOS_JOB: ${{ needs.bios.result }}
+      BIOS_ARTIFACT: ${{ needs.bios.outputs.artifact-id }}:${{ needs.bios.outputs.artifact-digest }}
       JOBS: build=${{ needs.build.result }},rebuild=${{ needs.rebuild.result }},delta=${{ needs.delta.result }},suite=${{ needs.suite.result }}
       GH_TOKEN: ${{ github.token }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -689,16 +729,27 @@ jobs:
           path: ${{ runner.temp }}/art/suite-base
           digest-mismatch: error
 
+      - id: dl-bios
+        if: needs.bios.outputs.artifact-id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        continue-on-error: true
+        with:
+          artifact-ids: ${{ needs.bios.outputs.artifact-id }}
+          path: ${{ runner.temp }}/bios
+          digest-mismatch: error
+
       - name: The line, from the build, the findings recomputed here from the code-made evidence, CI's results on the head and the verdict
         id: record
         env:
           DOWNLOADS: >-
             verdict=${{ steps.dl-verdict.outcome }},build=${{ steps.dl-build.outcome }},
             delta=${{ steps.dl-delta.outcome }},rebuild=${{ steps.dl-rebuild.outcome }},
-            suite-candidate=${{ steps.dl-suite-candidate.outcome }},suite-base=${{ steps.dl-suite-base.outcome }}
+            suite-candidate=${{ steps.dl-suite-candidate.outcome }},suite-base=${{ steps.dl-suite-base.outcome }},
+            bios=${{ steps.dl-bios.outcome }}
           ARTIFACTS: >-
             cert-build-candidate-${{ needs.plan.outputs.version }}=${{ needs.build.outputs.candidate-id }}:${{ needs.build.outputs.candidate-digest }},
             cert-build-base-${{ needs.plan.outputs.version }}=${{ needs.build.outputs.base-id }}:${{ needs.build.outputs.base-digest }},
+            cert-build-wasi-slicc-${{ needs.plan.outputs.version }}=${{ needs.build.outputs.wasi-id }}:${{ needs.build.outputs.wasi-digest }},
             cert-review-rebuild-${{ needs.plan.outputs.version }}=${{ needs.rebuild.outputs.rebuild-id }}:${{ needs.rebuild.outputs.rebuild-digest }},
             cert-review-delta-${{ needs.plan.outputs.version }}=${{ needs.delta.outputs.delta-id }}:${{ needs.delta.outputs.delta-digest }},
             cert-review-suite-candidate-${{ needs.plan.outputs.version }}=${{ needs.suite.outputs.candidate-id }}:${{ needs.suite.outputs.candidate-digest }},
@@ -715,7 +766,8 @@ jobs:
             --head "$HEAD_SHA" --commit "$COMMIT" --run "$RUN_URL" --artifact "$RUNNER_TEMP/build" --sums "$SUMS" \
             --findings "$RUNNER_TEMP/findings.json" --review "$RUNNER_TEMP/cert-review" \
             --review-result "$REVIEW" --jobs "$JOBS" --key "${KEY:-false}" --run-id "$GITHUB_RUN_ID" --artifacts "$ARTIFACTS" \
-            --downloads "$DOWNLOADS" --ci-wait 3600 --out "$RUNNER_TEMP/record"; then
+            --downloads "$DOWNLOADS" --bios "$BIOS" --bios-job "$BIOS_JOB" --bios-artifact "$BIOS_ARTIFACT" \
+            --bios-dir "$RUNNER_TEMP/bios" --ci-wait 3600 --out "$RUNNER_TEMP/record"; then
             ok=true
           else
             ok=false
