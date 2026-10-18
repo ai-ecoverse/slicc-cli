@@ -121,11 +121,11 @@ func (rl *relay) park(data []byte) bool {
 	defer rl.parkMu.Unlock()
 	q, waiting := rl.parked[c.session]
 	if !waiting {
-		ready, deadline := rl.g.navWait(c.session)
+		ready := rl.g.navWait(c.session)
 		if ready == nil {
 			return false
 		}
-		go rl.release(c.session, ready, deadline)
+		go rl.release(c.session, ready)
 	}
 	if rl.parkedCount >= maxParked || rl.parkedBytes+len(data) > maxParkedBytes {
 		rl.kill("ENOBUFS: too many commands wait for a target's guard")
@@ -137,13 +137,9 @@ func (rl *relay) park(data []byte) bool {
 	return true
 }
 
-func (rl *relay) release(session string, ready <-chan struct{}, deadline time.Time) {
-	t := time.NewTimer(time.Until(deadline))
-	defer t.Stop()
+func (rl *relay) release(session string, ready <-chan struct{}) {
 	select {
 	case <-ready:
-	case <-t.C:
-		rl.g.navExpire(session)
 	case <-rl.s.Done():
 	}
 	for {

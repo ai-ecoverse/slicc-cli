@@ -1,0 +1,10 @@
+{
+  "repository": "ai-ecoverse/slicc-bios",
+  "workflow": ".github/workflows/canary.yml",
+  "commit": "b43553b05780d2e2a6d8334688e068a76a67912a",
+  "package": "@ai-ecoverse/wasi-slicc",
+  "label": "bios",
+  "shards": ["follow-chat"],
+  "tests": ["follow-slicc.test.mjs"],
+  "repeat": 1
+}

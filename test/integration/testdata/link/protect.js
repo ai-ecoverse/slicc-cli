@@ -93,6 +93,27 @@ export function protectTest(getLink, describe) {
         const other = await outcome(c.send('Browser.getVersion')).then((r) => ({ ...r, ms: Date.now() - start }));
         return { enable: await enable, other };
       }),
+    guardHold: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const start = Date.now();
+        const enable = await outcome(c.send('Page.enable', {}, sessionId));
+        return { enable: { ...enable, ms: Date.now() - start } };
+      }),
+    guardFlood: async (browser, count, size) => {
+      try {
+        const c = await CdpClient.open(getLink(), browser);
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const params = size ? { pad: 'x'.repeat(size) } : {};
+        for (let i = 0; i < count; i += 1) c.send('Page.enable', params, sessionId).catch(() => {});
+        const stream = await Promise.race([c.closed, sleep(60000).then(() => ({ open: true }))]);
+        return { stream };
+      } catch (error) {
+        return { failed: String(error?.message ?? error) };
+      }
+    },
     targets: (browser) =>
       run(browser, async (c) => {
         const { targetInfos } = await c.send('Target.getTargets');

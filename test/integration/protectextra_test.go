@@ -21,6 +21,13 @@ type fakeCDPBrowser struct {
 	mu     sync.Mutex
 	got    []string
 	slow   map[string]time.Duration
+	pulse  []string
+}
+
+func (f *fakeCDPBrowser) every(event string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pulse = append(f.pulse, event)
 }
 
 func (f *fakeCDPBrowser) delay(method string, d time.Duration) {
@@ -76,6 +83,27 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = c.CloseNow() }()
 	c.SetReadLimit(-1)
 	ctx := r.Context()
+	f.mu.Lock()
+	pulse := append([]string(nil), f.pulse...)
+	f.mu.Unlock()
+	if len(pulse) > 0 {
+		go func() {
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+				for _, e := range pulse {
+					if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
+						return
+					}
+				}
+			}
+		}()
+	}
 	for {
 		_, data, err := c.Read(ctx)
 		if err != nil {
@@ -171,13 +199,18 @@ func extraInfoScript(seven, allowed string) []string {
 
 func setupFakeProtect(t *testing.T, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
 	t.Helper()
+	return setupFakeProtectEnv(t, nil, script)
+}
+
+func setupFakeProtectEnv(t *testing.T, attachEnv []string, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
+	t.Helper()
 	b := launchBrowser(t)
 	srv := pageServer(t)
 	plain := plainServer(t)
 	allowed := strings.Replace(plain.URL, "127.0.0.1", "localhost", 1)
 	fake := newFakeCDPBrowser(t, script(plain.URL, allowed))
 	env := &protectEnv{linkEnv: &linkEnv{t: t, b: b, origin: srv.URL}, plain: plain, allowed: allowed, seven: srv.URL}
-	env.a = startAttach(t, "--cdp", b.endpoint, "--cdp-extra", fake.srv.URL, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
+	env.a = startAttachEnv(t, false, attachEnv, "--cdp", b.endpoint, "--cdp-extra", fake.srv.URL, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	return env, fake

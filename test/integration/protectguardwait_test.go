@@ -43,16 +43,99 @@ type guardWaitResult struct {
 	} `json:"other"`
 }
 
-func TestCDPHoldsATargetsCommandsWhileItsGuardIsSlowToSetUp(t *testing.T) {
+func TestCDPHoldsATargetsCommandsPastAMinuteWhileChromeIsLive(t *testing.T) {
 	env, fake := setupFakeProtect(t, func(string, string) fakeScript { return guardWaitScript("{}") })
-	fake.delay("Network.enable", 20*time.Second)
+	fake.delay("Network.enable", 90*time.Second)
 	var r guardWaitResult
-	env.evalJSON(t, "linkTest.protect.guardWait('chrome-2')", &r)
-	if !r.Enable.OK || r.Enable.MS < 19000 {
-		t.Errorf("Page.enable on the target: %+v, want it to succeed once the guard is up, after about 20 s", r.Enable)
+	env.evalJSONWithin(t, "linkTest.protect.guardWait('chrome-2')", &r, 150*time.Second)
+	if !r.Enable.OK || r.Enable.MS < 89000 {
+		t.Errorf("Page.enable on the target: %+v, want it to succeed once the guard is up, after about 90 s", r.Enable)
 	}
 	if !r.Other.OK || r.Other.MS > 10000 {
 		t.Errorf("a browser command on the same stream: %+v, want it answered without waiting for the target's guard", r.Other)
+	}
+}
+
+type guardHoldResult struct {
+	Enable struct {
+		cdpOutcome
+		MS int `json:"ms"`
+	} `json:"enable"`
+}
+
+func guardBounds(idle, limit string) []string {
+	return []string{"SLICC_CDP_GUARD_IDLE=" + idle, "SLICC_CDP_GUARD_LIMIT=" + limit}
+}
+
+func TestCDPRefusesAHeldTargetAtTheIdleBoundWhenChromeIsSilent(t *testing.T) {
+	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "60s"), func(string, string) fakeScript { return guardWaitScript("{}") })
+	fake.delay("Network.enable", 10*time.Minute)
+	fake.delay("Browser.getVersion", 10*time.Minute)
+	var r guardHoldResult
+	env.evalJSON(t, "linkTest.protect.guardHold('chrome-2')", &r)
+	if !r.Enable.refused() || !strings.Contains(r.Enable.Error.Message, "slicc can't keep seven's origin out of this target: its guard made no progress in 2s") || r.Enable.MS > 15000 {
+		t.Errorf("Page.enable on the target: %+v, want slicc's refusal at the 2 s idle bound", r.Enable)
+	}
+}
+
+func TestCDPRefusesAHeldTargetAtTheOuterBoundWhileChromeIsLive(t *testing.T) {
+	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(string, string) fakeScript { return guardWaitScript("{}") })
+	fake.delay("Network.enable", 10*time.Minute)
+	var r guardHoldResult
+	env.evalJSON(t, "linkTest.protect.guardHold('chrome-2')", &r)
+	if !r.Enable.refused() || !strings.Contains(r.Enable.Error.Message, "slicc can't keep seven's origin out of this target: its guard wasn't ready in 8s") || r.Enable.MS < 6000 || r.Enable.MS > 30000 {
+		t.Errorf("Page.enable on the target: %+v, want it held past the 2 s idle bound and refused at the 8 s outer bound", r.Enable)
+	}
+}
+
+func TestCDPCountsATargetsEventsAsItsGuardsProgress(t *testing.T) {
+	targetEvent := func(id string) string {
+		return `{"method":"Target.targetInfoChanged","sessionId":"RELAY","params":{"targetInfo":{"targetId":"` + id + `","type":"page","url":"about:blank","title":"","attached":true}}}`
+	}
+	for _, tc := range []struct {
+		name, event, want string
+	}{
+		{"an event on the guard's session", `{"method":"Network.dataReceived","sessionId":"S1","params":{"requestId":"r1","timestamp":1,"dataLength":1,"encodedDataLength":1}}`, "its guard wasn't ready in 8s"},
+		{"a Target event for the target", targetEvent("T1"), "its guard wasn't ready in 8s"},
+		{"a Target event for another target", targetEvent("T9"), "its guard made no progress in 2s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(string, string) fakeScript { return guardWaitScript("{}") })
+			fake.delay("Network.enable", 10*time.Minute)
+			fake.delay("Browser.getVersion", 10*time.Minute)
+			fake.every(tc.event)
+			var r guardHoldResult
+			env.evalJSON(t, "linkTest.protect.guardHold('chrome-2')", &r)
+			if !r.Enable.refused() || !strings.HasSuffix(r.Enable.Error.Message, ": "+tc.want) || r.Enable.MS > 30000 {
+				t.Errorf("Page.enable on the target: %+v, want a refusal with %q", r.Enable, tc.want)
+			}
+		})
+	}
+}
+
+func TestCDPResetsAStreamWhoseHeldCommandsPassTheCaps(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		count, size int
+	}{
+		{"4097 commands", 4097, 0},
+		{"over 64 MiB", 17, 4 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, fake := setupFakeProtect(t, func(string, string) fakeScript { return guardWaitScript("{}") })
+			fake.delay("Network.enable", 10*time.Minute)
+			var r struct {
+				Stream struct {
+					Reset  string `json:"reset"`
+					Detail string `json:"detail"`
+				} `json:"stream"`
+				Failed string `json:"failed"`
+			}
+			env.evalJSON(t, "linkTest.protect.guardFlood("+jsArgs("chrome-2", tc.count, tc.size)+")", &r)
+			if r.Stream.Reset != "ENOBUFS" {
+				t.Errorf("the stream: %+v, want RESET ENOBUFS", r)
+			}
+		})
 	}
 }
 

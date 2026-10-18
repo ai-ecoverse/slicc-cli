@@ -76,8 +76,13 @@ func TestCDPProtectsSevensOrigin(t *testing.T) {
 
 func (e *protectEnv) evalJSON(t *testing.T, expr string, out any) {
 	t.Helper()
+	e.evalJSONWithin(t, expr, out, 90*time.Second)
+}
+
+func (e *protectEnv) evalJSONWithin(t *testing.T, expr string, out any, timeout time.Duration) {
+	t.Helper()
 	var raw map[string]any
-	e.p.eval(expr, &raw)
+	e.p.evalWithin(expr, &raw, timeout)
 	b, _ := json.Marshal(raw)
 	if _, failed := raw["error"].(string); failed || raw["reset"] != nil {
 		t.Fatalf("%s: %s", expr, b)
