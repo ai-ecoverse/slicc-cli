@@ -89,18 +89,37 @@ if (isMain(import.meta.url)) {
   const run = spawn('go', ['test', ...flag, ...rest], { stdio: ['inherit', 'pipe', 'inherit'] });
   let ran = 0;
   let tail = '';
+  let timedOut = '';
+  const took = [];
+  const stuck = [];
+  const see = (line) => {
+    const done = line.match(/^--- (?:PASS|FAIL|SKIP): (Test\w+) \(([0-9.]+)s\)/);
+    if (done) {
+      ran += 1;
+      took.push([done[1], Number(done[2])]);
+    }
+    const panic = line.match(/^panic: test timed out after (\S+)/);
+    if (panic) timedOut = panic[1];
+    const running = timedOut && line.match(/^\s+(Test\S+) \((\S+)\)$/);
+    if (running) stuck.push(`${running[1]} for ${running[2]}`);
+  };
   run.stdout.on('data', (chunk) => {
     process.stdout.write(chunk);
     const lines = (tail + chunk.toString('utf8')).split('\n');
     tail = lines.pop();
-    for (const line of lines) if (/^--- (PASS|FAIL|SKIP): Test/.test(line)) ran += 1;
+    for (const line of lines) see(line);
   });
   run.on('error', (err) => {
     process.stderr.write(`test-shard: go test: ${err.message}\n`);
     process.exit(1);
   });
   run.on('close', (code, signal) => {
-    if (/^--- (PASS|FAIL|SKIP): Test/.test(tail)) ran += 1;
+    see(tail);
+    if (timedOut) {
+      const total = took.reduce((sum, [, s]) => sum + s, 0);
+      const slowest = [...took].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([n, s]) => `${n} ${s} s`).join(', ');
+      process.stderr.write(`test-shard: ${platform} ${spec} hit its -timeout ${timedOut} with ${stuck.join(', ') || 'no test'} running: the ${took.length} finished tests took ${Math.round(total)} s, the times predicted ${Math.round(shard.seconds)} s for the whole shard; the slowest finished: ${slowest || 'none'}\n`);
+    }
     if (code !== 0) {
       process.stderr.write(`test-shard: FAIL ${platform} ${spec}: go test exited ${code ?? signal}\n`);
       process.exit(code || 1);
