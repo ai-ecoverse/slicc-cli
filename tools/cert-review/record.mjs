@@ -129,9 +129,8 @@ async function bound() {
 }
 
 function bios() {
-  if (values.bios === '') return undefined;
   if (values.bios === 'false') return (facts.bios = 'bios: not needed, wasm unchanged');
-  if (!biosNeed) return missing.push(`classify said bios=${one(values.bios)}, so whether bios's canary was needed is unknown`);
+  if (!biosNeed) return missing.push(`classify said bios=${one(values.bios) || 'nothing'}, so whether bios's canary was needed is unknown`);
   const before = problems.length + missing.length;
   const fail = (t) => problems.push(`bios: ${t}`);
   const lack = (t) => missing.push(`bios: ${t}`);
@@ -311,7 +310,7 @@ const { line, state } = verdictLine({
   review,
   incomplete,
   known,
-  certified: `certified ${tag}, build ${version} SHA256SUMS sha256=${facts.sums} (wasm sha256=${facts.wasm}; ${facts.bios ? `${facts.bios}; ` : ''}reproducible: ${facts.rebuild?.files ?? '?'} files from git archive; ${ci_}; known: ${known.length ? known.join(', ') : 'none'}${gap})`,
+  certified: `certified ${tag}, build ${version} SHA256SUMS sha256=${facts.sums} (wasm sha256=${facts.wasm}; ${facts.bios}; reproducible: ${facts.rebuild?.files ?? '?'} files from git archive; ${ci_}; known: ${known.length ? known.join(', ') : 'none'}${gap})`,
 });
 const comment =
   values.review && existsSync(join(values.review, 'comment.md'))
@@ -321,7 +320,7 @@ const checks = [
   `- the reviewed build: ${version}, SHA256SUMS sha256 ${facts.sums ?? '?'} (${facts.files ?? '?'} files and SHA256SUMS, ${facts.packages ?? '?'} npm packages), re-hashed here from the artifact; the build job said ${values.sums || '?'}; ${facts.go ?? '?'}`,
   `- reproducible from a git archive of the merge commit: ${facts.rebuild ? (facts.rebuild.match ? 'yes, byte for byte' : 'NO') : '?'}`,
   `- the NEGATIVE: ${facts.decision ?? '?'}`,
-  ...(values.bios === '' ? [] : [`- seven's canary on the wasm: ${facts.bios ?? 'NO'}`]),
+  `- seven's canary on the wasm: ${facts.bios ?? 'NO'}`,
   `- CI at the head: ${facts.ci ? Object.entries(facts.ci).map(([os, legs]) => `${os} ${legs.length ? legs.map((l) => l.split('=')[1]).join('/') : 'none'}`).join(', ') : '?'}`,
   `- pull request #${pr}, head ${values.head || '?'}, reviewed as merged onto main (${values.commit || '?'})`,
 ].join('\n');

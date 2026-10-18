@@ -424,9 +424,9 @@ func TestCertReviewRecordCertifiesOnlyTheBytesItBuiltWithEveryPieceOfEvidence(t 
 	certified := map[string]any{"verdict": "certified", "known": []string{"ai-ecoverse/slicc-cli#5"}}
 	cases := []recordCase{
 		{name: "everything there", key: "true", state: "success", want: "certified ai-ecoverse/slicc-cli PR #7 at fake-head-00, build 1.2.4-pr.7.1 SHA256SUMS sha256=", verdict: certified, rebuildMatch: true, runs: green},
-		{name: "without classify's bios the certified line is as before", key: "true", state: "success", want: "; reproducible:", verdict: certified, rebuildMatch: true, runs: green},
-		{name: "an unchanged wasm says it skipped seven's canary", key: "true", state: "success", want: "; bios: not needed, wasm unchanged; reproducible:", bios: "false", verdict: certified, rebuildMatch: true, runs: green},
+		{name: "an unchanged wasm says it skipped seven's canary", key: "true", state: "success", want: "; bios: not needed, wasm unchanged; reproducible:", verdict: certified, rebuildMatch: true, runs: green},
 		{name: "a new wasm that seven's canary passes", key: "true", state: "success", want: "; bios: follow-chat pass at slicc-bios@" + biosPin(t).Commit + "; reproducible:", bios: "true", verdict: certified, rebuildMatch: true, runs: green},
+		{name: "classify said nothing about the wasm", key: "true", state: "error", want: "classify said bios=nothing, so whether bios's canary was needed is unknown", bios: "unset", verdict: certified, rebuildMatch: true, runs: green},
 		{name: "classify said neither true nor false about the wasm", key: "true", state: "error", want: "classify said bios=maybe, so whether bios's canary was needed is unknown", bios: "maybe", verdict: certified, rebuildMatch: true, runs: green},
 		{name: "a new wasm without a canary result", key: "true", state: "error", want: "bios: the canary left no result (its job ended skipped)", bios: "true", noCanary: true, verdict: certified, rebuildMatch: true, runs: green},
 		{name: "a failing shard", key: "true", state: "failure", want: "bios: 1 failing in follow-chat: follow-slicc.test.mjs › follows a seven (follow-chat)", bios: "true", verdict: certified, rebuildMatch: true, runs: green, canary: func(r map[string]any) {
@@ -599,6 +599,9 @@ func recordOnce(t *testing.T, c recordCase) {
 	declare := declared(arts)
 	pin := biosPin(t)
 	bios := c.bios
+	if bios == "" {
+		bios = "false"
+	}
 	canaryDir := filepath.Join(dir, "bios")
 	canaryArtifact := ":"
 	if bios == "true" && !c.noCanary {
@@ -629,7 +632,7 @@ func recordOnce(t *testing.T, c recordCase) {
 	if c.artifacts != nil {
 		arts = c.artifacts(arts)
 	}
-	downloads := "verdict=success, build=success, delta=success, rebuild=success, suite-candidate=success, suite-base=success"
+	downloads := "verdict=success, build=success, delta=success, rebuild=success, suite-candidate=success, suite-base=success, bios=skipped"
 	if c.downloads != "" {
 		downloads = c.downloads
 	}
@@ -639,7 +642,7 @@ func recordOnce(t *testing.T, c recordCase) {
 	if !c.bare {
 		args = append(args, "--artifacts", declare)
 	}
-	if bios != "" {
+	if bios != "unset" {
 		args = append(args, "--bios", bios, "--bios-job", map[bool]string{true: "success", false: "skipped"}[bios == "true" && !c.noCanary], "--bios-artifact", canaryArtifact, "--bios-dir", canaryDir)
 	}
 	r := certTool(t, f.srv.URL, "record.mjs", append(args, "--artifact", art, "--sums", sumsSHA, "--findings", findings, "--review", review, "--jobs", "build=success,rebuild=success,delta=success,suite=success", "--key", c.key, "--out", out)...)
@@ -657,12 +660,6 @@ func recordOnce(t *testing.T, c recordCase) {
 	}
 	if (r.code == 0) != (c.state == "success") {
 		t.Fatalf("exit %d for %s", r.code, c.state)
-	}
-	if bios == "" {
-		body, err := os.ReadFile(filepath.Join(out, "body.md"))
-		if err != nil || strings.Contains(rec.Line, "bios") || strings.Contains(r.out, "bios") || strings.Contains(string(body), "canary") {
-			t.Fatalf("a record without --bios says nothing about bios, as before: %s\n%s\n%s", rec.Line, r.out, body)
-		}
 	}
 	if c.state == "success" && (!strings.Contains(rec.Line, "sha256="+sumsSHA) || !strings.Contains(rec.Line, "known: ai-ecoverse/slicc-cli#5") || !strings.Contains(rec.Line, "wasm sha256="+files["slicc-wasip1-wasm.wasm"])) {
 		t.Fatalf("the certified line must carry the SHA256SUMS and wasm hashes and the open known issue: %s", rec.Line)
@@ -721,7 +718,7 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 	}
 	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	jobs := jobsOf(t, text)
-	want := []string{"guard", "plan", "build", "classify", "rebuild", "delta", "suite", "review", "record", "report", "group"}
+	want := []string{"guard", "plan", "build", "classify", "rebuild", "delta", "suite", "bios", "review", "record", "report", "group"}
 	for _, name := range want {
 		if _, ok := jobs[name]; !ok {
 			t.Fatalf("no %s job", name)
@@ -747,10 +744,15 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 	sameRepo := "github.event.pull_request.head.repo.full_name == github.repository"
 	for name, body := range jobs {
 		runsOn := regexp.MustCompile(`(?m)^    runs-on: (.*)$`).FindStringSubmatch(body)
-		if runsOn == nil {
+		if name == "bios" {
+			if runsOn != nil || !strings.Contains(body, "\n    uses: ai-ecoverse/slicc-bios/") {
+				t.Errorf("bios is a call of slicc-bios's canary, which picks hosted runners for the candidate's shards")
+			}
+		} else if runsOn == nil {
 			t.Fatalf("%s has no runs-on", name)
 		}
 		switch name {
+		case "bios":
 		case "rebuild", "suite":
 			if runsOn[1] != "${{ vars.CERT_RUNNER || 'ubuntu-latest' }}" {
 				t.Errorf("%s runs on %s, want the heavy pool", name, runsOn[1])
@@ -764,7 +766,7 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 				t.Errorf("%s runs on %s, want the light pool", name, runsOn[1])
 			}
 		}
-		if name == "build" || name == "rebuild" || name == "suite" {
+		if name == "build" || name == "rebuild" || name == "suite" || name == "bios" {
 			if cond := regexp.MustCompile(`(?m)^    if: (.*)$`).FindStringSubmatch(body); cond == nil || !strings.Contains(cond[1], sameRepo) {
 				t.Errorf("%s runs candidate code, so it must check the same-repo rule itself", name)
 			}
@@ -870,6 +872,78 @@ func biosPin(t *testing.T) biosPinned {
 		t.Fatalf("bios.json pins slicc-bios by commit, the wasi-slicc package, its shards and tests: %s", data)
 	}
 	return pin
+}
+
+func TestCertReviewRunsSevensCanaryOnANewWasmOnly(t *testing.T) {
+	pin := biosPin(t)
+	_, jobs, _ := workflowSteps(t, "cert-review-pr.yml")
+	bios, ok := jobs["bios"]
+	if !ok {
+		t.Fatal("no bios job: a pull request that changes the wasm is certified without running it inside seven")
+	}
+	shards, _ := json.Marshal(pin.Shards)
+	for _, line := range []string{
+		"    needs: [plan, build, classify]\n",
+		"    if: ${{ !cancelled() && needs.classify.outputs.go == 'true' && needs.classify.outputs.bios == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}\n",
+		"    permissions:\n      contents: read\n      actions: read\n    uses: ",
+		"    uses: " + pin.Repository + "/" + pin.Workflow + "@" + pin.Commit + "\n",
+		"      bios-ref: " + pin.Commit + "\n",
+		"      shards: '" + string(shards) + "'\n",
+		fmt.Sprintf("      repeat: %d\n", pin.Repeat),
+		"      label: " + pin.Label + "\n",
+		"      candidate-package: '" + pin.Package + "'\n",
+		"      candidate-artifact: cert-build-wasi-slicc-${{ needs.plan.outputs.version }}\n",
+		"      candidate-run: ${{ github.run_id }}\n",
+		"      candidate-repo: ${{ github.repository }}\n",
+		"      candidate-sha256: ${{ needs.build.outputs.wasi-sha256 }}\n",
+		"      candidate-artifact-id: ${{ needs.build.outputs.wasi-id }}\n",
+		"      candidate-artifact-digest: ${{ needs.build.outputs.wasi-digest }}\n",
+		"      candidate-binding: strict\n",
+	} {
+		if !strings.Contains(bios, line) {
+			t.Errorf("the bios job lacks %q:\n%s", line, bios)
+		}
+	}
+	if strings.Contains(bios, "secrets") || strings.Contains(bios, "write") {
+		t.Error("the canary needs no secret and no write: none is passed")
+	}
+	build := jobs["build"]
+	for _, line := range []string{
+		"      wasi-sha256: ${{ matrix.side == 'candidate' && steps.manifest.outputs.wasi || '' }}\n",
+		`echo "wasi=$(node -p 'require(process.argv[1]).packages["` + pin.Package + `"].sha256' "$RUNNER_TEMP/out/manifest.json")" >> "$GITHUB_OUTPUT"`,
+		"      - id: wasi\n",
+		"        if: matrix.side == 'candidate'\n",
+		"          path: ${{ runner.temp }}/out/npm/ai-ecoverse-wasi-slicc-${{ needs.plan.outputs.version }}.tgz\n",
+	} {
+		if !strings.Contains(build, line) {
+			t.Errorf("build hands the canary its own wasi-slicc tarball and sha256: no %q", line)
+		}
+	}
+	lib, err := os.ReadFile(certTools + "lib.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(lib), "export const BIOS_OUTPUTS = ['slicc-wasip1-wasm.wasm', 'npm "+pin.Package+"'];") || !strings.Contains(jobs["classify"], "      bios: ${{ steps.classify.outputs.bios }}\n") {
+		t.Error("classify says whether the wasm or the wasi-slicc tarball differs")
+	}
+	record := jobs["record"]
+	for _, line := range []string{
+		"    needs: [plan, build, classify, rebuild, delta, suite, review, bios]\n",
+		"      BIOS: ${{ needs.classify.outputs.bios }}\n",
+		"      BIOS_JOB: ${{ needs.bios.result }}\n",
+		"      BIOS_ARTIFACT: ${{ needs.bios.outputs.artifact-id }}:${{ needs.bios.outputs.artifact-digest }}\n",
+		"          artifact-ids: ${{ needs.bios.outputs.artifact-id }}\n          path: ${{ runner.temp }}/bios\n",
+		"bios=${{ steps.dl-bios.outcome }}",
+		`--bios "$BIOS" --bios-job "$BIOS_JOB" --bios-artifact "$BIOS_ARTIFACT"`,
+		`--bios-dir "$RUNNER_TEMP/bios"`,
+	} {
+		if !strings.Contains(record, line) {
+			t.Errorf("record reads the canary's report by its id and digest: no %q", line)
+		}
+	}
+	if strings.Contains(record, "bios=${{ needs.bios.result }}") {
+		t.Error("a failing canary is a FAIL, not a job that didn't finish")
+	}
 }
 
 func TestCertReviewClassifiesOnlyTheBuildsItsProducersDeclared(t *testing.T) {
