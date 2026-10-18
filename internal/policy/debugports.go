@@ -46,11 +46,11 @@ func (p *Policy) Guard(d DebugPorts) *Policy {
 }
 
 type live struct {
-	scan  func() []uint16
+	scan  func() ([]uint16, error)
 	found func(uint16)
 }
 
-func (p *Policy) Live(scan func() []uint16, found func(uint16)) {
+func (p *Policy) Live(scan func() ([]uint16, error), found func(uint16)) {
 	p.live = &live{scan: scan, found: found}
 }
 
@@ -59,7 +59,14 @@ func (p *Policy) checkStream(ap netip.AddrPort) error {
 		return err
 	}
 	addr, _ := normalize(ap.Addr())
-	if !p.onThisMachine(addr) || !slices.Contains(p.live.scan(), ap.Port()) {
+	if !p.onThisMachine(addr) {
+		return nil
+	}
+	ports, err := p.live.scan()
+	if err != nil {
+		return &Error{Addr: ap, Checked: addr, Reason: debugWhy + ": " + err.Error()}
+	}
+	if !slices.Contains(ports, ap.Port()) {
 		return nil
 	}
 	if p.GuardPort(ap.Port()) && p.live.found != nil {

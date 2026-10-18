@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -12,11 +13,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 )
 
 const fakeDebugBody = "fake debugging port"
@@ -340,5 +343,292 @@ func TestABadProtectedPortRangeExits(t *testing.T) {
 	_, errOut, code := runWithEnv(t, bad, "attach", "--signal", "stdio", "--no-kernel", "--no-jerk")
 	if code != 1 || !strings.Contains(errOut, browser.ProtectedPortsEnv) {
 		t.Fatalf("code %d, stderr %q", code, errOut)
+	}
+}
+
+func debugProcessTable(lines func(context.Context) string) func(context.Context) ([]byte, error) {
+	return func(ctx context.Context) ([]byte, error) {
+		s := lines(ctx)
+		switch s {
+		case "fail":
+			return nil, os.ErrNotExist
+		case "hang":
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		if runtime.GOOS != "windows" {
+			return []byte(s), nil
+		}
+		var rows []string
+		for _, l := range strings.Split(strings.TrimSpace(s), "\n") {
+			pid, cmd, _ := strings.Cut(strings.TrimSpace(l), " ")
+			rows = append(rows, fmt.Sprintf(`{"ProcessId":%s,"CommandLine":%q}`, pid, cmd))
+		}
+		return []byte("[" + strings.Join(rows, ",") + "]"), nil
+	}
+}
+
+type debugLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *debugLog) logf(format string, a ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, a...))
+}
+
+func (l *debugLog) count(want string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, line := range l.lines {
+		if strings.Contains(line, want) {
+			n++
+		}
+	}
+	return n
+}
+
+func (l *debugLog) waitFor(t *testing.T, want string, limit time.Duration) {
+	t.Helper()
+	for deadline := time.Now().Add(limit); l.count(want) == 0; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			t.Fatalf("no %q in %v", want, l.lines)
+		}
+	}
+}
+
+const (
+	procListFailed    = "couldn't list running browsers for their debugging ports:"
+	procListRecovered = "listing running browsers for their debugging ports again"
+	procListRefused   = "a browser debugging port: couldn't list running browsers"
+)
+
+func startGuard(t *testing.T, table func(context.Context) ([]byte, error), logf func(string, ...any)) (*policy.Dialer, context.CancelFunc) {
+	t.Helper()
+	t.Setenv(browser.DiscoveryEnv, "isolated")
+	t.Setenv(browser.ProtectedPortsEnv, "9300")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	pol := policy.Local()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- browser.Guard(ctx, pol, browser.Options{Home: t.TempDir(), Processes: table}, nil, nil, logf)
+	}()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Guard never returned")
+	}
+	return policy.NewDialer(pol), cancel
+}
+
+func connectAsync(d *policy.Dialer, addr string) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- d.Control("tcp4", addr, nil) }()
+	return done
+}
+
+func connectWithin(t *testing.T, d *policy.Dialer, addr string, limit time.Duration) error {
+	t.Helper()
+	select {
+	case err := <-connectAsync(d, addr):
+		return err
+	case <-time.After(limit):
+		t.Fatalf("a connect to %s took longer than %v", addr, limit)
+		return nil
+	}
+}
+
+func refusedAsDebugPort(t *testing.T, err error, addr string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "a browser debugging port") {
+		t.Fatalf("a connect to %s: %v, want refused as a browser debugging port", addr, err)
+	}
+}
+
+func TestProcessListScanWaitsWhenTheListIsStale(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	defer release()
+	var calls atomic.Int32
+	d, _ := startGuard(t, debugProcessTable(func(context.Context) string {
+		if calls.Add(1) == 1 {
+			return "21 /opt/chrome --remote-debugging-port=9370\n"
+		}
+		<-gate
+		return "21 /opt/chrome --remote-debugging-port=9370\n22 /opt/chrome --remote-debugging-port=9380\n"
+	}), t.Logf)
+	time.Sleep(1500 * time.Millisecond)
+	waiting := connectAsync(d, "127.0.0.1:9380")
+	select {
+	case err := <-waiting:
+		t.Fatalf("a connect to this machine with a stale process list didn't wait for the scan: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if err := connectWithin(t, d, "8.8.8.8:9380", 200*time.Millisecond); err != nil {
+		t.Fatalf("a connect to another host: %v", err)
+	}
+	release()
+	select {
+	case err := <-waiting:
+		refusedAsDebugPort(t, err, "127.0.0.1:9380")
+	case <-time.After(3 * time.Second):
+		t.Fatal("the connect never finished after the scan did")
+	}
+	if err := connectWithin(t, d, "127.0.0.1:9400", 3*time.Second); err != nil {
+		t.Fatalf("a connect to a port no browser listens on: %v", err)
+	}
+	refusedAsDebugPort(t, connectWithin(t, d, "127.0.0.1:9370", 3*time.Second), "127.0.0.1:9370")
+}
+
+func TestProcessListScanKeepsTheListFreshWhileActive(t *testing.T) {
+	var calls atomic.Int32
+	var slow atomic.Bool
+	d, _ := startGuard(t, debugProcessTable(func(context.Context) string {
+		calls.Add(1)
+		if slow.Load() {
+			time.Sleep(200 * time.Millisecond)
+		}
+		return "21 /opt/chrome --remote-debugging-port=9370\n"
+	}), t.Logf)
+	if err := connectWithin(t, d, "127.0.0.1:9400", 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	before := calls.Load()
+	time.Sleep(3 * time.Second)
+	if n := calls.Load() - before; n < 2 {
+		t.Fatalf("%d process scans in the 3 s after a connect, want about one a second", n)
+	}
+	slow.Store(true)
+	time.Sleep(1500 * time.Millisecond)
+	waited := 0
+	for range 20 {
+		start := time.Now()
+		if err := connectWithin(t, d, "127.0.0.1:9400", 3*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		if time.Since(start) > 150*time.Millisecond {
+			waited++
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if waited > 5 {
+		t.Fatalf("%d of 20 connects during steady use waited for a 200 ms process scan", waited)
+	}
+}
+
+func TestProcessListScanFailureRefusesTheConnect(t *testing.T) {
+	var mu sync.Mutex
+	mode := "start"
+	set := func(m string) { mu.Lock(); mode = m; mu.Unlock() }
+	log := &debugLog{}
+	d, _ := startGuard(t, debugProcessTable(func(context.Context) string {
+		mu.Lock()
+		defer mu.Unlock()
+		switch mode {
+		case "fail":
+			return "fail"
+		case "late":
+			return "21 /opt/chrome --remote-debugging-port=9370\n22 /opt/chrome --remote-debugging-port=9380\n"
+		}
+		return "21 /opt/chrome --remote-debugging-port=9370\n"
+	}), log.logf)
+	set("fail")
+	time.Sleep(1500 * time.Millisecond)
+	err := connectWithin(t, d, "127.0.0.1:9400", 3*time.Second)
+	if err == nil || !strings.Contains(err.Error(), procListRefused) {
+		t.Fatalf("a connect to this machine while the process scan fails: %v", err)
+	}
+	if err := connectWithin(t, d, "8.8.8.8:9400", 200*time.Millisecond); err != nil {
+		t.Fatalf("a connect to another host: %v", err)
+	}
+	log.waitFor(t, procListFailed, 3*time.Second)
+	time.Sleep(2500 * time.Millisecond)
+	if err := connectWithin(t, d, "127.0.0.1:9400", 3*time.Second); err == nil || !strings.Contains(err.Error(), procListRefused) {
+		t.Fatalf("a connect to this machine after more failed scans: %v", err)
+	}
+	if n := log.count(procListFailed); n != 1 {
+		t.Fatalf("the failure was reported %d times: %v", n, log.lines)
+	}
+	set("late")
+	log.waitFor(t, procListRecovered, 5*time.Second)
+	if err := connectWithin(t, d, "127.0.0.1:9400", 3*time.Second); err != nil {
+		t.Fatalf("a connect after the scan recovered: %v", err)
+	}
+	refusedAsDebugPort(t, connectWithin(t, d, "127.0.0.1:9380", 3*time.Second), "127.0.0.1:9380")
+	if n := log.count(procListRecovered); n != 1 {
+		t.Fatalf("the recovery was reported %d times: %v", n, log.lines)
+	}
+}
+
+func TestProcessListScanTimeoutRefusesTheConnect(t *testing.T) {
+	var calls atomic.Int32
+	log := &debugLog{}
+	d, _ := startGuard(t, debugProcessTable(func(context.Context) string {
+		if calls.Add(1) == 1 {
+			return "21 /opt/chrome --remote-debugging-port=9370\n"
+		}
+		return "hang"
+	}), log.logf)
+	time.Sleep(1500 * time.Millisecond)
+	err := connectWithin(t, d, "127.0.0.1:9400", 15*time.Second)
+	if err == nil || !strings.Contains(err.Error(), procListRefused) {
+		t.Fatalf("a connect to this machine while the process scan hangs: %v", err)
+	}
+	log.waitFor(t, procListFailed, 3*time.Second)
+}
+
+func TestProcessListScanIdlesQuietly(t *testing.T) {
+	var calls atomic.Int32
+	startGuard(t, debugProcessTable(func(context.Context) string {
+		calls.Add(1)
+		return "21 /opt/chrome --remote-debugging-port=9370\n"
+	}), t.Logf)
+	time.Sleep(5 * time.Second)
+	if n := calls.Load(); n > 2 {
+		t.Fatalf("an idle node scanned the process list %d times in 5 s", n)
+	}
+}
+
+func TestProcessListScanShutdownSkipsFailure(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	var once sync.Once
+	log := &debugLog{}
+	d, cancel := startGuard(t, debugProcessTable(func(context.Context) string {
+		if calls.Add(1) == 1 {
+			return "21 /opt/chrome --remote-debugging-port=9370\n"
+		}
+		once.Do(func() { close(started) })
+		return "hang"
+	}), log.logf)
+	time.Sleep(1500 * time.Millisecond)
+	waiting := connectAsync(d, "127.0.0.1:9400")
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the connect never started a scan")
+	}
+	cancel()
+	select {
+	case err := <-waiting:
+		if err == nil {
+			t.Fatal("a connect waiting on a scan cancelled by shutdown went through")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a connect waiting on a scan never finished after shutdown")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := log.count("couldn't list running browsers"); n != 0 {
+		t.Fatalf("reported a failure on shutdown: %v", log.lines)
 	}
 }
