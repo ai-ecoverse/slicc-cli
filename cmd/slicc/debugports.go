@@ -22,8 +22,11 @@ again on each connection to this machine and every 5 s. The process list
 is rescanned in the background, about every second while connections to
 this machine keep coming and every 30 s while idle; a connection that
 finds it more than about a second old waits for a fresh scan (up to its
-5 s timeout) and is refused if that scan fails. Connections to other hosts
-never wait. No --allow changes that, not even --allow 127.0.0.1:9222.
-Only --expose-debug-port <port> opens one, a port that is a debugging port
-when slicc starts; the browsers slicc was given or launched stay closed.
+5 s timeout) and is refused if that scan fails. On Linux the list falls
+back to /proc when ps fails; with no list at all slicc says so at startup,
+and connections to this machine's own addresses are refused. No --allow
+changes any of this, not even --allow 127.0.0.1:9222. Connections to other
+hosts never wait. Only --expose-debug-port <port> opens one, a port that
+is a debugging port when slicc starts; the browsers slicc was given or
+launched stay closed.
 `

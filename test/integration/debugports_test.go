@@ -417,7 +417,7 @@ func startGuard(t *testing.T, table func(context.Context) ([]byte, error), logf 
 	pol := policy.Local()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- browser.Guard(ctx, pol, browser.Options{Home: t.TempDir(), Processes: table}, nil, nil, logf)
+		errCh <- browser.Guard(ctx, pol, browser.Options{Home: t.TempDir(), Processes: table}, nil, nil, t.Logf, logf)
 	}()
 	select {
 	case err := <-errCh:
@@ -630,5 +630,90 @@ func TestProcessListScanShutdownSkipsFailure(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if n := log.count("couldn't list running browsers"); n != 0 {
 		t.Fatalf("reported a failure on shutdown: %v", log.lines)
+	}
+}
+
+func withoutPS(t *testing.T, procRoot string) []string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ps"), []byte("#!/bin/sh\necho 'ps: unrecognized option: x' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"), browser.ProcRootEnv + "=" + procRoot}
+}
+
+func writeFakeProc(t *testing.T, root string, pid int, args ...string) {
+	t.Helper()
+	dir := filepath.Join(root, strconv.Itoa(pid))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(strings.Join(args, "\x00")+"\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func openOverLink(t *testing.T, p *page, port int) echoResult {
+	t.Helper()
+	var r echoResult
+	p.eval("linkTest.open("+jsArgs(map[string]any{"kind": "tcp", "host": "127.0.0.1", "port": port})+")", &r)
+	return r
+}
+
+const noProcessList = "slicc: can't list running browsers here (ps: "
+
+func statusLines(stderr, want string) int {
+	n := 0
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(line, "slicc: ") && strings.Contains(line, want) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestProcessListFallsBackToProcWithoutPS(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the /proc fallback is Linux only")
+	}
+	root := t.TempDir()
+	early, late := fakeDebug(t), fakeDebug(t)
+	writeFakeProc(t, root, 4242, "/opt/chrome", "--remote-debugging-port="+strconv.Itoa(early), "--user-data-dir="+t.TempDir())
+	writeFakeProc(t, root, 4243, "/bin/sleep", "1000")
+	env := setupLinkEnv(t, false, withoutPS(t, root))
+	refusedOverLink(t, env.p, early)
+	_, echo := hostPort(t, env.echo)
+	if r := openOverLink(t, env.p, echo); r.Reset != "" || r.Opened.RemoteAddr == "" {
+		t.Fatalf("net to a loopback port that isn't a debugging port, with /proc but no ps: %+v", r)
+	}
+	writeFakeProc(t, root, 4244, "/opt/chrome", "--remote-debugging-port="+strconv.Itoa(late))
+	time.Sleep(1100 * time.Millisecond)
+	if r := openOverLink(t, env.p, late); r.Reset != "EACCES" {
+		t.Fatalf("net to a browser that started later, found in /proc: %+v", r)
+	}
+	if s := env.a.stderr.String(); statusLines(s, "list running browsers") != 0 {
+		t.Fatalf("the /proc fallback reported a failure:\n%s", s)
+	}
+}
+
+func TestNoProcessListIsLoudAndRefusesThisMachine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a fake ps on PATH is a Unix test")
+	}
+	env := setupLinkEnv(t, false, withoutPS(t, filepath.Join(t.TempDir(), "no-proc")))
+	env.a.waitStderr(t, noProcessList, 10*time.Second)
+	if s := env.a.stderr.String(); !strings.Contains(s, "connects to this machine's own addresses are refused") || statusLines(s, "list running browsers") != 1 {
+		t.Fatalf("stderr:\n%s", s)
+	}
+	_, echo := hostPort(t, env.echo)
+	if r := openOverLink(t, env.p, echo); r.Reset != "EACCES" {
+		t.Fatalf("net to this machine with no process list: %+v", r)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if r := openOverLink(t, env.p, echo); r.Reset != "EACCES" {
+		t.Fatalf("net to this machine with no process list, later: %+v", r)
+	}
+	if s := env.a.stderr.String(); statusLines(s, "list running browsers") != 1 {
+		t.Fatalf("the failure was reported more than once:\n%s", s)
 	}
 }

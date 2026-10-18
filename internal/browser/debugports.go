@@ -101,7 +101,7 @@ type scanRun struct {
 type liveScan struct {
 	ctx     context.Context
 	o       Options
-	logf    func(string, ...any)
+	status  func(string, ...any)
 	every   time.Duration
 	idle    time.Duration
 	active  time.Duration
@@ -115,10 +115,11 @@ type liveScan struct {
 	touched time.Time
 	busy    bool
 	failed  bool
+	first   bool
 }
 
-func newLiveScan(ctx context.Context, o Options, logf func(string, ...any)) *liveScan {
-	return &liveScan{ctx: ctx, o: o, logf: logf, every: processEvery, idle: processIdle, active: processActive, wait: processWait, wake: make(chan struct{}, 1)}
+func newLiveScan(ctx context.Context, o Options, status func(string, ...any)) *liveScan {
+	return &liveScan{ctx: ctx, o: o, status: status, every: processEvery, idle: processIdle, active: processActive, wait: processWait, wake: make(chan struct{}, 1)}
 }
 
 func (s *liveScan) snapshot() []uint16 {
@@ -152,16 +153,20 @@ func (s *liveScan) scan(r *scanRun) {
 			return
 		}
 		s.failed = true
-		if s.logf != nil {
-			s.logf("couldn't list running browsers for their debugging ports: %v", err)
+		switch {
+		case s.status == nil:
+		case s.first:
+			s.status("can't list running browsers here (%v); connects to this machine's own addresses are refused", err)
+		default:
+			s.status("couldn't list running browsers for their debugging ports: %v", err)
 		}
 		return
 	}
 	s.proc, s.okAt = ports, r.start
 	if s.failed {
 		s.failed = false
-		if s.logf != nil {
-			s.logf("listing running browsers for their debugging ports again")
+		if s.status != nil {
+			s.status("listing running browsers for their debugging ports again")
 		}
 	}
 }
@@ -231,15 +236,16 @@ func (s *liveScan) loop() {
 	}
 }
 
-func Guard(ctx context.Context, pol *policy.Policy, o Options, given, exposed []uint16, logf func(string, ...any)) error {
+func Guard(ctx context.Context, pol *policy.Policy, o Options, given, exposed []uint16, logf, status func(string, ...any)) error {
 	ports, err := DebugPortRange()
 	if err != nil {
 		return err
 	}
-	scan := newLiveScan(ctx, o, logf)
+	scan := newLiveScan(ctx, o, status)
 	first := &scanRun{start: time.Now(), done: make(chan struct{})}
-	scan.run = first
+	scan.run, scan.first = first, true
 	scan.scan(first)
+	scan.first = false
 	found := union(ports, scan.snapshot())
 	for _, p := range exposed {
 		switch {

@@ -309,7 +309,7 @@ func (r *run) policy(ctx context.Context) (*policy.Policy, error) {
 		kernel = uint16(r.cfg.Kernel)
 	}
 	pol := policy.Local(kernel).With(r.cfg.Allow, r.cfg.Deny)
-	if err := browser.Guard(ctx, pol, r.cfg.Browser, given, r.cfg.Expose, r.cfg.Logf); err != nil {
+	if err := browser.Guard(ctx, pol, r.cfg.Browser, given, r.cfg.Expose, r.cfg.Logf, func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) }); err != nil {
 		return nil, err
 	}
 	return pol, nil
