@@ -33,7 +33,7 @@ func envDuration(name string, def time.Duration) time.Duration {
 }
 
 func (b guardBounds) period() time.Duration {
-	return max(b.idle/4, minWatchPeriod)
+	return max(min(b.idle, b.limit)/4, minWatchPeriod)
 }
 
 func (b guardBounds) expired(nt *navTarget, answered, now time.Time) string {

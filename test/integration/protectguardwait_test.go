@@ -88,6 +88,31 @@ func TestCDPRefusesAHeldTargetAtTheOuterBoundWhileChromeIsLive(t *testing.T) {
 	}
 }
 
+func TestCDPCountsATargetsEventsAsItsGuardsProgress(t *testing.T) {
+	targetEvent := func(id string) string {
+		return `{"method":"Target.targetInfoChanged","sessionId":"RELAY","params":{"targetInfo":{"targetId":"` + id + `","type":"page","url":"about:blank","title":"","attached":true}}}`
+	}
+	for _, tc := range []struct {
+		name, event, want string
+	}{
+		{"an event on the guard's session", `{"method":"Network.dataReceived","sessionId":"S1","params":{"requestId":"r1","timestamp":1,"dataLength":1,"encodedDataLength":1}}`, "its guard wasn't ready in 8s"},
+		{"a Target event for the target", targetEvent("T1"), "its guard wasn't ready in 8s"},
+		{"a Target event for another target", targetEvent("T9"), "its guard made no progress in 2s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(string, string) fakeScript { return guardWaitScript("{}") })
+			fake.delay("Network.enable", 10*time.Minute)
+			fake.delay("Browser.getVersion", 10*time.Minute)
+			fake.every(tc.event)
+			var r guardHoldResult
+			env.evalJSON(t, "linkTest.protect.guardHold('chrome-2')", &r)
+			if !r.Enable.refused() || !strings.HasSuffix(r.Enable.Error.Message, ": "+tc.want) || r.Enable.MS > 30000 {
+				t.Errorf("Page.enable on the target: %+v, want a refusal with %q", r.Enable, tc.want)
+			}
+		})
+	}
+}
+
 func TestCDPResetsAStreamWhoseHeldCommandsPassTheCaps(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

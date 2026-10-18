@@ -21,6 +21,13 @@ type fakeCDPBrowser struct {
 	mu     sync.Mutex
 	got    []string
 	slow   map[string]time.Duration
+	pulse  []string
+}
+
+func (f *fakeCDPBrowser) every(event string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pulse = append(f.pulse, event)
 }
 
 func (f *fakeCDPBrowser) delay(method string, d time.Duration) {
@@ -76,6 +83,27 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = c.CloseNow() }()
 	c.SetReadLimit(-1)
 	ctx := r.Context()
+	f.mu.Lock()
+	pulse := append([]string(nil), f.pulse...)
+	f.mu.Unlock()
+	if len(pulse) > 0 {
+		go func() {
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+				for _, e := range pulse {
+					if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
+						return
+					}
+				}
+			}
+		}()
+	}
 	for {
 		_, data, err := c.Read(ctx)
 		if err != nil {
