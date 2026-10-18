@@ -717,3 +717,43 @@ func TestNoProcessListIsLoudAndRefusesThisMachine(t *testing.T) {
 		t.Fatalf("the failure was reported more than once:\n%s", s)
 	}
 }
+
+func withFailingPowerShell(t *testing.T) []string {
+	t.Helper()
+	dir := t.TempDir()
+	script := "@echo Get-CimInstance : the WMI service did not answer 1>&2\r\n@exit /b 1\r\n"
+	if err := os.WriteFile(filepath.Join(dir, "powershell.bat"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")}
+}
+
+func TestProcessListOnWindowsNeedsNoPowerShell(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the native process list is Windows only")
+	}
+	exe := buildFakeChrome(t).Executable
+	start := func(port int) {
+		cmd := exec.Command(exe, "--remote-debugging-port="+strconv.Itoa(port), "--user-data-dir="+t.TempDir())
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	}
+	early, late := fakeDebug(t), fakeDebug(t)
+	start(early)
+	env := setupLinkEnv(t, false, withFailingPowerShell(t))
+	refusedOverLink(t, env.p, early)
+	_, echo := hostPort(t, env.echo)
+	if r := openOverLink(t, env.p, echo); r.Reset != "" || r.Opened.RemoteAddr == "" {
+		t.Fatalf("net to a loopback port that isn't a debugging port, with PowerShell failing: %+v\n%s", r, env.a.stderr.String())
+	}
+	start(late)
+	time.Sleep(1100 * time.Millisecond)
+	if r := openOverLink(t, env.p, late); r.Reset != "EACCES" {
+		t.Fatalf("net to a browser that started later, with PowerShell failing: %+v", r)
+	}
+	if s := env.a.stderr.String(); statusLines(s, "list running browsers") != 0 {
+		t.Fatalf("the native process list reported a failure:\n%s", s)
+	}
+}
