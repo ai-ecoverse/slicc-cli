@@ -32,9 +32,9 @@ type worldContext struct {
 	} `json:"auxData"`
 }
 
-func launchExtensionBrowser(t *testing.T, extra ...string) *chromeProc {
+func launchExtensionBrowser(t *testing.T, ext string, extra ...string) *chromeProc {
 	t.Helper()
-	dir, err := filepath.Abs(filepath.Join("testdata", "extension"))
+	dir, err := filepath.Abs(ext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func launchExtensionBrowser(t *testing.T, extra ...string) *chromeProc {
 
 func setupProtectExtension(t *testing.T) *protectEnv {
 	t.Helper()
-	return setupProtectOn(t, launchExtensionBrowser(t))
+	return setupProtectOn(t, launchExtensionBrowser(t, filepath.Join("testdata", "extension")))
 }
 
 func TestCDPHidesExtensionWorlds(t *testing.T) {
