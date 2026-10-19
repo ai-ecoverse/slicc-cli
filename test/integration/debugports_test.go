@@ -753,7 +753,7 @@ func TestProcessListOnWindowsNeedsNoPowerShell(t *testing.T) {
 	if r := openOverLink(t, env.p, late); r.Reset != "EACCES" {
 		t.Fatalf("net to a browser that started later, with PowerShell failing: %+v", r)
 	}
-	if s := env.a.stderr.String(); statusLines(s, "list running browsers") != 0 {
+	if s := env.a.stderr.String(); statusLines(s, "running browsers") != 0 {
 		t.Fatalf("the native process list reported a failure:\n%s", s)
 	}
 }
