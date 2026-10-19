@@ -40,7 +40,10 @@ func TestFlowRelinksWithNewCapsInTheSameTab(t *testing.T) {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil {
+				t.Errorf("flow.Go: %v", err)
+			}
 		case <-time.After(30 * time.Second):
 			t.Error("flow.Go did not return")
 		}
