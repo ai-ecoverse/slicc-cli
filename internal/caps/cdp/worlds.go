@@ -263,6 +263,7 @@ func (g *guard) navWorldLocked(nt *navTarget, m *message) {
 	if nt.target == "" {
 		return
 	}
+	g.navRequestLocked(nt, m)
 	switch m.Method {
 	case "Runtime.executionContextCreated":
 		var p struct {
@@ -499,7 +500,13 @@ func (g *guard) scrubWorlds(m map[string]any) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	session, _ := m["sessionId"].(string)
-	return g.scrubStacksLocked(g.worlds[g.worldTargetLocked(session)], m)
+	target := g.worldTargetLocked(session)
+	changed := g.scrubStacksLocked(g.worlds[target], m)
+	if p, _ := m["params"].(map[string]any); p != nil && g.fromWorldLocked(target, p) {
+		g.cutWorldRequest(p)
+		changed = true
+	}
+	return changed
 }
 
 func (g *guard) pageSessionLocked(sessionID string) bool {
@@ -540,11 +547,15 @@ func (g *guard) consoleProfileEvent(m *message, data []byte) browserVerdict {
 }
 
 func (g *guard) initiatorLocked(sessionID string, p map[string]any) bool {
+	return g.initiatorOfLocked(g.worldTargetLocked(sessionID), p)
+}
+
+func (g *guard) initiatorOfLocked(target string, p map[string]any) bool {
 	ini, _ := p["initiator"].(map[string]any)
 	if ini == nil {
 		return false
 	}
-	return g.scrubStacksLocked(g.worlds[g.worldTargetLocked(sessionID)], ini) || g.scrubInitiatorLocked(ini)
+	return g.scrubStacksLocked(g.worlds[target], ini) || g.scrubInitiatorLocked(ini)
 }
 
 func (g *guard) narrowBindingLocked(c *command) {
@@ -564,4 +575,95 @@ func (g *guard) forgetWorldSessionLocked(id string) {
 			delete(wc.seen, id)
 		}
 	}
+}
+
+const maxWorldRequests = 65536
+
+var worldDropped = map[string]bool{"postData": true, "postDataEntries": true, "headersText": true, "requestHeadersText": true, "associatedCookies": true, "exemptedCookies": true, "blockedCookies": true}
+
+func (g *guard) worldRequestLocked(target, id string) {
+	k := requestKey{target, id}
+	if id == "" || target == "" || g.worldRequests[k] {
+		return
+	}
+	g.worldRequests[k] = true
+	g.worldRequestOrder = append(g.worldRequestOrder, k)
+	if len(g.worldRequestOrder) > maxWorldRequests {
+		delete(g.worldRequests, g.worldRequestOrder[0])
+		g.worldRequestOrder = g.worldRequestOrder[1:]
+	}
+}
+
+func (g *guard) fromWorldLocked(target string, p map[string]any) bool {
+	for _, key := range []string{"requestId", "networkId"} {
+		if id, _ := p[key].(string); id != "" && g.worldRequests[requestKey{target, id}] {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) navRequestLocked(nt *navTarget, m *message) {
+	if m.Method != "Network.requestWillBeSent" && m.Method != "Network.webSocketCreated" && m.Method != "Network.webTransportCreated" {
+		return
+	}
+	p, ok := decodeObject(m.Params)
+	if !ok {
+		return
+	}
+	if g.initiatorOfLocked(nt.target, p) {
+		id, _ := p["requestId"].(string)
+		g.worldRequestLocked(nt.target, id)
+	}
+}
+
+func (g *guard) cutWorldRequest(root any) {
+	stack := []any{root}
+	for len(stack) > 0 {
+		v := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch t := v.(type) {
+		case map[string]any:
+			for k, val := range t {
+				s, isString := val.(string)
+				switch {
+				case worldDropped[k]:
+					delete(t, k)
+				case headerLists[k]:
+					t[k] = map[string]any{}
+				case isString && urlKey(k) && strings.Contains(s, ":"):
+					t[k] = redactURL(s)
+				default:
+					stack = append(stack, val)
+				}
+			}
+		case []any:
+			stack = append(stack, t...)
+		}
+	}
+}
+
+func (g *guard) worldPauseLocked(m *message, p map[string]any) ([]byte, bool) {
+	id, other := pausedIDs(m.Method, p)
+	t := g.worldTargetLocked(m.SessionID)
+	if !g.worldRequests[requestKey{t, other}] && !g.worldRequests[requestKey{t, id}] {
+		return nil, false
+	}
+	delete(g.handed, requestKey{m.SessionID, id})
+	g.markRequestLocked(m.SessionID, id)
+	g.markRequestLocked(m.SessionID, other)
+	method, params := "Fetch.continueRequest", map[string]any{"requestId": id}
+	switch m.Method {
+	case "Network.requestIntercepted":
+		method, params = "Network.continueInterceptedRequest", map[string]any{"interceptionId": id}
+		if _, ok := p["authChallenge"]; ok {
+			params["authChallengeResponse"] = map[string]any{"response": "Default"}
+		}
+	case "Fetch.authRequired":
+		method = "Fetch.continueWithAuth"
+		params["authChallengeResponse"] = map[string]any{"response": "Default"}
+	}
+	g.logf("cdp: continued a request a browser extension's world made without showing it to the page")
+	msg, _ := g.newCallLocked(m.SessionID, method, params, false)
+	return msg, true
 }

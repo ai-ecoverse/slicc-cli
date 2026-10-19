@@ -9,7 +9,9 @@ document.addEventListener('slicc-ping', function sliccFixtureBusy() {
   document.dispatchEvent(new CustomEvent('slicc-pong'));
   if (window === top && !globalThis.sliccFixtureFetched) {
     globalThis.sliccFixtureFetched = true;
-    fetch('/?n=extension-fetch').catch(() => {});
+    fetch('/?n=extension-fetch&account=fake-value-0002', { method: 'POST', body: 'fake-value-0003', headers: { 'x-slicc-fixture': 'fake-value-0004' } })
+      .then((r) => r.text())
+      .then(() => document.documentElement.setAttribute('data-slicc-fetched', ''), () => document.documentElement.setAttribute('data-slicc-fetched', 'failed'));
     new WebSocket(`ws://${location.host}/ws`).onopen = (e) => e.target.close();
     const node = document.createElement('div');
     node.id = 'slicc-extension-node';

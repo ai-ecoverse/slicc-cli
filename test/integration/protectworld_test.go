@@ -57,6 +57,7 @@ func TestCDPHidesExtensionWorlds(t *testing.T) {
 	t.Run("a live world stays hidden through any churn of other worlds", env.testExtensionChurn)
 	t.Run("breakpoint conditions can't run in an extension's world", env.testExtensionBreakpoint)
 	t.Run("profiles, coverage and stacks leave out an extension's world", env.testExtensionProfile)
+	t.Run("requests an extension's world makes show only their origin", env.testExtensionRequests)
 	t.Run("the seven tab is still cut", env.testAttach)
 	t.Run("script navigation onto seven still detaches", env.testScriptNavigate)
 	t.Run("the link still works", env.testStillLinked)
@@ -350,5 +351,33 @@ func (e *protectEnv) testExtensionProfile(t *testing.T) {
 	}
 	if !strings.Contains(r.Profile, "(program)") || !strings.Contains(r.Best, "slicc-warm.js") || !strings.Contains(r.Precise, "slicc-page.js") || !strings.Contains(r.Stacks, "slicc-page.js") {
 		t.Errorf("the profile or coverage lost the page's own scripts: %s %s", r.Profile, r.Best)
+	}
+}
+
+func (e *protectEnv) testExtensionRequests(t *testing.T) {
+	for _, intercept := range []bool{false, true} {
+		target, _, _, _ := e.extensionPage(t, "requests")
+		var r struct {
+			Fetched  *string     `json:"fetched"`
+			Seen     []string    `json:"seen"`
+			Text     string      `json:"text"`
+			PostData *cdpOutcome `json:"postData"`
+			Paused   int         `json:"paused"`
+		}
+		e.evalJSON(t, "linkTest.protect.extensionRequests("+jsArgs("chrome", target, intercept)+")", &r)
+		if r.Fetched == nil || *r.Fetched != "" {
+			t.Errorf("intercept %v: the extension's own request didn't complete: %v", intercept, r.Fetched)
+		}
+		for _, leak := range []string{"fake-value-0002", "fake-value-0003", "fake-value-0004", "account=", "x-slicc-fixture"} {
+			if strings.Contains(r.Text, leak) {
+				t.Errorf("intercept %v: seven saw %s from the extension's request: %s", intercept, leak, r.Text)
+			}
+		}
+		if intercept && r.Paused != 0 {
+			t.Errorf("seven was handed %d pauses of the extension's request", r.Paused)
+		}
+		if !intercept && (len(r.Seen) == 0 || r.PostData == nil || !r.PostData.refused()) {
+			t.Errorf("the extension's request reached seven as %v, and its post data gave %+v", r.Seen, r.PostData)
+		}
 	}
 }

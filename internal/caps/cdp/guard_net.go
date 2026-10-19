@@ -59,7 +59,11 @@ func (g *guard) socketCreatedEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
 		id, _ := p["requestId"].(string)
 		u, _ := p["url"].(string)
-		if g.o.URL(socketURL(strings.TrimSpace(u))) || g.initiatorLocked(m.SessionID, p) {
+		world := g.initiatorLocked(m.SessionID, p)
+		if world {
+			g.worldRequestLocked(g.worldTargetLocked(m.SessionID), id)
+		}
+		if g.o.URL(socketURL(strings.TrimSpace(u))) || world {
 			g.markRequestLocked(m.SessionID, id)
 		}
 		return true, false, nil
@@ -134,6 +138,9 @@ func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
 		redirect, _ := p["redirectResponse"].(map[string]any)
 		ru, _ := redirect["url"].(string)
 		world := g.initiatorLocked(m.SessionID, p)
+		if world {
+			g.worldRequestLocked(g.worldTargetLocked(m.SessionID), id)
+		}
 		if g.o.URL(u) || g.o.URL(ru) || world {
 			g.markRequestLocked(m.SessionID, id)
 		}
@@ -216,6 +223,9 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 		id, other := pausedIDs(m.Method, p)
 		req, _ := p["request"].(map[string]any)
 		u, _ := req["url"].(string)
+		if msg, ok := g.worldPauseLocked(m, p); ok {
+			return false, false, [][]byte{msg}
+		}
 		if g.o.URL(u) {
 			delete(g.handed, requestKey{m.SessionID, id})
 			g.markRequestLocked(m.SessionID, id)

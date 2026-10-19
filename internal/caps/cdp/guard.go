@@ -70,50 +70,52 @@ type guard struct {
 	o    *protect.Origins
 	logf func(format string, args ...any)
 
-	relaySession    string
-	lost            bool
-	targets         map[string]*target
-	tombstones      []string
-	sessions        map[string]*session
-	hidden          map[string]bool
-	refused         map[string]bool
-	refusedOrder    []string
-	browserSessions map[string]bool
-	ownContexts     map[string]bool
-	pending         map[callKey]callKind
-	relayCalls      map[callKey]*relayCall
-	nextID          int64
-	marked          map[string]map[string]bool
-	markedCount     int
-	saturated       map[string]bool
-	swProtected     map[string]bool
-	navTargets      map[string]*navTarget
-	navSessions     map[string]*navTarget
-	unknown         map[string]*navTarget
-	gone            map[string]bool
-	goneOrder       []string
-	held            map[string]*heldSession
-	explicit        map[string]int
-	attachCalls     map[callKey]string
-	patterns        []any
-	heldExtras      map[requestKey][]heldExtra
-	heldExtraCount  int
-	seen            map[requestKey]reqLevel
-	seenOrder       []requestKey
-	handed          map[requestKey]int
-	handedOrder     []handedPause
-	pauses          int
-	continues       map[callKey]handedPause
-	bodyCalls       map[callKey]bodyCall
-	heldAnswers     map[callKey]*heldAnswer
-	streams         map[string]bool
-	streamOrder     []string
-	bounds          guardBounds
-	worlds          map[string]*worldSet
-	worldUniques    map[string]string
-	maxWorlds       int
-	answered        time.Time
-	probing         bool
+	relaySession      string
+	lost              bool
+	targets           map[string]*target
+	tombstones        []string
+	sessions          map[string]*session
+	hidden            map[string]bool
+	refused           map[string]bool
+	refusedOrder      []string
+	browserSessions   map[string]bool
+	ownContexts       map[string]bool
+	pending           map[callKey]callKind
+	relayCalls        map[callKey]*relayCall
+	nextID            int64
+	marked            map[string]map[string]bool
+	markedCount       int
+	saturated         map[string]bool
+	swProtected       map[string]bool
+	navTargets        map[string]*navTarget
+	navSessions       map[string]*navTarget
+	unknown           map[string]*navTarget
+	gone              map[string]bool
+	goneOrder         []string
+	held              map[string]*heldSession
+	explicit          map[string]int
+	attachCalls       map[callKey]string
+	patterns          []any
+	heldExtras        map[requestKey][]heldExtra
+	heldExtraCount    int
+	seen              map[requestKey]reqLevel
+	seenOrder         []requestKey
+	handed            map[requestKey]int
+	handedOrder       []handedPause
+	pauses            int
+	continues         map[callKey]handedPause
+	bodyCalls         map[callKey]bodyCall
+	heldAnswers       map[callKey]*heldAnswer
+	streams           map[string]bool
+	streamOrder       []string
+	bounds            guardBounds
+	worlds            map[string]*worldSet
+	worldUniques      map[string]string
+	worldRequests     map[requestKey]bool
+	worldRequestOrder []requestKey
+	maxWorlds         int
+	answered          time.Time
+	probing           bool
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -151,6 +153,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		streams:         map[string]bool{},
 		worlds:          map[string]*worldSet{},
 		worldUniques:    map[string]string{},
+		worldRequests:   map[requestKey]bool{},
 		maxWorlds:       maxWorlds,
 		bounds:          boundsFromEnv(),
 	}

@@ -496,8 +496,8 @@ export function protectTest(getLink, describe) {
         await c.send('Network.enable', {}, sessionId);
         await c.send('DOM.enable', {}, sessionId);
         await c.send('DOM.setNodeStackTracesEnabled', { enable: true }, sessionId);
-        const socket = c.waitEvent((e) => e.method === 'Network.webSocketCreated' && e.sessionId === sessionId && e.params.url.endsWith('/ws'), 15000);
-        const fetched = c.waitEvent((e) => e.method === 'Network.loadingFinished' && e.sessionId === sessionId && c.events.some((r) => r.method === 'Network.requestWillBeSent' && r.params.requestId === e.params.requestId && r.params.request.url.includes('extension-fetch')), 15000);
+        const socket = c.waitEvent((e) => e.method === 'Network.webSocketCreated' && e.sessionId === sessionId, 15000);
+        const fetched = c.waitEvent((e) => e.method === 'Network.loadingFinished' && e.sessionId === sessionId && c.events.some((r) => r.method === 'Network.requestWillBeSent' && r.params.requestId === e.params.requestId && r.params.request.method === 'POST'), 15000);
         await c.send('Profiler.enable', {}, sessionId);
         await c.evaluate("(function sliccPageWarm() { return 1; })()\n//# sourceURL=slicc-warm.js", sessionId);
         const best = await c.send('Profiler.getBestEffortCoverage', {}, sessionId);
@@ -534,6 +534,36 @@ export function protectTest(getLink, describe) {
           nodeStack: JSON.stringify(nodeStack),
           body,
           console: JSON.stringify(c.events.filter((e) => e.sessionId === sessionId && (e.method === 'Console.messageAdded' || e.method.startsWith('Profiler.consoleProfile'))).map((e) => e.params)),
+        };
+      }),
+    extensionRequests: (browser, targetId, intercept) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const off = c.on((e) => {
+          if (e.method === 'Fetch.requestPaused' && e.sessionId === sessionId) c.send('Fetch.continueRequest', { requestId: e.params.requestId }, sessionId).catch(() => {});
+        });
+        if (intercept) await c.send('Fetch.enable', { patterns: [{ urlPattern: '*extension-fetch*' }] }, sessionId);
+        else await c.send('Network.enable', {}, sessionId);
+        await c.evaluate("document.dispatchEvent(new CustomEvent('slicc-ping')); true", sessionId);
+        let fetched = null;
+        for (let i = 0; i < 100 && fetched === null; i += 1) {
+          await sleep(100);
+          fetched = await c.evaluate("document.documentElement.getAttribute('data-slicc-fetched')", sessionId);
+        }
+        await sleep(300);
+        const events = c.events.filter((e) => e.sessionId === sessionId && (e.method.startsWith('Network.') || e.method.startsWith('Fetch.')));
+        const own = events.find((e) => e.method === 'Network.requestWillBeSent' && e.params.request.method === 'POST');
+        const postData = own ? await outcome(c.send('Network.getRequestPostData', { requestId: own.params.requestId }, sessionId)) : null;
+        off();
+        if (intercept) await c.send('Fetch.disable', {}, sessionId);
+        else await c.send('Network.disable', {}, sessionId);
+        await c.send('Target.detachFromTarget', { sessionId });
+        return {
+          fetched,
+          seen: events.filter((e) => own && e.params.requestId === own.params.requestId).map((e) => e.method),
+          text: JSON.stringify(events.map((e) => e.params)),
+          postData,
+          paused: events.filter((e) => e.method === 'Fetch.requestPaused').length,
         };
       }),
     extensionFrame: (browser, targetId, callFrameId) =>
