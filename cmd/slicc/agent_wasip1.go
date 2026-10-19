@@ -28,6 +28,12 @@ bad usage, 3 when that seven doesn't allow remote control from this seven or
 this seven's link facade refuses.
 `
 
+	waitSynopsis = ""
+	waitFlags    = ""
+	waitExit     = `this seven or this seven's link facade refuses, 124 on timeout, 130 on
+Ctrl-C.
+`
+
 	abortSynopsis = ""
 	abortFlags    = ""
 )

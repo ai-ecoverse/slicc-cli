@@ -19,6 +19,7 @@ type Event struct {
 	Reason    string `json:"reason,omitempty"`
 	Message   string `json:"message,omitempty"`
 	Detail    string `json:"detail,omitempty"`
+	Busy      bool   `json:"busy,omitempty"`
 
 	Line []byte `json:"-"`
 }
@@ -34,6 +35,7 @@ const (
 	EventError      = "error"
 	EventEnd        = "end"
 	EventDelivered  = "delivered"
+	EventBusy       = "busy"
 )
 
 const (

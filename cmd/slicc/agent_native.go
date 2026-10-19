@@ -42,6 +42,18 @@ link offers nothing to seven.
 usage, 3 when seven doesn't allow remote control from this device.
 `
 
+	waitSynopsis = `       slicc wait --cdp <url> [--origin <origin>]... [flags]
+       slicc wait --signal stdio [flags]
+`
+	waitFlags = `  --cdp <url>           link over CDP instead of a join URL
+  --origin <origin>     with --cdp, also accept seven on this origin
+  --signal stdio        carry the local setup messages as NDJSON on stdin
+                        and stdout instead of CDP (for a test harness);
+                        stdout also carries the events, as with --json
+`
+	waitExit = `this device, 124 on timeout, 130 on Ctrl-C.
+`
+
 	abortSynopsis = `       slicc abort --cdp <url> [--origin <origin>]...
        slicc abort --signal stdio
 `
