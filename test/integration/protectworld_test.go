@@ -54,12 +54,19 @@ func TestCDPHidesExtensionWorlds(t *testing.T) {
 	env := setupProtectExtension(t)
 	t.Run("an extension's world is hidden and its page stays usable", env.testExtensionWorld)
 	t.Run("call frames in an extension's world are refused", env.testExtensionFrame)
+	t.Run("a live world stays hidden through any churn of other worlds", env.testExtensionChurn)
 	t.Run("the seven tab is still cut", env.testAttach)
 	t.Run("script navigation onto seven still detaches", env.testScriptNavigate)
 	t.Run("the link still works", env.testStillLinked)
 }
 
 func (e *protectEnv) extensionPage(t *testing.T, tag string) (string, *cdp.Session, *cdp.Subscription, worldContext) {
+	t.Helper()
+	target, s, sub, world, _ := e.extensionWorlds(t, tag)
+	return target, s, sub, world
+}
+
+func (e *protectEnv) extensionWorlds(t *testing.T, tag string) (string, *cdp.Session, *cdp.Subscription, worldContext, worldContext) {
 	t.Helper()
 	var created struct {
 		TargetID string `json:"targetId"`
@@ -79,8 +86,9 @@ func (e *protectEnv) extensionPage(t *testing.T, tag string) (string, *cdp.Sessi
 		t.Fatal(err)
 	}
 	var seen []worldContext
+	var world, main *worldContext
 	deadline := time.After(15 * time.Second)
-	for {
+	for world == nil || main == nil {
 		select {
 		case ev := <-sub.Events():
 			if ev.SessionID != s.ID || ev.Method != "Runtime.executionContextCreated" {
@@ -91,13 +99,18 @@ func (e *protectEnv) extensionPage(t *testing.T, tag string) (string, *cdp.Sessi
 			}
 			_ = json.Unmarshal(ev.Params, &p)
 			seen = append(seen, p.Context)
-			if strings.HasPrefix(p.Context.Origin, "chrome-extension://") && !p.Context.AuxData.IsDefault {
-				return created.TargetID, s, sub, p.Context
+			switch c := p.Context; {
+			case c.AuxData.FrameID != created.TargetID:
+			case strings.HasPrefix(c.Origin, "chrome-extension://") && !c.AuxData.IsDefault:
+				world = &c
+			case c.AuxData.IsDefault:
+				main = &c
 			}
 		case <-deadline:
 			t.Fatalf("the fixture extension's isolated world never showed up on an unguarded session; contexts %+v", seen)
 		}
 	}
+	return created.TargetID, s, sub, *world, *main
 }
 
 func (e *protectEnv) testExtensionWorld(t *testing.T) {
@@ -127,7 +140,10 @@ func (e *protectEnv) testExtensionWorld(t *testing.T) {
 		Console         []struct {
 			ContextID int64 `json:"contextId"`
 		} `json:"console"`
-		Detached bool `json:"detached"`
+		Detached   bool       `json:"detached"`
+		Heap       cdpOutcome `json:"heap"`
+		HeapLeak   bool       `json:"heapLeak"`
+		HeapChunks int        `json:"heapChunks"`
 	}
 	w := extensionWorld{ID: world.ID, UniqueID: world.UniqueID, ObjectID: obj.Result.ObjectID}
 	var raw map[string]any
@@ -143,6 +159,9 @@ func (e *protectEnv) testExtensionWorld(t *testing.T) {
 		if o.Error.Message != refusedWorld {
 			t.Errorf("%s in the extension's world: %+v", name, o)
 		}
+	}
+	if r.Heap.Error.Message != "slicc: refused: HeapProfiler reads the page's whole renderer, browser extensions' worlds included" || r.HeapLeak || r.HeapChunks != 0 {
+		t.Errorf("a heap snapshot of the page with an extension's world: %+v, leaked %v in %d chunks", r.Heap, r.HeapLeak, r.HeapChunks)
 	}
 	if r.Detached || !r.After.OK {
 		t.Errorf("the page with an extension's world was cut: detached %v, evaluate after %+v", r.Detached, r.After)
@@ -235,5 +254,22 @@ func (e *protectEnv) testExtensionFrame(t *testing.T) {
 		if sc.ContextID == world.ID || strings.HasPrefix(sc.URL, "chrome-extension://") {
 			t.Errorf("seven was shown a script in the extension's world: %+v", sc)
 		}
+	}
+}
+
+func (e *protectEnv) testExtensionChurn(t *testing.T) {
+	target, _, _, world, main := e.extensionWorlds(t, "churn")
+	var r struct {
+		Ms    int        `json:"ms"`
+		World cdpOutcome `json:"world"`
+		Main  cdpOutcome `json:"main"`
+	}
+	e.evalJSONWithin(t, "linkTest.protect.extensionChurn("+jsArgs("chrome", target, world.ID, main.ID, 50, 50)+")", &r, 3*time.Minute)
+	t.Logf("2500 frames, each with its own extension world, came and went in %d ms", r.Ms)
+	if r.World.Error.Message != refusedWorld {
+		t.Errorf("the page's extension world after the churn: %+v", r.World)
+	}
+	if !r.Main.OK {
+		t.Errorf("the page's own world after the churn: %+v", r.Main)
 	}
 }

@@ -418,12 +418,48 @@ export function protectTest(getLink, describe) {
         out.objectId = await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: pull, objectId, returnByValue: true }, sessionId));
         out.properties = await outcome(c.send('Runtime.getProperties', { objectId, ownProperties: true }, sessionId));
         out.argument = await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: 'function (w) { return w.secret ?? null; }', objectId: plain.result.objectId, arguments: [{ objectId }], returnByValue: true }, sessionId));
+        await c.send('HeapProfiler.enable', {}, sessionId);
+        out.heap = await outcome(c.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false }, sessionId));
+        out.heapLeak = c.events.some((e) => e.method === 'HeapProfiler.addHeapSnapshotChunk' && e.params.chunk.includes('fake-value-0001'));
+        out.heapChunks = c.events.filter((e) => e.method === 'HeapProfiler.addHeapSnapshotChunk').length;
+        await c.send('HeapProfiler.disable', {}, sessionId);
         await c.send('Runtime.enable', {}, sessionId);
         await c.evaluate('new Promise((resolve) => setTimeout(() => resolve(true), 300))', sessionId);
         out.contexts = c.events.filter((e) => e.method === 'Runtime.executionContextCreated' && e.sessionId === sessionId).map((e) => e.params.context);
         out.console = c.events.filter((e) => e.method === 'Runtime.consoleAPICalled' && e.sessionId === sessionId).map((e) => ({ contextId: e.params.executionContextId, args: JSON.stringify(e.params.args) }));
         out.after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
         out.detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
+        await c.send('Target.detachFromTarget', { sessionId });
+        return out;
+      }),
+    extensionChurn: (browser, targetId, worldId, mainId, rounds, batch) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const churn = `(async () => {
+          for (let r = 0; r < ${rounds}; r += 1) {
+            const frames = [];
+            for (let i = 0; i < ${batch}; i += 1) {
+              const f = document.createElement('iframe');
+              document.body.append(f);
+              frames.push(f);
+            }
+            const injected = () => frames.every((f) => f.contentDocument?.documentElement?.hasAttribute('data-slicc-world'));
+            for (let wait = 0; !injected(); wait += 1) {
+              if (wait > 500) throw new Error('the fixture never ran in a churned frame');
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            for (const f of frames) f.remove();
+          }
+          return true;
+        })()`;
+        const started = Date.now();
+        await c.evaluate(churn, sessionId);
+        const read = 'globalThis.sliccFixtureWorld?.secret ?? null';
+        const out = {
+          ms: Date.now() - started,
+          world: await outcome(c.send('Runtime.evaluate', { expression: read, returnByValue: true, contextId: worldId }, sessionId)),
+          main: await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true, contextId: mainId }, sessionId)),
+        };
         await c.send('Target.detachFromTarget', { sessionId });
         return out;
       }),

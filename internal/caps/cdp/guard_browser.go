@@ -182,6 +182,7 @@ var eventHandlers = map[string]eventHandler{
 	"Page.frameNavigated":                        (*guard).frameNavigatedEvent,
 	"Runtime.executionContextCreated":            (*guard).contextCreatedEvent,
 	"Runtime.executionContextDestroyed":          (*guard).contextGoneEvent,
+	"Runtime.executionContextsCleared":           (*guard).contextsClearedEvent,
 	"Runtime.consoleAPICalled":                   (*guard).contextEvent,
 	"Runtime.exceptionThrown":                    (*guard).contextEvent,
 	"Runtime.bindingCalled":                      (*guard).contextEvent,
@@ -350,7 +351,7 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 		return browserVerdict{forward: data}
 	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.URL(p.Context.Origin):
 		return browserVerdict{send: g.markLocked(t)}
-	case g.worldContextLocked(t.id, p.Context):
+	case g.worldContextLocked(t.id, m.SessionID, p.Context):
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}

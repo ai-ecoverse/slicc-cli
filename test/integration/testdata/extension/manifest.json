@@ -2,5 +2,5 @@
   "manifest_version": 3,
   "name": "slicc fixture world",
   "version": "1.0",
-  "content_scripts": [{ "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_start" }]
+  "content_scripts": [{ "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_start", "all_frames": true, "match_about_blank": true, "match_origin_as_fallback": true }]
 }
