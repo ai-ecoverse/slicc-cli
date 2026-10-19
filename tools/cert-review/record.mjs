@@ -131,12 +131,11 @@ async function bound() {
 }
 
 function bios() {
+  if (biosOff && !/^[\w.-]+(\/[\w.-]+)?#\d+$/.test(biosOff))
+    return missing.push(`the canary is off without an issue that says why (--bios-off ${one(biosOff).slice(0, 100)})`);
   if (values.bios === 'false') return (facts.bios = 'bios: not needed, wasm unchanged');
   if (values.bios !== 'true') return missing.push(`classify said bios=${one(values.bios) || 'nothing'}, so whether bios's canary was needed is unknown`);
-  if (biosOff) {
-    if (!/^[\w.-]+(\/[\w.-]+)?#\d+$/.test(biosOff)) return missing.push(`the canary is off without an issue that says why (--bios-off ${one(biosOff).slice(0, 100)})`);
-    return (facts.bios = `bios: off (${biosOff}), wasm changed`);
-  }
+  if (biosOff) return (facts.bios = `bios: off (${biosOff}), wasm changed`);
   const before = problems.length + missing.length;
   const fail = (t) => problems.push(`bios: ${t}`);
   const lack = (t) => missing.push(`bios: ${t}`);
