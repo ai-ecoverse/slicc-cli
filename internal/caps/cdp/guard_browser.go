@@ -181,6 +181,14 @@ var eventHandlers = map[string]eventHandler{
 	"Target.receivedMessageFromTarget":           (*guard).innerMessageEvent,
 	"Page.frameNavigated":                        (*guard).frameNavigatedEvent,
 	"Runtime.executionContextCreated":            (*guard).contextCreatedEvent,
+	"Runtime.executionContextDestroyed":          (*guard).contextGoneEvent,
+	"Runtime.consoleAPICalled":                   (*guard).contextEvent,
+	"Runtime.exceptionThrown":                    (*guard).contextEvent,
+	"Runtime.bindingCalled":                      (*guard).contextEvent,
+	"Debugger.scriptParsed":                      (*guard).scriptEvent,
+	"Debugger.scriptFailedToParse":               (*guard).scriptEvent,
+	"Debugger.breakpointResolved":                (*guard).breakpointEvent,
+	"Debugger.paused":                            (*guard).debuggerPausedEvent,
 	"Network.requestWillBeSent":                  afterRequest((*guard).requestEvent, levelKnown),
 	"Network.requestWillBeSentExtraInfo":         (*guard).extraEvent,
 	"Network.responseReceived":                   afterRequest((*guard).responseEvent, levelSettled),
@@ -333,20 +341,19 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 
 func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 	var p struct {
-		Context struct {
-			Origin  string `json:"origin"`
-			AuxData struct {
-				IsDefault bool   `json:"isDefault"`
-				FrameID   string `json:"frameId"`
-			} `json:"auxData"`
-		} `json:"context"`
+		Context execContext `json:"context"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	t := g.sessionTargetLocked(m.SessionID)
-	if t == nil || !p.Context.AuxData.IsDefault || p.Context.AuxData.FrameID != t.id || !g.o.URL(p.Context.Origin) {
+	switch {
+	case t == nil:
 		return browserVerdict{forward: data}
+	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.URL(p.Context.Origin):
+		return browserVerdict{send: g.markLocked(t)}
+	case g.worldContextLocked(t.id, p.Context):
+		return browserVerdict{}
 	}
-	return browserVerdict{send: g.markLocked(t)}
+	return browserVerdict{forward: data}
 }
 
 func (g *guard) eventProtected(v any, depth int) bool {

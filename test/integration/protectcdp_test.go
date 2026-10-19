@@ -42,7 +42,11 @@ type protectTarget struct {
 
 func setupProtect(t *testing.T) *protectEnv {
 	t.Helper()
-	b := launchBrowser(t)
+	return setupProtectOn(t, launchBrowser(t))
+}
+
+func setupProtectOn(t *testing.T, b *chromeProc) *protectEnv {
+	t.Helper()
 	srv := pageServer(t)
 	plain := plainServer(t)
 	env := &protectEnv{

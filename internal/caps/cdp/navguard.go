@@ -14,6 +14,7 @@ var slowGuard = 2 * time.Second
 var navTypes = map[string]bool{"page": true, "iframe": true, "background_page": true, "webview": true}
 
 type navTarget struct {
+	target   string
 	session  string
 	start    time.Time
 	progress time.Time
@@ -53,7 +54,7 @@ func (g *guard) touchLocked(targetID, typ string) [][]byte {
 	if _, ok := g.navTargets[targetID]; ok {
 		return nil
 	}
-	nt := &navTarget{ready: make(chan struct{}), start: time.Now()}
+	nt := &navTarget{target: targetID, ready: make(chan struct{}), start: time.Now()}
 	g.navTargets[targetID] = nt
 	sent := time.Now()
 	msg := g.callbackLocked(g.relaySession, "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, func(m message) [][]byte {
@@ -92,6 +93,7 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 		{"Fetch.enable", map[string]any{"patterns": g.patterns}},
 		{"Network.enable", map[string]any{"maxTotalBufferSize": 0, "maxResourceBufferSize": 0, "maxPostDataSize": 0}},
 		{"Network.setBypassServiceWorker", map[string]any{"bypass": true}},
+		{"Runtime.enable", nil},
 	}
 	nt.pending = len(calls)
 	out := make([][]byte, 0, len(calls))
@@ -114,6 +116,7 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 }
 
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
+	g.navWorldLocked(nt, m)
 	if m.Method != "Fetch.requestPaused" {
 		return nil
 	}

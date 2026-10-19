@@ -399,6 +399,49 @@ export function protectTest(getLink, describe) {
         const detached = await leave(c, sessionId, away);
         return { targetId, href, title, sub, sent, paused, detached };
       }),
+    extensionWorld: (browser, targetId, world) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const read = 'globalThis.sliccFixtureWorld?.secret ?? null';
+        const pull = 'function () { return this.secret ?? null; }';
+        const out = {
+          main: await outcome(c.send('Runtime.evaluate', { expression: read, returnByValue: true }, sessionId)),
+          contextId: await outcome(c.send('Runtime.evaluate', { expression: read, returnByValue: true, contextId: world.id }, sessionId)),
+          uniqueContextId: await outcome(c.send('Runtime.evaluate', { expression: read, returnByValue: true, uniqueContextId: world.uniqueId }, sessionId)),
+          callOnContext: await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: 'function () { return globalThis.sliccFixtureWorld?.secret ?? null; }', executionContextId: world.id, returnByValue: true }, sessionId)),
+          lexical: await outcome(c.send('Runtime.globalLexicalScopeNames', { executionContextId: world.id }, sessionId)),
+          observerObjectId: await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: pull, objectId: world.objectId, returnByValue: true }, sessionId)),
+        };
+        const own = await outcome(c.send('Runtime.evaluate', { expression: 'globalThis.sliccFixtureWorld', contextId: world.id }, sessionId));
+        const plain = await c.send('Runtime.evaluate', { expression: '({})' }, sessionId);
+        const objectId = own.result?.result?.objectId ?? `${plain.result.objectId.split('.')[0]}.${world.id}.1`;
+        out.objectId = await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: pull, objectId, returnByValue: true }, sessionId));
+        out.properties = await outcome(c.send('Runtime.getProperties', { objectId, ownProperties: true }, sessionId));
+        out.argument = await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: 'function (w) { return w.secret ?? null; }', objectId: plain.result.objectId, arguments: [{ objectId }], returnByValue: true }, sessionId));
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.evaluate('new Promise((resolve) => setTimeout(() => resolve(true), 300))', sessionId);
+        out.contexts = c.events.filter((e) => e.method === 'Runtime.executionContextCreated' && e.sessionId === sessionId).map((e) => e.params.context);
+        out.console = c.events.filter((e) => e.method === 'Runtime.consoleAPICalled' && e.sessionId === sessionId).map((e) => ({ contextId: e.params.executionContextId, args: JSON.stringify(e.params.args) }));
+        out.after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
+        out.detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
+        await c.send('Target.detachFromTarget', { sessionId });
+        return out;
+      }),
+    extensionFrame: (browser, targetId, callFrameId) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Debugger.enable', {}, sessionId);
+        const out = {
+          evaluate: await outcome(c.send('Debugger.evaluateOnCallFrame', { callFrameId, expression: 'globalThis.sliccFixtureWorld?.secret ?? null', returnByValue: true }, sessionId)),
+          setVariable: await outcome(c.send('Debugger.setVariableValue', { callFrameId, scopeNumber: 0, variableName: 'probe', newValue: { value: 1 } }, sessionId)),
+        };
+        await sleep(300);
+        out.pausedFrames = c.events.filter((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId).map((e) => e.params.callFrames.map((f) => f.callFrameId));
+        out.scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId).map((e) => ({ url: e.params.url, contextId: e.params.executionContextId }));
+        await outcome(c.send('Debugger.disable', {}, sessionId));
+        await c.send('Target.detachFromTarget', { sessionId });
+        return out;
+      }),
     ownContext: (browser) =>
       run(browser, async (c) => {
         const { browserContextId } = await c.send('Target.createBrowserContext');

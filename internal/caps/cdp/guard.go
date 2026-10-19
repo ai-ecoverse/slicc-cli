@@ -109,6 +109,8 @@ type guard struct {
 	streams         map[string]bool
 	streamOrder     []string
 	bounds          guardBounds
+	worlds          map[string]*worldSet
+	worldUniques    map[string]string
 	answered        time.Time
 	probing         bool
 }
@@ -146,6 +148,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		bodyCalls:       map[callKey]bodyCall{},
 		heldAnswers:     map[callKey]*heldAnswer{},
 		streams:         map[string]bool{},
+		worlds:          map[string]*worldSet{},
+		worldUniques:    map[string]string{},
 		bounds:          boundsFromEnv(),
 	}
 	g.patterns = g.documentPatterns()
@@ -350,6 +354,7 @@ func (g *guard) addRefusedLocked(id string) {
 func (g *guard) destroyedLocked(id string) {
 	g.navForgetLocked(id)
 	g.dropHeldLocked(id)
+	g.forgetWorldsLocked(id)
 	t, ok := g.targets[id]
 	if !ok || t.gone {
 		return

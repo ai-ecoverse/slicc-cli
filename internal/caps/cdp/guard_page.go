@@ -196,6 +196,9 @@ func (g *guard) checkLocked(c *command) string {
 			return reason
 		}
 	}
+	if reason := g.worldCheckLocked(c); reason != "" {
+		return reason
+	}
 	return g.scan(c.params, c, exemptKeys[c.method], 0)
 }
 
