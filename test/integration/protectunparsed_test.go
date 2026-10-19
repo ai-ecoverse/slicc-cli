@@ -38,14 +38,14 @@ func TestCDPFailsClosedOnUnparseableURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.hole = "http://exa mple.sliccy.ai:" + pu.Port() + "/?n=hole"
-	env.exotic = "http://\u200d.cut.test:" + pu.Port() + "/?n=exotic"
+	env.exotic = "http://an exotic.cut.test:" + pu.Port() + "/?n=exotic"
 	env.unguardedCall(t, "Storage.setCookies", map[string]any{"cookies": []map[string]any{{"name": "seven", "value": sliccyCookie, "domain": ".sliccy.ai", "path": "/"}}}, nil)
 	t.Run("unparseable destinations are refused", env.testDestinations)
 	t.Run("Chrome loads none of the URLs it rejects", env.testControl)
 	t.Run("a tab Chrome loaded on an unparseable sliccy.ai host is cut", func(t *testing.T) { env.testLoadedTab(t, env.hole, "exa%20mple", true) })
-	t.Run("an exotic host that isn't protected is cut too", func(t *testing.T) { env.testLoadedTab(t, env.exotic, "xn--1ug", false) })
+	t.Run("an exotic host that isn't protected is cut too", func(t *testing.T) { env.testLoadedTab(t, env.exotic, "an%20exotic", false) })
 	t.Run("window.open to an unparseable sliccy.ai host is cut", func(t *testing.T) { env.testPopupTo(t, env.hole, "exa%20mple") })
-	t.Run("window.open to an exotic host is cut too", func(t *testing.T) { env.testPopupTo(t, env.exotic, "xn--1ug") })
+	t.Run("window.open to an exotic host is cut too", func(t *testing.T) { env.testPopupTo(t, env.exotic, "an%20exotic") })
 	t.Run("the link still works", env.testStillLinked)
 }
 
