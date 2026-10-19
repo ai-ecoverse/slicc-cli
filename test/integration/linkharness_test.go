@@ -75,6 +75,11 @@ func launchBrowser(t *testing.T) *chromeProc {
 
 func launchBrowserOn(t *testing.T, debugPort int, extra ...string) *chromeProc {
 	t.Helper()
+	return launchBrowserWith(t, debugPort, nil, extra...)
+}
+
+func launchBrowserWith(t *testing.T, debugPort int, prep func(cmd *exec.Cmd) func(), extra ...string) *chromeProc {
+	t.Helper()
 	chrome := findChrome()
 	if chrome == "" {
 		if os.Getenv("CI") != "" {
@@ -104,8 +109,15 @@ func launchBrowserOn(t *testing.T, debugPort int, extra ...string) *chromeProc {
 		t.Fatal(err)
 	}
 	cmd.Stdout, cmd.Stderr = logFile, logFile
+	var afterStart func()
+	if prep != nil {
+		afterStart = prep(cmd)
+	}
 	err = cmd.Start()
 	_ = logFile.Close()
+	if afterStart != nil {
+		afterStart()
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

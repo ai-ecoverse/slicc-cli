@@ -38,7 +38,16 @@ func setupProtectExtension(t *testing.T) *protectEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return setupProtectOn(t, launchBrowserOn(t, 0, "--load-extension="+dir, "--disable-extensions-except="+dir, "--disable-features=DisableLoadExtensionCommandLineSwitch"))
+	pipe := newBrowserPipe(t)
+	b := launchBrowserWith(t, 0, pipe.prep(t), "--enable-unsafe-extension-debugging")
+	var loaded struct {
+		ID string `json:"id"`
+	}
+	pipe.call(t, "Extensions.loadUnpacked", map[string]any{"path": dir}, &loaded)
+	if loaded.ID == "" {
+		t.Fatal("Extensions.loadUnpacked gave no extension id")
+	}
+	return setupProtectOn(t, b)
 }
 
 func TestCDPHidesExtensionWorlds(t *testing.T) {
