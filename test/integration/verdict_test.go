@@ -22,8 +22,7 @@ var gates = []gate{
 	{"npm-publish", "scripts/npm-publish.mjs"},
 	{"sliccy-next", "scripts/sliccy-next.mjs"},
 	{"install-check", "test/integration/testdata/install/check.sh"},
-	{"nightly", "scripts/nightly-gate.mjs"},
-	{"nightly-issue", "scripts/nightly-issue.mjs"},
+	{"release-issue", "scripts/release-issue.mjs"},
 }
 
 type gateCall struct {
@@ -47,7 +46,7 @@ func gateCalls(t *testing.T) []gateCall {
 			}
 		}
 	}
-	for _, name := range []string{"ci.yml", "release.yml", "nightly.yml"} {
+	for _, name := range []string{"ci.yml", "release.yml"} {
 		raw, err := os.ReadFile("../../.github/workflows/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -117,7 +116,7 @@ func TestEveryGateCallerRequiresItsVerdict(t *testing.T) {
 			t.Errorf("the fresh job lacks %q", want)
 		}
 	}
-	if cond := workflowJobs(t, release)["release"].cond; !strings.Contains(cond, "(github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown')") {
+	if cond := workflowJobs(t, release)["build"].cond; !strings.Contains(cond, "(github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown')") {
 		t.Errorf("a release after CI does not require the fresh job's verdict: %s", cond)
 	}
 }
