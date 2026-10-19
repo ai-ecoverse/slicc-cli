@@ -74,7 +74,7 @@ func certTool(t *testing.T, api string, script string, args ...string) toolRun {
 	node := requireNode(t)
 	gho := filepath.Join(t.TempDir(), "github_output")
 	cmd := exec.Command(node, append([]string{certTools + script}, args...)...)
-	cmd.Env = append(os.Environ(), "GITHUB_API_URL="+api, "GH_TOKEN=fake-value-0001", "GITHUB_OUTPUT="+gho, "GITHUB_STEP_SUMMARY=")
+	cmd.Env = append(withoutEnv(os.Environ(), "PR_DRAFT"), "GITHUB_API_URL="+api, "GH_TOKEN=fake-value-0001", "GITHUB_OUTPUT="+gho, "GITHUB_STEP_SUMMARY=")
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
@@ -90,6 +90,16 @@ func certTool(t *testing.T, api string, script string, args ...string) toolRun {
 		}
 	}
 	return toolRun{string(out), code, outputs}
+}
+
+func withoutEnv(env []string, name string) []string {
+	out := []string{}
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, name+"=") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 func writeJSON(t *testing.T, path string, v any) string {
@@ -231,7 +241,7 @@ func TestCertReviewPlanBuildsOnlyOnTheEventsThatMatter(t *testing.T) {
 		{name: "ready for review plans and builds at once", action: "ready_for_review", guard: "PASS", state: "pending", build: "true", files: files("cmd/slicc/main.go")},
 		{name: "a draft is not built and stays red", action: "opened", guard: "PASS", state: "failure", build: "false", draft: "true", files: files("cmd/slicc/main.go")},
 		{name: "a push to a draft is not built and stays red", action: "synchronize", guard: "PASS", state: "failure", build: "false", draft: "true", files: files("cmd/slicc/main.go")},
-		{name: "converted to draft cancels into a red status", action: "converted_to_draft", guard: "PASS", state: "failure", build: "false", draft: "true", files: files("cmd/slicc/main.go")},
+		{name: "converted to draft posts a red status", action: "converted_to_draft", guard: "PASS", state: "failure", build: "false", draft: "true", files: files("cmd/slicc/main.go")},
 		{name: "no draft flag counts as a draft", action: "synchronize", guard: "PASS", state: "failure", build: "false", draft: "omit", files: files("cmd/slicc/main.go")},
 		{name: "the self-guard refused", action: "synchronize", guard: "FAIL", state: "failure", build: "false", files: files("tools/cert-review/lib.mjs")},
 		{name: "the self-guard didn't finish", action: "synchronize", state: "error", build: "false", files: files("cmd/slicc/main.go")},
@@ -270,6 +280,9 @@ func TestCertReviewPlanBuildsOnlyOnTheEventsThatMatter(t *testing.T) {
 			}
 			if r.outputs["build"] != c.build {
 				t.Fatalf("build=%q, want %q", r.outputs["build"], c.build)
+			}
+			if c.draft != "" && c.draft != "false" && got[0]["description"] != "draft: not reviewed, mark it ready for review" {
+				t.Fatalf("a draft's status %v, want draft: not reviewed", got[0])
 			}
 			if c.build == "true" && r.outputs["forced"] != c.forced {
 				t.Fatalf("forced=%q, want %q", r.outputs["forced"], c.forced)
@@ -754,7 +767,7 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 	if strings.Count(text, "PR_DRAFT: ${{ github.event.pull_request.draft }}") != 2 || strings.Contains(text, "merge-ok") {
 		t.Fatal("plan and classify read the draft flag from PR_DRAFT, and nothing reads merge-ok")
 	}
-	if !strings.Contains(text, "format('cert-review-pr-noop-{0}', github.run_id)") {
+	if !strings.Contains(text, "group: ${{ ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'cert-review-approved') && format('cert-review-pr-noop-{0}', github.run_id) || format('cert-review-pr-{0}', github.event.pull_request.number || github.event.merge_group.head_sha) }}") {
 		t.Fatal("other labels must get a concurrency group of their own")
 	}
 	if strings.Contains(text, "always()") || strings.Contains(text, "id-token") {
