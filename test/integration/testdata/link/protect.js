@@ -463,6 +463,29 @@ export function protectTest(getLink, describe) {
         await c.send('Target.detachFromTarget', { sessionId });
         return out;
       }),
+    extensionBreakpoint: (browser, targetId, pageURL) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Debugger.enable', {}, sessionId);
+        await c.send('Page.enable', {}, sessionId);
+        const condition = (key) => `(document.documentElement.dataset.${key} = globalThis.sliccFixtureWorld?.secret ?? "none", false)`;
+        const out = {
+          regex: await outcome(c.send('Debugger.setBreakpointByUrl', { urlRegex: 'chrome-extension://.*', lineNumber: 2, condition: condition('regex') }, sessionId)),
+          hash: await outcome(c.send('Debugger.setBreakpointByUrl', { scriptHash: '0'.repeat(64), lineNumber: 2, condition: condition('hash') }, sessionId)),
+          blank: await outcome(c.send('Debugger.setBreakpointByUrl', { url: '', lineNumber: 0, condition: condition('blank') }, sessionId)),
+          page: await outcome(c.send('Debugger.setBreakpointByUrl', { url: pageURL, lineNumber: 0, condition: 'false' }, sessionId)),
+          plain: await outcome(c.send('Debugger.setBreakpointByUrl', { urlRegex: 'chrome-extension://.*', lineNumber: 1 }, sessionId)),
+        };
+        const loaded = c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 20000);
+        await c.send('Page.reload', {}, sessionId);
+        await loaded;
+        await sleep(300);
+        out.leak = await c.evaluate('JSON.stringify(document.documentElement.dataset)', sessionId);
+        out.paused = c.events.filter((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId).length;
+        await outcome(c.send('Debugger.disable', {}, sessionId));
+        await c.send('Target.detachFromTarget', { sessionId });
+        return out;
+      }),
     extensionFrame: (browser, targetId, callFrameId) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });

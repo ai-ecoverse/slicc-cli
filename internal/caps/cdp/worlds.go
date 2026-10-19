@@ -9,6 +9,7 @@ import (
 const (
 	refusedWorld = "that execution context belongs to a browser extension"
 	refusedHeap  = "HeapProfiler reads the page's whole renderer, browser extensions' worlds included"
+	refusedBreak = "a breakpoint condition that could run in a browser extension's world needs a url naming the page's own script"
 	maxWorlds    = 4096
 )
 
@@ -178,6 +179,9 @@ func (g *guard) worldCheckLocked(c *command) string {
 	t := g.sessionTargetLocked(c.session)
 	if t != nil && navTypes[t.typ] && strings.HasPrefix(c.method, "HeapProfiler.") && !heapOK[c.method] {
 		return refusedHeap
+	}
+	if t != nil && navTypes[t.typ] && c.method == "Debugger.setBreakpointByUrl" && c.str("condition") != "" && c.str("url") == "" {
+		return refusedBreak
 	}
 	if len(g.worlds) == 0 {
 		return ""

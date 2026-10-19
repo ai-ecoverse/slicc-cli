@@ -55,6 +55,7 @@ func TestCDPHidesExtensionWorlds(t *testing.T) {
 	t.Run("an extension's world is hidden and its page stays usable", env.testExtensionWorld)
 	t.Run("call frames in an extension's world are refused", env.testExtensionFrame)
 	t.Run("a live world stays hidden through any churn of other worlds", env.testExtensionChurn)
+	t.Run("breakpoint conditions can't run in an extension's world", env.testExtensionBreakpoint)
 	t.Run("the seven tab is still cut", env.testAttach)
 	t.Run("script navigation onto seven still detaches", env.testScriptNavigate)
 	t.Run("the link still works", env.testStillLinked)
@@ -271,5 +272,34 @@ func (e *protectEnv) testExtensionChurn(t *testing.T) {
 	}
 	if !r.Main.OK {
 		t.Errorf("the page's own world after the churn: %+v", r.Main)
+	}
+}
+
+func (e *protectEnv) testExtensionBreakpoint(t *testing.T) {
+	target, _, _, _ := e.extensionPage(t, "breakpoint")
+	var r struct {
+		Regex  cdpOutcome `json:"regex"`
+		Hash   cdpOutcome `json:"hash"`
+		Blank  cdpOutcome `json:"blank"`
+		Page   cdpOutcome `json:"page"`
+		Plain  cdpOutcome `json:"plain"`
+		Leak   string     `json:"leak"`
+		Paused int        `json:"paused"`
+	}
+	e.evalJSON(t, "linkTest.protect.extensionBreakpoint("+jsArgs("chrome", target, e.allowed+"/?n=breakpoint")+")", &r)
+	const want = "slicc: refused: a breakpoint condition that could run in a browser extension's world needs a url naming the page's own script"
+	for name, o := range map[string]cdpOutcome{"urlRegex": r.Regex, "scriptHash": r.Hash, "an empty url": r.Blank} {
+		if o.Error.Message != want {
+			t.Errorf("a conditional breakpoint by %s: %+v", name, o)
+		}
+	}
+	if !r.Page.OK || !r.Plain.OK {
+		t.Errorf("a conditional breakpoint on the page's own URL gave %+v, and a plain one by urlRegex %+v", r.Page, r.Plain)
+	}
+	if r.Leak != `{"sliccWorld":""}` {
+		t.Errorf("after a reload breakpoint conditions left %s in the page's DOM", r.Leak)
+	}
+	if r.Paused != 0 {
+		t.Errorf("seven saw %d pauses in the extension's world", r.Paused)
 	}
 }
