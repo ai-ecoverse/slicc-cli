@@ -22,6 +22,13 @@ type Config struct {
 	Color    bool
 	Notice   string
 	Now      func() time.Time
+
+	Settings    Settings
+	JerkVersion string
+	Runner      []string
+	CheckRunner func([]string) error
+	LiveMounts  func() bool
+	Apply       func(s Settings, relink bool)
 }
 
 type Choice struct {
@@ -47,6 +54,7 @@ const (
 	ModeProfile    Mode = "profile"
 	ModeNewProfile Mode = "new-profile"
 	ModeDashboard  Mode = "dashboard"
+	ModeCaps       Mode = "caps"
 	ModeClosing    Mode = "closing"
 	ModeDone       Mode = "done"
 )
@@ -64,8 +72,12 @@ type Model struct {
 	prof     profilePicker
 	message  string
 	dash     dashboard
+	settings Settings
+	caps     capsEditor
 	err      error
 	height   int
+	width    int
+	dark     bool
 }
 
 func New(cfg Config) Model {
@@ -75,9 +87,10 @@ func New(cfg Config) Model {
 	if cfg.Profiles == nil {
 		cfg.Profiles = func(browser.Entry) []string { return nil }
 	}
-	m := Model{cfg: cfg, st: newStyles(cfg.Color), mode: ModeDiscover, profiles: map[string]string{}, known: map[string][]string{}}
+	m := Model{cfg: cfg, st: newStyles(cfg.Color, true), dark: true, mode: ModeDiscover, profiles: map[string]string{}, known: map[string][]string{}}
 	m.dash = newDashboard(cfg.Now())
 	m.dash.notice = cfg.Notice
+	m.settings = cfg.Settings.clone()
 	if cfg.Entries != nil {
 		m.entries = cfg.Entries
 		m.mode = ModePick
@@ -98,7 +111,12 @@ func (m Model) Message() string { return m.message }
 
 func (m Model) Err() error { return m.err }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	if !m.cfg.Color {
+		return nil
+	}
+	return tea.RequestBackgroundColor
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -122,12 +140,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = ModeDone
 		return m, tea.Quit
 	case tickMsg:
-		if m.mode == ModeDashboard || m.mode == ModeClosing {
+		if m.mode == ModeDashboard || m.mode == ModeCaps || m.mode == ModeClosing {
 			return m, tick()
 		}
 		return m, nil
 	case tea.WindowSizeMsg:
-		m.height = msg.Height
+		m.height, m.width = msg.Height, msg.Width
+		return m, nil
+	case tea.BackgroundColorMsg:
+		m.dark = msg.IsDark()
+		m.st = newStyles(m.cfg.Color, m.dark)
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.key(msg)
@@ -135,6 +157,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.mode == ModeNewProfile {
 		var cmd tea.Cmd
 		m.prof.input, cmd = m.prof.input.Update(msg)
+		return m, cmd
+	}
+	if m.mode == ModeCaps && m.caps.editing != inputNone {
+		var cmd tea.Cmd
+		m.caps.input, cmd = m.caps.input.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -160,16 +187,23 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case ModeNewProfile:
 		return m.newProfileKey(k)
 	case ModeDashboard:
-		if k.String() == "q" {
+		switch k.String() {
+		case "q":
 			return m.quit()
+		case "c":
+			m.openCaps()
+		case "m", "a":
+			return m.startInput(inputFolder, -1, "")
 		}
+	case ModeCaps:
+		return m.capsKey(k)
 	}
 	return m, nil
 }
 
 func (m Model) quit() (tea.Model, tea.Cmd) {
 	switch m.mode {
-	case ModeDashboard:
+	case ModeDashboard, ModeCaps:
 		m.mode = ModeClosing
 		if m.cfg.Stop != nil {
 			m.cfg.Stop()
@@ -278,8 +312,10 @@ func (m Model) View() tea.View {
 		s = m.pickView()
 	case ModeProfile, ModeNewProfile:
 		s = m.profileView()
+	case ModeCaps:
+		s = m.capsView()
 	default:
-		s = m.dash.view(m.st, m.mode, m.cfg.Now())
+		s = m.dashView()
 	}
 	return tea.NewView(s)
 }

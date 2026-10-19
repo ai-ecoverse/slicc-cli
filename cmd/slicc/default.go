@@ -27,6 +27,7 @@ import (
 	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
+	"github.com/ai-ecoverse/slicc-cli/internal/jerk"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 	"github.com/ai-ecoverse/slicc-cli/internal/tui"
@@ -198,17 +199,23 @@ func (f *defaultFlags) parseProfile(stderr io.Writer) int {
 	return -1
 }
 
-func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), mounts []hostfs.Mount, withJerk bool, kernelPort int) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
+func registerCaps(lc *liveCaps, origins []string, logf func(string, ...any)) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
 	return func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []flow.Browser) (flow.Caps, error) {
+		c := lc.snapshot()
 		tcp.Register(n)
 		resolve.Register(n)
 		httpcap.Register(n)
 		wscap.Register(n)
 		udpcap.Register(n)
-		if withJerk {
+		if c.jerk {
 			serveJerk(n, true, false, logf)
 		}
-		closeMounts := serveMounts(n, mounts, logf)
+		srv, closeFS := shareMounts(n, c.mounts, logf)
+		lc.setFS(nil, srv)
+		closeMounts := func() {
+			lc.setFS(srv, nil)
+			closeFS()
+		}
 		var seven string
 		var extra, order []string
 		for _, b := range browsers {
@@ -225,7 +232,7 @@ func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), 
 			closeMounts()
 			return flow.Caps{}, err
 		}
-		closeSSH, err := cf.serve(n, logf)
+		closeSSH, err := c.compute.serve(n, logf)
 		if err != nil {
 			closeMounts()
 			return flow.Caps{}, err
@@ -238,8 +245,8 @@ func registerCaps(cf computeFlags, origins []string, logf func(string, ...any), 
 		}
 		wctx, cancel := context.WithCancel(ctx)
 		serveBrowsers(wctx, n, reg)
-		h, closeCtl := serveCtl("default", n, kernelPort, logf)
-		unwatch := watchLocal(h, n, kernelPort)
+		h, closeCtl := serveCtl("default", n, c.kernel, logf)
+		unwatch := watchLocal(h, n, c.kernel)
 		live := func() map[string]bool {
 			out := map[string]bool{}
 			for _, b := range reg.List() {
@@ -279,9 +286,10 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
 	mounts := hostfs.Load(f.mounts, func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) })
+	lc := newLiveCaps(f.compute, mounts, !f.noJerk, f.kernel)
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(f.compute, pageOrigins(f.page, f.origins), logf, mounts, !f.noJerk, f.kernel), Compute: f.compute.dashboard(), Logf: logf,
+		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(lc, pageOrigins(f.page, f.origins), logf), Compute: f.compute.dashboard(), Logf: logf,
 	}
 	origins, _ := flow.PageOrigins(f.page, f.origins)
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
@@ -295,7 +303,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 			}
 			found = &r
 		}
-		return runTUI(cfg, found, stdout, stderr)
+		return runTUI(cfg, found, lc, stdout, stderr)
 	}
 	cfg.Chosen = len(f.browsers) > 0 || f.six != nil
 	return runPlain(cfg, f, mounts, stdout, stderr)
@@ -433,7 +441,7 @@ func tuiProfiles(o browser.Options) func(browser.Entry) []string {
 	}
 }
 
-func runTUI(cfg flow.Config, found *browser.Result, stdout, stderr io.Writer) int {
+func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var p *tea.Program
@@ -445,6 +453,17 @@ func runTUI(cfg flow.Config, found *browser.Result, stdout, stderr io.Writer) in
 		Notice:   strings.TrimSpace(takeNotice()),
 		Profiles: tuiProfiles(cfg.Browser),
 		Stop:     cancel,
+		Runner:   defaultRunner(),
+	}
+	cfg.Relink = lc.relink
+	if j, _ := jerk.Find(jerkDirs()...); j != nil {
+		tcfg.JerkVersion = j.Version
+	}
+	tcfg.Settings = lc.settings(tcfg.JerkVersion != "")
+	tcfg.LiveMounts = lc.liveMounts
+	tcfg.Apply = func(s tui.Settings, relink bool) {
+		status := statusTo(func(e flow.Event) { go p.Send(tui.EventMsg(e)) })
+		lc.apply(s, relink, status)
 	}
 	tcfg.Start = func(c tui.Choice) {
 		fc := cfg

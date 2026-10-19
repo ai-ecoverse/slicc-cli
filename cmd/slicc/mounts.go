@@ -18,9 +18,14 @@ const mountUsage = `  --mount <path>[:<name>][:ro]
 `
 
 func serveMounts(n *node.Node, mounts []fs.Mount, status func(string, ...any)) func() {
+	_, closeMounts := shareMounts(n, mounts, status)
+	return closeMounts
+}
+
+func shareMounts(n *node.Node, mounts []fs.Mount, status func(string, ...any)) (*fs.Server, func()) {
 	srv := fs.Register(n, mounts)
 	if srv == nil {
-		return func() {}
+		return nil, func() {}
 	}
 	names := make([]string, 0, len(mounts))
 	for _, m := range mounts {
@@ -31,5 +36,5 @@ func serveMounts(n *node.Node, mounts []fs.Mount, status func(string, ...any)) f
 		}
 	}
 	status("fs: sharing %s", strings.Join(names, ", "))
-	return func() { _ = srv.Close() }
+	return srv, func() { _ = srv.Close() }
 }

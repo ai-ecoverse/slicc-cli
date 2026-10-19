@@ -1,6 +1,9 @@
 package integration
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -287,23 +290,23 @@ func TestTUIDashboard(t *testing.T) {
 	ev(flow.Event{Event: flow.Kernel, Kernel: "http://<port>.kernel.localhost/"})
 	v := h.view()
 	for _, s := range []string{
-		"Google Chrome 141.0", "launched · CDP :50000 · hosts seven",
-		"Brave", "attached · CDP :9333 · extra cdp",
+		"Google Chrome   141.0", "launched · CDP :50000  hosts seven",
+		"Brave", "attached · CDP :9333  extra cdp",
 		"https://seven.sliccy.ai/", `linked with "seven" · up 3m12s`,
-		"net · http · cdp", "policy   every public address",
-		"tcp 2 open, 3 total", "cdp 1 open, 1 total", "kernel   http://<port>.kernel.localhost/",
-		"slicc 9.9.9 is available", "compute  ssh via bash -c",
+		"network   net · http · cdp", "policy    every public address",
+		"tcp 2 open, 3 total", "cdp 1 open, 1 total", "● kernel  http://<port>.kernel.localhost/",
+		"slicc 9.9.9 is available", "● shell   ssh via bash -c", "c capabilities",
 	} {
 		if !strings.Contains(v, s) {
 			t.Fatalf("dashboard lacks %q:\n%s", s, v)
 		}
 	}
 	ev(flow.Event{Event: flow.BrowserGone, Browser: "cdp:127.0.0.1:9333", Name: "Brave", Role: flow.RoleExtra})
-	if !strings.Contains(h.view(), "extra cdp · gone") {
+	if !strings.Contains(h.view(), "extra cdp  gone") {
 		t.Fatalf("after browser-gone:\n%s", h.view())
 	}
 	ev(flow.Event{Event: flow.BrowserBack, Browser: "cdp:127.0.0.1:9333", Name: "Brave", Role: flow.RoleExtra})
-	if strings.Contains(h.view(), "· gone") || !strings.Contains(h.view(), "Brave is back") {
+	if strings.Contains(h.view(), "extra cdp  gone") || !strings.Contains(h.view(), "Brave is back") {
 		t.Fatalf("after browser-back:\n%s", h.view())
 	}
 	ev(flow.Event{Event: flow.LinkLost, Reason: "page navigated"})
@@ -352,5 +355,120 @@ func TestTUIScrollsALongList(t *testing.T) {
 	rows := h.rows()
 	if len(rows) != 3 || !strings.Contains(rows[2], "Slack") || !strings.Contains(rows[2], "›") || !strings.Contains(h.view(), "↑ 3 more") {
 		t.Fatalf("bottom:\n%s", h.view())
+	}
+}
+
+type appliedCaps struct {
+	s      tui.Settings
+	relink bool
+}
+
+func TestTUICapabilities(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "project"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := &tuiHarness{t: t, now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
+	var applied []appliedCaps
+	live := false
+	h.m = tui.New(tui.Config{
+		Entries:     tuiEntries(),
+		Start:       func(c tui.Choice) { h.started = append(h.started, c) },
+		Stop:        func() { h.stopped++ },
+		Now:         func() time.Time { return h.now },
+		Settings:    tui.Settings{Jerk: true, Kernel: 80},
+		JerkVersion: "0.6.2",
+		Runner:      []string{"sh", "-c"},
+		CheckRunner: func([]string) error { return nil },
+		LiveMounts:  func() bool { return live },
+		Apply:       func(s tui.Settings, relink bool) { applied = append(applied, appliedCaps{s, relink}) },
+	})
+	h.keys("down", "down", "enter")
+	h.send(tui.EventMsg(flow.Event{Event: flow.Serving, Caps: []string{"net", "http", "jerk", "jerk-seal", "cdp"}, Policy: "p"}))
+	h.keys("c")
+	if h.model().Mode() != tui.ModeCaps || !strings.Contains(h.view(), "ALWAYS OFFERED  net · http · cdp") {
+		t.Fatalf("c: mode %s\n%s", h.model().Mode(), h.view())
+	}
+	h.keys("down", "space", "a", dir+"/project:proj:ro", "enter")
+	v := h.view()
+	for _, s := range []string{"+ shell sh -c", "+ folder proj", "applying relinks seven", "read-only"} {
+		if !strings.Contains(v, s) {
+			t.Fatalf("pending lacks %q:\n%s", s, v)
+		}
+	}
+	h.keys("s")
+	if len(applied) != 1 || !applied[0].relink || strings.Join(applied[0].s.Shell, " ") != "sh -c" ||
+		len(applied[0].s.Folders) != 1 || applied[0].s.Folders[0].Name != "proj" || !applied[0].s.Folders[0].ReadOnly ||
+		applied[0].s.Folders[0].Path != filepath.Join(dir, "project") || !applied[0].s.Jerk || applied[0].s.Kernel != 80 {
+		t.Fatalf("first apply %+v", applied)
+	}
+	if h.model().Mode() != tui.ModeDashboard || !strings.Contains(h.view(), "relinking") {
+		t.Fatalf("after s: mode %s\n%s", h.model().Mode(), h.view())
+	}
+	live = true
+	h.keys("c", "down", "down", "down", "r")
+	if !strings.Contains(h.view(), "applies live") {
+		t.Fatalf("read-only toggle on a shared folder should apply live:\n%s", h.view())
+	}
+	h.keys("s")
+	if len(applied) != 2 || applied[1].relink || applied[1].s.Folders[0].ReadOnly {
+		t.Fatalf("live apply %+v", applied)
+	}
+	h.keys("c", "down", "down", "down", "x", "esc")
+	if !strings.Contains(h.view(), "apply these changes?") {
+		t.Fatalf("esc with pending changes:\n%s", h.view())
+	}
+	h.keys("n")
+	if h.model().Mode() != tui.ModeDashboard || len(applied) != 2 {
+		t.Fatalf("n should discard: mode %s, %d applies", h.model().Mode(), len(applied))
+	}
+	h.keys("c", "down", "down", "enter")
+	h.send(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	h.keys("abc", "enter")
+	if !strings.Contains(h.view(), `"abc" is not a port`) {
+		t.Fatalf("bad port:\n%s", h.view())
+	}
+	h.keys("esc", "esc")
+	if h.model().Mode() != tui.ModeDashboard {
+		t.Fatalf("esc twice: mode %s", h.model().Mode())
+	}
+	h.keys("m", dir+"/nope", "enter")
+	if !strings.Contains(h.view(), "is not an existing folder") || h.model().Mode() != tui.ModeCaps {
+		t.Fatalf("m with a missing folder:\n%s", h.view())
+	}
+}
+
+func TestTUIDashboardKeepsRelinkingOnItsOwnBye(t *testing.T) {
+	h := newTUI(t, "")
+	h.keys("down", "down", "enter")
+	h.send(tui.EventMsg(flow.Event{Event: flow.Linked, Peer: "seven", Caps: []string{"net"}}))
+	h.send(tui.EventMsg(flow.Event{Event: flow.LinkLost, Reason: flow.RelinkReason}))
+	if v := h.view(); !strings.Contains(v, "relinking") || strings.Contains(v, "reconnecting") {
+		t.Fatalf("after its own relink bye:\n%s", v)
+	}
+}
+
+func TestTUIRunnerKeepsArgumentBoundaries(t *testing.T) {
+	h := &tuiHarness{t: t, now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
+	var applied []tui.Settings
+	h.m = tui.New(tui.Config{
+		Entries:     tuiEntries(),
+		Start:       func(c tui.Choice) { h.started = append(h.started, c) },
+		Now:         func() time.Time { return h.now },
+		Settings:    tui.Settings{Shell: []string{"bash", "-c", "echo foo"}},
+		CheckRunner: func([]string) error { return nil },
+		Apply:       func(s tui.Settings, _ bool) { applied = append(applied, s) },
+	})
+	h.keys("down", "down", "enter", "c", "down", "enter")
+	if !strings.Contains(h.view(), `bash -c 'echo foo'`) {
+		t.Fatalf("the runner editor:\n%s", h.view())
+	}
+	h.keys("enter")
+	if strings.Contains(h.view(), "PENDING") {
+		t.Fatalf("an unchanged runner shows as a change:\n%s", h.view())
+	}
+	h.keys("down", "space", "s")
+	if len(applied) != 1 || !slices.Equal(applied[0].Shell, []string{"bash", "-c", "echo foo"}) {
+		t.Fatalf("applied %+v", applied)
 	}
 }
