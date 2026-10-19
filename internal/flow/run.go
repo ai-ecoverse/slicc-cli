@@ -344,12 +344,12 @@ func (r *run) serve(ctx context.Context) error {
 }
 
 func (r *run) serveLink(ctx context.Context) (bool, error) {
-	pol, err := r.policy(ctx)
+	lctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
+	pol, err := r.policy(lctx)
 	if err != nil {
 		return false, err
 	}
-	lctx, stop := context.WithCancelCause(ctx)
-	defer stop(nil)
 	n := node.New(node.Config{Name: r.cfg.Name, Host: r.cfg.Name, Version: r.cfg.Version, Mode: "local", Policy: pol, Exit: true, Logf: r.cfg.Logf, Status: r.cfg.Logf})
 	caps, err := r.cfg.Register(lctx, n, pol, append([]Browser(nil), r.browsers...))
 	if err != nil {

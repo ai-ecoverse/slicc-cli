@@ -3,6 +3,7 @@ package integration
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -444,5 +445,30 @@ func TestTUIDashboardKeepsRelinkingOnItsOwnBye(t *testing.T) {
 	h.send(tui.EventMsg(flow.Event{Event: flow.LinkLost, Reason: flow.RelinkReason}))
 	if v := h.view(); !strings.Contains(v, "relinking") || strings.Contains(v, "reconnecting") {
 		t.Fatalf("after its own relink bye:\n%s", v)
+	}
+}
+
+func TestTUIRunnerKeepsArgumentBoundaries(t *testing.T) {
+	h := &tuiHarness{t: t, now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
+	var applied []tui.Settings
+	h.m = tui.New(tui.Config{
+		Entries:     tuiEntries(),
+		Start:       func(c tui.Choice) { h.started = append(h.started, c) },
+		Now:         func() time.Time { return h.now },
+		Settings:    tui.Settings{Shell: []string{"bash", "-c", "echo foo"}},
+		CheckRunner: func([]string) error { return nil },
+		Apply:       func(s tui.Settings, _ bool) { applied = append(applied, s) },
+	})
+	h.keys("down", "down", "enter", "c", "down", "enter")
+	if !strings.Contains(h.view(), `bash -c 'echo foo'`) {
+		t.Fatalf("the runner editor:\n%s", h.view())
+	}
+	h.keys("enter")
+	if strings.Contains(h.view(), "PENDING") {
+		t.Fatalf("an unchanged runner shows as a change:\n%s", h.view())
+	}
+	h.keys("down", "space", "s")
+	if len(applied) != 1 || !slices.Equal(applied[0].Shell, []string{"bash", "-c", "echo foo"}) {
+		t.Fatalf("applied %+v", applied)
 	}
 }

@@ -38,6 +38,7 @@ type CDP struct {
 	in   chan Message
 	err  error
 	done chan struct{}
+	ran  chan struct{}
 	once sync.Once
 	stop context.CancelFunc
 }
@@ -52,8 +53,11 @@ func NewCDP(opts CDPOptions) *CDP {
 		opts.Status = func(string, ...any) {}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &CDP{opts: opts, in: make(chan Message, 64), done: make(chan struct{}), stop: cancel}
-	go c.run(ctx)
+	c := &CDP{opts: opts, in: make(chan Message, 64), done: make(chan struct{}), ran: make(chan struct{}), stop: cancel}
+	go func() {
+		defer close(c.ran)
+		c.run(ctx)
+	}()
 	return c
 }
 
@@ -85,7 +89,23 @@ func (c *CDP) Send(ctx context.Context, m Message) error {
 
 func (c *CDP) Close() error {
 	c.finish(ErrClosed)
+	<-c.ran
 	return nil
+}
+
+const detachTimeout = 2 * time.Second
+
+func (c *CDP) detach(s *cdp.Session) {
+	c.mu.Lock()
+	if c.session == s {
+		c.session = nil
+	}
+	c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), detachTimeout)
+	defer cancel()
+	if err := s.Detach(ctx); err != nil {
+		c.opts.Logf("signal: detach from the seven tab: %v", err)
+	}
 }
 
 func (c *CDP) finish(err error) {
@@ -178,7 +198,9 @@ func (c *CDP) serveTarget(ctx context.Context, sub *cdp.Subscription, t cdp.Targ
 		return err
 	}
 	w := &watch{c: c, s: s, targetID: t.TargetID, mainFrame: t.TargetID}
-	return w.loop(ctx, sub)
+	err = w.loop(ctx, sub)
+	c.detach(s)
+	return err
 }
 
 func bounded(ctx context.Context, fn func(context.Context) error) error {
@@ -198,12 +220,14 @@ func (c *CDP) setup(ctx context.Context, t cdp.TargetInfo) (*cdp.Session, error)
 	c.opts.Status("found seven at %s", t.URL)
 	c.grantLocalNetwork(ctx, t.URL)
 	if err := bounded(ctx, func(cctx context.Context) error { return s.AddBinding(cctx, BindingName) }); err != nil {
+		c.detach(s)
 		return nil, err
 	}
 	c.mu.Lock()
 	c.session = s
 	c.mu.Unlock()
 	if err := bounded(ctx, func(cctx context.Context) error { return s.Call(cctx, "Runtime.enable", nil, nil) }); err != nil {
+		c.detach(s)
 		return nil, err
 	}
 	return s, nil

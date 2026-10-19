@@ -57,8 +57,8 @@ func changes(from, to Settings, live bool) []change {
 	if from.Jerk != to.Jerk {
 		out = append(out, change{sign(to.Jerk) + " jerk", true})
 	}
-	switch a, b := strings.Join(from.Shell, " "), strings.Join(to.Shell, " "); {
-	case a == b:
+	switch a, b := quoteArgv(from.Shell), quoteArgv(to.Shell); {
+	case slices.Equal(from.Shell, to.Shell):
 	case a == "":
 		out = append(out, change{"+ shell " + b, true})
 	case b == "":
@@ -314,7 +314,7 @@ func (m Model) editCap(r capRow) (tea.Model, tea.Cmd) {
 		if len(runner) == 0 {
 			runner = m.caps.runner
 		}
-		return m.startInput(inputShell, 0, strings.Join(runner, " "))
+		return m.startInput(inputShell, 0, quoteArgv(runner))
 	case rowKernel:
 		port := d.Kernel
 		if port == 0 {
@@ -397,7 +397,10 @@ func (m *Model) commitInput() error {
 	d := &m.caps.draft
 	switch m.caps.editing {
 	case inputShell:
-		argv := strings.Fields(value)
+		argv, err := splitArgv(value)
+		if err != nil {
+			return err
+		}
 		if len(argv) == 0 {
 			return errors.New("type the runner's command, such as bash -c")
 		}
@@ -720,7 +723,7 @@ func (m Model) capLine(i int, r capRow) string {
 		return cell(false, "jerk", "off", "seven can't ask slicc-jerk for tokens")
 	case rowShell:
 		if len(d.Shell) > 0 {
-			return cell(true, "shell", strings.Join(d.Shell, " "), "seven can ssh into this machine")
+			return cell(true, "shell", quoteArgv(d.Shell), "seven can ssh into this machine")
 		}
 		return cell(false, "shell", "off", "seven can't run commands here")
 	case rowKernel:
@@ -760,7 +763,7 @@ func (m Model) capDetail() (string, string) {
 		}
 		return "turn slicc-jerk " + onOffWord(!d.Jerk) + " for seven", "jerk signs in on this machine and seals tokens into seven's vault"
 	case rowShell:
-		runner := firstOf(strings.Join(d.Shell, " "), strings.Join(m.caps.runner, " "), "bash -c")
+		runner := firstOf(quoteArgv(d.Shell), quoteArgv(m.caps.runner), "bash -c")
 		return "change the runner: each command seven runs becomes " + st.title.Render(runner) + " <command>", "space turns the shell on or off; seven reaches it over ssh"
 	case rowKernel:
 		return "change the port for <port>.kernel.localhost", "space turns kernel services on or off; ports below 1024 need root on macOS and Linux"
@@ -789,4 +792,50 @@ func (m Model) inputLabel() string {
 		return "folder: path[:name][:ro]"
 	}
 	return "share a folder: path[:name][:ro]"
+}
+
+func quoteArgv(argv []string) string {
+	out := make([]string, len(argv))
+	for i, a := range argv {
+		if a != "" && !strings.ContainsAny(a, " \t\n'\"") {
+			out[i] = a
+			continue
+		}
+		out[i] = "'" + strings.ReplaceAll(a, "'", `'"'"'`) + "'"
+	}
+	return strings.Join(out, " ")
+}
+
+func splitArgv(s string) ([]string, error) {
+	var out []string
+	var cur strings.Builder
+	in, quote := false, rune(0)
+	for _, r := range s {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote, in = r, true
+		case r == ' ' || r == '\t' || r == '\n':
+			if in {
+				out = append(out, cur.String())
+				cur.Reset()
+				in = false
+			}
+		default:
+			cur.WriteRune(r)
+			in = true
+		}
+	}
+	if quote != 0 {
+		return nil, errors.New("the runner has an unclosed quote")
+	}
+	if in {
+		out = append(out, cur.String())
+	}
+	return out, nil
 }

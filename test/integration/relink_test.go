@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -99,5 +100,21 @@ func TestFlowRelinksWithNewCapsInTheSameTab(t *testing.T) {
 	}
 	if !b.answers() {
 		t.Fatal("the browser stopped answering after the relink")
+	}
+	settled := func() int {
+		time.Sleep(3 * time.Second)
+		runtime.GC()
+		return runtime.NumGoroutine()
+	}
+	base := settled()
+	for i := range 4 {
+		relink <- flow.Relink{}
+		if lost := next(flow.LinkLost); lost.Reason != flow.RelinkReason {
+			t.Fatalf("relink %d: link-lost reason %q", i+2, lost.Reason)
+		}
+		next(flow.Linked)
+	}
+	if after := settled(); after-base >= 4 {
+		t.Fatalf("goroutines grew from %d after the 2nd link to %d after the 6th: a relink leaves workers behind", base, after)
 	}
 }

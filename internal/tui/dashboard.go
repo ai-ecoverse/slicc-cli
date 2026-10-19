@@ -374,7 +374,7 @@ func (m Model) dashCaps() []string {
 	case d.compute != "":
 		shell = d.compute
 	case has("ssh") && len(m.settings.Shell) > 0:
-		shell = "ssh via " + strings.Join(m.settings.Shell, " ")
+		shell = "ssh via " + quoteArgv(m.settings.Shell)
 	}
 	out = append(out, row(shell != off, "shell", shell))
 	kernel, on := off, false
