@@ -30,12 +30,14 @@ const { values } = parseArgs({
     'bios-job': { type: 'string', default: '' },
     'bios-artifact': { type: 'string', default: '' },
     'bios-dir': { type: 'string', default: '' },
+    'bios-off': { type: 'string', default: '' },
     out: { type: 'string' },
   },
 });
 const { version, repo, pr } = values;
 const pin = JSON.parse(readFileSync(join(here, 'bios.json'), 'utf8'));
-const biosNeed = values.bios === 'true';
+const biosOff = values['bios-off'];
+const biosNeed = values.bios === 'true' && !biosOff;
 let wasiPkg;
 const API = process.env.GITHUB_API_URL ?? 'https://api.github.com';
 const headers = {
@@ -130,7 +132,11 @@ async function bound() {
 
 function bios() {
   if (values.bios === 'false') return (facts.bios = 'bios: not needed, wasm unchanged');
-  if (!biosNeed) return missing.push(`classify said bios=${one(values.bios) || 'nothing'}, so whether bios's canary was needed is unknown`);
+  if (values.bios !== 'true') return missing.push(`classify said bios=${one(values.bios) || 'nothing'}, so whether bios's canary was needed is unknown`);
+  if (biosOff) {
+    if (!/^[\w.-]+(\/[\w.-]+)?#\d+$/.test(biosOff)) return missing.push(`the canary is off without an issue that says why (--bios-off ${one(biosOff).slice(0, 100)})`);
+    return (facts.bios = `bios: off (${biosOff}), wasm changed`);
+  }
   const before = problems.length + missing.length;
   const fail = (t) => problems.push(`bios: ${t}`);
   const lack = (t) => missing.push(`bios: ${t}`);

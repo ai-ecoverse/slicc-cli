@@ -399,6 +399,7 @@ type recordCase struct {
 	name, key, state, want string
 	downloads              string
 	bios                   string
+	biosOff                string
 	canary                 func(r map[string]any)
 	noCanary               bool
 	bare                   bool
@@ -428,6 +429,9 @@ func TestCertReviewRecordCertifiesOnlyTheBytesItBuiltWithEveryPieceOfEvidence(t 
 		{name: "a new wasm that seven's canary passes", key: "true", state: "success", want: "; bios: follow-chat pass at slicc-bios@" + biosPin(t).Commit + "; reproducible:", bios: "true", verdict: certified, rebuildMatch: true, runs: green},
 		{name: "classify said nothing about the wasm", key: "true", state: "error", want: "classify said bios=nothing, so whether bios's canary was needed is unknown", bios: "unset", verdict: certified, rebuildMatch: true, runs: green},
 		{name: "classify said neither true nor false about the wasm", key: "true", state: "error", want: "classify said bios=maybe, so whether bios's canary was needed is unknown", bios: "maybe", verdict: certified, rebuildMatch: true, runs: green},
+		{name: "a new wasm while the canary is off names the issue", key: "true", state: "success", want: "; bios: off (ai-ecoverse/slicc-bios#600), wasm changed; reproducible:", bios: "true", biosOff: "ai-ecoverse/slicc-bios#600", noCanary: true, verdict: certified, rebuildMatch: true, runs: green},
+		{name: "an unchanged wasm while the canary is off needed no canary", key: "true", state: "success", want: "; bios: not needed, wasm unchanged; reproducible:", biosOff: "slicc-bios#600", verdict: certified, rebuildMatch: true, runs: green},
+		{name: "the canary off without an issue", key: "true", state: "error", want: "the canary is off without an issue that says why (--bios-off for now)", bios: "true", biosOff: "for now", noCanary: true, verdict: certified, rebuildMatch: true, runs: green},
 		{name: "a new wasm without a canary result", key: "true", state: "error", want: "bios: the canary left no result (its job ended skipped)", bios: "true", noCanary: true, verdict: certified, rebuildMatch: true, runs: green},
 		{name: "a failing shard", key: "true", state: "failure", want: "bios: 1 failing in follow-chat: follow-slicc.test.mjs › follows a seven (follow-chat)", bios: "true", verdict: certified, rebuildMatch: true, runs: green, canary: func(r map[string]any) {
 			r["ok"] = false
@@ -644,6 +648,9 @@ func recordOnce(t *testing.T, c recordCase) {
 	}
 	if bios != "unset" {
 		args = append(args, "--bios", bios, "--bios-job", map[bool]string{true: "success", false: "skipped"}[bios == "true" && !c.noCanary], "--bios-artifact", canaryArtifact, "--bios-dir", canaryDir)
+	}
+	if c.biosOff != "" {
+		args = append(args, "--bios-off", c.biosOff)
 	}
 	r := certTool(t, f.srv.URL, "record.mjs", append(args, "--artifact", art, "--sums", sumsSHA, "--findings", findings, "--review", review, "--jobs", "build=success,rebuild=success,delta=success,suite=success", "--key", c.key, "--out", out)...)
 	var rec struct {
