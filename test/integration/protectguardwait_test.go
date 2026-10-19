@@ -89,6 +89,27 @@ func TestCDPGuardBoundsFromTheEnvironmentNeverWidenTheGuard(t *testing.T) {
 	}
 }
 
+func unannounced(script fakeScript, sessionID string) fakeScript {
+	return func(method string, params json.RawMessage) (string, []string) {
+		result, after := script(method, params)
+		if method == "Target.attachToTarget" && strings.Contains(result, `"sessionId":"`+sessionID+`"`) {
+			return result, nil
+		}
+		return result, after
+	}
+}
+
+func TestCDPHoldsATargetsCommandsBeforeChromeAnnouncesTheirSession(t *testing.T) {
+	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "60s"), func(string, string) fakeScript { return unannounced(guardWaitScript("{}"), "S2") })
+	fake.delay("Network.enable", 10*time.Minute)
+	fake.delay("Browser.getVersion", 10*time.Minute)
+	var r guardHoldResult
+	env.evalJSON(t, "linkTest.protect.guardHold('chrome-2')", &r)
+	if !r.Enable.refused() || !strings.HasSuffix(r.Enable.Error.Message, ": its guard made no progress in 2s") || r.Enable.MS > 15000 {
+		t.Errorf("Page.enable on a session Chrome answered but never announced: %+v, want it held for the target's guard and refused at the 2 s idle bound", r.Enable)
+	}
+}
+
 func TestCDPRefusesAHeldTargetAtTheOuterBoundWhileChromeIsLive(t *testing.T) {
 	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(string, string) fakeScript { return guardWaitScript("{}") })
 	fake.delay("Network.enable", 10*time.Minute)
