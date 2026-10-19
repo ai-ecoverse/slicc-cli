@@ -47,9 +47,17 @@ type Config struct {
 	Chosen   bool
 	Register func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []Browser) (Caps, error)
 	Compute  string
+	Relink   <-chan Relink
 	Emit     func(Event)
 	Logf     func(format string, args ...any)
 }
+
+type Relink struct {
+	Kernel  int
+	Compute string
+}
+
+const RelinkReason = "slicc is relinking"
 
 type launched struct {
 	id string
@@ -327,19 +335,30 @@ func portOf(raw string) uint16 {
 }
 
 func (r *run) serve(ctx context.Context) error {
+	for {
+		again, err := r.serveLink(ctx)
+		if !again {
+			return err
+		}
+	}
+}
+
+func (r *run) serveLink(ctx context.Context) (bool, error) {
 	pol, err := r.policy(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
+	lctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
 	n := node.New(node.Config{Name: r.cfg.Name, Host: r.cfg.Name, Version: r.cfg.Version, Mode: "local", Policy: pol, Exit: true, Logf: r.cfg.Logf, Status: r.cfg.Logf})
-	caps, err := r.cfg.Register(ctx, n, pol, append([]Browser(nil), r.browsers...))
+	caps, err := r.cfg.Register(lctx, n, pol, append([]Browser(nil), r.browsers...))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if caps.Release != nil {
 		defer caps.Release()
 	}
-	defer r.watchBrowsers(ctx, caps.Live)()
+	defer r.watchBrowsers(lctx, caps.Live)()
 	q := newQueue()
 	unsubscribe := n.Subscribe(q.push)
 	defer r.serveKernel(n)()
@@ -348,6 +367,19 @@ func (r *run) serve(ctx context.Context) error {
 		defer close(pumped)
 		r.pump(q, n, pol)
 	}()
+	next := make(chan Relink, 1)
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		select {
+		case <-lctx.Done():
+		case rl, ok := <-r.cfg.Relink:
+			if ok {
+				next <- rl
+				stop(node.Bye(RelinkReason))
+			}
+		}
+	}()
 	sig := signal.NewCDP(signal.CDPOptions{
 		Client:  r.client,
 		Origins: r.allowed,
@@ -355,7 +387,9 @@ func (r *run) serve(ctx context.Context) error {
 		Status:  func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) },
 	})
 	r.emit(Event{Event: Serving, Caps: n.Caps(), Policy: pol.Summary(), Compute: r.cfg.Compute})
-	err = n.Serve(ctx, sig)
+	err = n.Serve(lctx, sig)
+	stop(nil)
+	<-watched
 	unsubscribe()
 	q.close()
 	<-pumped
@@ -364,12 +398,20 @@ func (r *run) serve(ctx context.Context) error {
 	case <-r.client.Done():
 		if ctx.Err() == nil {
 			r.emit(Event{Event: Status, Message: r.browsers[0].Name + " closed"})
-			return nil
+			return false, nil
+		}
+	default:
+	}
+	select {
+	case rl := <-next:
+		if ctx.Err() == nil {
+			r.cfg.Kernel, r.cfg.Compute = rl.Kernel, rl.Compute
+			return true, nil
 		}
 	default:
 	}
 	_ = r.client.Close()
-	return err
+	return false, err
 }
 
 type Caps struct {

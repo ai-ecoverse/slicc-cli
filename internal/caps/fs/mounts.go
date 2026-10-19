@@ -52,6 +52,15 @@ func (s *Server) Add(m Mount) error {
 	return nil
 }
 
+func (s *Server) Live() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pushers) > 0
+}
+
 func (s *Server) Remove(name string) bool {
 	s.mu.Lock()
 	m := s.byName[name]

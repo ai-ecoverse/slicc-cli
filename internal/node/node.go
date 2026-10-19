@@ -167,6 +167,18 @@ func (c *current) getReason() string {
 	return c.reason
 }
 
+type Bye string
+
+func (b Bye) Error() string { return string(b) }
+
+func byeReason(ctx context.Context) string {
+	var b Bye
+	if errors.As(context.Cause(ctx), &b) {
+		return string(b)
+	}
+	return "slicc is exiting"
+}
+
 func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 	var cur *current
 	closeCur := func(reason string, bye bool) {
@@ -181,7 +193,7 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		<-cur.watched
 		cur = nil
 	}
-	defer closeCur("slicc is exiting", true)
+	defer func() { closeCur(byeReason(ctx), true) }()
 	for {
 		m, err := conn.Recv(ctx)
 		if err != nil {

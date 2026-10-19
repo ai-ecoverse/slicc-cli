@@ -287,23 +287,23 @@ func TestTUIDashboard(t *testing.T) {
 	ev(flow.Event{Event: flow.Kernel, Kernel: "http://<port>.kernel.localhost/"})
 	v := h.view()
 	for _, s := range []string{
-		"Google Chrome 141.0", "launched · CDP :50000 · hosts seven",
-		"Brave", "attached · CDP :9333 · extra cdp",
+		"Google Chrome   141.0", "launched · CDP :50000  hosts seven",
+		"Brave", "attached · CDP :9333  extra cdp",
 		"https://seven.sliccy.ai/", `linked with "seven" · up 3m12s`,
-		"net · http · cdp", "policy   every public address",
-		"tcp 2 open, 3 total", "cdp 1 open, 1 total", "kernel   http://<port>.kernel.localhost/",
-		"slicc 9.9.9 is available", "compute  ssh via bash -c",
+		"network   net · http · cdp", "policy    every public address",
+		"tcp 2 open, 3 total", "cdp 1 open, 1 total", "● kernel  http://<port>.kernel.localhost/",
+		"slicc 9.9.9 is available", "● shell   ssh via bash -c", "c capabilities",
 	} {
 		if !strings.Contains(v, s) {
 			t.Fatalf("dashboard lacks %q:\n%s", s, v)
 		}
 	}
 	ev(flow.Event{Event: flow.BrowserGone, Browser: "cdp:127.0.0.1:9333", Name: "Brave", Role: flow.RoleExtra})
-	if !strings.Contains(h.view(), "extra cdp · gone") {
+	if !strings.Contains(h.view(), "extra cdp  gone") {
 		t.Fatalf("after browser-gone:\n%s", h.view())
 	}
 	ev(flow.Event{Event: flow.BrowserBack, Browser: "cdp:127.0.0.1:9333", Name: "Brave", Role: flow.RoleExtra})
-	if strings.Contains(h.view(), "· gone") || !strings.Contains(h.view(), "Brave is back") {
+	if strings.Contains(h.view(), "extra cdp  gone") || !strings.Contains(h.view(), "Brave is back") {
 		t.Fatalf("after browser-back:\n%s", h.view())
 	}
 	ev(flow.Event{Event: flow.LinkLost, Reason: "page navigated"})
