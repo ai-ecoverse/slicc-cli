@@ -473,9 +473,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ai-ecoverse/slicc-bios/.github/workflows/canary.yml@b43553b05780d2e2a6d8334688e068a76a67912a
+    uses: ai-ecoverse/slicc-bios/.github/workflows/canary.yml@f480353b55d17ab6ceafecf7e8c30721a0a4d9fd
     with:
-      bios-ref: b43553b05780d2e2a6d8334688e068a76a67912a
+      bios-ref: f480353b55d17ab6ceafecf7e8c30721a0a4d9fd
       shards: '["follow-chat"]'
       repeat: 1
       label: bios
