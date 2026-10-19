@@ -1155,6 +1155,7 @@ These commands talk to seven's agent over a link that offers nothing to seven (`
 - **Ctrl-C** leaves the run going in seven. With `--abort-on-interrupt`, slicc first opens `abort`.
 
 **`prompt --allsettled <quiet>`** (for benchmarks and scripts) goes on after the prompt's run until seven has nothing left to do. The cone can end a run while scoops it started are still working, and run again when their results come in. `<quiet>` is a duration such as `2m` or `0s`.
+- **Needs** a seven whose agent is @ai-ecoverse/slicc-agent 6.15.0 or later, the first that reports `busy`. `wait` needs it too.
 - **Settled** means seven says it isn't busy (`busy` false, see [`agent`](#agent-page-cap-agent-node--page) below), and nothing has come from seven for `<quiet>`. The quiet period starts once the stream is open, and every line from seven restarts it.
 - **A seven that doesn't report `busy`:** before sending anything, slicc opens a `watch` with `busy`. When seven's answer doesn't say whether it's busy, slicc says `this seven doesn't report when its agent is idle; update it` and exits 1. The prompt isn't sent.
 - **Output:** the prompt's run streams as usual. After its `end`, slicc opens `watch` with `busy`, and `since` the last event it showed, so the cone's later runs stream as they would in `watch`, with nothing shown twice.
