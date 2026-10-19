@@ -68,9 +68,9 @@ func (g *guard) showContextLocked(target, session string, c execContext) {
 		return
 	}
 	g.unshowLocked(target, c.ID)
-	if len(s.contexts) >= g.maxWorlds {
+	if s.full || len(s.contexts) >= g.maxWorlds {
 		if !s.full {
-			g.logf("cdp: a target has more execution contexts than slicc tracks; refusing a uniqueContextId there it no longer tracks")
+			g.logf("cdp: a target has more execution contexts than slicc tracks; refusing the uniqueContextId of every newer context there until its contexts are cleared")
 		}
 		s.full = true
 		return
@@ -262,7 +262,7 @@ func (g *guard) worldCheckLocked(c *command) string {
 		if _, hidden := g.worldUniques[u]; hidden {
 			return refusedWorld
 		}
-		if _, shown := g.shownUniques[u]; !shown {
+		if shown, ok := g.shownUniques[u]; !ok || shown != t.id {
 			return refusedUnexposed
 		}
 	}

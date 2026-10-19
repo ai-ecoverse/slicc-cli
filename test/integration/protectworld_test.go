@@ -296,6 +296,7 @@ func (e *protectEnv) testExtensionChurn(t *testing.T) {
 func (e *protectEnv) testExtensionStale(t *testing.T) {
 	gone, _, _, world, main := e.extensionWorlds(t, "stale")
 	e.b.closeTarget(gone)
+	_, _, _, _, other := e.extensionWorlds(t, "other")
 	target, _, _, _ := e.extensionPage(t, "fresh")
 	var r struct {
 		Own      cdpOutcome   `json:"own"`
@@ -303,7 +304,7 @@ func (e *protectEnv) testExtensionStale(t *testing.T) {
 		After    cdpOutcome   `json:"after"`
 		Detached bool         `json:"detached"`
 	}
-	ids := []string{world.UniqueID, main.UniqueID, "1234567890.987654321"}
+	ids := []string{world.UniqueID, main.UniqueID, other.UniqueID, "1234567890.987654321"}
 	e.evalJSON(t, "linkTest.protect.extensionStale("+jsArgs("chrome", target, ids)+")", &r)
 	if !r.Own.OK {
 		t.Errorf("the page's own context by its unique id: %+v", r.Own)
