@@ -469,7 +469,7 @@ jobs:
   bios:
     name: cert-review-pr / bios canary
     needs: [plan, build, classify]
-    if: ${{ !cancelled() && needs.classify.outputs.go == 'true' && needs.classify.outputs.bios == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && vars.CERT_BIOS_CANARY == 'on' && needs.classify.outputs.go == 'true' && needs.classify.outputs.bios == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:
       contents: read
       actions: read
@@ -661,6 +661,7 @@ jobs:
       BIOS: ${{ needs.classify.outputs.bios }}
       BIOS_JOB: ${{ needs.bios.result }}
       BIOS_ARTIFACT: ${{ needs.bios.outputs.artifact-id }}:${{ needs.bios.outputs.artifact-digest }}
+      BIOS_OFF: ${{ vars.CERT_BIOS_CANARY != 'on' && 'ai-ecoverse/slicc-bios#599' || '' }}
       JOBS: build=${{ needs.build.result }},rebuild=${{ needs.rebuild.result }},delta=${{ needs.delta.result }},suite=${{ needs.suite.result }}
       GH_TOKEN: ${{ github.token }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -767,7 +768,7 @@ jobs:
             --findings "$RUNNER_TEMP/findings.json" --review "$RUNNER_TEMP/cert-review" \
             --review-result "$REVIEW" --jobs "$JOBS" --key "${KEY:-false}" --run-id "$GITHUB_RUN_ID" --artifacts "$ARTIFACTS" \
             --downloads "$DOWNLOADS" --bios "$BIOS" --bios-job "$BIOS_JOB" --bios-artifact "$BIOS_ARTIFACT" \
-            --bios-dir "$RUNNER_TEMP/bios" --ci-wait 3600 --out "$RUNNER_TEMP/record"; then
+            --bios-dir "$RUNNER_TEMP/bios" --bios-off "$BIOS_OFF" --ci-wait 3600 --out "$RUNNER_TEMP/record"; then
             ok=true
           else
             ok=false

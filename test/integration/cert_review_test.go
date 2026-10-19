@@ -892,7 +892,7 @@ func TestCertReviewRunsSevensCanaryOnANewWasmOnly(t *testing.T) {
 	shards, _ := json.Marshal(pin.Shards)
 	for _, line := range []string{
 		"    needs: [plan, build, classify]\n",
-		"    if: ${{ !cancelled() && needs.classify.outputs.go == 'true' && needs.classify.outputs.bios == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}\n",
+		"    if: ${{ !cancelled() && vars.CERT_BIOS_CANARY == 'on' && needs.classify.outputs.go == 'true' && needs.classify.outputs.bios == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}\n",
 		"    permissions:\n      contents: read\n      actions: read\n    uses: ",
 		"    uses: " + pin.Repository + "/" + pin.Workflow + "@" + pin.Commit + "\n",
 		"      bios-ref: " + pin.Commit + "\n",
@@ -940,10 +940,11 @@ func TestCertReviewRunsSevensCanaryOnANewWasmOnly(t *testing.T) {
 		"      BIOS: ${{ needs.classify.outputs.bios }}\n",
 		"      BIOS_JOB: ${{ needs.bios.result }}\n",
 		"      BIOS_ARTIFACT: ${{ needs.bios.outputs.artifact-id }}:${{ needs.bios.outputs.artifact-digest }}\n",
+		"      BIOS_OFF: ${{ vars.CERT_BIOS_CANARY != 'on' && 'ai-ecoverse/slicc-bios#599' || '' }}\n",
 		"          artifact-ids: ${{ needs.bios.outputs.artifact-id }}\n          path: ${{ runner.temp }}/bios\n",
 		"bios=${{ steps.dl-bios.outcome }}",
 		`--bios "$BIOS" --bios-job "$BIOS_JOB" --bios-artifact "$BIOS_ARTIFACT"`,
-		`--bios-dir "$RUNNER_TEMP/bios"`,
+		`--bios-dir "$RUNNER_TEMP/bios" --bios-off "$BIOS_OFF"`,
 	} {
 		if !strings.Contains(record, line) {
 			t.Errorf("record reads the canary's report by its id and digest: no %q", line)
