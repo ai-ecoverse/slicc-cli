@@ -29,7 +29,7 @@ func envDuration(name string, def time.Duration) time.Duration {
 	if err != nil || d <= 0 {
 		return def
 	}
-	return d
+	return min(d, def)
 }
 
 func (b guardBounds) period() time.Duration {

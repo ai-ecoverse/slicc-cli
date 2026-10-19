@@ -78,6 +78,17 @@ func TestCDPRefusesAHeldTargetAtTheIdleBoundWhenChromeIsSilent(t *testing.T) {
 	}
 }
 
+func TestCDPGuardBoundsFromTheEnvironmentNeverWidenTheGuard(t *testing.T) {
+	env, fake := setupFakeProtectEnv(t, guardBounds("1h", "1h"), func(string, string) fakeScript { return guardWaitScript("{}") })
+	fake.delay("Network.enable", 10*time.Minute)
+	fake.delay("Browser.getVersion", 10*time.Minute)
+	var r guardHoldResult
+	env.evalJSON(t, "linkTest.protect.guardHold('chrome-2')", &r)
+	if !r.Enable.refused() || !strings.HasSuffix(r.Enable.Error.Message, ": its guard made no progress in 30s") || r.Enable.MS < 29000 || r.Enable.MS > 60000 {
+		t.Errorf("Page.enable on the target with %s=1h: %+v, want slicc's refusal at the default 30 s idle bound", "SLICC_CDP_GUARD_IDLE", r.Enable)
+	}
+}
+
 func TestCDPRefusesAHeldTargetAtTheOuterBoundWhileChromeIsLive(t *testing.T) {
 	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(string, string) fakeScript { return guardWaitScript("{}") })
 	fake.delay("Network.enable", 10*time.Minute)
