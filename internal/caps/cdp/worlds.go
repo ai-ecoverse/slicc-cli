@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	refusedWorld = "that execution context belongs to a browser extension"
-	refusedHeap  = "HeapProfiler reads the page's whole renderer, browser extensions' worlds included"
-	refusedBreak = "a breakpoint condition that could run in a browser extension's world needs a url naming the page's own script"
-	maxWorlds    = 4096
+	refusedWorld     = "that execution context belongs to a browser extension"
+	refusedUnexposed = "that execution context is not exposed"
+	refusedHeap      = "HeapProfiler reads the page's whole renderer, browser extensions' worlds included"
+	refusedBreak     = "a breakpoint condition that could run in a browser extension's world needs a url naming the page's own script"
+	maxWorlds        = 4096
 )
 
 var heapOK = map[string]bool{"HeapProfiler.enable": true, "HeapProfiler.disable": true, "HeapProfiler.collectGarbage": true, "HeapProfiler.getHeapObjectId": true}
@@ -25,6 +26,11 @@ type worldCtx struct {
 type worldSet struct {
 	contexts map[int64]*worldCtx
 	scripts  map[string]int64
+	full     bool
+}
+
+type shownSet struct {
+	contexts map[int64]*worldCtx
 	full     bool
 }
 
@@ -48,7 +54,58 @@ func (g *guard) worldsLocked(target string) *worldSet {
 	return w
 }
 
+func (g *guard) showContextLocked(target, session string, c execContext) {
+	if c.UniqueID == "" {
+		return
+	}
+	s := g.shown[target]
+	if s == nil {
+		s = &shownSet{contexts: map[int64]*worldCtx{}}
+		g.shown[target] = s
+	}
+	if sc := s.contexts[c.ID]; sc != nil && sc.unique == c.UniqueID {
+		sc.seen[session] = true
+		return
+	}
+	g.unshowLocked(target, c.ID)
+	if s.full || len(s.contexts) >= g.maxWorlds {
+		if !s.full {
+			g.logf("cdp: a target has more execution contexts than slicc tracks; refusing the uniqueContextId of every newer context there until its contexts are cleared")
+		}
+		s.full = true
+		return
+	}
+	s.contexts[c.ID] = &worldCtx{unique: c.UniqueID, seen: map[string]bool{session: true}}
+	g.shownUniques[c.UniqueID] = target
+}
+
+func (g *guard) unshowLocked(target string, id int64) {
+	s := g.shown[target]
+	if s == nil || s.contexts[id] == nil {
+		return
+	}
+	delete(g.shownUniques, s.contexts[id].unique)
+	delete(s.contexts, id)
+}
+
+func (g *guard) shownGoneLocked(target string, id int64, unique string) {
+	if t, ok := g.shownUniques[unique]; ok && unique != "" {
+		target = t
+	}
+	s := g.shown[target]
+	if s == nil {
+		return
+	}
+	for cid, sc := range s.contexts {
+		if unique != "" && sc.unique == unique {
+			id = cid
+		}
+	}
+	g.unshowLocked(target, id)
+}
+
 func (g *guard) hideContextLocked(target, session string, c execContext) {
+	g.unshowLocked(target, c.ID)
 	w := g.worldsLocked(target)
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true
@@ -94,6 +151,12 @@ func (g *guard) hideScriptLocked(w *worldSet, ctx int64, id string) {
 }
 
 func (g *guard) forgetWorldsLocked(target string) {
+	if s := g.shown[target]; s != nil {
+		for id := range s.contexts {
+			g.unshowLocked(target, id)
+		}
+		delete(g.shown, target)
+	}
 	w := g.worlds[target]
 	if w == nil {
 		return
@@ -109,6 +172,7 @@ func (g *guard) worldContextLocked(target, session string, c execContext) bool {
 		if w := g.worlds[target]; w != nil {
 			g.forgetContextLocked(w, c.ID)
 		}
+		g.showContextLocked(target, session, c)
 		return false
 	}
 	g.hideContextLocked(target, session, c)
@@ -116,6 +180,7 @@ func (g *guard) worldContextLocked(target, session string, c execContext) bool {
 }
 
 func (g *guard) contextGoneLocked(target string, id int64, unique string) bool {
+	g.shownGoneLocked(target, id, unique)
 	if t, ok := g.worldUniques[unique]; ok && unique != "" {
 		target = t
 	}
@@ -138,6 +203,16 @@ func (g *guard) contextGoneLocked(target string, id int64, unique string) bool {
 }
 
 func (g *guard) contextsClearedLocked(target, session string) {
+	if s := g.shown[target]; s != nil {
+		for id, sc := range s.contexts {
+			if sc.seen[session] {
+				g.unshowLocked(target, id)
+			}
+		}
+		if len(s.contexts) < g.maxWorlds {
+			s.full = false
+		}
+	}
 	w := g.worlds[target]
 	if w == nil {
 		return
@@ -182,6 +257,14 @@ func (g *guard) worldCheckLocked(c *command) string {
 	}
 	if t != nil && navTypes[t.typ] && c.method == "Debugger.setBreakpointByUrl" && c.str("condition") != "" && c.str("url") == "" {
 		return refusedBreak
+	}
+	if u, ok := c.params["uniqueContextId"].(string); ok && t != nil {
+		if _, hidden := g.worldUniques[u]; hidden {
+			return refusedWorld
+		}
+		if shown, ok := g.shownUniques[u]; !ok || shown != t.id {
+			return refusedUnexposed
+		}
 	}
 	if len(g.worlds) == 0 {
 		return ""
@@ -562,6 +645,11 @@ func (g *guard) forgetWorldSessionLocked(id string) {
 	for _, w := range g.worlds {
 		for _, wc := range w.contexts {
 			delete(wc.seen, id)
+		}
+	}
+	for _, s := range g.shown {
+		for _, sc := range s.contexts {
+			delete(sc.seen, id)
 		}
 	}
 }
