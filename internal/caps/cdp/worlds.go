@@ -481,3 +481,55 @@ func (g *guard) profileEvent(m *message, data []byte) browserVerdict {
 		return true, g.scrubProfileLocked(m.SessionID, p), nil
 	})
 }
+
+func (g *guard) pageSessionLocked(sessionID string) bool {
+	t := g.sessionTargetLocked(sessionID)
+	return t != nil && navTypes[t.typ]
+}
+
+func (g *guard) consoleMessageEvent(m *message, data []byte) browserVerdict {
+	var p struct {
+		Message struct {
+			URL string `json:"url"`
+		} `json:"message"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	if g.pageSessionLocked(m.SessionID) && (p.Message.URL == "" || g.o.URL(p.Message.URL)) {
+		return browserVerdict{}
+	}
+	return browserVerdict{forward: data}
+}
+
+func (g *guard) logEntryEvent(m *message, data []byte) browserVerdict {
+	w := g.worlds[g.worldTargetLocked(m.SessionID)]
+	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		e, _ := p["entry"].(map[string]any)
+		u, _ := e["url"].(string)
+		if (u != "" && g.o.URL(u)) || g.scrubStacksLocked(w, e, 0) {
+			return false, false, nil
+		}
+		return true, false, nil
+	})
+}
+
+func (g *guard) consoleProfileEvent(m *message, data []byte) browserVerdict {
+	if g.pageSessionLocked(m.SessionID) {
+		return browserVerdict{}
+	}
+	return g.profileEvent(m, data)
+}
+
+func (g *guard) initiatorLocked(sessionID string, p map[string]any) bool {
+	ini, _ := p["initiator"].(map[string]any)
+	if ini == nil {
+		return false
+	}
+	scrubbed := g.scrubStacksLocked(g.worlds[g.worldTargetLocked(sessionID)], ini, 0)
+	if u, _ := ini["url"].(string); u != "" && g.o.URL(u) {
+		delete(ini, "url")
+		delete(ini, "lineNumber")
+		delete(ini, "columnNumber")
+		scrubbed = true
+	}
+	return scrubbed
+}

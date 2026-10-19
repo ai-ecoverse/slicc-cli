@@ -490,6 +490,9 @@ export function protectTest(getLink, describe) {
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
         await c.send('Runtime.enable', {}, sessionId);
+        await c.send('Console.enable', {}, sessionId);
+        await c.send('Network.enable', {}, sessionId);
+        const fetched = c.waitEvent((e) => e.method === 'Network.loadingFinished' && e.sessionId === sessionId && c.events.some((r) => r.method === 'Network.requestWillBeSent' && r.params.requestId === e.params.requestId && r.params.request.url.includes('extension-fetch')), 15000);
         await c.send('Profiler.enable', {}, sessionId);
         await c.evaluate("(function sliccPageWarm() { return 1; })()\n//# sourceURL=slicc-warm.js", sessionId);
         const best = await c.send('Profiler.getBestEffortCoverage', {}, sessionId);
@@ -498,9 +501,14 @@ export function protectTest(getLink, describe) {
         await c.send('Profiler.start', {}, sessionId);
         await c.evaluate("(function sliccPageCode() { document.addEventListener('slicc-pong', () => console.log('slicc pong')); for (let i = 0; i < 10; i += 1) document.dispatchEvent(new CustomEvent('slicc-ping')); return true; })()\n//# sourceURL=slicc-page.js", sessionId);
         const { profile } = await c.send('Profiler.stop', {}, sessionId);
+        const done = await fetched;
+        const sent = c.events.find((e) => e.method === 'Network.requestWillBeSent' && e.params.requestId === done.params.requestId);
+        const body = await outcome(c.send('Network.getResponseBody', { requestId: done.params.requestId }, sessionId));
+        await c.send('Network.disable', {}, sessionId);
         const precise = await c.send('Profiler.takePreciseCoverage', {}, sessionId);
         await c.send('Profiler.stopPreciseCoverage', {}, sessionId);
         await c.send('Profiler.disable', {}, sessionId);
+        await c.send('Console.disable', {}, sessionId);
         await sleep(300);
         const pongs = c.events.filter((e) => e.method === 'Runtime.consoleAPICalled' && e.sessionId === sessionId && e.params.args[0]?.value === 'slicc pong');
         await c.send('Target.detachFromTarget', { sessionId });
@@ -510,6 +518,9 @@ export function protectTest(getLink, describe) {
           best: JSON.stringify(best.result.map((r) => ({ url: r.url, functions: r.functions.map((f) => f.functionName) }))),
           stacks: JSON.stringify(pongs.map((e) => e.params.stackTrace)),
           pongs: pongs.length,
+          initiator: JSON.stringify(sent.params.initiator),
+          body,
+          console: JSON.stringify(c.events.filter((e) => e.sessionId === sessionId && (e.method === 'Console.messageAdded' || e.method.startsWith('Profiler.consoleProfile'))).map((e) => e.params)),
         };
       }),
     extensionFrame: (browser, targetId, callFrameId) =>

@@ -308,15 +308,24 @@ func (e *protectEnv) testExtensionBreakpoint(t *testing.T) {
 func (e *protectEnv) testExtensionProfile(t *testing.T) {
 	target, _, _, _ := e.extensionPage(t, "profile")
 	var r struct {
-		Profile string `json:"profile"`
-		Precise string `json:"precise"`
-		Best    string `json:"best"`
-		Stacks  string `json:"stacks"`
-		Pongs   int    `json:"pongs"`
+		Profile   string     `json:"profile"`
+		Precise   string     `json:"precise"`
+		Best      string     `json:"best"`
+		Stacks    string     `json:"stacks"`
+		Pongs     int        `json:"pongs"`
+		Console   string     `json:"console"`
+		Initiator string     `json:"initiator"`
+		Body      cdpOutcome `json:"body"`
 	}
 	e.evalJSON(t, "linkTest.protect.extensionProfile("+jsArgs("chrome", target)+")", &r)
 	if r.Pongs == 0 {
 		t.Fatal("the page never heard back from the fixture's world")
+	}
+	if strings.Contains(r.Console, "fake-value-0001") || strings.Contains(r.Console, "slicc-fixture-profile") || strings.Contains(r.Console, "chrome-extension://") {
+		t.Errorf("legacy console or console.profile events show the extension's world: %s", r.Console)
+	}
+	if strings.Contains(r.Initiator, "chrome-extension://") || strings.Contains(r.Initiator, "sliccFixtureBusy") || !r.Body.refused() {
+		t.Errorf("a request from the extension's world shows its initiator %s, and its body gave %+v", r.Initiator, r.Body)
 	}
 	for name, got := range map[string]string{"Profiler.stop": r.Profile, "Profiler.takePreciseCoverage": r.Precise, "Profiler.getBestEffortCoverage": r.Best, "consoleAPICalled stack traces": r.Stacks} {
 		if strings.Contains(got, "chrome-extension://") || strings.Contains(got, "sliccFixtureBusy") {
