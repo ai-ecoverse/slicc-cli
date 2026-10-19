@@ -49,13 +49,24 @@ func waitMountUpdate(t *testing.T, p *page, want ...string) {
 func TestFSMountUpdates(t *testing.T) {
 	f := newFSFixture(t)
 	var srv *fs.Server
+	liveBefore := true
 	env := setupInProcess(t, policy.Local(), func(n *node.Node) {
 		srv = fs.Register(n, fs.Load([]string{f.folder}, nil))
+		liveBefore = srv.Live()
 	})
 	t.Cleanup(func() { _ = srv.Close() })
+	var none *fs.Server
+	if liveBefore || none.Live() {
+		t.Fatalf("Live before a link %v, on no server %v", liveBefore, none.Live())
+	}
 	c := &fsClient{p: env.p, mount: "project", secret: fsSecret}
 	if got := mountNames(t, env.p, "linkTest.ready().then((h) => [h.mounts])"); !slices.Equal(got[0], []string{"project"}) {
 		t.Fatalf("HELLO mounts %v", got)
+	}
+	for deadline := time.Now().Add(10 * time.Second); !srv.Live(); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("Live stayed false with a page that takes mounts updates")
+		}
 	}
 	fh, _ := c.open(t, map[string]any{"path": "hello.txt", "write": true})
 	w := c.watch(t, "project")
