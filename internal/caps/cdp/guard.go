@@ -435,7 +435,7 @@ func (g *guard) markRequestLocked(sessionID, requestID string) {
 }
 
 func (g *guard) requestMarkedLocked(sessionID, requestID string) bool {
-	return g.saturated[sessionID] || g.marked[sessionID][requestID]
+	return g.saturated[sessionID] || g.marked[sessionID][requestID] || g.worldRequestKnownLocked(g.worldTargetLocked(sessionID), requestID)
 }
 
 func (g *guard) targetProtectedLocked(id string) bool {
