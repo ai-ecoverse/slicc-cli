@@ -19,5 +19,17 @@
       "depNameTemplate": "alpine",
       "datasourceTemplate": "docker"
     }
+  ],
+  "packageRules": [
+    {
+      "description": "slicc-browsers ships one release to npm and as a Go module, and the guard harness requires both pins to name the same release: move @ai-ecoverse/slicc-browsers and github.com/ai-ecoverse/slicc-browsers in one PR. A major also moves the Go pin to its /vN module path (the preset's gomodUpdateImportPaths), and the harness's module-path check then fails it until the harness names the new path, so a major never automerges.",
+      "matchPackageNames": [
+        "@ai-ecoverse/slicc-browsers",
+        "github.com/ai-ecoverse/slicc-browsers"
+      ],
+      "groupName": "slicc-browsers",
+      "groupSlug": "slicc-browsers",
+      "separateMajorMinor": false
+    }
   ]
 }
