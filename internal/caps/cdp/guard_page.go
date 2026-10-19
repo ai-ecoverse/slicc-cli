@@ -154,6 +154,8 @@ func resultKind(method string) callKind {
 		return kindAttach
 	case "Page.printToPDF", "Network.loadNetworkResource", "IO.resolveBlob":
 		return kindStreams
+	case "Profiler.takePreciseCoverage", "Profiler.getBestEffortCoverage", "Profiler.stop", "Profiler.takeTypeProfile":
+		return kindProfile
 	}
 	return kindPlain
 }

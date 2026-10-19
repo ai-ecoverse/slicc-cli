@@ -319,7 +319,7 @@ func (g *guard) contextEvent(m *message, data []byte) browserVerdict {
 	if g.contextHiddenLocked(target, p.ID) || g.contextHiddenLocked(target, p.Details.ID) {
 		return browserVerdict{}
 	}
-	return browserVerdict{forward: data}
+	return g.stackEventLocked(m, data)
 }
 
 func (g *guard) scriptEvent(m *message, data []byte) browserVerdict {
@@ -383,10 +383,101 @@ func (g *guard) debuggerPausedEvent(m *message, data []byte) browserVerdict {
 				kept = append(kept, f)
 			}
 		}
-		if len(kept) == len(frames) {
-			return true, false, nil
+		changed := len(kept) != len(frames)
+		if changed {
+			p["callFrames"] = kept
 		}
-		p["callFrames"] = kept
-		return true, true, nil
+		return true, g.scrubStacksLocked(w, p, 0) || changed, nil
+	})
+}
+
+var hiddenFrame = map[string]any{"functionName": "(program)", "scriptId": "0", "url": "", "lineNumber": -1, "columnNumber": -1}
+
+func (g *guard) scriptOutLocked(w *worldSet, url, script string, anonymous bool) bool {
+	if url != "" && g.o.URL(url) {
+		return true
+	}
+	if anonymous && url == "" && script != "" && script != "0" {
+		return true
+	}
+	return w != nil && g.scriptHidden(w, script)
+}
+
+func (g *guard) scrubProfileLocked(sessionID string, v map[string]any) bool {
+	w := g.worlds[g.worldTargetLocked(sessionID)]
+	changed := false
+	if list, ok := v["result"].([]any); ok {
+		kept := make([]any, 0, len(list))
+		for _, item := range list {
+			e, _ := item.(map[string]any)
+			url, _ := e["url"].(string)
+			script, _ := e["scriptId"].(string)
+			if !g.scriptOutLocked(w, url, script, true) {
+				kept = append(kept, item)
+			}
+		}
+		changed = len(kept) != len(list)
+		v["result"] = kept
+	}
+	profile, _ := v["profile"].(map[string]any)
+	nodes, _ := profile["nodes"].([]any)
+	for _, item := range nodes {
+		node, _ := item.(map[string]any)
+		cf, _ := node["callFrame"].(map[string]any)
+		url, _ := cf["url"].(string)
+		script, _ := cf["scriptId"].(string)
+		if cf != nil && g.scriptOutLocked(w, url, script, true) {
+			node["callFrame"] = hiddenFrame
+			delete(node, "positionTicks")
+			changed = true
+		}
+	}
+	return changed
+}
+
+func (g *guard) scrubStacksLocked(w *worldSet, v any, depth int) bool {
+	if depth > maxScanDepth {
+		return false
+	}
+	changed := false
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if frames, ok := val.([]any); ok && k == "callFrames" {
+				kept := make([]any, 0, len(frames))
+				for _, f := range frames {
+					frame, _ := f.(map[string]any)
+					url, _ := frame["url"].(string)
+					script, _ := frame["scriptId"].(string)
+					if !g.scriptOutLocked(w, url, script, false) {
+						kept = append(kept, f)
+					}
+				}
+				if len(kept) != len(frames) {
+					t[k] = kept
+					changed = true
+				}
+				continue
+			}
+			changed = g.scrubStacksLocked(w, val, depth+1) || changed
+		}
+	case []any:
+		for _, val := range t {
+			changed = g.scrubStacksLocked(w, val, depth+1) || changed
+		}
+	}
+	return changed
+}
+
+func (g *guard) stackEventLocked(m *message, data []byte) browserVerdict {
+	w := g.worlds[g.worldTargetLocked(m.SessionID)]
+	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		return true, g.scrubStacksLocked(w, p, 0), nil
+	})
+}
+
+func (g *guard) profileEvent(m *message, data []byte) browserVerdict {
+	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		return true, g.scrubProfileLocked(m.SessionID, p), nil
 	})
 }

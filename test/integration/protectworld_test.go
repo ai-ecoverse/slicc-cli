@@ -56,6 +56,7 @@ func TestCDPHidesExtensionWorlds(t *testing.T) {
 	t.Run("call frames in an extension's world are refused", env.testExtensionFrame)
 	t.Run("a live world stays hidden through any churn of other worlds", env.testExtensionChurn)
 	t.Run("breakpoint conditions can't run in an extension's world", env.testExtensionBreakpoint)
+	t.Run("profiles, coverage and stacks leave out an extension's world", env.testExtensionProfile)
 	t.Run("the seven tab is still cut", env.testAttach)
 	t.Run("script navigation onto seven still detaches", env.testScriptNavigate)
 	t.Run("the link still works", env.testStillLinked)
@@ -301,5 +302,28 @@ func (e *protectEnv) testExtensionBreakpoint(t *testing.T) {
 	}
 	if r.Paused != 0 {
 		t.Errorf("seven saw %d pauses in the extension's world", r.Paused)
+	}
+}
+
+func (e *protectEnv) testExtensionProfile(t *testing.T) {
+	target, _, _, _ := e.extensionPage(t, "profile")
+	var r struct {
+		Profile string `json:"profile"`
+		Precise string `json:"precise"`
+		Best    string `json:"best"`
+		Stacks  string `json:"stacks"`
+		Pongs   int    `json:"pongs"`
+	}
+	e.evalJSON(t, "linkTest.protect.extensionProfile("+jsArgs("chrome", target)+")", &r)
+	if r.Pongs == 0 {
+		t.Fatal("the page never heard back from the fixture's world")
+	}
+	for name, got := range map[string]string{"Profiler.stop": r.Profile, "Profiler.takePreciseCoverage": r.Precise, "Profiler.getBestEffortCoverage": r.Best, "consoleAPICalled stack traces": r.Stacks} {
+		if strings.Contains(got, "chrome-extension://") || strings.Contains(got, "sliccFixtureBusy") {
+			t.Errorf("%s shows the extension's world: %s", name, got)
+		}
+	}
+	if !strings.Contains(r.Profile, "(program)") || !strings.Contains(r.Best, "slicc-warm.js") || !strings.Contains(r.Precise, "slicc-page.js") || !strings.Contains(r.Stacks, "slicc-page.js") {
+		t.Errorf("the profile or coverage lost the page's own scripts: %s %s", r.Profile, r.Best)
 	}
 }

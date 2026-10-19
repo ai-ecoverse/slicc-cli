@@ -98,6 +98,8 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		send = g.infoLocked(res["targetInfo"])
 	case kindCookies:
 		res["cookies"] = g.filterCookies(res["cookies"])
+	case kindProfile:
+		g.scrubProfileLocked(m.SessionID, res)
 	case kindStreams:
 		g.recordStreamsLocked(res)
 	case kindBrowserSession:
@@ -190,6 +192,8 @@ var eventHandlers = map[string]eventHandler{
 	"Debugger.scriptFailedToParse":               (*guard).scriptEvent,
 	"Debugger.breakpointResolved":                (*guard).breakpointEvent,
 	"Debugger.paused":                            (*guard).debuggerPausedEvent,
+	"Profiler.consoleProfileFinished":            (*guard).profileEvent,
+	"Profiler.preciseCoverageDeltaUpdate":        (*guard).profileEvent,
 	"Network.requestWillBeSent":                  afterRequest((*guard).requestEvent, levelKnown),
 	"Network.requestWillBeSentExtraInfo":         (*guard).extraEvent,
 	"Network.responseReceived":                   afterRequest((*guard).responseEvent, levelSettled),

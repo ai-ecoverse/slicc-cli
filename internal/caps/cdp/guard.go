@@ -39,6 +39,7 @@ const (
 	kindCreate
 	kindAttach
 	kindStreams
+	kindProfile
 )
 
 type relayCall struct {
