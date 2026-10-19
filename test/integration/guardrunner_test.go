@@ -337,7 +337,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	rules := "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1,MAP sliccy.ai 127.0.0.1,MAP *.test 127.0.0.1"
 	chromes := make([]*chromeProc, n)
 	for i := range chromes {
-		chromes[i] = launchBrowserOn(t, 0, rules, "--remote-allow-origins="+srv.URL)
+		chromes[i] = launchExtensionBrowser(t, rules, "--remote-allow-origins="+srv.URL)
 	}
 	args := []string{"--cdp", chromes[0].endpoint}
 	for _, b := range chromes[1:] {
@@ -372,7 +372,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	opts := map[string]any{
 		"browsers":     slots,
 		"targets":      targets,
-		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true},
+		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "extensionWorld": true},
 		"variants":     []string{run.variant},
 		"parallel":     n,
 		"log":          "http://127.0.0.1:" + strconv.Itoa(fix.log),
