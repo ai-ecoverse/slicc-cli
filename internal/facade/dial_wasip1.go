@@ -20,7 +20,7 @@ const (
 	pollMillis = 100
 )
 
-var ErrNoHost = errors.New("this runtime has no slicc_host module (it needs slicc-kernel with @ai-ecoverse/wasi-slicc's host/slicc-host.mjs)")
+var ErrNoHost = errors.New("this runtime has no slicc_host module (it needs slicc-kernel, with @ai-ecoverse/wasi-slicc's host/slicc-host.mjs)")
 
 //go:wasmimport wasi_snapshot_preview1 sched_yield
 func schedYield() uint32
