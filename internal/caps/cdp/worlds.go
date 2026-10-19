@@ -730,8 +730,12 @@ func (g *guard) pauseGateEvent(m *message, data []byte) browserVerdict {
 	t := g.worldTargetLocked(m.SessionID)
 	nt := g.navTargets[t]
 	k := requestKey{t, p.NetworkID}
-	if p.NetworkID == "" || nt == nil || nt.session == "" || g.navSeen[k] || g.worldRequestKnownLocked(t, p.NetworkID) || g.heldPauseCount >= maxHeldPauses {
+	if p.NetworkID == "" || nt == nil || nt.session == "" || g.navSeen[k] || g.worldRequestKnownLocked(t, p.NetworkID) {
 		return pauseHandler(g, m, data)
+	}
+	if g.heldPauseCount >= maxHeldPauses {
+		g.logf("cdp: too many paused requests wait for the navigation guard; continuing one without showing it to the page")
+		return g.continuePauseLocked(m)
 	}
 	g.heldPauses[k] = append(g.heldPauses[k], heldPause{m: *m, data: data})
 	g.heldPauseCount++
@@ -762,6 +766,21 @@ func (g *guard) cutWorldRequest(root any) {
 			stack = append(stack, t...)
 		}
 	}
+}
+
+func (g *guard) continuePauseLocked(m *message) browserVerdict {
+	p, _ := decodeObject(m.Params)
+	id, other := pausedIDs(m.Method, p)
+	g.markRequestLocked(m.SessionID, id)
+	g.markRequestLocked(m.SessionID, other)
+	params := map[string]any{"requestId": id}
+	method := "Fetch.continueRequest"
+	if m.Method == "Fetch.authRequired" {
+		method = "Fetch.continueWithAuth"
+		params["authChallengeResponse"] = map[string]any{"response": "Default"}
+	}
+	msg, _ := g.newCallLocked(m.SessionID, method, params, false)
+	return browserVerdict{send: [][]byte{msg}}
 }
 
 func (g *guard) worldPauseLocked(m *message, p map[string]any) ([]byte, bool) {
