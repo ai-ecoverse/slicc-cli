@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const wasiJoin = "https://tray.example.test/join/tok.00112233445566778899"
@@ -167,17 +168,10 @@ func runWasiOn(t *testing.T, real *wasiReal, cases []wasiCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(node, "testdata/wasi/run.mjs")
-	cmd.Stdin = bytes.NewReader(input)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("the kernel harness: %v\n%s", err, stderr.String())
-	}
+	out, stderr := runWasiHarness(t, node, input)
 	var results []wasiResult
 	if err := json.Unmarshal(out, &results); err != nil {
-		t.Fatalf("the kernel harness answered %q: %v\n%s", out, err, stderr.String())
+		t.Fatalf("the kernel harness answered %q: %v\n%s", out, err, stderr.text())
 	}
 	if len(results) != len(cases) {
 		t.Fatalf("%d results for %d cases", len(results), len(cases))
@@ -193,6 +187,85 @@ func runWasiOn(t *testing.T, real *wasiReal, cases []wasiCase) {
 			}
 			c.check(t, r)
 		})
+	}
+}
+
+const wasiQuiet = 30 * time.Second
+
+type harnessLog struct {
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	last time.Time
+}
+
+func (l *harnessLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.last = time.Now()
+	return l.buf.Write(p)
+}
+
+func (l *harnessLog) quiet(now time.Time) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return now.Sub(l.last)
+}
+
+func (l *harnessLog) lines() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, line := range strings.Split(l.buf.String(), "\n") {
+		if !strings.HasPrefix(line, "run.mjs: alive at ") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func (l *harnessLog) text() string {
+	return strings.Join(l.lines(), "\n")
+}
+
+func (l *harnessLog) step() string {
+	lines := l.lines()
+	for i := len(lines) - 1; i >= 0; i-- {
+		if at, ok := strings.CutPrefix(lines[i], "run.mjs: "); ok {
+			return at
+		}
+	}
+	return "its start"
+}
+
+func runWasiHarness(t *testing.T, node string, input []byte) ([]byte, *harnessLog) {
+	t.Helper()
+	cmd := exec.Command(node, "testdata/wasi/run.mjs")
+	cmd.Stdin = bytes.NewReader(input)
+	var stdout bytes.Buffer
+	stderr := &harnessLog{last: time.Now()}
+	cmd.Stdout, cmd.Stderr = &stdout, stderr
+	cmd.WaitDelay = 5 * time.Second
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("the kernel harness: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("the kernel harness: %v, at %s\n%s", err, stderr.step(), stderr.text())
+			}
+			return stdout.Bytes(), stderr
+		case now := <-tick.C:
+			if q := stderr.quiet(now); q > wasiQuiet {
+				_ = cmd.Process.Kill()
+				err := <-done
+				t.Fatalf("the kernel harness went quiet for %s at %s, so its event loop is stuck; killed it (%v)\n%s", q.Round(time.Second), stderr.step(), err, stderr.text())
+			}
+		}
 	}
 }
 
