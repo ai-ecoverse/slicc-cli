@@ -720,13 +720,14 @@ func (g *guard) expirePause(k requestKey) (page, send [][]byte) {
 var pauseHandler = afterRequestBy((*guard).pausedEvent, levelSettled, pausedIDOf)
 
 func (g *guard) pauseGateEvent(m *message, data []byte) browserVerdict {
-	if m.Method == "Network.requestIntercepted" {
-		return pauseHandler(g, m, data)
-	}
 	var p struct {
 		NetworkID string `json:"networkId"`
+		RequestID string `json:"requestId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	if m.Method == "Network.requestIntercepted" {
+		p.NetworkID = p.RequestID
+	}
 	t := g.worldTargetLocked(m.SessionID)
 	nt := g.navTargets[t]
 	k := requestKey{t, p.NetworkID}
