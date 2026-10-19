@@ -319,8 +319,8 @@ func legsOf(spec string) []ciLeg {
 	return legs
 }
 
-const lightMatrix = "ubuntu-latest,1/2,race,guards ubuntu-latest,2/2,race,guards macos-latest,1/1,-,- windows-latest,1/1,-,-"
-const fullMatrix = "ubuntu-latest,1/2,race,guards ubuntu-latest,2/2,race,guards macos-latest,1/4,race,guards macos-latest,2/4,race,guards macos-latest,3/4,race,guards macos-latest,4/4,race,guards windows-latest,1/3,race,guards windows-latest,2/3,race,guards windows-latest,3/3,race,guards"
+const lightMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/1,-,- windows-latest,1/1,-,-"
+const fullMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/4,race,guards macos-latest,2/4,race,guards macos-latest,3/4,race,guards macos-latest,4/4,race,guards windows-latest,1/3,race,guards windows-latest,2/3,race,guards windows-latest,3/3,race,guards"
 
 func TestPushToMainRunsOnlyTheLightMatrix(t *testing.T) {
 	for _, event := range []string{"push", "pull_request", "merge_group"} {

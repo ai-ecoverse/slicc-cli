@@ -171,16 +171,16 @@ func TestTestShardRunsGoTestOnItsShard(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	src := "package fixture\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n" +
-		"func TestAlpha(t *testing.T) {}\n\nfunc TestBravo(t *testing.T) {\n\tif os.Getenv(\"FIXTURE_FAIL\") != \"\" {\n\t\tt.Fatal(\"bravo failed\")\n\t}\n}\n\n" +
+	src := "package fixture\n\nimport (\n\t\"os\"\n\t\"testing\"\n\t\"time\"\n)\n\n" +
+		"func TestAlpha(t *testing.T) {}\n\nfunc TestBravo(t *testing.T) {\n\tif os.Getenv(\"FIXTURE_FAIL\") != \"\" {\n\t\tt.Fatal(\"bravo failed\")\n\t}\n\tif os.Getenv(\"FIXTURE_STALL\") != \"\" {\n\t\ttime.Sleep(time.Minute)\n\t}\n}\n\n" +
 		"func TestCharlie(t *testing.T) {\n\tt.Run(\"sub\", func(t *testing.T) {})\n}\n"
 	for name, body := range map[string]string{"go.mod": "module fixture\n\ngo 1.26\n", "fixture_test.go": src} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	run := func(spec string, extra ...string) (string, int) {
-		cmd := exec.Command(node, script, spec, "-count=1", "-v", ".")
+	runArgs := func(args []string, extra ...string) (string, int) {
+		cmd := exec.Command(node, append([]string{script}, args...)...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), append([]string{"SLICC_TEST_SHARD_SUITE=" + dir}, extra...)...)
 		out, err := cmd.CombinedOutput()
@@ -191,6 +191,9 @@ func TestTestShardRunsGoTestOnItsShard(t *testing.T) {
 			t.Fatal(err)
 		}
 		return string(out), code
+	}
+	run := func(spec string, extra ...string) (string, int) {
+		return runArgs([]string{spec, "-count=1", "-v", "."}, extra...)
 	}
 	ran := func(out string) []string {
 		var names []string
@@ -210,6 +213,10 @@ func TestTestShardRunsGoTestOnItsShard(t *testing.T) {
 	failed, code := run("2/2", "FIXTURE_FAIL=1")
 	if code != 1 || !strings.Contains(failed, "bravo failed") {
 		t.Fatalf("a failing shard: exit %d\n%s", code, failed)
+	}
+	stalled, code := runArgs([]string{"1/1", "-count=1", "-timeout", "2s", "-v", "."}, "FIXTURE_STALL=1", "SLICC_TEST_SHARD_PLATFORM=fixture")
+	if want := "test-shard: fixture 1/1 hit its -timeout 2s with TestBravo for "; code == 0 || !strings.Contains(stalled, want) || !strings.Contains(stalled, "the 1 finished tests took 0 s") || !strings.Contains(stalled, "the slowest finished: TestAlpha 0 s") {
+		t.Fatalf("a shard that hit its -timeout: exit %d, want %q\n%s", code, want, stalled)
 	}
 	timed := filepath.Join(t.TempDir(), "times.json")
 	if err := os.WriteFile(timed, []byte(`{"fixture": {"TestAlpha": 30, "TestBravo": 1, "TestCharlie": 2}}`), 0o644); err != nil {
@@ -256,6 +263,52 @@ func TestShardTimesReadsGoTestLogs(t *testing.T) {
 		err := exec.Command(node, append([]string{"../../scripts/shard-times.mjs"}, args...)...).Run()
 		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 {
 			t.Fatalf("shard-times %v: %v", args, err)
+		}
+	}
+}
+
+func TestEachCIShardFitsItsTimeout(t *testing.T) {
+	node := requireNode(t)
+	declared := declaredTests(t)
+	times := shardTimes(t)
+	platforms := map[string]string{"ubuntu-latest": "linux", "macos-latest": "darwin", "windows-latest": "win32"}
+	run := strings.TrimPrefix(lineWith(t, workflowJobs(t, readWorkflow(t, "ci.yml"))["test"].body, "sh scripts/verdict.sh test-shard"), "run: ")
+	for _, full := range []any{nil, true} {
+		ctx := ghCtx{"github.event_name": "push", "inputs.full": full}
+		legs, _ := ciMatrix(t, ctx)
+		for _, leg := range legs {
+			if !leg.race || !leg.guards {
+				continue
+			}
+			ctx["matrix.os"], ctx["matrix.shard"] = leg.os, leg.shard
+			m := regexp.MustCompile(` -timeout ([0-9]+)m `).FindStringSubmatch(ghString(ghTemplate(t, run, ctx)))
+			if m == nil {
+				t.Fatalf("%s %s has no -timeout in minutes", leg.os, leg.shard)
+			}
+			minutes, _ := strconv.Atoi(m[1])
+			platform := platforms[leg.os]
+			var known []float64
+			for _, name := range declared {
+				if s, ok := times[platform][name]; ok {
+					known = append(known, s)
+				}
+			}
+			sort.Float64s(known)
+			picks := shardSelector(t, node, leg.shard, "SLICC_TEST_SHARD_PLATFORM="+platform)
+			load := 0.0
+			for _, name := range declared {
+				if !picks(name) {
+					continue
+				}
+				if s, ok := times[platform][name]; ok {
+					load += s
+				} else if len(known) > 0 {
+					load += known[len(known)/2]
+				}
+			}
+			if budget := float64(minutes*60) * 3 / 4; load > budget {
+				t.Errorf("%s %s: its tests took %.0f s by shard-times.json, more than three quarters of its -timeout %dm (%.0f s); add a shard", leg.os, leg.shard, load, minutes, budget)
+			}
 		}
 	}
 }
