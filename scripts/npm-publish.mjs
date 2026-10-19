@@ -24,9 +24,9 @@ const guarded = {
 const defaultGate = 'SLICC_NPM_PUBLISH';
 const companions = new Set(['@ai-ecoverse/slicc-jerk']);
 
-function fail(message) {
+function fail(message, code = 1) {
   process.stderr.write(`npm-publish: ${message}\n`);
-  process.exit(1);
+  process.exit(code);
 }
 
 function npm(args, options = {}) {
@@ -77,7 +77,7 @@ async function requireDependencies(pkg) {
       if (why) missing.push(`${name}@${version} (${why})`);
     }
     if (!missing.length) break;
-    if (Date.now() >= deadline) fail(`refusing to publish ${pkg.name}@${pkg.version}; not on the registry: ${missing.join(', ')}`);
+    if (Date.now() >= deadline) fail(`refusing to publish ${pkg.name}@${pkg.version}; not on the registry: ${missing.join(', ')}`, 3);
     process.stdout.write(`waiting for ${missing.join(', ')} to appear on the registry\n`);
     await new Promise((resolve) => setTimeout(resolve, Math.min(30000, Math.max(1000, deadline - Date.now()))));
   }
