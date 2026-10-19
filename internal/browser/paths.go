@@ -3,6 +3,7 @@ package browser
 import (
 	"os"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -141,6 +142,48 @@ func classifyWindowsExe(exePath string) (known, bool) {
 		}
 	}
 	return known{}, false
+}
+
+func knownByExecutable(exe string) (known, bool) {
+	if exe == "" {
+		return known{}, false
+	}
+	if strings.HasSuffix(strings.ToLower(exe), ".exe") {
+		return classifyWindowsExe(exe)
+	}
+	base := exe[strings.LastIndexAny(exe, `/\`)+1:]
+	for _, k := range knownBrowsers {
+		if k.mac.app != "" && strings.Contains(exe, "/"+k.mac.app+"/") {
+			return k, true
+		}
+	}
+	for _, k := range knownBrowsers {
+		if slices.Contains(k.linux.bins, base) {
+			return k, true
+		}
+	}
+	return known{}, false
+}
+
+func processApp(exe string) string {
+	if k, ok := knownByExecutable(exe); ok {
+		return k.name
+	}
+	if i := strings.Index(exe, ".app/"); i >= 0 {
+		return exe[strings.LastIndexAny(exe[:i], `/\`)+1 : i]
+	}
+	base := exe[strings.LastIndexAny(exe, `/\`)+1:]
+	if strings.HasSuffix(strings.ToLower(base), ".exe") {
+		base = base[:len(base)-len(".exe")]
+	}
+	for _, k := range knownBrowsers {
+		for _, e := range k.win.exes() {
+			if strings.EqualFold(strings.TrimSuffix(e[strings.LastIndexAny(e, `/\`)+1:], ".exe"), base) {
+				return ""
+			}
+		}
+	}
+	return base
 }
 
 func (p platform) macAppDirs() []string {

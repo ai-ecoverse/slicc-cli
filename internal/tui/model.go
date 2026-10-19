@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +16,8 @@ type Config struct {
 	Entries  []browser.Entry
 	Profiles func(browser.Entry) []string
 	Profile  string
+	Last     browser.Last
+	Dir      func(browser.Entry, string) string
 	Start    func(Choice)
 	Stop     func()
 	Color    bool
@@ -78,6 +79,12 @@ type Model struct {
 	height   int
 	width    int
 	dark     bool
+	order    []group
+	open     map[group]bool
+	went     bool
+	last     string
+	used     map[string]time.Time
+	note     string
 }
 
 func New(cfg Config) Model {
@@ -87,16 +94,28 @@ func New(cfg Config) Model {
 	if cfg.Profiles == nil {
 		cfg.Profiles = func(browser.Entry) []string { return nil }
 	}
-	m := Model{cfg: cfg, st: newStyles(cfg.Color, true), dark: true, mode: ModeDiscover, profiles: map[string]string{}, known: map[string][]string{}}
+	m := Model{cfg: cfg, st: newStyles(cfg.Color, true), dark: true, mode: ModeDiscover, profiles: map[string]string{}, known: map[string][]string{}, open: map[group]bool{}}
 	m.dash = newDashboard(cfg.Now())
 	m.dash.notice = cfg.Notice
 	m.settings = cfg.Settings.clone()
 	if cfg.Entries != nil {
-		m.entries = cfg.Entries
+		m.setEntries(cfg.Entries)
 		m.mode = ModePick
-		m.loadProfiles()
 	}
 	return m
+}
+
+func (m *Model) applyLast() {
+	l := m.cfg.Last
+	if l.ID == "" || l.Profile == "" || m.cfg.Profile != "" || m.profiles[l.ID] != "" {
+		return
+	}
+	for _, e := range m.entries {
+		if e.ID == l.ID && e.Kind == browser.KindInstalled && e.Installed.Engine == browser.EngineChromium &&
+			l.Profile != browser.DefaultProfileName(*e.Installed) && slices.Contains(m.profileList(e), l.Profile) {
+			m.profiles[l.ID] = l.Profile
+		}
+	}
 }
 
 func (m Model) Mode() Mode { return m.mode }
@@ -121,10 +140,8 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case EntriesMsg:
-		m.entries = []browser.Entry(msg)
-		m.cursor = 0
 		m.moved = false
-		m.loadProfiles()
+		m.setEntries([]browser.Entry(msg))
 		if m.mode == ModeDiscover {
 			m.mode = ModePick
 		}
@@ -216,92 +233,7 @@ func (m Model) quit() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-func (m Model) pickKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	m.message = ""
-	switch k.String() {
-	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-			m.moved = true
-		}
-	case "down", "j":
-		if m.cursor < len(m.entries)-1 {
-			m.cursor++
-			m.moved = true
-		}
-	case "space":
-		m.toggle()
-	case "p":
-		m.openProfiles()
-	case "enter":
-		return m.goChoice()
-	case "q", "esc":
-		return m.quit()
-	}
-	return m, nil
-}
-
-func (m *Model) toggle() {
-	if len(m.entries) == 0 {
-		return
-	}
-	e := m.entries[m.cursor]
-	if i := slices.Index(m.selected, e.ID); i >= 0 {
-		m.selected = slices.Delete(m.selected, i, i+1)
-		return
-	}
-	if err := flow.CanExtra(e); err != nil {
-		m.message = err.Error()
-		return
-	}
-	m.selected = append(m.selected, e.ID)
-}
-
-func (m Model) choice() []browser.Entry {
-	if len(m.selected) == 0 {
-		if len(m.entries) == 0 {
-			return nil
-		}
-		return []browser.Entry{m.entries[m.cursor]}
-	}
-	var out []browser.Entry
-	for _, id := range m.selected {
-		for _, e := range m.entries {
-			if e.ID == id {
-				out = append(out, e)
-			}
-		}
-	}
-	return out
-}
-
 const sixUnpicked = "SLICC six's profile is never picked for you; move to it, or select it with space"
-
-func (m Model) goChoice() (tea.Model, tea.Cmd) {
-	sel := m.choice()
-	if len(m.selected) == 0 && !m.moved && len(sel) == 1 && flow.IsSix(sel[0]) {
-		m.message = sixUnpicked
-		return m, nil
-	}
-	if err := flow.Check(sel); err != nil {
-		m.message = err.Error()
-		return m, nil
-	}
-	profiles := map[string]string{}
-	for _, e := range sel {
-		if p := m.profiles[e.ID]; p != "" {
-			profiles[e.ID] = p
-		}
-	}
-	notice := m.dash.notice
-	m.mode = ModeDashboard
-	m.dash = newDashboard(m.cfg.Now())
-	m.dash.notice = notice
-	if m.cfg.Start != nil {
-		m.cfg.Start(Choice{Entries: sel, Profiles: profiles})
-	}
-	return m, tick()
-}
 
 func (m Model) View() tea.View {
 	var s string
@@ -314,71 +246,14 @@ func (m Model) View() tea.View {
 		s = m.profileView()
 	case ModeCaps:
 		s = m.capsView()
+	case ModeDone:
+		if m.went {
+			s = m.dashView()
+		}
 	default:
 		s = m.dashView()
 	}
 	return tea.NewView(s)
-}
-
-func (m Model) pickView() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s · pick browsers    %s\n", m.st.title.Render("slicc"), m.st.faint.Render("↑↓ move · space select · enter go · p profile · q quit"))
-	if len(m.entries) == 0 {
-		b.WriteString("\n  no browsers found; install Chrome, or start one with --remote-debugging-port\n")
-	}
-	start, end := m.window()
-	if start > 0 {
-		b.WriteString(m.st.faint.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
-	}
-	for i := start; i < end; i++ {
-		b.WriteString(m.row(i, m.entries[i]))
-		b.WriteByte('\n')
-	}
-	if end < len(m.entries) {
-		b.WriteString(m.st.faint.Render(fmt.Sprintf("  ↓ %d more", len(m.entries)-end)) + "\n")
-	}
-	if m.message != "" {
-		b.WriteString("\n" + m.st.bad.Render(m.message) + "\n")
-	}
-	return b.String()
-}
-
-func (m Model) window() (int, int) {
-	n := len(m.entries)
-	visible := m.height - 6
-	if m.height <= 0 || n <= visible {
-		return 0, n
-	}
-	visible = max(visible, 3)
-	start := min(max(m.cursor-visible/2, 0), n-visible)
-	return start, start + visible
-}
-
-func (m Model) row(i int, e browser.Entry) string {
-	pointer := "  "
-	if i == m.cursor {
-		pointer = m.st.cursor.Render("›") + " "
-	}
-	mark := "○"
-	tag := ""
-	if at := slices.Index(m.selected, e.ID); at >= 0 {
-		mark = m.st.selected.Render("●")
-		tag = "hosts seven"
-		if at > 0 {
-			tag = fmt.Sprintf("extra cdp #%d", at)
-		}
-	} else if i == 0 && len(m.selected) == 0 && !flow.IsSix(e) {
-		tag = "best match"
-	}
-	name := e.Name
-	if e.Version != "" {
-		name += " " + shortVersion(e.Version)
-	}
-	line := fmt.Sprintf("%s%s %-28s %s", pointer, mark, name, m.state(e))
-	if tag != "" {
-		line += "  " + m.st.faint.Render("← "+tag)
-	}
-	return line
 }
 
 func shortVersion(v string) string {
@@ -387,43 +262,6 @@ func shortVersion(v string) string {
 		return parts[0] + "." + parts[1]
 	}
 	return v
-}
-
-func (m Model) state(e browser.Entry) string {
-	if e.Kind == browser.KindSix {
-		return "SLICC six's own profile, used in place"
-	}
-	if e.Kind == browser.KindEndpoint {
-		s := "CDP " + hostPort(e.Endpoint.CDP)
-		if e.Endpoint.Six {
-			s += " · SLICC six's profile"
-		}
-		if e.Endpoint.SevenOpen {
-			s += " · " + m.st.good.Render("seven open")
-		}
-		if e.Endpoint.WSOnly {
-			s += " · websocket only"
-		}
-		return s
-	}
-	in := e.Installed
-	if in.Engine == browser.EngineElectron {
-		if in.DebugSupport == browser.DebugDisabled {
-			return "installed · Electron · " + m.st.bad.Render("debugging disabled")
-		}
-		return "installed · Electron"
-	}
-	name := m.profiles[e.ID]
-	if name == "" {
-		name = browser.DefaultProfileName(*in)
-		if m.cfg.Profile != "" {
-			name = m.cfg.Profile
-		}
-	}
-	if !slices.Contains(m.profileList(e), name) {
-		return "installed · new SLICC profile " + name
-	}
-	return "installed · profile " + name
 }
 
 func (m Model) profileList(e browser.Entry) []string {

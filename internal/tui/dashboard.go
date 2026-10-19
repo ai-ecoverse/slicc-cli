@@ -394,7 +394,7 @@ func (m Model) dashCaps() []string {
 	}
 	parts := make([]string, len(folders))
 	for i, f := range folders {
-		parts[i] = st.title.Render(f.Name) + " " + st.faint.Render(homeRel(f.Path))
+		parts[i] = st.title.Render(f.Name) + " " + st.faint.Render(tilde(f.Path))
 		if f.ReadOnly {
 			parts[i] += " " + st.warn.Render("read-only")
 		}

@@ -3,6 +3,7 @@ package integration
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -38,10 +39,15 @@ type tuiHarness struct {
 }
 
 func newTUI(t *testing.T, profile string) *tuiHarness {
+	return newLastTUI(t, profile, browser.Last{})
+}
+
+func newLastTUI(t *testing.T, profile string, last browser.Last) *tuiHarness {
 	h := &tuiHarness{t: t, now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	h.m = tui.New(tui.Config{
 		Entries: tuiEntries(),
 		Profile: profile,
+		Last:    last,
 		Profiles: func(e browser.Entry) []string {
 			if e.ID == "chrome" {
 				return []string{"chrome", "work"}
@@ -114,22 +120,14 @@ func isQuit(cmd tea.Cmd) bool {
 func TestTUIShowsTheRankingBestFirst(t *testing.T) {
 	h := newTUI(t, "")
 	rows := h.rows()
-	want := []string{"Google Chrome 141.0", "Brave 1.84", "Google Chrome 141.0", "Google Chrome Canary 143.0", "Claude", "Slack"}
-	if len(rows) != len(want) {
+	checks := [][]string{
+		{"›", "Google Chrome ", "141", "best match", "seven is open", ":9222"},
+		{"Brave", ":9333"},
+		{"Google Chrome ", `profile "chrome"`},
+		{"Google Chrome Canary", `new profile "chrome-canary"`},
+	}
+	if len(rows) != len(checks) {
 		t.Fatalf("rows:\n%s", h.view())
-	}
-	for i, w := range want {
-		if !strings.Contains(rows[i], w) {
-			t.Fatalf("row %d %q lacks %q:\n%s", i, rows[i], w, h.view())
-		}
-	}
-	checks := map[int][]string{
-		0: {"›", "CDP :9222", "seven open", "best match"},
-		1: {"CDP :9333"},
-		2: {"installed · profile chrome"},
-		3: {"installed · new SLICC profile chrome-canary"},
-		4: {"Electron", "debugging disabled"},
-		5: {"installed · Electron"},
 	}
 	for i, subs := range checks {
 		for _, s := range subs {
@@ -138,14 +136,30 @@ func TestTUIShowsTheRankingBestFirst(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(rows[1], "seven open") || strings.Contains(rows[1], "best match") {
-		t.Errorf("row 1 %q", rows[1])
+	if strings.Contains(rows[1], "best match") || strings.Contains(rows[2], "new profile") {
+		t.Errorf("rows:\n%s", h.view())
 	}
-	if strings.Contains(h.view(), "\x1b[") {
-		t.Errorf("ANSI codes with color off: %q", h.view())
+	v := h.view()
+	for _, s := range []string{"choose where seven runs", "2 running · 2 to launch", "Running  attach over CDP", "Launch  in a SLICC profile", "for testing SLICC seven", "▸ 2 Electron apps  extras only · 1 blocks debugging",
+		"↵ Links the seven tab in Google Chrome at :9222", "space select", "p profile", "e apps"} {
+		if !strings.Contains(v, s) {
+			t.Errorf("view lacks %q:\n%s", s, v)
+		}
 	}
-	if !strings.Contains(h.view(), "space select") || !strings.Contains(h.view(), "p profile") {
-		t.Errorf("no key help:\n%s", h.view())
+	if strings.Contains(v, "RUNNING") || strings.Contains(v, "LAUNCH") || strings.Index(v, "Running") > strings.Index(v, "Launch") || strings.Index(v, "Launch") > strings.Index(v, "Electron apps") {
+		t.Errorf("section order:\n%s", v)
+	}
+	if strings.Contains(v, "\x1b[") {
+		t.Errorf("ANSI codes with color off: %q", v)
+	}
+	h.keys("e")
+	rows = h.rows()
+	if len(rows) != 6 || !strings.Contains(rows[4], "Claude") || !strings.Contains(rows[4], "blocks debugging") || !strings.Contains(rows[5], "Slack") || strings.Contains(rows[5], "extra") || !strings.Contains(h.view(), "▾ 2 Electron apps") {
+		t.Fatalf("after e:\n%s", h.view())
+	}
+	h.keys("e")
+	if len(h.rows()) != 4 {
+		t.Fatalf("e again:\n%s", h.view())
 	}
 }
 
@@ -163,24 +177,43 @@ func TestTUIEnterGoesWithTheHighlightedRow(t *testing.T) {
 	}
 }
 
+func TestTUIEnterOnAFoldOpensIt(t *testing.T) {
+	h := newTUI(t, "")
+	h.keys("down", "down", "down", "down")
+	if !strings.Contains(h.view(), "↵ Shows 2 Electron apps") {
+		t.Fatalf("detail on the fold:\n%s", h.view())
+	}
+	h.keys("enter")
+	if len(h.started) != 0 || len(h.rows()) != 6 {
+		t.Fatalf("enter on the fold: %+v\n%s", h.started, h.view())
+	}
+	h.keys("down", "down", "e")
+	if len(h.rows()) != 4 || !strings.Contains(h.view(), "↵ Shows 2 Electron apps") {
+		t.Fatalf("closing the fold from inside:\n%s", h.view())
+	}
+}
+
 func TestTUIMultiSelectHostsSevenInTheFirstSelected(t *testing.T) {
 	h := newTUI(t, "")
-	h.keys("down", "space", "down", "space", "down", "down", "down", "space")
+	h.keys("down", "space", "down", "space", "down", "down", "space", "down", "down", "space")
 	if got := h.model().Selected(); strings.Join(got, ",") != "cdp:127.0.0.1:9333,chrome,electron:slack" {
-		t.Fatalf("selected %v", got)
+		t.Fatalf("selected %v:\n%s", got, h.view())
 	}
 	rows := h.rows()
-	if !strings.Contains(rows[1], "● ") || !strings.Contains(rows[1], "hosts seven") || !strings.Contains(rows[2], "extra cdp #1") || !strings.Contains(rows[5], "extra cdp #2") {
+	if !strings.Contains(rows[1], "●1") || !strings.Contains(rows[2], "●2") || !strings.Contains(rows[5], "●3") {
 		t.Fatalf("rows:\n%s", h.view())
+	}
+	if !strings.Contains(h.view(), "↵ Opens seven in Brave at :9333 (new tab), with Google Chrome and Slack as extra browsers") {
+		t.Errorf("detail:\n%s", h.view())
 	}
 	if strings.Contains(rows[0], "best match") {
 		t.Errorf("best match still shown with a selection: %q", rows[0])
 	}
 	h.keys("up", "space")
-	if h.model().Message() == "" || len(h.model().Selected()) != 3 {
-		t.Fatalf("selecting Claude: message %q, selected %v", h.model().Message(), h.model().Selected())
+	if h.model().Message() != "" || !strings.Contains(h.view(), "Claude blocks remote debugging, so it can't be picked") || len(h.model().Selected()) != 3 {
+		t.Fatalf("selecting Claude: message %q, selected %v\n%s", h.model().Message(), h.model().Selected(), h.view())
 	}
-	h.keys("up", "up", "space")
+	h.keys("up", "up", "up", "space")
 	if got := h.model().Selected(); strings.Join(got, ",") != "cdp:127.0.0.1:9333,electron:slack" {
 		t.Fatalf("after unselecting chrome: %v", got)
 	}
@@ -199,7 +232,7 @@ func TestTUIMultiSelectHostsSevenInTheFirstSelected(t *testing.T) {
 
 func TestTUIElectronCannotHostSeven(t *testing.T) {
 	h := newTUI(t, "")
-	h.keys("down", "down", "down", "down", "down", "space", "up", "up", "up", "up", "space", "enter")
+	h.keys("e", "down", "down", "down", "down", "down", "down", "space", "up", "up", "up", "up", "up", "space", "enter")
 	if len(h.started) != 0 || h.model().Mode() != tui.ModePick || !strings.Contains(h.view(), "Electron app and can't host seven") {
 		t.Fatalf("started %v, mode %s:\n%s", h.started, h.model().Mode(), h.view())
 	}
@@ -225,8 +258,8 @@ func TestTUIProfileChoice(t *testing.T) {
 	if h.model().ProfileFor("chrome") != "work" || h.model().Mode() != tui.ModePick {
 		t.Fatalf("profile %q, mode %s", h.model().ProfileFor("chrome"), h.model().Mode())
 	}
-	if !strings.Contains(h.rows()[2], "installed · profile work") {
-		t.Fatalf("row %q", h.rows()[2])
+	if !strings.Contains(h.rows()[2], `profile "work"`) || !strings.Contains(h.view(), `↵ Opens seven in Google Chrome 141 (SLICC profile "work")`) {
+		t.Fatalf("after choosing work:\n%s", h.view())
 	}
 	h.keys("down", "p", "down", "enter")
 	if h.model().Mode() != tui.ModeNewProfile {
@@ -244,8 +277,9 @@ func TestTUIProfileChoice(t *testing.T) {
 	if h.model().ProfileFor("chrome-canary") != "canary-test" {
 		t.Fatalf("new profile %q:\n%s", h.model().ProfileFor("chrome-canary"), h.view())
 	}
-	if !strings.Contains(h.rows()[3], "new SLICC profile canary-test") {
-		t.Fatalf("row %q", h.rows()[3])
+	if !strings.Contains(h.rows()[3], `new profile "canary-test"`) ||
+		!strings.Contains(h.view(), `↵ Opens seven in Google Chrome Canary 143 (create new Google Chrome Canary profile "canary-test" for testing SLICC seven)`) {
+		t.Fatalf("after creating canary-test:\n%s", h.view())
 	}
 	h.keys("up", "space", "down", "space", "enter")
 	if len(h.started) != 1 {
@@ -259,7 +293,8 @@ func TestTUIProfileChoice(t *testing.T) {
 
 func TestTUIProfileFlagIsTheDefault(t *testing.T) {
 	h := newTUI(t, "work")
-	if !strings.Contains(h.rows()[2], "installed · profile work") || !strings.Contains(h.rows()[3], "new SLICC profile work") {
+	rows := h.rows()
+	if !strings.Contains(rows[2], `profile "work"`) || strings.Contains(rows[2], "new profile") || !strings.Contains(rows[3], `new profile "work"`) {
 		t.Fatalf("rows:\n%s", h.view())
 	}
 }
@@ -331,6 +366,9 @@ func TestTUIQuitBeforeGoing(t *testing.T) {
 	if !isQuit(h.keys("q")) || len(h.started) != 0 {
 		t.Fatal("q in the picker did not quit")
 	}
+	if v := h.view(); strings.TrimSpace(v) != "" {
+		t.Fatalf("quitting the picker leaves a frame behind:\n%s", v)
+	}
 	h = newTUI(t, "")
 	if !isQuit(h.keys("ctrl+c")) {
 		t.Fatal("ctrl+c in the picker did not quit")
@@ -347,13 +385,17 @@ func TestTUIQuitBeforeGoing(t *testing.T) {
 
 func TestTUIScrollsALongList(t *testing.T) {
 	h := newTUI(t, "")
-	h.send(tea.WindowSizeMsg{Width: 100, Height: 9})
-	if rows := h.rows(); len(rows) != 3 || !strings.Contains(h.view(), "↓ 3 more") || strings.Contains(h.view(), "↑ 3 more") {
-		t.Fatalf("top:\n%s", h.view())
+	h.keys("e")
+	h.send(tea.WindowSizeMsg{Width: 100, Height: 12})
+	v := h.view()
+	more := regexp.MustCompile(`([↑↓]) \d+ more`)
+	if len(h.rows()) >= 6 || len(more.FindAllString(v, -1)) != 1 || !strings.Contains(v, "↓ ") || len(strings.Split(strings.TrimRight(v, "\n"), "\n")) > 12 {
+		t.Fatalf("top:\n%s", v)
 	}
-	h.keys("down", "down", "down", "down", "down")
+	h.keys("down", "down", "down", "down", "down", "down")
 	rows := h.rows()
-	if len(rows) != 3 || !strings.Contains(rows[2], "Slack") || !strings.Contains(rows[2], "›") || !strings.Contains(h.view(), "↑ 3 more") {
+	last := rows[len(rows)-1]
+	if !strings.Contains(last, "Slack") || !strings.Contains(last, "›") || !regexp.MustCompile(`↑ \d+ more`).MatchString(h.view()) {
 		t.Fatalf("bottom:\n%s", h.view())
 	}
 }

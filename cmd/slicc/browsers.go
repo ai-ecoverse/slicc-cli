@@ -71,7 +71,11 @@ func printEntries(w io.Writer, entries []browser.Entry) {
 		if version == "" {
 			version = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", e.ID, e.Name, version, entryState(e), entryWhere(e))
+		name := e.Name
+		if e.Endpoint != nil && e.Endpoint.App != "" {
+			name = e.Endpoint.App
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", e.ID, name, version, entryState(e), entryWhere(e))
 	}
 	_ = tw.Flush()
 }
@@ -80,6 +84,9 @@ func entryState(e browser.Entry) string {
 	if e.Kind == browser.KindEndpoint {
 		var parts []string
 		parts = append(parts, "running")
+		if e.Endpoint.Headless() {
+			parts = append(parts, "headless")
+		}
 		if e.Endpoint.SevenOpen {
 			parts = append(parts, "seven open")
 		}

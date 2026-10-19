@@ -73,8 +73,10 @@ type Endpoint struct {
 	Profile      string `json:"profile,omitempty"`
 	WSOnly       bool   `json:"wsOnly,omitempty"`
 	Six          bool   `json:"six,omitempty"`
-	SevenOpen    bool   `json:"sevenOpen"`
-	SevenTabs    []Tab  `json:"sevenTabs"`
+	App          string `json:"-"`
+	headless     bool
+	SevenOpen    bool  `json:"sevenOpen"`
+	SevenTabs    []Tab `json:"sevenTabs"`
 }
 
 type Kind string
