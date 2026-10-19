@@ -171,24 +171,25 @@ func TestCertReviewClassifiesAPullRequestByWhatShips(t *testing.T) {
 	linux := map[string]string{"SHA256SUMS": "fake-sums-3", "slicc-linux-amd64": "fake-bin-2", "slicc-wasip1-wasm.wasm": "fake-wasm-1"}
 	native := writeJSON(t, filepath.Join(dir, "native.json"), manifestOf("fake-sums-3", linux, pkgs("fake-tgz-1", "fake-wasi-1")))
 	cases := []struct {
-		name, candidate, labels, forced, state, desc, goOn, bios string
-		exit                                                     int
+		name, candidate, draft, forced, state, desc, goOn, bios string
+		exit                                                    int
 	}{
-		{"a dev pin that ships nothing new", identical, "", "", "success", "not behaviour: identical build outputs", "false", "false", 0},
-		{"the same, with merge-ok", identical, "merge-ok", "", "success", "not behaviour", "false", "false", 0},
-		{"a README change that changes a tarball", readme, "", "", "failure", "waits for merge-ok to be reviewed (changes npm @ai-ecoverse/slicc)", "false", "false", 0},
-		{"a code change", code, "", "", "failure", "changes SHA256SUMS, slicc-wasip1-wasm.wasm", "false", "true", 0},
-		{"a code change with merge-ok", code, "bug,merge-ok", "", "pending", "reviewing #7 at fake-head-00", "true", "true", 0},
-		{"a wasi-slicc host change with merge-ok", host, "merge-ok", "", "pending", "reviewing #7", "true", "true", 0},
-		{"a native-only change with merge-ok", native, "merge-ok", "", "pending", "reviewing #7", "true", "false", 0},
-		{"release.yml with identical outputs", identical, "", ".github/workflows/release.yml", "failure", "changes .github/workflows/release.yml", "false", "false", 0},
-		{"no candidate build", filepath.Join(dir, "missing.json"), "merge-ok", "", "error", "couldn't build the pull request", "", "", 1},
+		{"a dev pin that ships nothing new", identical, "false", "", "success", "not behaviour: identical build outputs", "false", "false", 0},
+		{"the same, as a draft", identical, "true", "", "success", "not behaviour", "false", "false", 0},
+		{"a README change that changes a tarball, as a draft", readme, "true", "", "failure", "draft: not reviewed, mark it ready for review (changes npm @ai-ecoverse/slicc)", "false", "false", 0},
+		{"a code change, as a draft", code, "true", "", "failure", "changes SHA256SUMS, slicc-wasip1-wasm.wasm", "false", "true", 0},
+		{"a code change with no draft flag counts as a draft", code, "", "", "failure", "draft: not reviewed", "false", "true", 0},
+		{"a code change, ready", code, "false", "", "pending", "reviewing #7 at fake-head-00", "true", "true", 0},
+		{"a wasi-slicc host change, ready", host, "false", "", "pending", "reviewing #7", "true", "true", 0},
+		{"a native-only change, ready", native, "false", "", "pending", "reviewing #7", "true", "false", 0},
+		{"release.yml with identical outputs, as a draft", identical, "true", ".github/workflows/release.yml", "failure", "changes .github/workflows/release.yml", "false", "false", 0},
+		{"no candidate build", filepath.Join(dir, "missing.json"), "false", "", "error", "couldn't build the pull request", "", "", 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			arts := buildArtifacts()
 			f := newCertAPI(t, withRun(nil, arts))
-			r := certTool(t, f.srv.URL, "pr.mjs", "classify", "--pr", "7", "--head", "fake-head-0001", "--labels", c.labels, "--forced", c.forced, "--run", "1", "--artifacts", declared(arts), "--base-manifest", same, "--candidate-manifest", c.candidate)
+			r := certTool(t, f.srv.URL, "pr.mjs", "classify", "--pr", "7", "--head", "fake-head-0001", "--labels", "merge-ok", "--draft", c.draft, "--forced", c.forced, "--run", "1", "--artifacts", declared(arts), "--base-manifest", same, "--candidate-manifest", c.candidate)
 			if r.code != c.exit {
 				t.Fatalf("exit %d, want %d:\n%s", r.code, c.exit, r.out)
 			}
@@ -207,10 +208,10 @@ func TestCertReviewClassifiesAPullRequestByWhatShips(t *testing.T) {
 }
 
 type planCase struct {
-	name, action, label, guard, state, build, forced string
-	files                                            []map[string]any
-	head                                             []map[string]any
-	runStatus                                        string
+	name, action, label, guard, state, build, forced, draft string
+	files                                                   []map[string]any
+	head                                                    []map[string]any
+	runStatus                                               string
 }
 
 func TestCertReviewPlanBuildsOnlyOnTheEventsThatMatter(t *testing.T) {
@@ -225,9 +226,13 @@ func TestCertReviewPlanBuildsOnlyOnTheEventsThatMatter(t *testing.T) {
 	pending := []map[string]any{{"context": "cert-review", "state": "pending", "target_url": "https://github.com/ai-ecoverse/slicc-cli/actions/runs/5"}}
 	cases := []planCase{
 		{name: "a push", action: "synchronize", guard: "PASS", state: "pending", build: "true", forced: "tools/cert-review/lib.mjs,.github/workflows/release.yml", files: files("cmd/slicc/main.go", "tools/cert-review/lib.mjs", ".github/workflows/release.yml")},
-		{name: "merge-ok added", action: "labeled", label: "merge-ok", guard: "PASS", state: "pending", build: "true", files: files("cmd/slicc/main.go")},
+		{name: "merge-ok added starts nothing", action: "labeled", label: "merge-ok", guard: "PASS", build: "false", files: files("cmd/slicc/main.go")},
 		{name: "another label", action: "labeled", label: "bug", guard: "PASS", build: "false", files: files("cmd/slicc/main.go")},
-		{name: "ready for review", action: "ready_for_review", guard: "PASS", build: "false", files: files("cmd/slicc/main.go")},
+		{name: "ready for review plans and builds at once", action: "ready_for_review", guard: "PASS", state: "pending", build: "true", files: files("cmd/slicc/main.go")},
+		{name: "a draft is not built and stays red", action: "opened", guard: "PASS", state: "failure", build: "false", draft: "true", files: files("cmd/slicc/main.go")},
+		{name: "a push to a draft is not built and stays red", action: "synchronize", guard: "PASS", state: "failure", build: "false", draft: "true", files: files("cmd/slicc/main.go")},
+		{name: "converted to draft cancels into a red status", action: "converted_to_draft", guard: "PASS", state: "failure", build: "false", draft: "true", files: files("cmd/slicc/main.go")},
+		{name: "no draft flag counts as a draft", action: "synchronize", guard: "PASS", state: "failure", build: "false", draft: "omit", files: files("cmd/slicc/main.go")},
 		{name: "the self-guard refused", action: "synchronize", guard: "FAIL", state: "failure", build: "false", files: files("tools/cert-review/lib.mjs")},
 		{name: "the self-guard didn't finish", action: "synchronize", state: "error", build: "false", files: files("cmd/slicc/main.go")},
 		{name: "the approval label on a pull request that doesn't change the reviewer plans again", action: "labeled", label: "cert-review-approved", guard: "PASS", state: "pending", build: "true", files: files("cmd/slicc/main.go")},
@@ -247,7 +252,15 @@ func TestCertReviewPlanBuildsOnlyOnTheEventsThatMatter(t *testing.T) {
 				routes[statuses] = c.head
 			}
 			f := newCertAPI(t, routes)
-			r := certTool(t, f.srv.URL, "pr.mjs", "plan", "--pr", "7", "--head", "fake-head-0001", "--action", c.action, "--label", c.label, "--labels", "merge-ok", "--run", "1", "--guard", c.guard)
+			args := []string{"plan", "--pr", "7", "--head", "fake-head-0001", "--action", c.action, "--label", c.label, "--labels", "merge-ok", "--run", "1", "--guard", c.guard}
+			switch c.draft {
+			case "":
+				args = append(args, "--draft", "false")
+			case "omit":
+			default:
+				args = append(args, "--draft", c.draft)
+			}
+			r := certTool(t, f.srv.URL, "pr.mjs", args...)
 			if r.code != 0 {
 				t.Fatalf("exit %d:\n%s", r.code, r.out)
 			}
@@ -735,8 +748,11 @@ func TestCertReviewWorkflowKeepsTheCandidateAwayFromSecretsAndPools(t *testing.T
 	if len(jobs) != len(want) {
 		t.Fatalf("jobs %v", jobs)
 	}
-	if !strings.Contains(text, "types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]\n  merge_group:\n") {
+	if !strings.Contains(text, "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]\n  merge_group:\n") {
 		t.Fatal("triggers")
+	}
+	if strings.Count(text, "PR_DRAFT: ${{ github.event.pull_request.draft }}") != 2 || strings.Contains(text, "merge-ok") {
+		t.Fatal("plan and classify read the draft flag from PR_DRAFT, and nothing reads merge-ok")
 	}
 	if !strings.Contains(text, "format('cert-review-pr-noop-{0}', github.run_id)") {
 		t.Fatal("other labels must get a concurrency group of their own")

@@ -431,10 +431,7 @@ func TestRenovatePullRequestsAskForTheirCertReview(t *testing.T) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	for _, l := range cfg.Labels {
-		if l == "merge-ok" {
-			return
-		}
+	if len(cfg.Labels) != 0 || strings.Contains(string(raw), "merge-ok") {
+		t.Fatalf("Renovate's pull requests carry no merge-ok: they aren't drafts, so a dev pin's cert-review runs by itself: %v", cfg.Labels)
 	}
-	t.Fatalf("Renovate's pull requests must carry merge-ok, so a dev pin's cert-review runs by itself: %v", cfg.Labels)
 }
