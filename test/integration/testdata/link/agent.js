@@ -13,7 +13,32 @@ export const agent = {
   scripts: [],
   hold: null,
   users: 0,
+  reportsBusy: true,
+  scoops: new Set(),
+  lastBusy: false,
 };
+
+function busyNow() {
+  return agent.busy || agent.scoops.size > 0;
+}
+
+function busyLine(busy) {
+  const out = { t: 'busy', busy };
+  if (busy) out.why = [...(agent.busy ? ['cone'] : []), ...[...agent.scoops].map((s) => `scoop:${s}`)];
+  return out;
+}
+
+function busyChanged() {
+  const now = busyNow();
+  if (now === agent.lastBusy) return;
+  agent.lastBusy = now;
+  for (const w of agent.watches) if (w.busy) w.send(busyLine(now));
+}
+
+function setBusy(busy) {
+  agent.busy = busy;
+  busyChanged();
+}
 
 function line(event) {
   return encoder.encode(`${JSON.stringify(event)}\n`);
@@ -98,6 +123,10 @@ async function runScript(prompt, script) {
         break;
       }
     }
+    if (step.scoop) {
+      agent.scoops.add(step.scoop);
+      busyChanged();
+    }
     if (step.event) emit(step.event, prompt);
   }
   emit({ t: 'run', state: 'end', reason }, prompt);
@@ -127,16 +156,18 @@ async function onPrompt(stream) {
   else stream.accept({ delivered });
   agent.users += 1;
   const wasBusy = agent.busy;
-  agent.busy = true;
+  setBusy(true);
   emit({ t: 'user', id: `u${agent.users}`, text, delivered }, prompt);
   await runScript(prompt, script);
-  agent.busy = wasBusy;
+  setBusy(wasBusy);
 }
 
 function onWatch(stream) {
   const open = stream.open;
   const order = entryOrder();
   const opened = { head: order[order.length - 1] ?? '' };
+  const busy = Boolean(open.busy) && agent.reportsBusy;
+  if (busy) opened.busy = busyNow();
   let events = [];
   if (open.since) {
     const replayed = replay(open.since);
@@ -145,6 +176,7 @@ function onWatch(stream) {
   }
   stream.accept(opened);
   const w = sink(stream, Boolean(open.thinking));
+  w.busy = busy;
   for (const e of events) w.send(e);
   agent.watches.add(w);
   stream.done.then(() => agent.watches.delete(w), () => agent.watches.delete(w));
@@ -183,10 +215,17 @@ export function onAgent(stream) {
 }
 
 export const agentTest = {
-  configure({ allow, busy } = {}) {
+  configure({ allow, busy, reportsBusy } = {}) {
     if (allow !== undefined) agent.allow = allow;
-    if (busy !== undefined) agent.busy = busy;
+    if (reportsBusy !== undefined) agent.reportsBusy = reportsBusy;
+    if (busy !== undefined) setBusy(busy);
     return this.state();
+  },
+  scoop(name, working) {
+    if (working) agent.scoops.add(name);
+    else agent.scoops.delete(name);
+    busyChanged();
+    return agent.scoops.size;
   },
   queue(script) {
     agent.scripts.push(script);
@@ -221,6 +260,7 @@ export const agentTest = {
       aborts: agent.aborts,
       watches: agent.watches.size,
       held: Boolean(agent.hold),
+      scoops: agent.scoops.size,
       log: agent.log.length,
     };
   },

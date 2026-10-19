@@ -191,6 +191,39 @@ func TestWasiWatch(t *testing.T) {
 	})
 }
 
+func TestWasiWaitAndAllSettled(t *testing.T) {
+	runWasi(t, []wasiCase{
+		{Name: "wait settles", Argv: []string{"slicc", wasiJoin, "wait", "--json"},
+			Scenario: []map[string]any{opened(ev("head", "5", "busy", true), "send", []any{ev("t", "busy", "busy", false)}, "hold", true)},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 0, "", "slicc: seven is idle\n")
+				if want := "{\"busy\":false,\"t\":\"busy\"}\n{\"t\":\"settled\"}\n"; r.Stdout != want {
+					t.Fatalf("stdout %q, want %q", r.Stdout, want)
+				}
+				checkOpen(t, onlyConn(t, r), ev("kind", "agent", "op", "watch", "busy", true))
+			}},
+		{Name: "wait on an older seven", Argv: []string{"slicc", wasiJoin, "wait"},
+			Scenario: []map[string]any{opened(ev("head", "5"), "hold", true)},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 1, "", "slicc wait: this seven doesn't report when its agent is idle; update it\n")
+			}},
+		{Name: "prompt --allsettled", Argv: []string{"slicc", wasiJoin, "prompt", "--allsettled", "0s", "hello there"},
+			Scenario: []map[string]any{
+				opened(ev("head", "0", "busy", false), "hold", true),
+				opened(ev("delivered", "run"), "send", promptRun("run"), "end", true),
+				opened(ev("head", "2", "busy", true), "send", []any{ev("t", "text", "id", "a10.0", "delta", "Later."), ev("t", "busy", "busy", false)}, "hold", true),
+			},
+			check: func(t *testing.T, r wasiResult) {
+				wantExit(t, r, 0, "Hi you.\n\nLater.\n", "")
+				if len(r.Log) != 3 {
+					t.Fatalf("%d facade connections, want 3", len(r.Log))
+				}
+				checkOpen(t, r.Log[0], ev("kind", "agent", "op", "watch", "busy", true))
+				checkOpen(t, r.Log[2], ev("kind", "agent", "op", "watch", "since", "retry-1", "busy", true))
+			}},
+	})
+}
+
 func TestWasiLocalhostIsLoopback(t *testing.T) {
 	runWasi(t, []wasiCase{
 		{Name: "localhost mapped elsewhere", Argv: []string{"slicc", wasiJoin, "abort"}, LinkHost: "localhost",
@@ -324,7 +357,7 @@ func TestWasiCommandsOutsideSeven(t *testing.T) {
 			}
 		}},
 		{Name: "help", Argv: []string{"slicc", "--help"}, check: func(t *testing.T, r wasiResult) {
-			wantExit(t, r, 0, "slicc <join-url> prompt <text>", "")
+			wantExit(t, r, 0, "slicc <join-url> prompt [--allsettled <quiet>] <text>", "")
 			for _, want := range []string{"slicc <join-url> watch", "slicc <join-url> abort", "slicc --version", "SLICC_LINK_URL"} {
 				if !strings.Contains(r.Stdout, want) {
 					t.Fatalf("help lacks %q:\n%s", want, r.Stdout)
@@ -357,7 +390,7 @@ func TestWasiCommandsOutsideSeven(t *testing.T) {
 		{Name: "prompt without a join url", Argv: []string{"slicc", "prompt", "--cdp", "http://127.0.0.1:9333", "hi"}, check: unavailable("prompt")},
 		{Name: "follow", Argv: []string{"slicc", wasiJoin, "follow", "--exit"}, check: unavailable("follow")},
 		{Name: "no verb", Argv: []string{"slicc", wasiJoin}, check: func(t *testing.T, r wasiResult) {
-			wantExit(t, r, 2, "", "slicc: a join URL must be followed by a command: prompt, watch or abort\n")
+			wantExit(t, r, 2, "", "slicc: a join URL must be followed by a command: prompt, watch, wait or abort\n")
 		}},
 		{Name: "not a join url", Argv: []string{"slicc", "https://tray.example.test/nope", "prompt", "hi"}, check: func(t *testing.T, r wasiResult) {
 			wantExit(t, r, 2, "", "slicc: not a tray join URL")

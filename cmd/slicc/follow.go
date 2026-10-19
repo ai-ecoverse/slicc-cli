@@ -96,11 +96,11 @@ func joinCommand(args []string, stdout, stderr io.Writer) int {
 		switch args[1] {
 		case "follow":
 			return follow(args[0], args[2:], stdout, stderr)
-		case "prompt", "watch", "abort":
+		case "prompt", "watch", "wait", "abort":
 			return runAgent(args[1], args[0], args[2:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
 		}
 	}
-	fmt.Fprint(stderr, "slicc: a join URL must be followed by a command: follow, prompt, watch or abort\n")
+	fmt.Fprint(stderr, "slicc: a join URL must be followed by a command: follow, prompt, watch, wait or abort\n")
 	return 2
 }
 

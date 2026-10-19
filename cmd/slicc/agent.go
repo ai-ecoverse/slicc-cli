@@ -35,6 +35,9 @@ type agentFlags struct {
 	steer            bool
 	reject           bool
 	abortOnInterrupt bool
+	settle           bool
+	quiet            time.Duration
+	timeout          time.Duration
 	args             []string
 }
 
@@ -55,6 +58,8 @@ func agentUsage(verb string) string {
 		return promptUsage
 	case "watch":
 		return watchUsage
+	case "wait":
+		return waitUsage
 	default:
 		return abortUsage
 	}
@@ -71,9 +76,17 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 		fs.StringVar(&f.signal, "signal", "cdp", "")
 	}
 	if verb != "abort" {
-		fs.BoolVar(&f.plain, "plain", false, "")
 		fs.BoolVar(&f.json, "json", false, "")
+	}
+	if verb == "prompt" || verb == "watch" {
+		fs.BoolVar(&f.plain, "plain", false, "")
 		fs.BoolVar(&f.thinking, "thinking", false, "")
+	}
+	if verb == "prompt" || verb == "wait" {
+		fs.DurationVar(&f.quiet, "allsettled", 0, "")
+	}
+	if verb == "wait" {
+		fs.DurationVar(&f.timeout, "timeout", 0, "")
 	}
 	if verb == "prompt" {
 		fs.BoolVar(&f.steer, "steer", false, "")
@@ -91,6 +104,10 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 		return f, 2
 	}
 	f.args = fs.Args()
+	fs.Visit(func(fl *flag.Flag) { f.settle = f.settle || fl.Name == "allsettled" })
+	if code := f.checkDurations(aio); code >= 0 {
+		return f, code
+	}
 	if code := f.checkSignal(aio); code >= 0 {
 		return f, code
 	}
@@ -109,6 +126,21 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 		return f, 2
 	}
 	return f, -1
+}
+
+func (f *agentFlags) checkDurations(aio agentIO) int {
+	switch {
+	case f.quiet < 0:
+		fmt.Fprintf(aio.stderr, "slicc %s: --allsettled needs a duration of 0s or more, like 2m\n", f.verb)
+		return 2
+	case f.timeout < 0:
+		fmt.Fprintf(aio.stderr, "slicc %s: --timeout needs a duration of 0s or more, like 30m\n", f.verb)
+		return 2
+	}
+	if f.verb == "wait" {
+		f.settle = true
+	}
+	return -1
 }
 
 func (f *agentFlags) checkSignal(aio agentIO) int {
@@ -204,6 +236,8 @@ func runAgent(verb, joinURL string, args []string, aio agentIO) int {
 		return runPrompt(ctx, f, aio)
 	case "watch":
 		return runWatch(ctx, f, aio)
+	case "wait":
+		return runWait(ctx, f, aio)
 	default:
 		return runAbort(ctx, f, aio)
 	}

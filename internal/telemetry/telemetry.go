@@ -41,6 +41,7 @@ var commands = map[string]bool{
 	"prompt":   true,
 	"unpair":   true,
 	"update":   true,
+	"wait":     true,
 	"watch":    true,
 }
 

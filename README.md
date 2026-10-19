@@ -1795,7 +1795,11 @@ slicc-node's hostfs ([its README, *Host folders*](https://github.com/ai-ecoverse
       - a live scoop of that cone has a run, a queued input or a feed;
       - a lick for the cone is queued or still to be delivered (a `scoop-notify` result, or a scoop `wait`'s delivery). That includes a lick held in the agent's outbox until its conversation's model is known. If the model never comes, `busy` stays true, so the client bounds its wait.
     - **It turns false** only when none of that holds. A lick from outside (a cron, a file watch) counts once it's queued, not before.
-    - **`why`:** a `busy: true` line may carry `"why": ["cone", "scoop:<name>", "pending-lick"]`, to be logged. The node doesn't use it, and it's left out when `busy` is false.
+    - **`why`:** a `busy: true` line may carry `"why"`, a list of what keeps the agent busy, to be logged. The node doesn't use it, and it's left out when `busy` is false. The values come from a fixed list:
+      - `"cone"`: the cone has a run or a queued input;
+      - `"scoop:<name>"`: that live scoop (its name, as seven shows it) has a run, a queued input or a feed;
+      - `"pending-lick"`: a lick for the cone is queued or still to be delivered.
+    - **Read-only status:** `busy` lines carry only the boolean and `why`. They never carry prompt text, tool arguments or output, and asking for `busy` changes nothing in the agent.
     - **Ordering:** a `run start` never comes before the `busy: true` that covers it, and the `busy: false` comes after the last `run end`.
     - **Computed** from the durable documents' subscriptions (the cone's and its scoops' `pi.live`, `ScoopWorkDoc.feeds` and the licks outbox), and a line goes out only when the value flips.
 - **Events:** one JSON object per line, mapped by slicc-agent from pi-durable's agent events (`watchEvents`) and handed to the page by `remoteControl(connection)` from `@ai-ecoverse/slicc-agent/page`.

@@ -20,6 +20,10 @@ spaces.
 
 ` + promptHow + `
 flags:
+  --allsettled <quiet>  go on after the run until seven has nothing left to
+                        do (its scoops included) and nothing has come from it
+                        for <quiet>, like 2m; later runs stream too, and
+                        --json ends with {"t":"settled"}
   --steer               if seven is busy, steer the running turn with it
                         (default: queue it as a follow-up)
   --reject              if seven is busy, don't send it; exit 1
@@ -59,6 +63,11 @@ func runPrompt(ctx context.Context, f agentFlags, aio agentIO) int {
 		fmt.Fprintf(aio.stderr, "slicc prompt: %s\n", noControlMessage)
 		return exitNoControl
 	}
+	if f.settle {
+		if code := probeBusy(ctx, aio, l); code >= 0 {
+			return code
+		}
+	}
 	opts := agentctl.PromptOptions{Text: text, WhenBusy: agentctl.FollowUp, Thinking: f.thinking}
 	switch {
 	case f.steer:
@@ -73,7 +82,84 @@ func runPrompt(ctx context.Context, f agentFlags, aio agentIO) int {
 	if err != nil {
 		return promptOpenFailed(aio, err)
 	}
-	return streamPrompt(ctx, f, aio, r, l, st)
+	tracker := agentctl.NewTracker()
+	code := streamPrompt(ctx, f, aio, r, l, st, tracker)
+	if code != 0 || !f.settle {
+		return code
+	}
+	return settlePrompt(ctx, f, aio, r, l, tracker)
+}
+
+func probeBusy(ctx context.Context, aio agentIO, l agentctl.Link) int {
+	st, err := agentctl.Watch(ctx, l, agentctl.WatchOptions{Busy: true})
+	switch {
+	case ctx.Err() != nil:
+		return exitInterrupted
+	case err != nil:
+		return promptOpenFailed(aio, err)
+	}
+	_ = st.Close()
+	if st.Busy == nil {
+		return agentFail(aio, "prompt", agentctl.ErrNoBusy)
+	}
+	return -1
+}
+
+func settlePrompt(ctx context.Context, f agentFlags, aio agentIO, r *agentctl.Renderer, l agentctl.Link, tracker *agentctl.Tracker) int {
+	tracker.Reconnected()
+	st, err := agentctl.Watch(ctx, l, agentctl.WatchOptions{Since: tracker.Since(), Thinking: f.thinking, Busy: true})
+	switch {
+	case ctx.Err() != nil:
+		return interruptPrompt(f, aio, l)
+	case err != nil:
+		fmt.Fprint(aio.stderr, "slicc prompt: lost the link to seven; the run goes on there\n")
+		return 1
+	case st.Busy == nil:
+		_ = st.Close()
+		return agentFail(aio, "prompt", agentctl.ErrNoBusy)
+	}
+	if st.Gap && !f.json {
+		r.Notice("some events were missed")
+	}
+	show := func(e agentctl.Event) {
+		e, ok := tracker.Filter(e)
+		switch {
+		case !ok:
+		case f.json:
+			_, _ = aio.stdout.Write(append(e.Line, '\n'))
+		default:
+			r.Render(e)
+		}
+	}
+	end := settler{quiet: f.quiet, show: show}.run(ctx, st)
+	if !f.json {
+		r.Finish()
+	}
+	switch end {
+	case settled:
+		if f.json {
+			_, _ = fmt.Fprint(aio.stdout, settledLine)
+		}
+		return 0
+	case settleInterrupted:
+		return interruptPrompt(f, aio, l)
+	}
+	fmt.Fprint(aio.stderr, "slicc prompt: lost the link to seven; the run goes on there\n")
+	return 1
+}
+
+func interruptPrompt(f agentFlags, aio agentIO, l agentctl.Link) int {
+	if f.abortOnInterrupt {
+		actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := agentctl.Abort(actx, l)
+		cancel()
+		if err != nil {
+			fmt.Fprintf(aio.stderr, "slicc prompt: could not abort the run: %v\n", err)
+		} else {
+			fmt.Fprint(aio.stderr, "slicc prompt: aborted the run\n")
+		}
+	}
+	return exitInterrupted
 }
 
 func promptOpenFailed(aio agentIO, err error) int {
@@ -93,9 +179,9 @@ type promptResult struct {
 	msg  string
 }
 
-func streamPrompt(ctx context.Context, f agentFlags, aio agentIO, r *agentctl.Renderer, l agentctl.Link, st *agentctl.Stream) int {
+func streamPrompt(ctx context.Context, f agentFlags, aio agentIO, r *agentctl.Renderer, l agentctl.Link, st *agentctl.Stream, tracker *agentctl.Tracker) int {
 	done := make(chan promptResult, 1)
-	go func() { done <- readPrompt(f, aio, r, st) }()
+	go func() { done <- readPrompt(f, aio, r, st, tracker) }()
 	select {
 	case res := <-done:
 		if !f.json {
@@ -110,26 +196,17 @@ func streamPrompt(ctx context.Context, f agentFlags, aio agentIO, r *agentctl.Re
 		if !f.json {
 			r.Finish()
 		}
-		if f.abortOnInterrupt {
-			actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, err := agentctl.Abort(actx, l)
-			cancel()
-			if err != nil {
-				fmt.Fprintf(aio.stderr, "slicc prompt: could not abort the run: %v\n", err)
-			} else {
-				fmt.Fprint(aio.stderr, "slicc prompt: aborted the run\n")
-			}
-		}
-		return exitInterrupted
+		return interruptPrompt(f, aio, l)
 	}
 }
 
-func readPrompt(f agentFlags, aio agentIO, r *agentctl.Renderer, st *agentctl.Stream) promptResult {
+func readPrompt(f agentFlags, aio agentIO, r *agentctl.Renderer, st *agentctl.Stream, tracker *agentctl.Tracker) promptResult {
 	for {
 		e, err := st.Next()
 		if err != nil {
 			return promptStreamError(err)
 		}
+		tracker.Filter(e)
 		if f.json {
 			_, _ = aio.stdout.Write(append(e.Line, '\n'))
 		}
