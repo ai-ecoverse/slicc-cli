@@ -551,6 +551,8 @@ func newFakeActionsAPI(t *testing.T) *fakeActionsAPI {
 		case "POST /issues":
 			w.WriteHeader(http.StatusCreated)
 			send(map[string]any{"number": 77})
+		case "POST /actions/workflows/release.yml/dispatches":
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			if strings.HasPrefix(call, "POST /issues/") || strings.HasPrefix(call, "PATCH /issues/") {
 				send(map[string]any{})
@@ -641,6 +643,88 @@ func TestNightlyGateRefusesUnlessTheLatestNightlyPassed(t *testing.T) {
 			}
 			if c.code != 0 && !strings.Contains(out, "gh workflow run nightly.yml --ref main") {
 				t.Errorf("a refusal must say how to unblock:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestAGreenNightlyAfterARedGateRunsTheRelease(t *testing.T) {
+	text := readWorkflow(t, "release-unblock.yml")
+	if !strings.Contains(text, "\n  workflow_run:\n    workflows: [Nightly]\n    types: [completed]\n    branches: [main]\n") {
+		t.Fatal("release-unblock.yml must follow the Nightly workflow's completed runs on main")
+	}
+	if strings.Contains(text, "name: Release\n") {
+		t.Fatal("release-unblock.yml must not be named Release, which cert-verify follows")
+	}
+	jobs := workflowJobs(t, text)
+	job := jobs["unblock"]
+	if len(jobs) != 1 || job.body == "" {
+		t.Fatalf("release-unblock.yml must have the one job unblock: %v", jobs)
+	}
+	if perms := permissionsOf(job.body); perms["actions"] != "write" || len(perms) != 2 || perms["contents"] != "read" {
+		t.Errorf("the unblock job must have actions: write and contents: read, nothing else: %v", perms)
+	}
+	if !strings.Contains(job.body, "    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}\n") {
+		t.Errorf("the unblock job must run on the light runner:\n%s", job.body)
+	}
+	for _, c := range []struct {
+		conclusion, branch, repo string
+		want                     bool
+	}{
+		{"success", "main", "ai-ecoverse/slicc-cli", true},
+		{"failure", "main", "ai-ecoverse/slicc-cli", false},
+		{"cancelled", "main", "ai-ecoverse/slicc-cli", false},
+		{"success", "other", "ai-ecoverse/slicc-cli", false},
+		{"success", "main", "someone/fork", false},
+	} {
+		ctx := ghCtx{"github.repository": "ai-ecoverse/slicc-cli", "github.event.workflow_run.conclusion": c.conclusion, "github.event.workflow_run.head_branch": c.branch, "github.event.workflow_run.head_repository.full_name": c.repo}
+		if got := ghTruthy(ghTemplate(t, job.cond, ctx)); got != c.want {
+			t.Errorf("a %s nightly on %s from %s runs the unblock job: %v, want %v", c.conclusion, c.branch, c.repo, got, c.want)
+		}
+	}
+	line := lineWith(t, job.body, "scripts/nightly-unblock.mjs")
+	if line != "run: sh scripts/verdict.sh nightly-unblock node scripts/nightly-unblock.mjs" {
+		t.Fatalf("the unblock job must require the script's verdict: %q", line)
+	}
+	now := time.Now().UTC()
+	stamp := func(ago time.Duration) string { return now.Add(-ago).Format(time.RFC3339) }
+	prev := func(conclusion string, ago time.Duration) map[string]any {
+		return map[string]any{"id": 101, "html_url": "https://github.com/ai-ecoverse/slicc-cli/actions/runs/101", "head_sha": "abc", "conclusion": conclusion, "created_at": stamp(ago), "run_started_at": stamp(ago)}
+	}
+	self := map[string]any{"id": 202, "html_url": "https://github.com/ai-ecoverse/slicc-cli/actions/runs/202", "conclusion": "success", "created_at": stamp(20 * time.Minute), "run_started_at": stamp(20 * time.Minute)}
+	const dispatch = "POST /actions/workflows/release.yml/dispatches"
+	for _, c := range []struct {
+		name    string
+		runs    []map[string]any
+		attempt string
+		fail    bool
+		code    int
+		writes  string
+		want    string
+	}{
+		{"after a cancelled nightly", []map[string]any{self, prev("cancelled", 9*time.Hour)}, "1", false, 0, dispatch, `nightly-unblock: PASS dispatched release.yml on main: \S+/202 passed after a red gate \(\S+/101 abc 8h[0-9]{2}m: the latest nightly ended cancelled\)`},
+		{"after a red nightly", []map[string]any{self, prev("failure", 24*time.Hour)}, "1", false, 0, dispatch, `the latest nightly ended failure`},
+		{"after a stale green nightly", []map[string]any{self, prev("success", 40*time.Hour)}, "1", false, 0, dispatch, `the latest nightly is older than 36h`},
+		{"the first nightly", []map[string]any{self}, "1", false, 0, dispatch, `no completed nightly.yml run on main`},
+		{"a re-run that went green", []map[string]any{self, prev("success", 24*time.Hour)}, "2", false, 0, dispatch, `passed on attempt 2, so an earlier attempt was red`},
+		{"after a green nightly", []map[string]any{self, prev("success", 24*time.Hour)}, "1", false, 0, "", `nightly-unblock: PASS nothing to release: \S+/202 passed after a green nightly`},
+		{"API down", nil, "1", true, 1, "", `nightly-unblock: FAIL GET \S+ HTTP 500`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			api := newFakeActionsAPI(t)
+			api.set(func() { api.runs, api.fail = c.runs, c.fail })
+			out, code := runStep(t, line, "GITHUB_API_URL="+api.srv.URL, "NIGHTLY_ID=202", "NIGHTLY_ATTEMPT="+c.attempt, "NIGHTLY_CREATED="+stamp(20*time.Minute), "NIGHTLY_UPDATED="+stamp(time.Minute), "NIGHTLY_URL=https://github.com/ai-ecoverse/slicc-cli/actions/runs/202")
+			if code != c.code || !regexp.MustCompile(c.want).MatchString(out) {
+				t.Fatalf("exit %d, want %d and /%s/:\n%s", code, c.code, c.want, out)
+			}
+			if got := strings.Join(api.writes(), " "); got != c.writes {
+				t.Errorf("wrote %q, want %q", got, c.writes)
+			}
+			if c.writes != "" && ghString(api.body(dispatch)["ref"]) != "main" {
+				t.Errorf("dispatched %v, want ref main", api.body(dispatch))
+			}
+			if c.code != 0 && !strings.Contains(out, "gh workflow run release.yml --ref main") {
+				t.Errorf("a failure must say how to release by hand:\n%s", out)
 			}
 		})
 	}

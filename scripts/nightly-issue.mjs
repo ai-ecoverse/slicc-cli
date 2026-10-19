@@ -60,7 +60,7 @@ export async function report(env = process.env) {
     'Failed jobs:',
     await failedJobs(call, runId),
     '',
-    `Releases are refused until a nightly on main passes. Fix main, run the Nightly workflow (\`gh workflow run nightly.yml --ref main\`), and once it passes run the release again. A green nightly closes this issue.`,
+    `Releases are refused until a nightly on main passes. Fix main, run the Nightly workflow (\`gh workflow run nightly.yml --ref main\`), and once it passes the release runs by itself (or run it: \`gh workflow run release.yml --ref main\`). A green nightly closes this issue.`,
   ].join('\n');
   if (open.length) {
     await call('POST', `/issues/${open[0].number}/comments`, { body });

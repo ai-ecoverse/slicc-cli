@@ -1,0 +1,45 @@
+name: Release unblock
+
+on:
+  workflow_run:
+    workflows: [Nightly]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-unblock
+  cancel-in-progress: false
+
+jobs:
+  unblock:
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository }}
+    name: Release what a red nightly held back
+    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Run the release when the nightly before this one had the gate red
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_ID: ${{ github.event.workflow_run.id }}
+          NIGHTLY_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          NIGHTLY_CREATED: ${{ github.event.workflow_run.created_at }}
+          NIGHTLY_UPDATED: ${{ github.event.workflow_run.updated_at }}
+          NIGHTLY_URL: ${{ github.event.workflow_run.html_url }}
+        run: sh scripts/verdict.sh nightly-unblock node scripts/nightly-unblock.mjs

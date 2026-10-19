@@ -3,7 +3,7 @@ import { isMain } from './is-main.mjs';
 
 export const WORKFLOW = 'nightly.yml';
 export const MAX_AGE_HOURS = 36;
-const UNBLOCK = `fix main if it is red, run the Nightly workflow (gh workflow run ${WORKFLOW} --ref main), and once it passes run the release again`;
+const UNBLOCK = `fix main if it is red, run the Nightly workflow (gh workflow run ${WORKFLOW} --ref main), and once it passes release-unblock.yml runs the release (or run it: gh workflow run release.yml --ref main)`;
 
 export function age(ms) {
   const minutes = Math.max(0, Math.floor(ms / 60000));
