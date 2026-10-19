@@ -393,6 +393,44 @@ export function protectTest(getLink, describe) {
         await outcome(c.send('Target.closeTarget', { targetId }));
         return { url, text, body, navigate, href, info: targetInfo.url };
       }),
+    parseRefusals: (browser, base, hole, historyTarget, holeMarker) =>
+      run(browser, async (c) => {
+        const out = {};
+        const { targetId, sessionId } = await c.attachTo(`${base}/doc?n=refusals`);
+        out.setCookie = await outcome(c.send('Network.setCookie', { name: 'x', value: '1', url: hole }, sessionId));
+        out.deleteCookies = await outcome(c.send('Network.deleteCookies', { name: 'seven', url: hole }, sessionId));
+        out.setCookies = await outcome(c.send('Network.setCookies', { cookies: [{ name: 'x', value: '1', url: hole }] }, sessionId));
+        out.storageSetCookies = await outcome(c.send('Storage.setCookies', { cookies: [{ name: 'x', value: '1', url: hole }] }));
+        await c.send('Fetch.enable', { patterns: [{ urlPattern: '*data?n=override*' }] }, sessionId);
+        const paused = c.waitEvent((e) => e.method === 'Fetch.requestPaused' && e.sessionId === sessionId);
+        const body = c.evaluate(`fetch(${JSON.stringify(`${base}/data?n=override`)}).then((r) => r.text())`, sessionId);
+        const { params } = await paused;
+        out.continueRequest = await outcome(c.send('Fetch.continueRequest', { requestId: params.requestId, url: hole }, sessionId));
+        out.continued = await outcome(c.send('Fetch.continueRequest', { requestId: params.requestId }, sessionId));
+        out.body = await body;
+        await c.send('Fetch.disable', {}, sessionId);
+        out.legacyEnable = await outcome(c.send('Network.setRequestInterception', { patterns: [{ urlPattern: '*data?n=legacy*' }] }, sessionId));
+        if (out.legacyEnable.ok) {
+          const intercepted = c.waitEvent((e) => e.method === 'Network.requestIntercepted' && e.sessionId === sessionId);
+          const legacyBody = c.evaluate(`fetch(${JSON.stringify(`${base}/data?n=legacy`)}).then((r) => r.text())`, sessionId);
+          const ev = await intercepted;
+          out.continueIntercepted = await outcome(c.send('Network.continueInterceptedRequest', { interceptionId: ev.params.interceptionId, url: hole }, sessionId));
+          out.legacyContinued = await outcome(c.send('Network.continueInterceptedRequest', { interceptionId: ev.params.interceptionId }, sessionId));
+          out.legacyBody = await legacyBody;
+          await c.send('Network.setRequestInterception', { patterns: [] }, sessionId);
+        }
+        const { frameTree } = await c.send('Page.getFrameTree', {}, sessionId);
+        out.loadNetworkResource = await outcome(c.send('Network.loadNetworkResource', { frameId: frameTree.frame.id, url: hole, options: { disableCache: true, includeCredentials: true } }, sessionId));
+        out.pwaInstall = await outcome(c.send('PWA.install', { manifestId: `${base}/manifest.json`, installUrlOrOrigin: hole }));
+        out.pwaLaunch = await outcome(c.send('PWA.launch', { manifestId: `${base}/manifest.json`, url: hole }));
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        const h = await c.send('Target.attachToTarget', { targetId: historyTarget, flatten: true });
+        const { entries } = await c.send('Page.getNavigationHistory', {}, h.sessionId);
+        const entry = entries.find((e) => e.url.includes(holeMarker));
+        out.history = entry ? await outcome(c.send('Page.navigateToHistoryEntry', { entryId: entry.id }, h.sessionId)) : { ok: false, error: { message: `no history entry on ${holeMarker} in ${JSON.stringify(entries.map((e) => e.url))}` } };
+        await outcome(c.send('Target.detachFromTarget', { sessionId: h.sessionId }));
+        return out;
+      }),
     navHang: (browser, opener, hang, wait) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(opener);

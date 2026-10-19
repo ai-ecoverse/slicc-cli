@@ -28,6 +28,8 @@ type unparsedEnv struct {
 	*protectEnv
 	hole   string
 	exotic string
+	zwj    string
+	xna    string
 }
 
 func TestCDPFailsClosedOnUnparseableURLs(t *testing.T) {
@@ -39,6 +41,8 @@ func TestCDPFailsClosedOnUnparseableURLs(t *testing.T) {
 	}
 	env.hole = "http://exa mple.sliccy.ai:" + pu.Port() + "/?n=hole"
 	env.exotic = "http://an exotic.cut.test:" + pu.Port() + "/?n=exotic"
+	env.zwj = "http://\u200d.sliccy.ai:" + pu.Port() + "/?n=zwj"
+	env.xna = "http://xn--a.sliccy.ai:" + pu.Port() + "/?n=xna"
 	env.unguardedCall(t, "Storage.setCookies", map[string]any{"cookies": []map[string]any{{"name": "seven", "value": sliccyCookie, "domain": ".sliccy.ai", "path": "/"}}}, nil)
 	t.Run("unparseable destinations are refused", env.testDestinations)
 	t.Run("Chrome loads none of the URLs it rejects", env.testControl)
@@ -47,11 +51,14 @@ func TestCDPFailsClosedOnUnparseableURLs(t *testing.T) {
 	t.Run("window.open to an unparseable sliccy.ai host is cut", func(t *testing.T) { env.testPopupTo(t, env.hole, "exa%20mple") })
 	t.Run("window.open to an exotic host is cut too", func(t *testing.T) { env.testPopupTo(t, env.exotic, "an%20exotic") })
 	t.Run("a blob from an opaque origin stays readable", env.testOpaqueBlob)
+	t.Run("a joiner host Chrome loads on sliccy.ai is cut", func(t *testing.T) { env.testLoadedForm(t, env.zwj, "xn--1ug.sliccy.ai", true, true) })
+	t.Run("an invalid xn-- label Chrome loads on sliccy.ai is cut", func(t *testing.T) { env.testLoadedForm(t, env.xna, "xn--a.sliccy.ai", true, true) })
+	t.Run("every other destination that doesn't parse is refused", env.testOtherDestinations)
 	t.Run("the link still works", env.testStillLinked)
 }
 
 func (e *unparsedEnv) testDestinations(t *testing.T) {
-	urls := append(append([]string{}, chromeRejects...), e.hole, e.exotic)
+	urls := append(append([]string{}, chromeRejects...), e.hole, e.exotic, e.zwj, e.xna)
 	var r struct {
 		Navigate map[string]struct {
 			cdpOutcome
@@ -143,6 +150,13 @@ func (e *unparsedEnv) testControl(t *testing.T) {
 
 func (e *unparsedEnv) realDocument(t *testing.T, targetID, marker string, cookie bool) {
 	t.Helper()
+	if href := e.loadedHref(t, targetID, marker); !strings.HasPrefix(href, "http://") || !strings.Contains(href, marker) || strings.Contains(href, sliccyCookie) != cookie {
+		t.Fatalf("unguarded, the tab holds %q, want a real document on %s (sliccy.ai cookie %v)", href, marker, cookie)
+	}
+}
+
+func (e *unparsedEnv) loadedHref(t *testing.T, targetID, marker string) string {
+	t.Helper()
 	var att struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -155,18 +169,23 @@ func (e *unparsedEnv) realDocument(t *testing.T, targetID, marker string, cookie
 			break
 		}
 	}
-	if !strings.HasPrefix(href, "http://") || !strings.Contains(href, marker) || strings.Contains(href, sliccyCookie) != cookie {
-		t.Fatalf("unguarded, the tab holds %q, want a real document on %s (sliccy.ai cookie %v)", href, marker, cookie)
-	}
 	_ = e.unguarded("", "Target.detachFromTarget", map[string]any{"sessionId": att.SessionID}, nil)
+	return href
 }
 
 func (e *unparsedEnv) testLoadedTab(t *testing.T, u, marker string, cookie bool) {
+	e.testLoadedForm(t, u, marker, cookie, false)
+}
+
+func (e *unparsedEnv) testLoadedForm(t *testing.T, u, marker string, cookie, optional bool) {
 	var made struct {
 		TargetID string `json:"targetId"`
 	}
 	e.unguardedCall(t, "Target.createTarget", map[string]any{"url": u}, &made)
 	defer e.b.closeTarget(made.TargetID)
+	if optional && !strings.Contains(e.loadedHref(t, made.TargetID, marker), marker) {
+		t.Skipf("this Chrome doesn't load %q as %s, so there's no page to cut", u, marker)
+	}
 	e.realDocument(t, made.TargetID, marker, cookie)
 	for _, tg := range e.targets(t) {
 		if tg.TargetID == made.TargetID && (strings.Contains(tg.URL, marker) || strings.Contains(tg.Title, "cdp nav")) {
@@ -235,5 +254,61 @@ func (e *unparsedEnv) testOpaqueBlob(t *testing.T) {
 	}
 	if !r.Navigate.OK || !strings.Contains(r.Href.Result, "blob ok") || r.Info != r.URL {
 		t.Errorf("the tab on the blob: navigate %+v, page %+v, listed at %q", r.Navigate, r.Href, r.Info)
+	}
+}
+
+func (e *unparsedEnv) historyTab(t *testing.T) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var made struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := e.b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": e.allowed + "/doc?n=history-start"}, &made); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.b.closeTarget(made.TargetID) })
+	s, err := e.b.client.Attach(ctx, made.TargetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, s, e.allowed)
+	for _, step := range []struct{ to, want string }{{e.hole, "http://exa%20mple.sliccy.ai"}, {e.allowed + "/doc?n=history-end", e.allowed + "/doc?n=history-end"}} {
+		if err := s.Call(ctx, "Page.navigate", map[string]any{"url": step.to}, nil); err != nil {
+			t.Fatal(err)
+		}
+		waitHref(t, s, step.want)
+	}
+	_ = s.Detach(ctx)
+	return made.TargetID
+}
+
+func (e *unparsedEnv) testOtherDestinations(t *testing.T) {
+	history := e.historyTab(t)
+	var r map[string]json.RawMessage
+	e.evalJSON(t, "linkTest.protect.parseRefusals("+jsArgs("chrome", e.allowed, e.hole, history, "exa%20mple")+")", &r)
+	for _, k := range []string{"setCookie", "deleteCookies", "setCookies", "storageSetCookies", "continueRequest", "loadNetworkResource", "pwaInstall", "pwaLaunch", "history"} {
+		var o cdpOutcome
+		if err := json.Unmarshal(r[k], &o); err != nil || o.Error.Message != refusedParseText {
+			t.Errorf("%s with %q: %s", k, e.hole, r[k])
+		}
+	}
+	var after struct {
+		Continued cdpOutcome `json:"continued"`
+		Body      string     `json:"body"`
+		Legacy    cdpOutcome `json:"legacyEnable"`
+		Intercept cdpOutcome `json:"continueIntercepted"`
+		LegacyOK  cdpOutcome `json:"legacyContinued"`
+	}
+	b, _ := json.Marshal(r)
+	_ = json.Unmarshal(b, &after)
+	if !after.Continued.OK || strings.Contains(after.Body, "cdp nav hole") {
+		t.Errorf("the paused request after the refusal: %+v, body %q", after.Continued, after.Body)
+	}
+	switch {
+	case !after.Legacy.OK:
+		t.Logf("this Chrome has no Network.setRequestInterception (%+v), so continueInterceptedRequest isn't tried", after.Legacy)
+	case after.Intercept.Error.Message != refusedParseText || !after.LegacyOK.OK:
+		t.Errorf("Network.continueInterceptedRequest with %q: %+v, then %+v", e.hole, after.Intercept, after.LegacyOK)
 	}
 }
