@@ -18,6 +18,7 @@ const { positionals, values } = parseArgs({
     guard: { type: 'string', default: '' },
     approval: { type: 'string', default: 'cert-review-approved' },
     forced: { type: 'string', default: '' },
+    draft: { type: 'string', default: process.env.PR_DRAFT ?? '' },
     artifacts: { type: 'string', default: '' },
     'base-manifest': { type: 'string', default: '' },
     'candidate-manifest': { type: 'string', default: '' },
@@ -103,8 +104,7 @@ async function settle() {
 
 async function plan() {
   const { action, label, approval } = values;
-  const starts = action === 'labeled' ? ['merge-ok', approval] : action === 'unlabeled' ? [approval] : [];
-  if (action === 'ready_for_review' || ((action === 'labeled' || action === 'unlabeled') && !starts.includes(label))) {
+  if ((action === 'labeled' || action === 'unlabeled') && label !== approval) {
     summary(`#${values.pr}: ${action} ${label} doesn't start or change a review`);
     await dangling();
     return output({ build: 'false', forced: '', self: 'false' });
@@ -116,6 +116,11 @@ async function plan() {
     const fail = values.guard === 'FAIL';
     await status(values.head, fail ? 'failure' : 'error', fail ? GUARD_FAIL(approval) : GUARD_INCOMPLETE);
     summary(`#${values.pr}: the certification self-guard says ${values.guard || 'nothing'}: not reviewed`);
+    return output({ build: 'false', forced: forced.join(','), self: String(self) });
+  }
+  if (values.draft !== 'false') {
+    await status(values.head, 'failure', 'draft: not reviewed, mark it ready for review');
+    summary(`#${values.pr} is a draft: not built, not reviewed`);
     return output({ build: 'false', forced: forced.join(','), self: String(self) });
   }
   if (label === approval && !self)
@@ -162,15 +167,14 @@ async function classify() {
   const differ = outputDiff(base, candidate);
   const behaviour = [...forced, ...differ];
   const bios = String(biosNeeded(differ));
-  const labelled = values.labels.split(',').includes('merge-ok');
   summary(`#${values.pr}: ${differ.length ? `ships differently: ${differ.join(', ')}` : 'identical build outputs'}${forced.length ? `; behaviour by path: ${forced.join(', ')}` : ''}`);
   if (behaviour.length === 0) {
     const n = Object.keys(candidate.files).length + Object.keys(candidate.packages).length;
     await status(values.head, 'success', `not behaviour: identical build outputs (${n} files and packages, SHA256SUMS ${candidate.sums.slice(0, 12)})`);
     return output({ go: 'false', behaviour: '', bios });
   }
-  if (!labelled) {
-    await status(values.head, 'failure', `waits for merge-ok to be reviewed (changes ${behaviour.slice(0, 4).join(', ')}${behaviour.length > 4 ? ', …' : ''})`);
+  if (values.draft !== 'false') {
+    await status(values.head, 'failure', `draft: not reviewed, mark it ready for review (changes ${behaviour.slice(0, 4).join(', ')}${behaviour.length > 4 ? ', …' : ''})`);
     return output({ go: 'false', behaviour: behaviour.join(','), bios });
   }
   await status(values.head, 'pending', `reviewing #${values.pr} at ${values.head.slice(0, 12)}`);
