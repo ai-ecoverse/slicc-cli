@@ -774,14 +774,24 @@ func (g *guard) continuePauseLocked(m *message) browserVerdict {
 	id, other := pausedIDs(m.Method, p)
 	g.markRequestLocked(m.SessionID, id)
 	g.markRequestLocked(m.SessionID, other)
-	params := map[string]any{"requestId": id}
-	method := "Fetch.continueRequest"
-	if m.Method == "Fetch.authRequired" {
+	method, params := continueWorld(m.Method, id, p)
+	msg, _ := g.newCallLocked(m.SessionID, method, params, false)
+	return browserVerdict{send: [][]byte{msg}}
+}
+
+func continueWorld(event, id string, p map[string]any) (string, map[string]any) {
+	method, params := "Fetch.continueRequest", map[string]any{"requestId": id}
+	switch event {
+	case "Network.requestIntercepted":
+		method, params = "Network.continueInterceptedRequest", map[string]any{"interceptionId": id}
+		if _, ok := p["authChallenge"]; ok {
+			params["authChallengeResponse"] = map[string]any{"response": "Default"}
+		}
+	case "Fetch.authRequired":
 		method = "Fetch.continueWithAuth"
 		params["authChallengeResponse"] = map[string]any{"response": "Default"}
 	}
-	msg, _ := g.newCallLocked(m.SessionID, method, params, false)
-	return browserVerdict{send: [][]byte{msg}}
+	return method, params
 }
 
 func (g *guard) worldPauseLocked(m *message, p map[string]any) ([]byte, bool) {
@@ -794,17 +804,7 @@ func (g *guard) worldPauseLocked(m *message, p map[string]any) ([]byte, bool) {
 	delete(g.handed, requestKey{m.SessionID, id})
 	g.markRequestLocked(m.SessionID, id)
 	g.markRequestLocked(m.SessionID, other)
-	method, params := "Fetch.continueRequest", map[string]any{"requestId": id}
-	switch m.Method {
-	case "Network.requestIntercepted":
-		method, params = "Network.continueInterceptedRequest", map[string]any{"interceptionId": id}
-		if _, ok := p["authChallenge"]; ok {
-			params["authChallengeResponse"] = map[string]any{"response": "Default"}
-		}
-	case "Fetch.authRequired":
-		method = "Fetch.continueWithAuth"
-		params["authChallengeResponse"] = map[string]any{"response": "Default"}
-	}
+	method, params := continueWorld(m.Method, id, p)
 	g.logf("cdp: continued a request a browser extension's world made without showing it to the page")
 	msg, _ := g.newCallLocked(m.SessionID, method, params, false)
 	return msg, true
