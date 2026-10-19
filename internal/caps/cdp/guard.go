@@ -15,6 +15,7 @@ const (
 	refusedCookies = "cookies on seven's origin"
 	refusedLost    = "slicc lost track of the browser's targets"
 	refusedPaused  = "slicc didn't pass this paused request to the page, so it could be seven's"
+	refusedParse   = "slicc can't parse this URL, so it could be a protected page"
 	LostGrace      = 2 * time.Second
 	maxTombstones  = 4096
 	maxRefused     = 4096
