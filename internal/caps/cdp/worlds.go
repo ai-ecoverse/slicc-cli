@@ -426,7 +426,9 @@ func (g *guard) keptLocked(w *worldSet, list []any, anonymous bool) ([]any, bool
 func coverageList(list []any) bool {
 	for _, item := range list {
 		e, _ := item.(map[string]any)
-		if _, ok := e["functions"]; ok && e["scriptId"] != nil {
+		_, functions := e["functions"]
+		_, entries := e["entries"]
+		if (functions || entries) && e["scriptId"] != nil {
 			return true
 		}
 	}
