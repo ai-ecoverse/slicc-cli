@@ -792,7 +792,7 @@ func TestFollowExitProtectsEveryAddressOfACDPEndpoint(t *testing.T) {
 	wsPort := closedPort(t)
 	cdpSrv := fakeCDPVersion(t, wsPort)
 	cdpPort := cdpSrv.Listener.Addr().(*net.TCPAddr).Port
-	other := closedPortOn(t, lan)
+	other := closedPortOn(t, lan, cdpPort, wsPort)
 	hosts := writeHosts(t, "127.0.0.1 localhost\n"+lan.String()+" localhost\n")
 	lanNet := netip.PrefixFrom(lan, min(24, lan.BitLen())).Masked().String()
 	cdpURL := "http://localhost:" + strconv.Itoa(cdpPort)
@@ -829,15 +829,21 @@ func TestFollowExitProtectsEveryAddressOfACDPEndpoint(t *testing.T) {
 	}
 }
 
-func closedPortOn(t *testing.T, addr netip.Addr) int {
+func closedPortOn(t *testing.T, addr netip.Addr, taken ...int) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", netip.AddrPortFrom(addr, 0).String())
-	if err != nil {
-		t.Fatal(err)
+	for range 64 {
+		ln, err := net.Listen("tcp", netip.AddrPortFrom(addr, 0).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+		if !slices.Contains(taken, port) {
+			return port
+		}
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-	return port
+	t.Fatalf("every free port on %s was one of %v", addr, taken)
+	return 0
 }
 
 func TestAttachProtectsEveryAddressOfACDPEndpoint(t *testing.T) {
@@ -845,7 +851,7 @@ func TestAttachProtectsEveryAddressOfACDPEndpoint(t *testing.T) {
 	wsPort := closedPort(t)
 	cdpSrv := fakeCDPVersion(t, wsPort)
 	cdpPort := cdpSrv.Listener.Addr().(*net.TCPAddr).Port
-	other := closedPortOn(t, lan)
+	other := closedPortOn(t, lan, cdpPort, wsPort)
 	hosts := writeHosts(t, "127.0.0.1 localhost\n"+lan.String()+" localhost\n")
 	env := setupLink(t, false, "--hosts", hosts, "--cdp-extra", "http://localhost:"+strconv.Itoa(cdpPort), "--allow", netip.PrefixFrom(lan, lan.BitLen()).String())
 	for _, c := range []struct {
