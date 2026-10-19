@@ -89,6 +89,115 @@ func TestCDPGuardBoundsFromTheEnvironmentNeverWidenTheGuard(t *testing.T) {
 	}
 }
 
+func unannounced(script fakeScript, sessionID string) fakeScript {
+	return func(method string, params json.RawMessage) (string, []string) {
+		result, after := script(method, params)
+		if method == "Target.attachToTarget" && strings.Contains(result, `"sessionId":"`+sessionID+`"`) {
+			return result, nil
+		}
+		return result, after
+	}
+}
+
+func TestCDPHoldsATargetsCommandsBeforeChromeAnnouncesTheirSession(t *testing.T) {
+	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "60s"), func(string, string) fakeScript { return unannounced(guardWaitScript("{}"), "S2") })
+	fake.delay("Network.enable", 10*time.Minute)
+	fake.delay("Browser.getVersion", 10*time.Minute)
+	var r guardHoldResult
+	env.evalJSON(t, "linkTest.protect.guardHold('chrome-2')", &r)
+	if !r.Enable.refused() || !strings.Contains(r.Enable.Error.Message, "slicc can't keep seven's origin out of this target: its guard made no progress in 2s") || r.Enable.MS > 15000 {
+		t.Errorf("Page.enable on a session Chrome answered but never announced: %+v, want it held for the target's guard and refused at the 2 s idle bound", r.Enable)
+	}
+}
+
+type lateSessionResult struct {
+	Enable struct {
+		cdpOutcome
+		MS int `json:"ms"`
+	} `json:"enable"`
+	Attach *cdpOutcome `json:"attach"`
+}
+
+func pageCommandsOn(fake *fakeCDPBrowser, sessionID string) []int {
+	var at []int
+	for i, raw := range fake.received() {
+		var m struct {
+			SessionID string `json:"sessionId"`
+		}
+		if json.Unmarshal([]byte(raw), &m) == nil && m.SessionID == sessionID {
+			at = append(at, i)
+		}
+	}
+	return at
+}
+
+func TestCDPRefusesCommandsOnASessionThatNeverRegisters(t *testing.T) {
+	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "60s"), func(string, string) fakeScript { return guardWaitScript("{}") })
+	fake.every(`{"method":"Target.targetInfoChanged","sessionId":"RELAY","params":{"targetInfo":{"targetId":"T1","type":"page","url":"about:blank","title":"","attached":false}}}`)
+	var r lateSessionResult
+	env.evalJSON(t, "linkTest.protect.lateSession('chrome-2', 'NOSUCH', null)", &r)
+	if !r.Enable.refused() || r.Enable.Error.Message != "slicc: refused: slicc doesn't know which target this session belongs to: its guard made no progress in 2s" || r.Enable.MS < 1500 || r.Enable.MS > 15000 {
+		t.Errorf("Page.enable on a session nobody attached: %+v, want it held and refused at the 2 s idle bound", r.Enable)
+	}
+	if at := pageCommandsOn(fake, "NOSUCH"); len(at) > 0 {
+		t.Errorf("the browser got %d commands on the unknown session", len(at))
+	}
+}
+
+func lateAttachScript(url string) fakeScript {
+	var attaches atomic.Int32
+	return func(method string, _ json.RawMessage) (string, []string) {
+		switch method {
+		case "Target.attachToTarget":
+			if attaches.Add(1) == 1 {
+				return `{"sessionId":"LATE"}`, []string{`{"method":"Target.attachedToTarget","params":{"sessionId":"LATE","targetInfo":{"targetId":"T9","type":"page","url":"` + url + `/doc","title":"","attached":true},"waitingForDebugger":false}}`}
+			}
+			return `{"sessionId":"NAV9"}`, nil
+		case "Browser.getVersion":
+			return `{"product":"Chrome/154.0.8037.98","protocolVersion":"1.3"}`, nil
+		}
+		return "{}", nil
+	}
+}
+
+func TestCDPDecidesAHeldSessionsCommandsOnceItRegisters(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		protected bool
+	}{
+		{"on seven's origin", true},
+		{"elsewhere", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, fake := setupFakeProtect(t, func(seven, allowed string) fakeScript {
+				if tc.protected {
+					return lateAttachScript(seven)
+				}
+				return lateAttachScript(allowed)
+			})
+			var r lateSessionResult
+			env.evalJSON(t, "linkTest.protect.lateSession('chrome-2', 'LATE', 'T9')", &r)
+			at := pageCommandsOn(fake, "LATE")
+			if tc.protected {
+				if !r.Enable.refused() || !strings.Contains(r.Enable.Error.Message, "target is on seven's origin") || len(at) > 0 {
+					t.Errorf("Page.enable on a session that registers on seven's origin: %+v, %d commands reached the browser; want it refused", r.Enable, len(at))
+				}
+				return
+			}
+			attach := -1
+			for i, raw := range fake.received() {
+				if strings.Contains(raw, `"Target.attachToTarget"`) && strings.Contains(raw, `"T9"`) {
+					attach = i
+					break
+				}
+			}
+			if !r.Enable.OK || len(at) != 1 || attach < 0 || at[0] < attach {
+				t.Errorf("Page.enable on a session that registers elsewhere: %+v, sent at %v, the attach at %d; want it held until the session registered and then answered", r.Enable, at, attach)
+			}
+		})
+	}
+}
+
 func TestCDPRefusesAHeldTargetAtTheOuterBoundWhileChromeIsLive(t *testing.T) {
 	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(string, string) fakeScript { return guardWaitScript("{}") })
 	fake.delay("Network.enable", 10*time.Minute)

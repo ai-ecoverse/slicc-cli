@@ -25,6 +25,7 @@ func (g *guard) fromBrowser(data []byte) browserVerdict {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	defer g.resolveUnknownLocked()
 	g.progressLocked(&m)
 	if m.ID != nil {
 		return g.responseLocked(&m, data)
@@ -112,6 +113,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		send = g.touchLocked(id, "page")
 	case kindAttach:
 		if t, ok := g.targets[attached]; ok {
+			g.attachAnsweredLocked(m.SessionID, res, t)
 			send = g.touchLocked(attached, t.typ)
 		}
 	}
@@ -266,6 +268,17 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		g.browserSessions[p.SessionID] = true
 	}
 	return browserVerdict{forward: data, send: append(send, g.touchLocked(info.TargetID, info.Type)...)}
+}
+
+func (g *guard) attachAnsweredLocked(parent string, res map[string]any, t *target) {
+	sid, _ := res["sessionId"].(string)
+	if sid == "" || sid == g.relaySession || g.sessions[sid] != nil || g.held[sid] != nil || g.hidden[sid] {
+		return
+	}
+	g.sessions[sid] = &session{id: sid, target: t.id, parent: parent, typ: t.typ}
+	if t.typ == "browser" {
+		g.browserSessions[sid] = true
+	}
 }
 
 func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {

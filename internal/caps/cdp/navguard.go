@@ -162,9 +162,7 @@ func (g *guard) navForgetLocked(targetID string) {
 	nt.settle(true)
 }
 
-func (g *guard) navWait(sessionID string) <-chan struct{} {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+func (g *guard) navWaitLocked(sessionID string) <-chan struct{} {
 	s, ok := g.sessions[sessionID]
 	if !ok || !navTypes[s.typ] {
 		return nil
