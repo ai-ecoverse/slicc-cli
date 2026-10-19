@@ -43,7 +43,10 @@ func commitLauncher(t *testing.T, repo string, run func(args ...string), content
 }
 
 func platformDeps() []string {
-	const version = "1.2.4"
+	return platformDepsAt("1.2.4")
+}
+
+func platformDepsAt(version string) []string {
 	deps := []string{}
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		for _, arch := range []string{"arm64", "amd64"} {
@@ -131,6 +134,31 @@ func TestSliccyNextChecksTheRegistryEvenInADryRun(t *testing.T) {
 	r := sliccyNext(t, node, repo, filepath.Join(t.TempDir(), "out"), registryEnv(t, newFakeRegistry(t, deps[1:]...)), "--dry-run")
 	if r.code == 0 || !strings.Contains(r.stderr, "refusing to publish sliccy@7.0.0-next.1.2.4; not on the registry: "+deps[0]) || strings.Contains(r.stdout+r.stderr, "Publishing to") {
 		t.Fatalf("%+v", r)
+	}
+}
+
+func TestSliccyNextDryRunChecksThePreviousReleaseWhileTheLatestPublishes(t *testing.T) {
+	node := requireNode(t)
+	repo, run := gitRepo(t)
+	commitLauncher(t, repo, run, "launcher 1.2.3\n", "v1.2.3")
+	commitLauncher(t, repo, run, "launcher 1.2.4\n", "v1.2.4")
+	latest := platformDeps()
+	out := filepath.Join(t.TempDir(), "out")
+	reg := newFakeRegistry(t, append(platformDepsAt("1.2.3"), latest[1:]...)...)
+	r := sliccyNext(t, node, repo, out, registryEnvWaiting(t, reg, 120), "--dry-run")
+	if r.code != 0 || strings.Contains(r.stdout, "waiting for") || !strings.Contains(r.stdout, "npm doesn't serve every platform package of v1.2.4 yet, so its release is still publishing; the dry run checks v1.2.3 instead") || !strings.Contains(r.stdout, "sliccy-next: PASS sliccy@7.0.0-next.1.2.3 (dry run)") {
+		t.Fatalf("a nightly that starts while v1.2.4 reaches npm waited out its job: %+v", r)
+	}
+	if launcherJS, err := os.ReadFile(filepath.Join(out, "slicc", "bin", "slicc.js")); err != nil || string(launcherJS) != "launcher 1.2.3\n" {
+		t.Fatalf("launcher %q (%v), want the one at v1.2.3", launcherJS, err)
+	}
+	r = sliccyNext(t, node, repo, filepath.Join(t.TempDir(), "out"), registryEnv(t, newFakeRegistry(t, latest[1:]...)), "--dry-run")
+	if r.code == 0 || !strings.Contains(r.stderr, "refusing to publish sliccy@7.0.0-next.1.2.3; not on the registry") || strings.Contains(r.stdout, "PASS") {
+		t.Fatalf("neither release on npm: %+v", r)
+	}
+	r = sliccyNext(t, node, repo, filepath.Join(t.TempDir(), "out"), registryEnv(t, newFakeRegistry(t, append(platformDepsAt("1.2.3"), latest[1:]...)...)))
+	if r.code == 0 || !strings.Contains(r.stderr, "refusing to publish sliccy@7.0.0-next.1.2.4; not on the registry: "+latest[0]) || strings.Contains(r.stdout, "v1.2.3") {
+		t.Fatalf("a real publish fell back to an older release: %+v", r)
 	}
 }
 
