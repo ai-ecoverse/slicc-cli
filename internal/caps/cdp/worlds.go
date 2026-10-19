@@ -533,7 +533,7 @@ func (g *guard) logEntryEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
 		e, _ := p["entry"].(map[string]any)
 		u, _ := e["url"].(string)
-		if (u != "" && g.o.URL(u)) || g.scrubStacksLocked(w, e) {
+		if (u != "" && g.o.URL(u)) || g.scrubStacksLocked(w, e) || g.fromWorldLocked(g.worldTargetLocked(m.SessionID), e) {
 			return false, false, nil
 		}
 		return true, false, nil
@@ -647,7 +647,7 @@ func (g *guard) fromWorldLocked(target string, root any) bool {
 		switch t := v.(type) {
 		case map[string]any:
 			for k, val := range t {
-				if id, ok := val.(string); ok && requestIDKeys[k] && g.worldRequestKnownLocked(target, id) {
+				if id, ok := val.(string); ok && (requestIDKeys[k] || strings.HasSuffix(k, "RequestId")) && g.worldRequestKnownLocked(target, id) {
 					return true
 				}
 				stack = append(stack, val)
