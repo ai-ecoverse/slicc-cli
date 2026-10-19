@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift (see [Coming from slicc-node](#coming-from-slicc-node)).
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, `slicc tray` (on a machine and inside seven), remote control with `prompt`, `watch` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, `slicc tray` (on a machine and inside seven), remote control with `prompt`, `watch`, `wait` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
 
 ## Commands (planned)
 
@@ -15,8 +15,8 @@
 | `slicc tray [--json] [-q] [-a]` | list the `slicc` processes on this machine that hold a link: mode, seven, device, state and offers (works now; see [Running links](#running-links-slicc-tray)) |
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)). `-` or `@<file>` in place of `<join-url>` reads it from stdin or a file, out of sight of `ps` |
-| `slicc <join-url> prompt <text>`, `watch`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-and-abort)) |
-| `slicc <join-url> prompt`, `watch`, `abort` inside seven | the same commands from seven's kernel, as `@ai-ecoverse/wasi-slicc` (works now; see [Inside seven](#inside-seven)) |
+| `slicc <join-url> prompt <text>`, `watch`, `wait`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, wait until it has nothing left to do, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)) |
+| `slicc <join-url> prompt`, `watch`, `wait`, `abort` inside seven | the same commands from seven's kernel, as `@ai-ecoverse/wasi-slicc` (works now; see [Inside seven](#inside-seven)) |
 | `slicc tray [url \| rotate \| unlink <device> \| retry]` inside seven | this seven's tray: its state and devices, the join URL on request, rotate it, drop a device, reconnect (see [Inside seven](#inside-seven)) |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
 | `slicc update [--check]` | replace this binary with the latest release (works now; see [Updates](#updates)) |
@@ -299,7 +299,7 @@ Release builds outside npm and app bundles print a notice on stderr when a newer
 ## Telemetry
 
 Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from the module version) send operational telemetry through [go-optel](https://github.com/ai-ecoverse/go-optel) with the app id `slicc-cli`, sampled once per process (1 in 100 by default):
-- `enter`, with the subcommand as `source`, from a fixed list (`abort`, `attach`, `browsers`, `follow`, `install`, `launch`, `open`, `pair`, `prompt`, `unpair`, `update`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
+- `enter`, with the subcommand as `source`, from a fixed list (`abort`, `attach`, `browsers`, `follow`, `install`, `launch`, `open`, `pair`, `prompt`, `unpair`, `update`, `wait`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
 - `error`, for operational failures, from a fixed set of sources (`update`, `signal`, `link`, `browser`, `ssh`, `cdp`). Messages pass through go-optel's sanitizer, which strips URLs and paths.
 
 `--version`, and any command line with `--help`, `-h` or `-help` (such as `slicc update --help`), send nothing, and development builds never configure a client.
@@ -737,7 +737,7 @@ Link spec §5.14 (J1). slicc-jerk (`jerk`, [Companion tools](#companion-tools)) 
 **Offered** when host jerk is found: of the first `jerk` on `PATH` and `jerk` in the data folder's `bin`, in that order, the first whose `jerk --version` names 0.6.0 or later. 0.6.0 is the first slicc-jerk with the `--via-link` calls below. An older jerk counts as absent: slicc says `jerk: host jerk <version> is older than 0.6.0; run slicc install jerk`, and HELLO has neither cap.
 - `slicc` and `slicc attach`: caps `jerk` and `jerk-seal`, unless `--no-jerk`.
 - `follow`: only with `--jerk` (cap `jerk`) or `--jerk-seal` (both).
-- `prompt`, `watch` and `abort`: never.
+- `prompt`, `watch`, `wait` and `abort`: never.
 - slicc says `jerk: offering slicc-jerk <version> (jerk, jerk-seal)`, and HELLO adds `"jerk": { "version" }`. Without the cap an OPEN gets `EOPNOTSUPP`.
 
 **OPEN** `{ "kind": "jerk", "op", "provider"?, "scope"?, "lease_id"?, "duration"?, "params"? }`. The page sends END right after it. slicc runs jerk as the user, with no terminal and its stderr dropped:
@@ -1089,7 +1089,7 @@ slicc @<file> follow [flags]
 
 `follow` links this machine to a seven on another machine through the tray hub (see [Tray hub signaling](#tray-hub-signaling-remote-setup)). It serves the link until interrupted (`SIGINT`, `SIGTERM`) and reconnects when the link drops. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics. The join URL is never printed.
 
-**The join URL off the command line.** On the command line, `ps` shows the join URL to every user of this machine. In its place, `-` reads it from stdin and `@<file>` from a file: the first non-empty line, trimmed. From stdin slicc reads only up to that line's end, so the rest of stdin is left for `prompt -`. The file must be a regular file, not a symlink. On macOS and Linux it must also belong to you and be readable by no one else (`chmod 600`). Exit 2 follows when there's no join URL, when the file can't be read, breaks those rules or is over 64 KiB, or when what's there isn't a join URL. The message names the file but never shows what it holds, inside seven too. `prompt`, `watch` and `abort` take `-` and `@<file>` the same way, inside seven too. There is no environment variable for it, because `--runner`'s processes would inherit it.
+**The join URL off the command line.** On the command line, `ps` shows the join URL to every user of this machine. In its place, `-` reads it from stdin and `@<file>` from a file: the first non-empty line, trimmed. From stdin slicc reads only up to that line's end, so the rest of stdin is left for `prompt -`. The file must be a regular file, not a symlink. On macOS and Linux it must also belong to you and be readable by no one else (`chmod 600`). Exit 2 follows when there's no join URL, when the file can't be read, breaks those rules or is over 64 KiB, or when what's there isn't a join URL. The message names the file but never shows what it holds, inside seven too. `prompt`, `watch`, `wait` and `abort` take `-` and `@<file>` the same way, inside seven too. There is no environment variable for it, because `--runner`'s processes would inherit it.
 
 **Flags.**
 - `--exit`: offer this machine's network to seven, as `tcp` and `resolve` streams (cap `net`), `http` streams (cap `http`), `ws` streams (cap `ws`) and `udp` streams (cap `udp`) under the remote policy, so public addresses only by default. Without `--exit`, all five are refused with `EOPNOTSUPP`.
@@ -1113,16 +1113,18 @@ HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode
 
 **Stops** with exit 1 and says why on `INVALID_JOIN_CAPABILITY`, `TRAY_EXPIRED` or `TRAY_SUPERSEDED_MISSING_JOIN_URL` from the hub, and on `UNTRUSTED`, `UNSUPPORTED_RUNTIME` or `NO_FINGERPRINT` (an internal error: the answer had no SHA-256 fingerprint) from seven. The device's fingerprint is always SHA-256.
 
-## Remote control: `slicc prompt`, `watch` and `abort`
+## Remote control: `slicc prompt`, `watch`, `wait` and `abort`
 
 ```
-slicc <join-url> prompt [--steer | --reject] [--thinking] [--json] [--plain] [--abort-on-interrupt] <text>|@file|-
+slicc <join-url> prompt [--allsettled <quiet>] [--steer | --reject] [--thinking] [--json] [--plain] [--abort-on-interrupt] <text>|@file|-
 slicc <join-url> watch [--thinking] [--json] [--plain]
+slicc <join-url> wait [--allsettled <quiet>] [--timeout <limit>] [--json]
 slicc <join-url> abort
 slicc prompt --cdp <url> [--origin <origin>]... [flags] <text>|@file|-
 slicc watch --cdp <url> [--origin <origin>]... [flags]
+slicc wait --cdp <url> [--origin <origin>]... [flags]
 slicc abort --cdp <url> [--origin <origin>]...
-slicc prompt|watch|abort --signal stdio [flags] …
+slicc prompt|watch|wait|abort --signal stdio [flags] …
 ```
 
 These commands talk to seven's agent over a link that offers nothing to seven (`caps: []`).
@@ -1151,6 +1153,27 @@ These commands talk to seven's agent over a link that offers nothing to seven (`
   - `3` without permission;
   - `130` on Ctrl-C or `SIGTERM`.
 - **Ctrl-C** leaves the run going in seven. With `--abort-on-interrupt`, slicc first opens `abort`.
+
+**`prompt --allsettled <quiet>`** (for benchmarks and scripts) goes on after the prompt's run until seven has nothing left to do. The cone can end a run while scoops it started are still working, and run again when their results come in. `<quiet>` is a duration such as `2m` or `0s`.
+- **Settled** means seven says it isn't busy (`busy` false, see [`agent`](#agent-page-cap-agent-node--page) below), and nothing has come from seven for `<quiet>`. The quiet period starts once the stream is open, and every line from seven restarts it.
+- **A seven that doesn't report `busy`:** before sending anything, slicc opens a `watch` with `busy`. When seven's answer doesn't say whether it's busy, slicc says `this seven doesn't report when its agent is idle; update it` and exits 1. The prompt isn't sent.
+- **Output:** the prompt's run streams as usual. After its `end`, slicc opens `watch` with `busy`, and `since` the last event it showed, so the cone's later runs stream as they would in `watch`, with nothing shown twice.
+- **`--json`:** the prompt's events up to its `end` line, then the watch's events, as seven sent them. The last line is slicc's own `{"t":"settled"}`.
+- **Exit status:** the prompt's own run decides. An `end` with `error` or `aborted` exits 1 at once, as without `--allsettled`. Otherwise slicc exits 0 once seven has settled, whatever the later runs did.
+  - A stream or link that ends before seven has settled exits 1 (`lost the link to seven; the run goes on there`).
+  - Bad usage, a missing permission and Ctrl-C exit as for `prompt` above.
+- **No time limit of its own.** A lick that's held in seven's outbox keeps seven busy, and so does a scoop that never finishes. Bound the wait with the caller's own timeout, or with `wait --timeout`.
+
+**`wait`** follows the agent without sending anything, and exits once seven has settled, as `prompt --allsettled` does. `--allsettled <quiet>` sets the quiet period (default `0s`: exit as soon as seven isn't busy).
+- **Output:** `slicc: seven is idle` on stderr, and nothing on stdout. With `--json`, the events as seven sent them, then `{"t":"settled"}`.
+- **`--timeout <limit>`:** give up after `<limit>` (default: no limit). slicc says `seven didn't settle within <limit>` and exits 124.
+- **Exit status:**
+  - `0` once seven has settled;
+  - `1` for a seven that doesn't report `busy`, and for a stream or link that ends first;
+  - `2` for bad usage;
+  - `3` without permission;
+  - `124` on timeout;
+  - `130` on Ctrl-C or `SIGTERM`.
 
 **`watch`** follows the agent until Ctrl-C or `SIGTERM`, then exits 0.
 - **Output:** `user` events go to stdout as `> <text>`, on one line. Assistant text goes to stdout as for `prompt`, and a line ends at each run's end. Everything else goes to stderr, as for `prompt`, plus `run ended: <reason>` for a run that didn't end with `stop`. `--json` prints the events instead.
@@ -1190,10 +1213,11 @@ Summaries are one line of at most 200 characters. Escape sequences and control c
   - The page then delivers it. Its first line is `{"t":"delivered","delivered"}`, or it resets with `EBUSY` instead.
 - **Aborting:** a RESET from the node, or a closed link, doesn't abort the run. Only `abort` does.
 
-**`watch`:** `OPEN { "kind": "agent", "op": "watch", "since"?: "<entry id>", "thinking"?: true }` on its own channel.
-- **Answer:** OPENED `{ "head": "<entry id>", "gap"?: true }`, then NDJSON events until either side resets.
+**`watch`:** `OPEN { "kind": "agent", "op": "watch", "since"?: "<entry id>", "thinking"?: true, "busy"?: true }` on its own channel.
+- **Answer:** OPENED `{ "head": "<entry id>", "gap"?: true, "busy"?: true | false }`, then NDJSON events until either side resets.
 - **Without `since`:** the events start at the next one.
 - **With `since`:** the page first replays `since`'s own entry when it's `text` or `thinking` (its whole text so far, as one `delta`), then every entry after it. `gap: true` means the transcript no longer holds `since`, and the events start at the next one.
+- **With `busy`** (`prompt --allsettled` and `wait`): OPENED says whether the agent has anything left to do, and a `busy` line follows each time that changes. An OPENED without `busy` means seven doesn't report it.
 
 **`abort`:** `OPEN { "kind": "agent", "op": "abort" }`, answered OPENED `{ "aborted": true | false }` (`false` when nothing was running), then END.
 
@@ -1210,6 +1234,7 @@ Summaries are one line of at most 200 characters. Escape sequences and control c
 | `{"t":"notice","id","text"}` | retries, compactions, rewinds |
 | `{"t":"error","id","message","detail"?}` | an error |
 | `{"t":"delivered","delivered"}` | a long prompt was taken (`prompt` only) |
+| `{"t":"busy","busy","why"?}` | the agent became busy or idle (`watch` with `busy` only) |
 | `{"t":"end","reason","message"?}` | the last line of a `prompt` stream |
 
 - **Ids:** `id` is the transcript entry id, and `delta` lines for one `id` arrive in order.
@@ -1261,8 +1286,9 @@ PID   MODE    SEVEN           DEVICE     STATE                   OFFERS
 `slicc` also runs inside seven's kernel, so that one seven's agent or user can prompt, watch and abort another seven's agent, and see and manage this seven's own tray. That build is `slicc.wasm`, slicc-cli's client commands compiled with `GOOS=wasip1 GOARCH=wasm` and `CGO_ENABLED=0`, and it ships as the npm package `@ai-ecoverse/wasi-slicc`, at slicc-cli's own version. seven's page holds the WebRTC link; slicc only reaches the page's link facade.
 
 ```
-slicc <join-url> prompt [--steer | --reject] [--thinking] [--json] [--plain] <text>|@file|-
+slicc <join-url> prompt [--allsettled <quiet>] [--steer | --reject] [--thinking] [--json] [--plain] <text>|@file|-
 slicc <join-url> watch [--thinking] [--json] [--plain]
+slicc <join-url> wait [--allsettled <quiet>] [--timeout <limit>] [--json]
 slicc <join-url> abort
 slicc tray [--json]
 slicc tray url
@@ -1273,7 +1299,7 @@ slicc --version
 slicc --help
 ```
 
-- **Commands:** `prompt`, `watch` and `abort` with a join URL behave as in [Remote control](#remote-control-slicc-prompt-watch-and-abort): the same flags, output, styling, `--json` events, resuming and exit codes, from the same code. The differences:
+- **Commands:** `prompt`, `watch`, `wait` and `abort` with a join URL behave as in [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort): the same flags, output, styling, `--json` events, resuming and exit codes, from the same code. The differences:
   - **Ctrl-C** ends slicc with 130 (the kernel's default for `SIGINT`), `watch` included, and a running prompt goes on in the other seven. `--abort-on-interrupt` isn't offered.
   - **Exit 3** covers the facade's own refusals too. When the facade gives a message (`unlock the vault to continue`, or the other seven's refusal), slicc prints it instead of the Linked devices hint.
   - **A terminal** is a standard stream that is a character device. Styling then follows `TERM`, `NO_COLOR` and `--plain` as usual.
@@ -1286,7 +1312,7 @@ slicc --help
   - **`slicc tray retry`** reconnects the tray's links, as the Reconnect button does.
   - **Not here:** choosing the exit (that's routing, not tray state), and SLICC six's `host join` and `host leave`: a seven follower runs no kernel or agent of its own, so following stays with `#follow=` and the UI's Leave.
   - **Exit status:** 0, 1 on failure (`ENOTCONN` when the tray isn't connected, a facade that doesn't answer within 1 minute, or 5 minutes for `rotate` and `unlink`, which seven may ask you to approve), 2 for bad usage, 3 when seven refuses (`EACCES`).
-- **Everything else** exits 2 with `slicc: <command> isn't available inside seven`: `follow`, `attach`, `open`, `browsers`, the default flow, `update`, `install`, and `prompt`, `watch` or `abort` without a join URL. `--help` lists only what works there.
+- **Everything else** exits 2 with `slicc: <command> isn't available inside seven`: `follow`, `attach`, `open`, `browsers`, the default flow, `update`, `install`, and `prompt`, `watch`, `wait` or `abort` without a join URL. `--help` lists only what works there.
 - **What the build leaves out** (build constraints): pion and the link, CDP, SSH, mounts, the kernel listener, the policy, browser discovery, telemetry and updates.
 
 **The link facade.** slicc reads its address from `SLICC_LINK_URL` only, as `tcp://127.0.0.1:<port>` on the kernel's loopback (any `127.x` address, or `localhost`). Without it, or with another shape, slicc exits 1. Each `agent` stream (see [`agent`](#agent-page-cap-agent-node--page)) is one connection, carrying records of a `u8` type, a `u32` big-endian length and the payload, both ways:
@@ -1734,14 +1760,14 @@ slicc-node's hostfs ([its README, *Host folders*](https://github.com/ai-ecoverse
   - Paths go through `\\?\`, so device names and 8.3 names are plain names inside the folder.
 
 #### 5.11 `agent` (page cap `agent`), node → page: remote control
-`slicc prompt`, `slicc watch` and `slicc abort` talk to seven's agent, the cone, which slicc-agent hosts. The page serves each stream through `remoteControl(connection)` from `@ai-ecoverse/slicc-agent/page`, on top of its `AgentConnection`, so the CLI never speaks pi's protocol.
+`slicc prompt`, `slicc watch`, `slicc wait` and `slicc abort` talk to seven's agent, the cone, which slicc-agent hosts. The page serves each stream through `remoteControl(connection)` from `@ai-ecoverse/slicc-agent/page`, on top of its `AgentConnection`, so the CLI never speaks pi's protocol.
 
 - **Who may:** the page advertises `agent` only to links the user allowed to control it.
   - A **local** link ([§1.1](#11-local-setup-over-cdp)) gets it by default, because a CLI holding the browser's CDP can drive the page anyway.
   - A **remote** link gets it only after the user turns on *Allow remote control* for that device in Linked devices. It's off by default, and keyed on the fingerprint.
   - Seven lists every device that has linked once, even one that's offline or offered no caps, so the toggle can be found after a refused `prompt`.
   - Without the cap, the node doesn't open `agent` streams, and the page refuses them with `EACCES`.
-- **Control-only links:** `prompt`, `watch` and `abort` links advertise `caps: []`. The page gives them no `<host>.slicc.internal`, no exit entry, and opens no `kernel` streams to them.
+- **Control-only links:** `prompt`, `watch`, `wait` and `abort` links advertise `caps: []`. The page gives them no `<host>.slicc.internal`, no exit entry, and opens no `kernel` streams to them.
 - **One device, several processes:** the node's HELLO ([§4](#4-hello)) and the [§1.1](#11-local-setup-over-cdp) hello both carry a random per-process `"node"` id.
   - The page replaces an older link of the same device (local: any local link; remote: the same fingerprint) only when `node` matches.
   - Over the tray, the page learns `node` at HELLO, so any replacement waits for HELLO.
@@ -1761,6 +1787,17 @@ slicc-node's hostfs ([its README, *Host folders*](https://github.com/ai-ecoverse
   - **Without `since`,** the stream starts at the next event.
   - **With `since`,** the page first replays `since`'s own entry when it's `text` or `thinking`, as one `delta` with its whole text so far. Then it replays every entry after it. Clients skip what they already printed.
   - **`gap: true`** means the transcript no longer holds `since` (a new session, or a compaction). The stream then starts at the next event.
+  - **`busy`** (`"busy": true` in the OPEN) is for `slicc prompt --allsettled` and `slicc wait`. The cone can end a run while scoops it started are still working, and run again when their results come in as `scoop-notify` licks. A client that sees only the cone's events can't tell that apart from being done.
+    - **OPENED** carries `"busy": true | false`, the state after any replay. A page that doesn't support it leaves `busy` out, and the node then reports that seven doesn't support it.
+    - **Then** the page sends `{"t":"busy","busy":true|false}` each time the value changes, in order with the other events. It has no `id`, and it's never replayed.
+    - **`busy` is true** while, for the cone the stream belongs to:
+      - the cone has a run or a queued input;
+      - a live scoop of that cone has a run, a queued input or a feed;
+      - a lick for the cone is queued or still to be delivered (a `scoop-notify` result, or a scoop `wait`'s delivery). That includes a lick held in the agent's outbox until its conversation's model is known. If the model never comes, `busy` stays true, so the client bounds its wait.
+    - **It turns false** only when none of that holds. A lick from outside (a cron, a file watch) counts once it's queued, not before.
+    - **`why`:** a `busy: true` line may carry `"why": ["cone", "scoop:<name>", "pending-lick"]`, to be logged. The node doesn't use it, and it's left out when `busy` is false.
+    - **Ordering:** a `run start` never comes before the `busy: true` that covers it, and the `busy: false` comes after the last `run end`.
+    - **Computed** from the durable documents' subscriptions (the cone's and its scoops' `pi.live`, `ScoopWorkDoc.feeds` and the licks outbox), and a line goes out only when the value flips.
 - **Events:** one JSON object per line, mapped by slicc-agent from pi-durable's agent events (`watchEvents`) and handed to the page by `remoteControl(connection)` from `@ai-ecoverse/slicc-agent/page`.
   - `{"t":"user","id","text","delivered"}`;
   - `{"t":"text","id","delta"}`: assistant text as it streams;
@@ -1768,7 +1805,8 @@ slicc-node's hostfs ([its README, *Host folders*](https://github.com/ai-ecoverse
   - `{"t":"tool","id","call","name","summary"}` and `{"t":"tool-result","id","call","ok","summary"}`;
   - `{"t":"run","state":"start"|"end","reason"?}`. These have no `id`, so a resume doesn't replay a missed `run end`. Clients use them only for layout and notices, and the `end` line or the next `user` event is authoritative.
   - `{"t":"notice","id","text"}`: retries, compactions, rewinds;
-  - `{"t":"error","id","message","detail"?}`.
+  - `{"t":"error","id","message","detail"?}`;
+  - `{"t":"busy","busy":true|false,"why"?:[…]}`: only on `watch` streams opened with `busy` (above).
   - **Ids** are opaque strings.
     - `user`, `tool-result`, and a `notice` or `error` that is a transcript entry: the entry id, such as `"42"`.
     - An assistant message's `text`, `thinking` and `tool` blocks: `"a<ts>.<block>"`, where `<ts>` is the message's own timestamp (set when its generation starts, and kept in the committed entry) and `<block>` its content index. An assistant message isn't an entry until it's committed, so this id is stable from the first delta to the committed entry. A second message with the same timestamp gets `"a<ts>~1.<block>"`, a third `~2`, and so on.
@@ -1840,7 +1878,7 @@ jerk ([ai-ecoverse/slicc-jerk](https://github.com/ai-ecoverse/slicc-jerk)) gets 
 |---|---|---|
 | `slicc`, `slicc attach` (local) | yes, when `jerk` ≥ the minimum version is on the host's `PATH` or in slicc's data dir. `--no-jerk` turns both off. | yes, by default |
 | `slicc <join> follow` (remote) | only with an explicit `--jerk` | only with an explicit `--jerk-seal`, which implies `--jerk`. A remote seven pulling this machine's tokens into its browser is a bigger grant than starting a sign-in. |
-| `prompt`, `watch`, `abort` | no | no |
+| `prompt`, `watch`, `wait`, `abort` | no | no |
 | any node without host jerk | no. Host providers are missing in seven. | no |
 
 HELLO adds `"jerk": { "version": "1.0.0" }` next to `caps`.
@@ -1931,7 +1969,7 @@ From [slicc-bios#360](https://github.com/ai-ecoverse/slicc-bios/pull/360) and [s
 How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-leader), and this seven's own tray. This isn't a link stream. It's seven's page serving its own kernel. The page holds the WebRTC; the program never sees the hub, the join state or the peer connection.
 
 - **The program:** `@ai-ecoverse/wasi-slicc`, slicc-cli's client command layer built for `GOOS=wasip1` (published by slicc-cli, offered by bios's catalog).
-  - **Commands:** `slicc <join-url> prompt|watch|abort`, with the CLI's own flags, output and `--json` events, and `slicc tray` (below).
+  - **Commands:** `slicc <join-url> prompt|watch|wait|abort`, with the CLI's own flags, output and `--json` events, and `slicc tray` (below).
   - **Anything else** exits 2 with `slicc: <command> isn't available inside seven`. A prompt without a join URL is refused the same way.
   - **How it reaches the facade:** through its host module, at `SLICC_LINK_URL` (below).
 - **Where it's served:** a page-served kernel facade with the caller's stamp on each connection, mirroring the CDP facade on `127.0.0.1:9222`. The mechanism is [slicc-kernel#526](https://github.com/ai-ecoverse/slicc-kernel/issues/526), shipped in [slicc-kernel 1.90.0](https://github.com/ai-ecoverse/slicc-kernel/tree/v1.90.0#page-facades) ([#556](https://github.com/ai-ecoverse/slicc-kernel/pull/556)):
