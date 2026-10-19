@@ -145,7 +145,7 @@ Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and
 
 | slicc-node | `slicc` |
 | --- | --- |
-| `npx @ai-ecoverse/slicc-node`, which opens seven in the default browser | `slicc open` (or `slicc --default-browser`) does that, in any browser and without CDP (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)). `npx sliccy@next`, or `slicc` from `curl -fsSL https://get.sliccy.ai/slicc \| sh` (see [Install with curl](#install-with-curl)). It launches or attaches to a Chromium browser over CDP and opens seven there (see [The default](#the-default-slicc)) |
+| `npx @ai-ecoverse/slicc-node`, which opens seven in the default browser | `slicc open` (or `slicc --default-browser`) does that, without CDP, in Chrome, Edge or Firefox; Safari is expected not to work, untested (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)). `npx sliccy@next`, or `slicc` from `curl -fsSL https://get.sliccy.ai/slicc \| sh` (see [Install with curl](#install-with-curl)). It launches or attaches to a Chromium browser over CDP and opens seven there (see [The default](#the-default-slicc)) |
 | `--page <url>`, `--origin <url>` | `--page <url>`, `--origin <origin>` |
 | `--port`, `--rotate-key`, `--ephemeral`, `--no-open` | not needed: there is no proxy port and no key. `slicc open` listens on 17117 or the next free port up to 17126, `slicc unpair` forgets paired sevens, and `slicc pair` doesn't open a browser |
 | `--mount <path>[:<name>][:ro]` | the same `--mount` (see [Host folders](#host-folders)). In seven the folder is `<device>/<name>` (`mount -t hostfs lars-mbp/project /mnt/p`) rather than `<name>` |
@@ -159,7 +159,7 @@ Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and
 | `startProxy`, `launchUrl`, `persistentKey` (JS) | no JS API |
 
 **Which browser.** slicc-node opened seven in the default browser, in any profile. `slicc` does that too when it finds no SLICC profile and no CDP endpoint: plain `slicc` then falls back to the first way below by itself, and `--no-fallback` turns that off (see [The default](#the-default-slicc)). `slicc` links seven in one of three ways:
-- **Your everyday browser, any vendor:** `slicc open` (or `slicc --default-browser`) opens seven in the default browser and pairs it over loopback, with no CDP and no remote debugging. `slicc pair` prints the pairing URL for a seven that's already open. Once paired, that seven links again by itself after a reload or a restart of `slicc`. The link has the local policy, folders, kernel services and compute, but no `cdp`, since slicc controls no browser there (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)).
+- **Your everyday browser (Chrome, Edge or Firefox):** `slicc open` (or `slicc --default-browser`) opens seven in the default browser and pairs it over loopback, with no CDP and no remote debugging. `slicc pair` prints the pairing URL for a seven that's already open. Once paired, that seven links again by itself after a reload or a restart of `slicc`. The link has the local policy, folders, kernel services and compute, but no `cdp`, since slicc controls no browser there (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)). Safari is expected not to work, though untested: Playwright's WebKit blocks the loopback request as mixed content, and there seven offers the tray path below instead (see [§1.3](#13-local-setup-without-cdp-loopback-signalling)).
 - **A browser `slicc` controls over CDP**, with `slicc` itself or `slicc attach`, which also offers seven `cdp` for that browser:
   - **by default,** a browser in a SLICC profile (see [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)). Its seven is separate from the one in your everyday profile, since seven keeps its files per browser profile.
   - **or a browser that is already running with CDP** (`--cdp`). That includes your everyday Chrome once its remote debugging is turned on at `chrome://inspect/#remote-debugging`. It is then listed as `wsOnly` (see [Browsers](#browsers)).
@@ -585,7 +585,7 @@ slicc --default-browser [the same flags]
 slicc unpair [<fingerprint> | --all]
 ```
 
-Link spec §1.3. These commands link a seven that runs in the browser you use every day, any vendor's, without CDP or remote debugging, as slicc-node could. Only the setup is new: once the peer connection is up, the link is the same as for `slicc attach` (see [Link](#link)).
+Link spec §1.3. These commands link a seven that runs in the browser you use every day (Chrome, Edge or Firefox; Safari is expected not to work until tested, see [§1.3](#13-local-setup-without-cdp-loopback-signalling)), without CDP or remote debugging, as slicc-node could. Only the setup is new: once the peer connection is up, the link is the same as for `slicc attach` (see [Link](#link)).
 
 - **`slicc open`**, and `slicc --default-browser` (the same command), print the pairing URL on stdout and open it in the default browser: `open` on macOS, `xdg-open` on Linux, and `rundll32 url.dll,FileProtocolHandler` on Windows. If that fails, slicc says `could not open the default browser (…); open the URL above yourself` and goes on.
 - **`slicc pair`** only prints the pairing URL, for a seven that's already open. Paste it into seven's address bar, or into its *Link this computer* field.
@@ -1387,7 +1387,7 @@ The scenario: `slicc` on a laptop launches Chrome there. seven runs on a desktop
 
 #### 1.3 Local setup without CDP: loopback signalling
 
-The scenario: seven is open in the user's **everyday browser** (any vendor, no CDP, no remote debugging), on the same machine as `slicc`, as slicc-node allowed. Only the signalling and trust setup are new. Once the peer connection is up, the link is [§2](#2-channels)–[§5](#5-stream-kinds) unchanged.
+The scenario: seven is open in the user's **everyday browser** (Chrome, Edge or Firefox; no CDP, no remote debugging), on the same machine as `slicc`, as slicc-node allowed. Only the signalling and trust setup are new. Once the peer connection is up, the link is [§2](#2-channels)–[§5](#5-stream-kinds) unchanged.
 
 **Pairing and trust**
 - **What anchors trust:** two pinned certificates.
@@ -1416,7 +1416,7 @@ The scenario: seven is open in the user's **everyday browser** (any vendor, no C
 **Local Network Access**
 - Chrome's LNA prompt appears on seven's first request to `127.0.0.1`. seven only makes loopback requests after a pairing [Link] click, or on load when it has a pin, so users who never pair are never prompted.
 - If the permission is denied, the page says how to allow it in site settings.
-- **Mixed content:** `http://127.0.0.1` is potentially trustworthy, so Chrome, Edge, Firefox and Safari allow it from https pages. bios CI tests Chrome and Firefox; Safari is checked by hand before release. Where a browser blocks it, the page offers the tray path ([§1.2](#12-remote-setup-over-the-tray-hub)).
+- **Mixed content:** `http://127.0.0.1` is potentially trustworthy, so Chrome, Edge and Firefox allow it from https pages; bios CI tests Chrome and Firefox. WebKit as tested (Playwright's build) blocks `http://127.0.0.1` and `http://localhost` from an https page as mixed content, so the request never reaches slicc and this setup doesn't work there. Safari is assumed to behave the same until it is checked on a real Safari. In such a browser the page says it can't pair there and offers the tray path ([§1.2](#12-remote-setup-over-the-tray-hub)), or Chrome, Edge or Firefox.
 
 **The link in this mode**
 - **ICE:** host candidates on loopback only, as in [§1.1](#11-local-setup-over-cdp).
