@@ -3,13 +3,19 @@
 package integration
 
 import (
+	"errors"
 	"os/exec"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 func tieToTest(cmd *exec.Cmd) func() (*lifeline, error) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 	return func() (*lifeline, error) {
 		job, err := windows.CreateJobObject(nil, nil)
 		if err != nil {
@@ -27,12 +33,44 @@ func tieToTest(cmd *exec.Cmd) func() (*lifeline, error) {
 		}
 		err = windows.AssignProcessToJobObject(job, h)
 		_ = windows.CloseHandle(h)
+		if err == nil {
+			err = resumeThreads(cmd.Process.Pid)
+		}
 		if err != nil {
 			_ = windows.CloseHandle(job)
 			return nil, err
 		}
 		return holdLifeline(func() { _ = windows.CloseHandle(job) }), nil
 	}
+}
+
+func resumeThreads(pid int) error {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = windows.CloseHandle(snap) }()
+	entry := windows.ThreadEntry32{Size: uint32(unsafe.Sizeof(windows.ThreadEntry32{}))}
+	resumed := 0
+	for err = windows.Thread32First(snap, &entry); err == nil; err = windows.Thread32Next(snap, &entry) {
+		if entry.OwnerProcessID != uint32(pid) {
+			continue
+		}
+		thread, oerr := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, entry.ThreadID)
+		if oerr != nil {
+			return oerr
+		}
+		_, rerr := windows.ResumeThread(thread)
+		_ = windows.CloseHandle(thread)
+		if rerr != nil {
+			return rerr
+		}
+		resumed++
+	}
+	if resumed == 0 {
+		return errors.New("no thread of Chrome to resume")
+	}
+	return nil
 }
 
 func processAlive(pid int) bool {
