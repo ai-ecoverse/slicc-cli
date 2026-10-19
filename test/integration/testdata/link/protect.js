@@ -101,6 +101,13 @@ export function protectTest(getLink, describe) {
         const enable = await outcome(c.send('Page.enable', {}, sessionId));
         return { enable: { ...enable, ms: Date.now() - start } };
       }),
+    lateSession: (browser, sessionId, targetId) =>
+      run(browser, async (c) => {
+        const start = Date.now();
+        const enable = outcome(c.send('Page.enable', {}, sessionId)).then((r) => ({ ...r, ms: Date.now() - start }));
+        const attach = targetId ? await outcome(c.send('Target.attachToTarget', { targetId, flatten: true })) : null;
+        return { enable: await enable, attach };
+      }),
     guardFlood: async (browser, count, size) => {
       try {
         const c = await CdpClient.open(getLink(), browser);

@@ -54,12 +54,16 @@ func (b guardBounds) expired(nt *navTarget, answered, now time.Time) string {
 }
 
 func (g *guard) progressLocked(m *message) {
-	if len(g.navTargets) == 0 {
+	if len(g.navTargets) == 0 && len(g.unknown) == 0 {
 		return
 	}
 	now := time.Now()
 	if m.ID != nil {
 		g.answered = now
+		return
+	}
+	if u, ok := g.unknown[m.SessionID]; ok {
+		u.progress = now
 		return
 	}
 	if nt, ok := g.navSessions[m.SessionID]; ok && m.SessionID != "" {
@@ -106,6 +110,17 @@ func (g *guard) navWatch(now time.Time) [][]byte {
 			continue
 		}
 		pending = true
+	}
+	g.resolveUnknownLocked()
+	for _, u := range g.unknown {
+		if u.done {
+			continue
+		}
+		if reason := g.bounds.expired(u, time.Time{}, now); reason != "" {
+			g.logf("cdp: a session slicc doesn't know never registered: %s; refusing its commands", reason)
+			u.reason = reason
+			u.settle(true)
+		}
 	}
 	if !pending || g.probing || g.relaySession == "" {
 		return nil

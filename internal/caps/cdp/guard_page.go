@@ -175,6 +175,9 @@ func (g *guard) checkLocked(c *command) string {
 	if g.lost {
 		return refusedLost
 	}
+	if reason := g.unknownCheckLocked(c.session); reason != "" {
+		return reason
+	}
 	if g.sessionRefusedLocked(c.session) {
 		return refusedTarget
 	}

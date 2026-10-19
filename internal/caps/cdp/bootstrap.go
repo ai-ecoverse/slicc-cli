@@ -121,7 +121,7 @@ func (rl *relay) park(data []byte) bool {
 	defer rl.parkMu.Unlock()
 	q, waiting := rl.parked[c.session]
 	if !waiting {
-		ready := rl.g.navWait(c.session)
+		ready := rl.g.sessionWait(c.session)
 		if ready == nil {
 			return false
 		}
@@ -138,15 +138,13 @@ func (rl *relay) park(data []byte) bool {
 }
 
 func (rl *relay) release(session string, ready <-chan struct{}) {
-	select {
-	case <-ready:
-	case <-rl.s.Done():
-	}
+	rl.g.awaitSession(session, ready, rl.s.Done())
 	for {
 		rl.parkMu.Lock()
 		q := rl.parked[session]
 		if len(q) == 0 {
 			delete(rl.parked, session)
+			rl.g.forgetUnknown(session)
 			rl.parkMu.Unlock()
 			return
 		}

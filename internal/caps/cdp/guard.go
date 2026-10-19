@@ -89,6 +89,9 @@ type guard struct {
 	swProtected     map[string]bool
 	navTargets      map[string]*navTarget
 	navSessions     map[string]*navTarget
+	unknown         map[string]*navTarget
+	gone            map[string]bool
+	goneOrder       []string
 	held            map[string]*heldSession
 	explicit        map[string]int
 	attachCalls     map[callKey]string
@@ -131,6 +134,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		swProtected:     map[string]bool{},
 		navTargets:      map[string]*navTarget{},
 		navSessions:     map[string]*navTarget{},
+		unknown:         map[string]*navTarget{},
+		gone:            map[string]bool{},
 		held:            map[string]*heldSession{},
 		explicit:        map[string]int{},
 		attachCalls:     map[callKey]string{},
@@ -361,6 +366,7 @@ func (g *guard) destroyedLocked(id string) {
 }
 
 func (g *guard) forgetSessionLocked(id string) {
+	g.goneLocked(id)
 	delete(g.sessions, id)
 	delete(g.browserSessions, id)
 	g.markedCount -= len(g.marked[id])

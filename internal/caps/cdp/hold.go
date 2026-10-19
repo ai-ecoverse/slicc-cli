@@ -66,7 +66,9 @@ func (g *guard) expireHold(sessionID string) [][]byte {
 	}
 	delete(g.held, sessionID)
 	g.logf("cdp: an auto-attached target never got a URL")
-	return [][]byte{g.hideLocked(h)}
+	msg := g.hideLocked(h)
+	g.resolveUnknownLocked()
+	return [][]byte{msg}
 }
 
 func (g *guard) dropHeldLocked(targetID string) {

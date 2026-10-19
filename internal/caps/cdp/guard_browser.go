@@ -25,6 +25,7 @@ func (g *guard) fromBrowser(data []byte) browserVerdict {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	defer g.resolveUnknownLocked()
 	g.progressLocked(&m)
 	if m.ID != nil {
 		return g.responseLocked(&m, data)
