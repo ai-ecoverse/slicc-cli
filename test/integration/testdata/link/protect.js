@@ -399,6 +399,158 @@ export function protectTest(getLink, describe) {
         const detached = await leave(c, sessionId, away);
         return { targetId, href, title, sub, sent, paused, detached };
       }),
+    extensionWorld: (browser, targetId, world) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const read = 'globalThis.sliccFixtureWorld?.secret ?? null';
+        const pull = 'function () { return this.secret ?? null; }';
+        const out = {
+          main: await outcome(c.send('Runtime.evaluate', { expression: read, returnByValue: true }, sessionId)),
+          contextId: await outcome(c.send('Runtime.evaluate', { expression: read, returnByValue: true, contextId: world.id }, sessionId)),
+          uniqueContextId: await outcome(c.send('Runtime.evaluate', { expression: read, returnByValue: true, uniqueContextId: world.uniqueId }, sessionId)),
+          callOnContext: await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: 'function () { return globalThis.sliccFixtureWorld?.secret ?? null; }', executionContextId: world.id, returnByValue: true }, sessionId)),
+          lexical: await outcome(c.send('Runtime.globalLexicalScopeNames', { executionContextId: world.id }, sessionId)),
+          observerObjectId: await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: pull, objectId: world.objectId, returnByValue: true }, sessionId)),
+        };
+        const own = await outcome(c.send('Runtime.evaluate', { expression: 'globalThis.sliccFixtureWorld', contextId: world.id }, sessionId));
+        const plain = await c.send('Runtime.evaluate', { expression: '({})' }, sessionId);
+        const objectId = own.result?.result?.objectId ?? `${plain.result.objectId.split('.')[0]}.${world.id}.1`;
+        out.objectId = await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: pull, objectId, returnByValue: true }, sessionId));
+        out.properties = await outcome(c.send('Runtime.getProperties', { objectId, ownProperties: true }, sessionId));
+        out.argument = await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: 'function (w) { return w.secret ?? null; }', objectId: plain.result.objectId, arguments: [{ objectId }], returnByValue: true }, sessionId));
+        out.binding = await outcome(c.send('Runtime.addBinding', { name: 'sliccSevenBinding' }, sessionId));
+        out.bound = await c.evaluate('typeof globalThis.sliccSevenBinding', sessionId);
+        await c.send('HeapProfiler.enable', {}, sessionId);
+        out.heap = await outcome(c.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false }, sessionId));
+        out.heapLeak = c.events.some((e) => e.method === 'HeapProfiler.addHeapSnapshotChunk' && e.params.chunk.includes('fake-value-0001'));
+        out.heapChunks = c.events.filter((e) => e.method === 'HeapProfiler.addHeapSnapshotChunk').length;
+        await c.send('HeapProfiler.disable', {}, sessionId);
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.evaluate('new Promise((resolve) => setTimeout(() => resolve(true), 300))', sessionId);
+        out.contexts = c.events.filter((e) => e.method === 'Runtime.executionContextCreated' && e.sessionId === sessionId).map((e) => e.params.context);
+        out.console = c.events.filter((e) => e.method === 'Runtime.consoleAPICalled' && e.sessionId === sessionId).map((e) => ({ contextId: e.params.executionContextId, args: JSON.stringify(e.params.args) }));
+        out.after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
+        out.detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
+        await c.send('Target.detachFromTarget', { sessionId });
+        return out;
+      }),
+    extensionChurn: (browser, targetId, worldId, mainId, rounds, batch) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const churn = `(async () => {
+          for (let r = 0; r < ${rounds}; r += 1) {
+            const frames = [];
+            for (let i = 0; i < ${batch}; i += 1) {
+              const f = document.createElement('iframe');
+              document.body.append(f);
+              frames.push(f);
+            }
+            const injected = () => frames.every((f) => f.contentDocument?.documentElement?.hasAttribute('data-slicc-world'));
+            for (let wait = 0; !injected(); wait += 1) {
+              if (wait > 500) throw new Error('the fixture never ran in a churned frame');
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            for (const f of frames) f.remove();
+          }
+          return true;
+        })()`;
+        const started = Date.now();
+        await c.evaluate(churn, sessionId);
+        const read = 'globalThis.sliccFixtureWorld?.secret ?? null';
+        const out = {
+          ms: Date.now() - started,
+          world: await outcome(c.send('Runtime.evaluate', { expression: read, returnByValue: true, contextId: worldId }, sessionId)),
+          main: await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true, contextId: mainId }, sessionId)),
+        };
+        await c.send('Target.detachFromTarget', { sessionId });
+        return out;
+      }),
+    extensionBreakpoint: (browser, targetId, pageURL) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Debugger.enable', {}, sessionId);
+        await c.send('Page.enable', {}, sessionId);
+        const condition = (key) => `(document.documentElement.dataset.${key} = globalThis.sliccFixtureWorld?.secret ?? "none", false)`;
+        const out = {
+          regex: await outcome(c.send('Debugger.setBreakpointByUrl', { urlRegex: 'chrome-extension://.*', lineNumber: 2, condition: condition('regex') }, sessionId)),
+          hash: await outcome(c.send('Debugger.setBreakpointByUrl', { scriptHash: '0'.repeat(64), lineNumber: 2, condition: condition('hash') }, sessionId)),
+          blank: await outcome(c.send('Debugger.setBreakpointByUrl', { url: '', lineNumber: 0, condition: condition('blank') }, sessionId)),
+          page: await outcome(c.send('Debugger.setBreakpointByUrl', { url: pageURL, lineNumber: 0, condition: 'false' }, sessionId)),
+          plain: await outcome(c.send('Debugger.setBreakpointByUrl', { urlRegex: 'chrome-extension://.*', lineNumber: 1 }, sessionId)),
+        };
+        const loaded = c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 20000);
+        await c.send('Page.reload', {}, sessionId);
+        await loaded;
+        await sleep(300);
+        out.leak = await c.evaluate('JSON.stringify(document.documentElement.dataset)', sessionId);
+        out.paused = c.events.filter((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId).length;
+        await outcome(c.send('Debugger.disable', {}, sessionId));
+        await c.send('Target.detachFromTarget', { sessionId });
+        return out;
+      }),
+    extensionProfile: (browser, targetId) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('Console.enable', {}, sessionId);
+        await c.send('Network.enable', {}, sessionId);
+        await c.send('DOM.enable', {}, sessionId);
+        await c.send('DOM.setNodeStackTracesEnabled', { enable: true }, sessionId);
+        const socket = c.waitEvent((e) => e.method === 'Network.webSocketCreated' && e.sessionId === sessionId && e.params.url.endsWith('/ws'), 15000);
+        const fetched = c.waitEvent((e) => e.method === 'Network.loadingFinished' && e.sessionId === sessionId && c.events.some((r) => r.method === 'Network.requestWillBeSent' && r.params.requestId === e.params.requestId && r.params.request.url.includes('extension-fetch')), 15000);
+        await c.send('Profiler.enable', {}, sessionId);
+        await c.evaluate("(function sliccPageWarm() { return 1; })()\n//# sourceURL=slicc-warm.js", sessionId);
+        const best = await c.send('Profiler.getBestEffortCoverage', {}, sessionId);
+        await c.send('Profiler.setSamplingInterval', { interval: 100 }, sessionId);
+        await c.send('Profiler.startPreciseCoverage', { callCount: true, detailed: true }, sessionId);
+        await c.send('Profiler.start', {}, sessionId);
+        await c.evaluate("(function sliccPageCode() { document.addEventListener('slicc-pong', () => console.log('slicc pong')); for (let i = 0; i < 10; i += 1) document.dispatchEvent(new CustomEvent('slicc-ping')); return true; })()\n//# sourceURL=slicc-page.js", sessionId);
+        const { profile } = await c.send('Profiler.stop', {}, sessionId);
+        const done = await fetched;
+        const sent = c.events.find((e) => e.method === 'Network.requestWillBeSent' && e.params.requestId === done.params.requestId);
+        const body = await outcome(c.send('Network.getResponseBody', { requestId: done.params.requestId }, sessionId));
+        const created = await socket;
+        const { root } = await c.send('DOM.getDocument', {}, sessionId);
+        const { nodeId } = await c.send('DOM.querySelector', { nodeId: root.nodeId, selector: '#slicc-extension-node' }, sessionId);
+        const nodeStack = await outcome(c.send('DOM.getNodeStackTraces', { nodeId }, sessionId));
+        await c.send('DOM.setNodeStackTracesEnabled', { enable: false }, sessionId);
+        await c.send('DOM.disable', {}, sessionId);
+        await c.send('Network.disable', {}, sessionId);
+        const precise = await c.send('Profiler.takePreciseCoverage', {}, sessionId);
+        await c.send('Profiler.stopPreciseCoverage', {}, sessionId);
+        await c.send('Profiler.disable', {}, sessionId);
+        await c.send('Console.disable', {}, sessionId);
+        await sleep(300);
+        const pongs = c.events.filter((e) => e.method === 'Runtime.consoleAPICalled' && e.sessionId === sessionId && e.params.args[0]?.value === 'slicc pong');
+        await c.send('Target.detachFromTarget', { sessionId });
+        return {
+          profile: JSON.stringify(profile.nodes.map((n) => n.callFrame)),
+          precise: JSON.stringify(precise.result.map((r) => ({ url: r.url, functions: r.functions.map((f) => f.functionName) }))),
+          best: JSON.stringify(best.result.map((r) => ({ url: r.url, functions: r.functions.map((f) => f.functionName) }))),
+          stacks: JSON.stringify(pongs.map((e) => e.params.stackTrace)),
+          pongs: pongs.length,
+          initiator: JSON.stringify(sent.params.initiator),
+          socket: JSON.stringify(created.params.initiator ?? null),
+          nodeStack: JSON.stringify(nodeStack),
+          body,
+          console: JSON.stringify(c.events.filter((e) => e.sessionId === sessionId && (e.method === 'Console.messageAdded' || e.method.startsWith('Profiler.consoleProfile'))).map((e) => e.params)),
+        };
+      }),
+    extensionFrame: (browser, targetId, callFrameId) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Debugger.enable', {}, sessionId);
+        const out = {
+          evaluate: await outcome(c.send('Debugger.evaluateOnCallFrame', { callFrameId, expression: 'globalThis.sliccFixtureWorld?.secret ?? null', returnByValue: true }, sessionId)),
+          setVariable: await outcome(c.send('Debugger.setVariableValue', { callFrameId, scopeNumber: 0, variableName: 'probe', newValue: { value: 1 } }, sessionId)),
+        };
+        await sleep(300);
+        out.pausedFrames = c.events.filter((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId).map((e) => e.params.callFrames.map((f) => f.callFrameId));
+        out.scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId).map((e) => ({ url: e.params.url, contextId: e.params.executionContextId }));
+        await outcome(c.send('Debugger.disable', {}, sessionId));
+        await c.send('Target.detachFromTarget', { sessionId });
+        return out;
+      }),
     ownContext: (browser) =>
       run(browser, async (c) => {
         const { browserContextId } = await c.send('Target.createBrowserContext');

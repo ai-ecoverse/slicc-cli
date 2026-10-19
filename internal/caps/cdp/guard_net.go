@@ -59,7 +59,7 @@ func (g *guard) socketCreatedEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
 		id, _ := p["requestId"].(string)
 		u, _ := p["url"].(string)
-		if g.o.URL(socketURL(strings.TrimSpace(u))) {
+		if g.o.URL(socketURL(strings.TrimSpace(u))) || g.initiatorLocked(m.SessionID, p) {
 			g.markRequestLocked(m.SessionID, id)
 		}
 		return true, false, nil
@@ -133,13 +133,14 @@ func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
 		u, _ := req["url"].(string)
 		redirect, _ := p["redirectResponse"].(map[string]any)
 		ru, _ := redirect["url"].(string)
-		if g.o.URL(u) || g.o.URL(ru) {
+		world := g.initiatorLocked(m.SessionID, p)
+		if g.o.URL(u) || g.o.URL(ru) || world {
 			g.markRequestLocked(m.SessionID, id)
 		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
-			return true, false, nil
+			return true, world, nil
 		}
-		changed := stripHeaders(req["headers"], "cookie")
+		changed := stripHeaders(req["headers"], "cookie") || world
 		return true, stripResponse(redirect) || changed, nil
 	})
 }
