@@ -24,9 +24,13 @@ func newStyles(color, dark bool) styles {
 		return styles{title: p, faint: p, cursor: p, selected: p, good: p, warn: p, bad: p, accent: p, section: p, key: p, row: p}
 	}
 	pick := lipgloss.LightDark(dark)
+	faint := lipgloss.NewStyle().Faint(true)
+	if !dark {
+		faint = lipgloss.NewStyle().Foreground(lipgloss.Color("#57606a"))
+	}
 	return styles{
 		title:    lipgloss.NewStyle().Bold(true),
-		faint:    lipgloss.NewStyle().Faint(true),
+		faint:    faint,
 		cursor:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
 		selected: lipgloss.NewStyle().Bold(true).Foreground(pick(lipgloss.Color("2"), lipgloss.Color("10"))),
 		good:     lipgloss.NewStyle().Foreground(pick(lipgloss.Color("2"), lipgloss.Color("10"))),

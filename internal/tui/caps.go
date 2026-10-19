@@ -89,7 +89,7 @@ func changes(from, to Settings, live bool) []change {
 		case !ok:
 			out = append(out, change{"+ folder " + f.Name, relink})
 		case o.Path != f.Path:
-			out = append(out, change{"folder " + f.Name + " → " + homeRel(f.Path), relink})
+			out = append(out, change{"folder " + f.Name + " → " + tilde(f.Path), relink})
 		case o.ReadOnly != f.ReadOnly:
 			out = append(out, change{"folder " + f.Name + " " + access(f.ReadOnly), relink})
 		}
@@ -328,7 +328,7 @@ func (m Model) editCap(r capRow) (tea.Model, tea.Cmd) {
 }
 
 func spec(f Folder) string {
-	s := homeRel(f.Path)
+	s := tilde(f.Path)
 	if f.Name != filepath.Base(f.Path) {
 		s += ":" + f.Name
 	}
@@ -507,7 +507,7 @@ func expandHome(p string) string {
 	return p
 }
 
-func homeRel(p string) string {
+func tilde(p string) string {
 	h := homeDir()
 	if h != "" && (p == h || strings.HasPrefix(p, h+string(filepath.Separator))) {
 		return "~" + p[len(h):]
@@ -748,7 +748,7 @@ func (m Model) capLine(i int, r capRow) string {
 		if f.Off {
 			ns = st.faint
 		}
-		return m.rowOf(cur, tail([]span{mark(!f.Off), {ns, fmt.Sprintf("%-8s", f.Name) + " "}, how, {st.faint, homeRel(f.Path)}})...)
+		return m.rowOf(cur, tail([]span{mark(!f.Off), {ns, fmt.Sprintf("%-8s", f.Name) + " "}, how, {st.faint, tilde(f.Path)}})...)
 	}
 	return m.rowOf(cur, span{st.accent, "+ "}, span{st.accent, "add a folder…"})
 }
@@ -769,7 +769,7 @@ func (m Model) capDetail() (string, string) {
 		return "change the port for <port>.kernel.localhost", "space turns kernel services on or off; ports below 1024 need root on macOS and Linux"
 	case rowFolder:
 		f := d.Folders[r.folder]
-		return "edit " + st.title.Render(f.Name) + " as path[:name][:ro]", homeRel(f.Path) + " · space shares or unshares · r read-only · x removes"
+		return "edit " + st.title.Render(f.Name) + " as path[:name][:ro]", tilde(f.Path) + " · space shares or unshares · r read-only · x removes"
 	}
 	return "share a folder with seven's kernel", "the same path[:name][:ro] as --mount; tab completes"
 }

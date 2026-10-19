@@ -441,6 +441,16 @@ func tuiProfiles(o browser.Options) func(browser.Entry) []string {
 	}
 }
 
+func tuiDir(o browser.Options) func(browser.Entry, string) string {
+	return func(e browser.Entry, name string) string {
+		if e.Installed == nil {
+			return ""
+		}
+		dir, _ := browser.ProfileDir(o, *e.Installed, name)
+		return dir
+	}
+}
+
 func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -449,6 +459,8 @@ func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr
 	var failed error
 	tcfg := tui.Config{
 		Profile:  cfg.Profile,
+		Last:     browser.LoadLast(cfg.Browser),
+		Dir:      tuiDir(cfg.Browser),
 		Color:    os.Getenv("NO_COLOR") == "",
 		Notice:   strings.TrimSpace(takeNotice()),
 		Profiles: tuiProfiles(cfg.Browser),

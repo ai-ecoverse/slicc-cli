@@ -25,13 +25,15 @@ import (
 var ActivePortFile = catalog.Discovery.ActivePortFile
 
 type candidate struct {
-	base    string
-	wsPath  string
-	source  Source
-	browser string
-	dir     string
-	profile string
-	six     bool
+	base     string
+	wsPath   string
+	source   Source
+	browser  string
+	dir      string
+	profile  string
+	app      string
+	headless bool
+	six      bool
 }
 
 type versionInfo struct {
@@ -332,6 +334,10 @@ func (e Endpoint) ChromiumMajor() int {
 	return 0
 }
 
+func (e Endpoint) Headless() bool {
+	return e.headless || strings.Contains(e.UserAgent, "HeadlessChrome") || strings.HasPrefix(e.Product, "HeadlessChrome/")
+}
+
 func getJSON(ctx context.Context, client *http.Client, u string, v any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -422,6 +428,18 @@ func mergeEndpoints(cands []candidate, results []*Endpoint) []Endpoint {
 		}
 		best[key] = ep
 	}
+	apps := map[string]string{}
+	headless := map[string]bool{}
+	for i, ep := range results {
+		if ep == nil {
+			continue
+		}
+		key := endpointKey(cands[i].base)
+		if cands[i].app != "" && apps[key] == "" {
+			apps[key] = cands[i].app
+		}
+		headless[key] = headless[key] || cands[i].headless
+	}
 	sixDirs := map[string]string{}
 	for i, ep := range results {
 		if ep != nil && ep.Six {
@@ -433,6 +451,7 @@ func mergeEndpoints(cands []candidate, results []*Endpoint) []Endpoint {
 	out := make([]Endpoint, 0, len(best))
 	for key, ep := range best {
 		e := *ep
+		e.App, e.headless = apps[key], headless[key]
 		if dir, ok := sixDirs[key]; ok {
 			e.Six = true
 			if e.UserDataDir == "" {

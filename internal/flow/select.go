@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -35,6 +36,29 @@ func CanExtra(e browser.Entry) error {
 
 func IsSix(e browser.Entry) bool {
 	return e.Six != nil || (e.Endpoint != nil && e.Endpoint.Six)
+}
+
+func IsHeadless(e browser.Entry) bool {
+	return e.Endpoint != nil && e.Endpoint.Headless()
+}
+
+func Demoted(entries []browser.Entry) []browser.Entry {
+	var rest, headless []browser.Entry
+	for _, e := range entries {
+		if IsHeadless(e) && !IsSix(e) && e.Endpoint.Source != browser.SourceFlag {
+			headless = append(headless, e)
+		} else {
+			rest = append(rest, e)
+		}
+	}
+	if len(headless) == 0 {
+		return entries
+	}
+	i := slices.IndexFunc(rest, func(e browser.Entry) bool { return e.Tier >= browser.TierElectron })
+	if i < 0 {
+		i = len(rest)
+	}
+	return slices.Concat(rest[:i], headless, rest[i:])
 }
 
 func Default(entries []browser.Entry) (browser.Entry, error) {

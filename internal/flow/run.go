@@ -179,6 +179,11 @@ func (r *run) launch(ctx context.Context, e browser.Entry, role, page string) (*
 	r.mu.Lock()
 	r.launched = append(r.launched, launched{id: e.ID, b: b})
 	r.mu.Unlock()
+	if role == RoleSeven {
+		if err := browser.SaveLast(opts, browser.Last{ID: e.ID, Profile: b.Profile}); err != nil {
+			r.cfg.Logf("remember last launch: %v", err)
+		}
+	}
 	r.emit(Event{
 		Event: Launched, Browser: e.ID, Name: e.Name, Version: e.Version, Role: role, PID: b.PID,
 		Profile: b.Profile, ProfileDir: b.ProfileDir, CDP: b.CDP, WebSocketURL: b.WebSocketURL,

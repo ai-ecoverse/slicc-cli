@@ -15,9 +15,11 @@ import (
 )
 
 type procHit struct {
-	pid  int
-	port int
-	dir  string
+	pid      int
+	port     int
+	dir      string
+	exe      string
+	headless bool
 }
 
 func parseProcessTable(out []byte, windows bool, self int) []procHit {
@@ -97,7 +99,16 @@ func argvHit(pid int, cmd string) (procHit, bool) {
 	if !ok {
 		return procHit{}, false
 	}
-	return procHit{pid: pid, port: port, dir: flagValue(cmd, catalog.Discovery.Process.UserDataDirFlag)}, true
+	return procHit{pid: pid, port: port, dir: flagValue(cmd, catalog.Discovery.Process.UserDataDirFlag), exe: displayExecutable(cmd), headless: hasFlag(cmd, "--headless")}, true
+}
+
+func hasFlag(cmd, flag string) bool {
+	for _, f := range strings.Fields(cmd) {
+		if f == flag || strings.HasPrefix(f, flag+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func headExecutable(cmd string) string {
@@ -276,8 +287,12 @@ func processCandidates(ctx context.Context, o Options, d discovery, six sixMatch
 	var cands []candidate
 	for _, h := range parseProcessTable(out, runtime.GOOS == "windows", os.Getpid()) {
 		isSix := six.is(h.dir)
+		app := ""
+		if h.exe != "" {
+			app = processApp(h.exe)
+		}
 		if h.port > 0 {
-			cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(h.port), source: SourceProcess, dir: h.dir, six: isSix})
+			cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(h.port), source: SourceProcess, app: app, headless: h.headless, dir: h.dir, six: isSix})
 			continue
 		}
 		if h.dir == "" || (underLegacyProfiles(h.dir) && !isSix) {
@@ -287,7 +302,7 @@ func processCandidates(ctx context.Context, o Options, d discovery, six sixMatch
 		if err != nil {
 			continue
 		}
-		cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), wsPath: ws, source: SourceProcess, dir: h.dir, six: isSix})
+		cands = append(cands, candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), wsPath: ws, source: SourceProcess, app: app, headless: h.headless, dir: h.dir, six: isSix})
 	}
 	return cands
 }

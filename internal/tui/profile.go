@@ -31,10 +31,10 @@ func (m *Model) loadProfiles() {
 }
 
 func (m *Model) openProfiles() {
-	if len(m.entries) == 0 {
+	e, ok := m.current()
+	if !ok {
 		return
 	}
-	e := m.entries[m.cursor]
 	if e.Kind == browser.KindSix {
 		m.message = "SLICC six's profile is used as it is; it has no SLICC profiles to choose"
 		return
