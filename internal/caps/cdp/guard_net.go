@@ -57,7 +57,7 @@ func socketURL(raw string) string {
 
 func (g *guard) socketCreatedEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
-		id, _ := p["requestId"].(string)
+		id := requestIDIn(p)
 		u, _ := p["url"].(string)
 		world := g.initiatorLocked(m.SessionID, p)
 		if world {

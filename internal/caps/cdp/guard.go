@@ -112,7 +112,12 @@ type guard struct {
 	worlds            map[string]*worldSet
 	worldUniques      map[string]string
 	worldRequests     map[requestKey]bool
-	worldRequestOrder []requestKey
+	worldRequestCount map[string]int
+	worldRequestsFull map[string]bool
+	navSeen           map[requestKey]bool
+	navSeenOrder      []requestKey
+	heldPauses        map[requestKey][]heldPause
+	heldPauseCount    int
 	maxWorlds         int
 	answered          time.Time
 	probing           bool
@@ -123,39 +128,43 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		logf = func(string, ...any) {}
 	}
 	g := &guard{
-		o:               o,
-		logf:            logf,
-		targets:         map[string]*target{},
-		sessions:        map[string]*session{},
-		hidden:          map[string]bool{},
-		refused:         map[string]bool{},
-		browserSessions: map[string]bool{},
-		ownContexts:     map[string]bool{},
-		pending:         map[callKey]callKind{},
-		relayCalls:      map[callKey]*relayCall{},
-		nextID:          relayIDBase,
-		marked:          map[string]map[string]bool{},
-		saturated:       map[string]bool{},
-		swProtected:     map[string]bool{},
-		navTargets:      map[string]*navTarget{},
-		navSessions:     map[string]*navTarget{},
-		unknown:         map[string]*navTarget{},
-		gone:            map[string]bool{},
-		held:            map[string]*heldSession{},
-		explicit:        map[string]int{},
-		attachCalls:     map[callKey]string{},
-		heldExtras:      map[requestKey][]heldExtra{},
-		seen:            map[requestKey]reqLevel{},
-		handed:          map[requestKey]int{},
-		continues:       map[callKey]handedPause{},
-		bodyCalls:       map[callKey]bodyCall{},
-		heldAnswers:     map[callKey]*heldAnswer{},
-		streams:         map[string]bool{},
-		worlds:          map[string]*worldSet{},
-		worldUniques:    map[string]string{},
-		worldRequests:   map[requestKey]bool{},
-		maxWorlds:       maxWorlds,
-		bounds:          boundsFromEnv(),
+		o:                 o,
+		logf:              logf,
+		targets:           map[string]*target{},
+		sessions:          map[string]*session{},
+		hidden:            map[string]bool{},
+		refused:           map[string]bool{},
+		browserSessions:   map[string]bool{},
+		ownContexts:       map[string]bool{},
+		pending:           map[callKey]callKind{},
+		relayCalls:        map[callKey]*relayCall{},
+		nextID:            relayIDBase,
+		marked:            map[string]map[string]bool{},
+		saturated:         map[string]bool{},
+		swProtected:       map[string]bool{},
+		navTargets:        map[string]*navTarget{},
+		navSessions:       map[string]*navTarget{},
+		unknown:           map[string]*navTarget{},
+		gone:              map[string]bool{},
+		held:              map[string]*heldSession{},
+		explicit:          map[string]int{},
+		attachCalls:       map[callKey]string{},
+		heldExtras:        map[requestKey][]heldExtra{},
+		seen:              map[requestKey]reqLevel{},
+		handed:            map[requestKey]int{},
+		continues:         map[callKey]handedPause{},
+		bodyCalls:         map[callKey]bodyCall{},
+		heldAnswers:       map[callKey]*heldAnswer{},
+		streams:           map[string]bool{},
+		worlds:            map[string]*worldSet{},
+		worldUniques:      map[string]string{},
+		worldRequests:     map[requestKey]bool{},
+		worldRequestCount: map[string]int{},
+		worldRequestsFull: map[string]bool{},
+		navSeen:           map[requestKey]bool{},
+		heldPauses:        map[requestKey][]heldPause{},
+		maxWorlds:         maxWorlds,
+		bounds:            boundsFromEnv(),
 	}
 	g.patterns = g.documentPatterns()
 	return g
@@ -360,6 +369,7 @@ func (g *guard) destroyedLocked(id string) {
 	g.navForgetLocked(id)
 	g.dropHeldLocked(id)
 	g.forgetWorldsLocked(id)
+	g.forgetWorldRequestsLocked(id)
 	t, ok := g.targets[id]
 	if !ok || t.gone {
 		return

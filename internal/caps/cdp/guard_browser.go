@@ -14,6 +14,7 @@ type browserVerdict struct {
 	hold    []string
 	extra   []requestKey
 	answers []callKey
+	pauses  []requestKey
 	lost    bool
 }
 
@@ -34,7 +35,9 @@ func (g *guard) fromBrowser(data []byte) browserVerdict {
 		return g.relayEventLocked(&m)
 	}
 	if nt, ok := g.navSessions[m.SessionID]; ok && m.SessionID != "" {
-		return browserVerdict{send: g.navEventLocked(nt, &m)}
+		v := g.navRequestLocked(nt, &m)
+		v.send = append(v.send, g.navEventLocked(nt, &m)...)
+		return v
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
 		return browserVerdict{}
@@ -200,7 +203,7 @@ var eventHandlers = map[string]eventHandler{
 	"Network.responseReceivedExtraInfo":          (*guard).extraEvent,
 	"Network.loadingFinished":                    afterRequest(forwardEvent, levelSettled),
 	"Network.loadingFailed":                      afterRequest(forwardEvent, levelSettled),
-	"Network.requestIntercepted":                 afterRequestBy((*guard).pausedEvent, levelSettled, pausedIDOf),
+	"Network.requestIntercepted":                 (*guard).pauseGateEvent,
 	"Network.webSocketCreated":                   afterRequest((*guard).socketCreatedEvent, levelSettled),
 	"Network.webTransportCreated":                afterRequest((*guard).socketCreatedEvent, levelSettled),
 	"Network.webSocketWillSendHandshakeRequest":  (*guard).markedDropEvent,
@@ -208,8 +211,8 @@ var eventHandlers = map[string]eventHandler{
 	"Network.webSocketFrameError":                (*guard).markedDropEvent,
 	"Network.eventSourceMessageReceived":         (*guard).markedDropEvent,
 	"Network.dataReceived":                       (*guard).markedDropEvent,
-	"Fetch.requestPaused":                        afterRequestBy((*guard).pausedEvent, levelSettled, pausedIDOf),
-	"Fetch.authRequired":                         afterRequestBy((*guard).pausedEvent, levelSettled, pausedIDOf),
+	"Fetch.requestPaused":                        (*guard).pauseGateEvent,
+	"Fetch.authRequired":                         (*guard).pauseGateEvent,
 	"ServiceWorker.workerRegistrationUpdated":    (*guard).swRegistrationsEvent,
 	"ServiceWorker.workerVersionUpdated":         (*guard).swVersionsEvent,
 	"ServiceWorker.workerErrorReported":          (*guard).swErrorEvent,

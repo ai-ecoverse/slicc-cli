@@ -237,6 +237,9 @@ func (rl *relay) toPage() {
 		for _, k := range v.answers {
 			rl.expireAnswerLater(k)
 		}
+		for _, k := range v.pauses {
+			rl.expirePauseLater(k)
+		}
 		if v.forward != nil {
 			v.page = append([][]byte{v.forward}, v.page...)
 		}
@@ -260,6 +263,20 @@ func (rl *relay) expireLater(sessionID string) {
 func (rl *relay) expireExtrasLater(k requestKey) {
 	time.AfterFunc(ExtraHold, func() {
 		for _, msg := range rl.g.expireExtras(k) {
+			if rl.writePage(msg) != nil {
+				return
+			}
+		}
+	})
+}
+
+func (rl *relay) expirePauseLater(k requestKey) {
+	time.AfterFunc(ExtraHold, func() {
+		page, send := rl.g.expirePause(k)
+		for _, msg := range send {
+			_ = rl.conn.Write(context.Background(), websocket.MessageText, msg)
+		}
+		for _, msg := range page {
 			if rl.writePage(msg) != nil {
 				return
 			}
