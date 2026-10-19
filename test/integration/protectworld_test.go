@@ -326,6 +326,8 @@ func (e *protectEnv) testExtensionProfile(t *testing.T) {
 		Pongs     int        `json:"pongs"`
 		Console   string     `json:"console"`
 		Initiator string     `json:"initiator"`
+		Socket    string     `json:"socket"`
+		NodeStack string     `json:"nodeStack"`
 		Body      cdpOutcome `json:"body"`
 	}
 	e.evalJSON(t, "linkTest.protect.extensionProfile("+jsArgs("chrome", target)+")", &r)
@@ -338,7 +340,10 @@ func (e *protectEnv) testExtensionProfile(t *testing.T) {
 	if strings.Contains(r.Initiator, "chrome-extension://") || strings.Contains(r.Initiator, "sliccFixtureBusy") || !r.Body.refused() {
 		t.Errorf("a request from the extension's world shows its initiator %s, and its body gave %+v", r.Initiator, r.Body)
 	}
-	for name, got := range map[string]string{"Profiler.stop": r.Profile, "Profiler.takePreciseCoverage": r.Precise, "Profiler.getBestEffortCoverage": r.Best, "consoleAPICalled stack traces": r.Stacks} {
+	if !strings.Contains(r.NodeStack, `"ok":true`) || !strings.Contains(r.Socket, "slicc-page.js") {
+		t.Errorf("the page's own frames are gone: node stack %s, socket initiator %s", r.NodeStack, r.Socket)
+	}
+	for name, got := range map[string]string{"Profiler.stop": r.Profile, "Profiler.takePreciseCoverage": r.Precise, "Profiler.getBestEffortCoverage": r.Best, "consoleAPICalled stack traces": r.Stacks, "webSocketCreated initiator": r.Socket, "DOM.getNodeStackTraces": r.NodeStack} {
 		if strings.Contains(got, "chrome-extension://") || strings.Contains(got, "sliccFixtureBusy") {
 			t.Errorf("%s shows the extension's world: %s", name, got)
 		}

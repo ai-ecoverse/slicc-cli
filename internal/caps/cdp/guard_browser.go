@@ -98,8 +98,6 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		send = g.infoLocked(res["targetInfo"])
 	case kindCookies:
 		res["cookies"] = g.filterCookies(res["cookies"])
-	case kindProfile:
-		g.scrubProfileLocked(m.SessionID, res)
 	case kindStreams:
 		g.recordStreamsLocked(res)
 	case kindBrowserSession:
@@ -196,7 +194,6 @@ var eventHandlers = map[string]eventHandler{
 	"Profiler.consoleProfileFinished":            (*guard).consoleProfileEvent,
 	"Console.messageAdded":                       (*guard).consoleMessageEvent,
 	"Log.entryAdded":                             (*guard).logEntryEvent,
-	"Profiler.preciseCoverageDeltaUpdate":        (*guard).profileEvent,
 	"Network.requestWillBeSent":                  afterRequest((*guard).requestEvent, levelKnown),
 	"Network.requestWillBeSentExtraInfo":         (*guard).extraEvent,
 	"Network.responseReceived":                   afterRequest((*guard).responseEvent, levelSettled),

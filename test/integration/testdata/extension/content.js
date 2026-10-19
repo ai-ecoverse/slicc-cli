@@ -10,5 +10,9 @@ document.addEventListener('slicc-ping', function sliccFixtureBusy() {
   if (window === top && !globalThis.sliccFixtureFetched) {
     globalThis.sliccFixtureFetched = true;
     fetch('/?n=extension-fetch').catch(() => {});
+    new WebSocket(`ws://${location.host}/ws`).onopen = (e) => e.target.close();
+    const node = document.createElement('div');
+    node.id = 'slicc-extension-node';
+    document.body.append(node);
   }
 });

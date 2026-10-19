@@ -27,7 +27,8 @@ func (g *guard) scrub(data []byte) []byte {
 	if !ok {
 		return data
 	}
-	if !g.scrubValue(m) {
+	worlds := g.scrubWorlds(m)
+	if !g.scrubValue(m) && !worlds {
 		return data
 	}
 	return encode(m)

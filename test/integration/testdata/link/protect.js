@@ -494,6 +494,9 @@ export function protectTest(getLink, describe) {
         await c.send('Runtime.enable', {}, sessionId);
         await c.send('Console.enable', {}, sessionId);
         await c.send('Network.enable', {}, sessionId);
+        await c.send('DOM.enable', {}, sessionId);
+        await c.send('DOM.setNodeStackTracesEnabled', { enable: true }, sessionId);
+        const socket = c.waitEvent((e) => e.method === 'Network.webSocketCreated' && e.sessionId === sessionId && e.params.url.endsWith('/ws'), 15000);
         const fetched = c.waitEvent((e) => e.method === 'Network.loadingFinished' && e.sessionId === sessionId && c.events.some((r) => r.method === 'Network.requestWillBeSent' && r.params.requestId === e.params.requestId && r.params.request.url.includes('extension-fetch')), 15000);
         await c.send('Profiler.enable', {}, sessionId);
         await c.evaluate("(function sliccPageWarm() { return 1; })()\n//# sourceURL=slicc-warm.js", sessionId);
@@ -506,6 +509,12 @@ export function protectTest(getLink, describe) {
         const done = await fetched;
         const sent = c.events.find((e) => e.method === 'Network.requestWillBeSent' && e.params.requestId === done.params.requestId);
         const body = await outcome(c.send('Network.getResponseBody', { requestId: done.params.requestId }, sessionId));
+        const created = await socket;
+        const { root } = await c.send('DOM.getDocument', {}, sessionId);
+        const { nodeId } = await c.send('DOM.querySelector', { nodeId: root.nodeId, selector: '#slicc-extension-node' }, sessionId);
+        const nodeStack = await outcome(c.send('DOM.getNodeStackTraces', { nodeId }, sessionId));
+        await c.send('DOM.setNodeStackTracesEnabled', { enable: false }, sessionId);
+        await c.send('DOM.disable', {}, sessionId);
         await c.send('Network.disable', {}, sessionId);
         const precise = await c.send('Profiler.takePreciseCoverage', {}, sessionId);
         await c.send('Profiler.stopPreciseCoverage', {}, sessionId);
@@ -521,6 +530,8 @@ export function protectTest(getLink, describe) {
           stacks: JSON.stringify(pongs.map((e) => e.params.stackTrace)),
           pongs: pongs.length,
           initiator: JSON.stringify(sent.params.initiator),
+          socket: JSON.stringify(created.params.initiator ?? null),
+          nodeStack: JSON.stringify(nodeStack),
           body,
           console: JSON.stringify(c.events.filter((e) => e.sessionId === sessionId && (e.method === 'Console.messageAdded' || e.method.startsWith('Profiler.consoleProfile'))).map((e) => e.params)),
         };

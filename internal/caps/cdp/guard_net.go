@@ -59,7 +59,7 @@ func (g *guard) socketCreatedEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
 		id, _ := p["requestId"].(string)
 		u, _ := p["url"].(string)
-		if g.o.URL(socketURL(strings.TrimSpace(u))) {
+		if g.o.URL(socketURL(strings.TrimSpace(u))) || g.initiatorLocked(m.SessionID, p) {
 			g.markRequestLocked(m.SessionID, id)
 		}
 		return true, false, nil
