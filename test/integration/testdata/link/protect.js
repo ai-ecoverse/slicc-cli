@@ -342,6 +342,38 @@ export function protectTest(getLink, describe) {
         await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
         return out;
       }),
+    unparsedPopup: (browser, opener, popup, markers) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(opener);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+        const start = c.events.length;
+        await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(popup)}))`, userGesture: true }, sessionId);
+        let popups = [];
+        for (let i = 0; i < 100 && popups.length === 0; i += 1) {
+          const { targetInfos } = await c.send('Target.getTargets');
+          popups = targetInfos.filter((t) => t.openerId === targetId).map(({ targetId: id, url, title }) => ({ targetId: id, url, title }));
+          if (popups.length === 0) await sleep(100);
+        }
+        await sleep(3000);
+        const { targetInfos } = await c.send('Target.getTargets');
+        popups = targetInfos.filter((t) => t.openerId === targetId).map(({ targetId: id, url, title }) => ({ targetId: id, url, title }));
+        const out = { popups, attach: {}, cookies: {} };
+        for (const p of popups) {
+          const r = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
+          out.attach[p.targetId] = r;
+          if (r.ok) out.cookies[p.targetId] = await outcome(c.evaluate('document.cookie', r.result.sessionId));
+        }
+        for (const e of c.events.slice(start).filter((e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.openerId === targetId)) {
+          out.cookies[e.params.sessionId] = await outcome(c.evaluate('document.cookie', e.params.sessionId));
+        }
+        const seen = JSON.stringify(c.events.slice(start)) + JSON.stringify(out);
+        out.leaked = markers.filter((m) => seen.includes(m));
+        await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+        await c.send('Target.setDiscoverTargets', { discover: false });
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        return out;
+      }),
     navHang: (browser, opener, hang, wait) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(opener);
