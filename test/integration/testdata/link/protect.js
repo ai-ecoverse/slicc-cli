@@ -581,6 +581,19 @@ export function protectTest(getLink, describe) {
         await c.send('Target.detachFromTarget', { sessionId });
         return out;
       }),
+    extensionStale: (browser, targetId, uniqueIds) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const created = c.waitEvent((e) => e.method === 'Runtime.executionContextCreated' && e.sessionId === sessionId && e.params.context.auxData?.isDefault && e.params.context.auxData?.frameId === targetId, 15000);
+        await c.send('Runtime.enable', {}, sessionId);
+        const own = (await created).params.context.uniqueId;
+        const out = { own: await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true, uniqueContextId: own }, sessionId)), stale: [] };
+        for (const uniqueContextId of uniqueIds) out.stale.push(await outcome(c.send('Runtime.evaluate', { expression: 'globalThis.sliccFixtureWorld?.secret ?? location.href', returnByValue: true, uniqueContextId }, sessionId)));
+        out.after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
+        out.detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
+        await c.send('Target.detachFromTarget', { sessionId });
+        return out;
+      }),
     ownContext: (browser) =>
       run(browser, async (c) => {
         const { browserContextId } = await c.send('Target.createBrowserContext');

@@ -34,6 +34,7 @@ var (
 	ErrTooLong     = fmt.Errorf("the prompt is longer than %d MiB", MaxPrompt>>20)
 	ErrEmpty       = errors.New("the prompt is empty")
 	ErrNotUTF8     = errors.New("the prompt is not UTF-8 text")
+	ErrNoBusy      = errors.New("this seven doesn't report when its agent is idle; update it")
 	errLineTooLong = errors.New("an event line is too long")
 )
 
@@ -46,6 +47,7 @@ type PromptOptions struct {
 type WatchOptions struct {
 	Since    string
 	Thinking bool
+	Busy     bool
 }
 
 type promptOpen struct {
@@ -62,6 +64,7 @@ type watchOpen struct {
 	Op       string `json:"op"`
 	Since    string `json:"since,omitempty"`
 	Thinking bool   `json:"thinking,omitempty"`
+	Busy     bool   `json:"busy,omitempty"`
 }
 
 type opOpen struct {
@@ -75,6 +78,7 @@ type Stream struct {
 	Delivered string
 	Head      string
 	Gap       bool
+	Busy      *bool
 }
 
 func CheckPrompt(text string) error {
@@ -140,7 +144,7 @@ func Watch(ctx context.Context, l Link, opts WatchOptions) (*Stream, error) {
 	if !l.Allowed() {
 		return nil, ErrNotAllowed
 	}
-	s, err := l.Open(ctx, watchOpen{Kind: Kind, Op: "watch", Since: opts.Since, Thinking: opts.Thinking})
+	s, err := l.Open(ctx, watchOpen{Kind: Kind, Op: "watch", Since: opts.Since, Thinking: opts.Thinking, Busy: opts.Busy})
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -148,9 +152,10 @@ func Watch(ctx context.Context, l Link, opts WatchOptions) (*Stream, error) {
 	var opened struct {
 		Head string `json:"head"`
 		Gap  bool   `json:"gap"`
+		Busy *bool  `json:"busy"`
 	}
 	_ = json.Unmarshal(s.Opened(), &opened)
-	st.Head, st.Gap = opened.Head, opened.Gap
+	st.Head, st.Gap, st.Busy = opened.Head, opened.Gap, opened.Busy
 	_ = s.CloseWrite()
 	return st, nil
 }

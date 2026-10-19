@@ -65,6 +65,7 @@ type chromeProc struct {
 	port     int
 	client   *cdp.Client
 	cmd      *exec.Cmd
+	life     *lifeline
 	stderr   string
 }
 
@@ -109,6 +110,7 @@ func launchBrowserWith(t *testing.T, debugPort int, prep func(cmd *exec.Cmd) fun
 		t.Fatal(err)
 	}
 	cmd.Stdout, cmd.Stderr = logFile, logFile
+	tie := tieToTest(cmd)
 	var afterStart func()
 	if prep != nil {
 		afterStart = prep(cmd)
@@ -121,7 +123,14 @@ func launchBrowserWith(t *testing.T, debugPort int, prep func(cmd *exec.Cmd) fun
 	if err != nil {
 		t.Fatal(err)
 	}
+	life, err := tie()
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("tie Chrome's life to the test binary: %v", err)
+	}
 	t.Cleanup(func() {
+		life.cut()
 		reap(t, cmd, "Chrome")
 		_ = os.RemoveAll(dir)
 	})
@@ -141,7 +150,7 @@ func launchBrowserWith(t *testing.T, debugPort int, prep func(cmd *exec.Cmd) fun
 	if port == 0 {
 		t.Fatalf("Chrome did not write DevToolsActivePort in %s; %s\n%s%s", time.Since(started).Round(time.Millisecond), userDataFiles(dir), chromeOutput(stderr), chromeTree(cmd.Process.Pid))
 	}
-	b := &chromeProc{endpoint: fmt.Sprintf("http://127.0.0.1:%d", port), port: port, cmd: cmd, stderr: stderr}
+	b := &chromeProc{endpoint: fmt.Sprintf("http://127.0.0.1:%d", port), port: port, cmd: cmd, life: life, stderr: stderr}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	b.client, err = cdp.Dial(ctx, b.endpoint)
@@ -180,6 +189,7 @@ func launchWithPage(t *testing.T, url string) (*chromeProc, *page) {
 		t.Fatal(err)
 	}
 	fmt.Fprintf(os.Stderr, "%s: the fresh Chrome stopped answering CDP before anything but this harness touched it; relaunching it once:\n%v\n", t.Name(), err)
+	b.life.cut()
 	reap(t, b.cmd, "Chrome")
 	b = launchBrowser(t)
 	return b, b.openPage(t, url)

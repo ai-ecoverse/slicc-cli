@@ -75,6 +75,7 @@ type agentOpen struct {
 	WhenBusy   string `json:"whenBusy"`
 	Thinking   bool   `json:"thinking"`
 	Since      string `json:"since"`
+	Busy       bool   `json:"busy"`
 	Length     int    `json:"length"`
 	TextLength int    `json:"textLength"`
 }
@@ -87,6 +88,7 @@ type agentState struct {
 	Aborts  int         `json:"aborts"`
 	Watches int         `json:"watches"`
 	Held    bool        `json:"held"`
+	Scoops  int         `json:"scoops"`
 	Log     int         `json:"log"`
 }
 

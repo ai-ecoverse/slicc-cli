@@ -298,7 +298,7 @@ func TestAgentUsage(t *testing.T) {
 		{[]string{"prompt", "--cdp", "http://127.0.0.1:1"}, "say what to send"},
 		{[]string{"http://127.0.0.1:1/join/tok.00112233445566778899", "prompt"}, "say what to send"},
 		{[]string{"http://127.0.0.1:1/join/tok.00112233445566778899", "watch", "--cdp", "x"}, "flag provided but not defined"},
-		{[]string{"http://127.0.0.1:1/join/tok.00112233445566778899", "frob"}, "follow, prompt, watch or abort"},
+		{[]string{"http://127.0.0.1:1/join/tok.00112233445566778899", "frob"}, "follow, prompt, watch, wait or abort"},
 	}
 	for _, c := range cases {
 		_, errOut, code := slicc(t, c.args...)
