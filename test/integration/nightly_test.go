@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -703,5 +704,27 @@ func TestNightlyReportOpensCommentsAndClosesTheIssue(t *testing.T) {
 	out, code := runStep(t, line, "GITHUB_API_URL="+api.srv.URL, "GITHUB_RUN_ID=", "GITHUB_SHA=", "RESULT=failure")
 	if code == 0 || !strings.Contains(out, "nightly-issue: FAIL") {
 		t.Errorf("without a run id the report must fail, got exit %d:\n%s", code, out)
+	}
+}
+
+func TestCITestsRunOnNode26AndTheNPMLauncherAlsoOn24(t *testing.T) {
+	jobs := workflowJobs(t, readWorkflow(t, "ci.yml"))
+	if v := lineWith(t, jobs["test"].body, "node-version:"); v != "node-version: 26" {
+		t.Errorf("the test job sets up %q, want Node 26: Node 24's V8 crashes the kernel harness about once in 100 runs on Windows", v)
+	}
+	assets := jobs["installer-assets"].body
+	if v := lineWith(t, assets, "node-version:"); v != "node-version: 24" {
+		t.Errorf("installer-assets sets up %q, want Node 24, what npm users still run", v)
+	}
+	run := lineWith(t, assets, "scripts/test-shard.mjs 1/1")
+	m := regexp.MustCompile(`-run '([^']+)'`).FindStringSubmatch(run)
+	if m == nil || !strings.Contains(run, "sh scripts/verdict.sh test-shard ") || !strings.Contains(run, " -v ") {
+		t.Fatalf("installer-assets doesn't run the npm launcher tests through verdict.sh with -v: %q", run)
+	}
+	re := regexp.MustCompile(m[1])
+	for _, name := range []string{"TestNPMLauncherRunsTheBinary", "TestNPMLauncherForwardsSignals", "TestNPMLauncherPutsCompanionsOnPath", "TestSliccyNextRunsThroughNpxUnderBothBins"} {
+		if !re.MatchString(name) || !slices.Contains(declaredTests(t), name) {
+			t.Errorf("installer-assets' Node 24 run doesn't run %s", name)
+		}
 	}
 }

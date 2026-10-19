@@ -123,7 +123,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
 
       - run: npm ci
@@ -180,6 +180,11 @@ jobs:
           sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dry-run
           sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dir dist/npm-next --tag next --dry-run
           sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs --dry-run
+
+      - name: Run the npm launcher tests on Node 24
+        run: |
+          node --version
+          sh scripts/verdict.sh test-shard node scripts/test-shard.mjs 1/1 -count=1 -timeout 10m -run '^(TestNPM|TestSliccy)' -v ./test/integration/...
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
