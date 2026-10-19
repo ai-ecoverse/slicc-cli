@@ -55,9 +55,6 @@ func (g *guard) worldsLocked(target string) *worldSet {
 }
 
 func (g *guard) showContextLocked(target, session string, c execContext) {
-	if c.UniqueID == "" {
-		return
-	}
 	s := g.shown[target]
 	if s == nil {
 		s = &shownSet{contexts: map[int64]*worldCtx{}}
@@ -70,13 +67,15 @@ func (g *guard) showContextLocked(target, session string, c execContext) {
 	g.unshowLocked(target, c.ID)
 	if s.full || len(s.contexts) >= g.maxWorlds {
 		if !s.full {
-			g.logf("cdp: a target has more execution contexts than slicc tracks; refusing the uniqueContextId of every newer context there until its contexts are cleared")
+			g.logf("cdp: a target has more execution contexts than slicc tracks; refusing every newer context there until its contexts are cleared")
 		}
 		s.full = true
 		return
 	}
 	s.contexts[c.ID] = &worldCtx{unique: c.UniqueID, seen: map[string]bool{session: true}}
-	g.shownUniques[c.UniqueID] = target
+	if c.UniqueID != "" {
+		g.shownUniques[c.UniqueID] = target
+	}
 }
 
 func (g *guard) unshowLocked(target string, id int64) {
@@ -84,7 +83,9 @@ func (g *guard) unshowLocked(target string, id int64) {
 	if s == nil || s.contexts[id] == nil {
 		return
 	}
-	delete(g.shownUniques, s.contexts[id].unique)
+	if u := s.contexts[id].unique; u != "" {
+		delete(g.shownUniques, u)
+	}
 	delete(s.contexts, id)
 }
 
@@ -266,6 +267,11 @@ func (g *guard) worldCheckLocked(c *command) string {
 			return refusedUnexposed
 		}
 	}
+	if t != nil {
+		if reason := g.numericContextLocked(t.id, c.params); reason != "" {
+			return reason
+		}
+	}
 	if len(g.worlds) == 0 {
 		return ""
 	}
@@ -275,6 +281,24 @@ func (g *guard) worldCheckLocked(c *command) string {
 	}
 	if g.worldScan(c.params, target, 0) {
 		return refusedWorld
+	}
+	return ""
+}
+
+func (g *guard) numericContextLocked(target string, params map[string]any) string {
+	for _, k := range []string{"contextId", "executionContextId"} {
+		n, ok := params[k].(json.Number)
+		if !ok {
+			continue
+		}
+		id, err := n.Int64()
+		switch {
+		case err != nil:
+		case g.contextHiddenLocked(target, id):
+			return refusedWorld
+		case g.shown[target] == nil || g.shown[target].contexts[id] == nil:
+			return refusedUnexposed
+		}
 	}
 	return ""
 }

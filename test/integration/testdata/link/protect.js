@@ -648,6 +648,13 @@ export function protectTest(getLink, describe) {
         const own = (await created).params.context.uniqueId;
         const out = { own: await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true, uniqueContextId: own }, sessionId)), stale: [] };
         for (const uniqueContextId of uniqueIds) out.stale.push(await outcome(c.send('Runtime.evaluate', { expression: 'globalThis.sliccFixtureWorld?.secret ?? location.href', returnByValue: true, uniqueContextId }, sessionId)));
+        await c.evaluate('new Promise((resolve) => setTimeout(() => resolve(true), 300))', sessionId);
+        const shown = new Set(c.events.filter((e) => e.method === 'Runtime.executionContextCreated' && e.sessionId === sessionId).map((e) => e.params.context.id));
+        out.numeric = [];
+        for (let id = 1; id <= 32; id += 1) {
+          const r = await outcome(c.send('Runtime.evaluate', { expression: 'globalThis.sliccFixtureWorld?.secret ?? location.href', returnByValue: true, contextId: id }, sessionId));
+          out.numeric.push({ id, exposed: shown.has(id), ok: r.ok && !r.result.exceptionDetails, message: r.error?.message ?? '', leaked: JSON.stringify(r).includes('fake-value-0001') });
+        }
         out.after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
         out.detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
         await c.send('Target.detachFromTarget', { sessionId });
