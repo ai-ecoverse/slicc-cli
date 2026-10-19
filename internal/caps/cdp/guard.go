@@ -111,6 +111,8 @@ type guard struct {
 	bounds          guardBounds
 	worlds          map[string]*worldSet
 	worldUniques    map[string]string
+	shown           map[string]*shownSet
+	shownUniques    map[string]string
 	maxWorlds       int
 	answered        time.Time
 	probing         bool
@@ -151,6 +153,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		streams:         map[string]bool{},
 		worlds:          map[string]*worldSet{},
 		worldUniques:    map[string]string{},
+		shown:           map[string]*shownSet{},
+		shownUniques:    map[string]string{},
 		maxWorlds:       maxWorlds,
 		bounds:          boundsFromEnv(),
 	}
