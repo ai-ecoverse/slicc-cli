@@ -533,3 +533,22 @@ func (g *guard) initiatorLocked(sessionID string, p map[string]any) bool {
 	}
 	return scrubbed
 }
+
+func (g *guard) narrowBindingLocked(c *command) {
+	if c.method != "Runtime.addBinding" || !g.pageSessionLocked(c.session) || c.params == nil {
+		return
+	}
+	_, byID := c.params["executionContextId"]
+	_, byName := c.params["executionContextName"]
+	if !byID && !byName {
+		c.params["executionContextName"] = ""
+	}
+}
+
+func (g *guard) forgetWorldSessionLocked(id string) {
+	for _, w := range g.worlds {
+		for _, wc := range w.contexts {
+			delete(wc.seen, id)
+		}
+	}
+}

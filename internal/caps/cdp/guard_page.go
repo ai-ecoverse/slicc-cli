@@ -99,6 +99,7 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 }
 
 func (g *guard) admitLocked(c *command) pageVerdict {
+	g.narrowBindingLocked(c)
 	k := callKey{c.session, c.id}
 	g.pending[k] = resultKind(c.method)
 	g.noteBodyCallLocked(k, c)

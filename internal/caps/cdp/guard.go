@@ -375,6 +375,7 @@ func (g *guard) destroyedLocked(id string) {
 
 func (g *guard) forgetSessionLocked(id string) {
 	g.goneLocked(id)
+	g.forgetWorldSessionLocked(id)
 	delete(g.sessions, id)
 	delete(g.browserSessions, id)
 	g.markedCount -= len(g.marked[id])

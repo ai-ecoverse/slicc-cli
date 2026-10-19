@@ -418,6 +418,8 @@ export function protectTest(getLink, describe) {
         out.objectId = await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: pull, objectId, returnByValue: true }, sessionId));
         out.properties = await outcome(c.send('Runtime.getProperties', { objectId, ownProperties: true }, sessionId));
         out.argument = await outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: 'function (w) { return w.secret ?? null; }', objectId: plain.result.objectId, arguments: [{ objectId }], returnByValue: true }, sessionId));
+        out.binding = await outcome(c.send('Runtime.addBinding', { name: 'sliccSevenBinding' }, sessionId));
+        out.bound = await c.evaluate('typeof globalThis.sliccSevenBinding', sessionId);
         await c.send('HeapProfiler.enable', {}, sessionId);
         out.heap = await outcome(c.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false }, sessionId));
         out.heapLeak = c.events.some((e) => e.method === 'HeapProfiler.addHeapSnapshotChunk' && e.params.chunk.includes('fake-value-0001'));

@@ -146,6 +146,8 @@ func (e *protectEnv) testExtensionWorld(t *testing.T) {
 		Heap       cdpOutcome `json:"heap"`
 		HeapLeak   bool       `json:"heapLeak"`
 		HeapChunks int        `json:"heapChunks"`
+		Binding    cdpOutcome `json:"binding"`
+		Bound      string     `json:"bound"`
 	}
 	w := extensionWorld{ID: world.ID, UniqueID: world.UniqueID, ObjectID: obj.Result.ObjectID}
 	var raw map[string]any
@@ -164,6 +166,15 @@ func (e *protectEnv) testExtensionWorld(t *testing.T) {
 	}
 	if r.Heap.Error.Message != "slicc: refused: HeapProfiler reads the page's whole renderer, browser extensions' worlds included" || r.HeapLeak || r.HeapChunks != 0 {
 		t.Errorf("a heap snapshot of the page with an extension's world: %+v, leaked %v in %d chunks", r.Heap, r.HeapLeak, r.HeapChunks)
+	}
+	var inWorld string
+	wctx, wcancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer wcancel()
+	if err := s.Evaluate(wctx, "typeof globalThis.sliccSevenBinding", cdp.EvaluateOptions{ContextID: int(world.ID), ReturnByValue: true}, &inWorld); err != nil {
+		t.Fatal(err)
+	}
+	if !r.Binding.OK || r.Bound != "function" || inWorld != "undefined" {
+		t.Errorf("an untargeted Runtime.addBinding gave %+v; the page's world sees a %s, the extension's world a %s", r.Binding, r.Bound, inWorld)
 	}
 	if r.Detached || !r.After.OK {
 		t.Errorf("the page with an extension's world was cut: detached %v, evaluate after %+v", r.Detached, r.After)
