@@ -152,7 +152,14 @@ func (o *Origins) LoadedOrigin(raw string) bool {
 }
 
 func Parses(raw string) bool {
-	u := unwrap(parse(raw))
+	u := parse(raw)
+	for i := 0; u != nil && i < maxUnwrap && slices.Contains(rules.InnerSchemes, scheme(u)); i++ {
+		inner := strings.TrimPrefix(u.Href(false), u.Protocol())
+		if scheme(u) == "blob" && strings.HasPrefix(inner, "null/") {
+			return true
+		}
+		u = parse(inner)
+	}
 	return u != nil && !slices.Contains(rules.InnerSchemes, scheme(u))
 }
 

@@ -46,6 +46,7 @@ func TestCDPFailsClosedOnUnparseableURLs(t *testing.T) {
 	t.Run("an exotic host that isn't protected is cut too", func(t *testing.T) { env.testLoadedTab(t, env.exotic, "an%20exotic", false) })
 	t.Run("window.open to an unparseable sliccy.ai host is cut", func(t *testing.T) { env.testPopupTo(t, env.hole, "exa%20mple") })
 	t.Run("window.open to an exotic host is cut too", func(t *testing.T) { env.testPopupTo(t, env.exotic, "an%20exotic") })
+	t.Run("a blob from an opaque origin stays readable", env.testOpaqueBlob)
 	t.Run("the link still works", env.testStillLinked)
 }
 
@@ -205,5 +206,34 @@ func (e *unparsedEnv) testPopupTo(t *testing.T, u, marker string) {
 	}
 	if len(r.Cookie) != 0 || len(r.Leaked) != 0 {
 		t.Errorf("the page reached the popup: cookies %+v, saw %v", r.Cookie, r.Leaked)
+	}
+}
+
+func (e *unparsedEnv) testOpaqueBlob(t *testing.T) {
+	var r struct {
+		URL  string `json:"url"`
+		Text string `json:"text"`
+		Body struct {
+			cdpOutcome
+			Result struct {
+				Body string `json:"body"`
+			} `json:"result"`
+		} `json:"body"`
+		Navigate cdpOutcome `json:"navigate"`
+		Href     struct {
+			cdpOutcome
+			Result string `json:"result"`
+		} `json:"href"`
+		Info string `json:"info"`
+	}
+	e.evalJSON(t, "linkTest.protect.opaqueBlob('chrome')", &r)
+	if !strings.HasPrefix(r.URL, "blob:null/") || !strings.Contains(r.Text, "opaque blob") {
+		t.Fatalf("the data: page made %q holding %q, want a blob:null/ URL", r.URL, r.Text)
+	}
+	if !r.Body.OK || !strings.Contains(r.Body.Result.Body, "opaque blob") {
+		t.Errorf("Network.getResponseBody of the blob: %+v", r.Body)
+	}
+	if !r.Navigate.OK || !strings.Contains(r.Href.Result, "blob ok") || r.Info != r.URL {
+		t.Errorf("the tab on the blob: navigate %+v, page %+v, listed at %q", r.Navigate, r.Href, r.Info)
 	}
 }
