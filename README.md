@@ -1668,7 +1668,7 @@ On a [§1.3](#13-local-setup-without-cdp-loopback-signalling) loopback link, `un
       - header maps are emptied;
       - `postData`, `postDataEntries`, `headersText`, `requestHeadersText` and the cookie lists are removed.
 
-      The request is also treated like one to a protected origin, so its bodies and post data are refused. A pause of such a request (`Fetch.requestPaused`/`authRequired`, `Network.requestIntercepted`) is continued by the node and never shown to the page. A `Fetch` pause whose `networkId` the guard session hasn't reported yet waits up to 2 s for it, at most 4096 at a time. A target with more than 65536 such requests fails closed: every request there is cut.
+      The request is also treated like one to a protected origin, so its bodies and post data are refused. A pause of such a request (`Fetch.requestPaused`/`authRequired`, `Network.requestIntercepted`) is continued by the node and never shown to the page. A `Fetch.authRequired`, which carries no `networkId`, is answered by the node (`Default`) when its Fetch `requestId` belongs to such a pause. A `Fetch` pause whose `networkId` the guard session hasn't reported yet waits up to 2 s for it, at most 4096 at a time. A target with more than 65536 such requests fails closed: every request there is cut.
 
 #### 5.8.1 `browsers` updates (page cap `browsers`), node → page
 - **When:** the browser list changes while a link is up (a browser quits, or the TUI adds one). The node then opens `OPEN { "kind": "browsers", "browsers": [ … ] }` on the control channel, carrying the **full** current list in HELLO's shape. It replaces the previous list; there are no deltas.

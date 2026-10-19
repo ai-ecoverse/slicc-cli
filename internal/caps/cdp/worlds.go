@@ -767,7 +767,8 @@ func (g *guard) cutWorldRequest(root any) {
 func (g *guard) worldPauseLocked(m *message, p map[string]any) ([]byte, bool) {
 	id, other := pausedIDs(m.Method, p)
 	t := g.worldTargetLocked(m.SessionID)
-	if !g.worldRequestKnownLocked(t, other) && !g.worldRequestKnownLocked(t, id) {
+	auth := m.Method == "Fetch.authRequired" && g.requestMarkedLocked(m.SessionID, id)
+	if !auth && !g.worldRequestKnownLocked(t, other) && !g.worldRequestKnownLocked(t, id) {
 		return nil, false
 	}
 	delete(g.handed, requestKey{m.SessionID, id})
