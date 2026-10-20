@@ -27,6 +27,10 @@ func Refusal() string {
 	return rules.Refusal
 }
 
+func UnparseableRefusal() string {
+	return rules.UnparseableRefusal
+}
+
 type Origins struct {
 	extra []string
 	hosts []string
@@ -144,7 +148,7 @@ func (o *Origins) URL(raw string) bool {
 }
 
 func (o *Origins) Loaded(raw string) bool {
-	return o.URL(raw) || (raw != "" && !Parses(raw))
+	return o.URL(raw) || (rules.Unparseable == "protected" && raw != "" && !Parses(raw))
 }
 
 func (o *Origins) LoadedOrigin(raw string) bool {
