@@ -248,7 +248,7 @@ func TestDefaultJSONLaunchesLinksAndCloses(t *testing.T) {
 		t.Fatalf("attached %s", a.raw)
 	}
 	up := f.next(t, "linked")
-	if up.Tab != pageURL || up.Peer != "link test page" || !strings.Contains(strings.Join(up.Caps, ","), "net") || up.Policy == "" {
+	if up.Tab != srv.URL || up.Peer != "link test page" || !strings.Contains(strings.Join(up.Caps, ","), "net") || up.Policy == "" {
 		t.Fatalf("linked %s", up.raw)
 	}
 
@@ -301,7 +301,7 @@ func TestDefaultPlainOpensSevenInARunningBrowser(t *testing.T) {
 	f := startFlow(t, append(env, "NO_COLOR=1"), "--plain", "--cdp", b.endpoint, "--browser", id, "--page", pageURL)
 	f.waitStderr(t, "attached to")
 	f.waitStderr(t, "opened "+pageURL+" in a new tab")
-	f.waitStderr(t, `linked with "link test page" in `+pageURL)
+	f.waitStderr(t, `linked with "link test page" in `+srv.URL)
 	if n := countTabs(t, b.client, pageURL); n != 1 {
 		t.Fatalf("%d tabs at %s", n, pageURL)
 	}

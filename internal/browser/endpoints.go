@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
 var ActivePortFile = catalog.Discovery.ActivePortFile
@@ -278,7 +279,8 @@ func probeCandidate(ctx context.Context, client *http.Client, c candidate, o Opt
 }
 
 func (t listTarget) tab() Tab {
-	return Tab{ID: t.ID, URL: t.URL, Title: t.Title}
+	origin := protect.Redact(t.URL)
+	return Tab{ID: t.ID, URL: origin, Title: origin}
 }
 
 func wsOnlyEndpoint(c candidate) *Endpoint {

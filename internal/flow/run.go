@@ -15,6 +15,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 	"github.com/ai-ecoverse/slicc-cli/internal/signal"
 	"github.com/ai-ecoverse/slicc-cli/internal/telemetry"
 )
@@ -285,7 +286,7 @@ func (r *run) sevenTab(ctx context.Context) string {
 	}
 	for _, t := range targets {
 		if t.Type == "page" && r.allowed.AllowedURL(t.URL) {
-			return t.URL
+			return protect.Redact(t.URL)
 		}
 	}
 	return ""

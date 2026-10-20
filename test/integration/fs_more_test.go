@@ -205,7 +205,7 @@ func TestDefaultFlowMounts(t *testing.T) {
 	id := "cdp:127.0.0.1:" + strings.TrimPrefix(b.endpoint, "http://127.0.0.1:")
 	flow := startFlow(t, append(env, "NO_COLOR=1"), "--plain", "--cdp", b.endpoint, "--browser", id, "--page", pageURL, "--no-kernel", "--mount", f.folder, "--mount", f.missing)
 	flow.waitStderr(t, "--mount "+f.missing+": not an existing folder, skipping")
-	flow.waitStderr(t, `linked with "link test page" in `+pageURL)
+	flow.waitStderr(t, `linked with "link test page" in `+srv.URL)
 	if !strings.Contains(flow.stderr.String(), "offering net, http, credentialed, ws, udp, fs") {
 		t.Fatalf("plain output does not offer fs:\n%s", flow.stderr.String())
 	}
