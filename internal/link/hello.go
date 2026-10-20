@@ -73,12 +73,17 @@ type Hello struct {
 	Browsers   []Browser `json:"browsers,omitempty"`
 	Mounts     []Mount   `json:"mounts,omitempty"`
 	Jerk       *Jerk     `json:"jerk,omitempty"`
+	Kernel     *Kernel   `json:"kernel,omitempty"`
 
 	Raw json.RawMessage `json:"-"`
 }
 
 type Jerk struct {
 	Version string `json:"version"`
+}
+
+type Kernel struct {
+	Port int `json:"port"`
 }
 
 func (h Hello) HasCap(c string) bool {

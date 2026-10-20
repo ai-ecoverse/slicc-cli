@@ -67,8 +67,10 @@ folders listed, read-only with :ro.
 
 When seven offers kernel-in, slicc listens on 127.0.0.1:<kernel port> and
 carries navigations and WebSockets to http://<port>.kernel.localhost/ into
-the page's kernel. If that port can't be bound, slicc says so and runs on
-without it.
+the page's kernel. On macOS, where only 0.0.0.0 lets a normal user bind 80,
+it listens there and refuses every peer that isn't loopback. When 80 is out
+of reach, it uses the first free port in 17180-17189. If the port can't be
+bound, slicc says so and runs on without it.
 ` + debugPortsHelp
 
 type attachFlags struct {
@@ -164,6 +166,9 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if os.Getenv("SLICC_DEBUG") != "" {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
+	if !f.noKernel {
+		f.kernelPort = kernelin.Pick(f.kernelPort, status)
+	}
 	origins, err := signal.NewOrigins(f.origins)
 	if err != nil {
 		status("%v", err)
@@ -207,6 +212,8 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	kernelPort := f.kernelPort
 	if f.noKernel {
 		kernelPort = 0
+	} else {
+		n.OnHello(kernelin.Announce(kernelPort))
 	}
 	h, closeCtl := serveCtl("attach", n, kernelPort, logf)
 	defer closeCtl()

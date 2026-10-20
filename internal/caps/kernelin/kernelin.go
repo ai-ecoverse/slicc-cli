@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"slices"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
@@ -17,11 +19,14 @@ const (
 	Cap         = "kernel-in"
 	Kind        = "kernel"
 	DefaultPort = 80
+	SpareFirst  = 17180
+	SpareLast   = 17189
 	CDPPort     = 9222
 	HeadLimit   = 64 * 1024
 	HeadTimeout = 30 * time.Second
 	OpenTimeout = 10 * time.Second
 	BindHost    = "127.0.0.1"
+	WildHost    = "0.0.0.0"
 )
 
 type Open struct {
@@ -140,8 +145,7 @@ func (s *Service) Listen() error {
 		return err
 	}
 	s.tried = true
-	addr := net.JoinHostPort(BindHost, strconv.Itoa(s.cfg.Port))
-	ln, err := net.Listen("tcp", addr)
+	ln, addr, err := bind(s.cfg.Port)
 	if err != nil {
 		s.err = err
 		s.mu.Unlock()
@@ -160,6 +164,47 @@ func (s *Service) Listen() error {
 	s.wg.Add(1)
 	go s.accept(ln, port)
 	return nil
+}
+
+func Pick(port int, status func(format string, args ...any)) int {
+	if port != DefaultPort {
+		return port
+	}
+	ln, addr, err := bind(port)
+	if err == nil {
+		_ = ln.Close()
+		return port
+	}
+	for p := SpareFirst; p <= SpareLast; p++ {
+		if spare, _, e := bind(p); e == nil {
+			_ = spare.Close()
+			if status != nil {
+				status("cannot listen on %s (%s), so kernel services use port %d", addr, bindReason(err), p)
+			}
+			return p
+		}
+	}
+	return port
+}
+
+func Announce(port int) func(*link.Hello) {
+	return func(h *link.Hello) { h.Kernel = &link.Kernel{Port: port} }
+}
+
+func bind(port int) (net.Listener, string, error) {
+	addr := net.JoinHostPort(BindHost, strconv.Itoa(port))
+	ln, err := net.Listen("tcp4", addr)
+	if err == nil || runtime.GOOS != "darwin" || !errors.Is(err, syscall.EACCES) {
+		return ln, addr, err
+	}
+	wild := net.JoinHostPort(WildHost, strconv.Itoa(port))
+	ln, err = net.Listen("tcp4", wild)
+	return ln, wild, err
+}
+
+func loopback(a net.Addr) bool {
+	t, ok := a.(*net.TCPAddr)
+	return ok && t.IP.IsLoopback()
 }
 
 func URL(kernelPort string, listenPort int) string {
@@ -222,6 +267,14 @@ func (s *Service) accept(ln net.Listener, port int) {
 			}
 			s.cfg.Logf("kernel: accept: %v", err)
 			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if !loopback(c.RemoteAddr()) {
+			s.cfg.Logf("kernel: refused %s, not loopback", c.RemoteAddr())
+			if tc, ok := c.(*net.TCPConn); ok {
+				_ = tc.SetLinger(0)
+			}
+			_ = c.Close()
 			continue
 		}
 		if !s.track(c) {
