@@ -305,7 +305,7 @@ var errorPageMethods = map[string]bool{
 	"Target.getTargetInfo": true, "Target.activateTarget": true,
 }
 
-var errorPageDomains = map[string]bool{"Page": true, "Runtime": true, "Target": true, "Inspector": true, "Network": true, "Log": true}
+var errorPageDomains = map[string]bool{"Page": true, "Runtime": true, "Target": true, "Inspector": true, "Network": true, "Log": true, "Fetch": true}
 
 var errorPageEvents = map[string]bool{
 	"Runtime.executionContextCreated": true, "Runtime.executionContextDestroyed": true, "Runtime.executionContextsCleared": true,
@@ -334,7 +334,7 @@ func (g *guard) errorPageCheckLocked(c *command) string {
 	if c.method == "Page.reload" && c.params["scriptToEvaluateOnLoad"] != nil {
 		return refusedErrorPage
 	}
-	if errorPageMethods[c.method] {
+	if errorPageMethods[c.method] || continueOK[c.method] {
 		return ""
 	}
 	domain, verb, _ := strings.Cut(c.method, ".")
@@ -390,7 +390,7 @@ func (g *guard) failedFormsLocked(sessionID string) []failedForm {
 }
 
 func (g *guard) noteCommitLocked(k callKey, c *command) {
-	if errorPageMethods[c.method] {
+	if errorPageMethods[c.method] || continueOK[c.method] {
 		return
 	}
 	s, ok := g.sessions[c.session]

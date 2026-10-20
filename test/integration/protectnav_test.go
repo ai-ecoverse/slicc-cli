@@ -105,7 +105,11 @@ func navServer(t *testing.T, log *navLog) *httptest.Server {
 	vectorRoutes(mux, log)
 	mux.HandleFunc("/redirect-secret", func(w http.ResponseWriter, r *http.Request) {
 		code := log.secret()
-		http.Redirect(w, r, r.URL.Query().Get("to")+"/doc?code="+code, http.StatusFound)
+		frag := ""
+		if r.URL.Query().Get("frag") != "" {
+			frag = "#access_token=" + code
+		}
+		http.Redirect(w, r, r.URL.Query().Get("to")+"/doc?code="+code+frag, http.StatusFound)
 	})
 	mux.HandleFunc("/beacon", func(w http.ResponseWriter, r *http.Request) {
 		log.beacon(r.URL.Query().Get("tag"), r.URL.Query().Get("origin"))
@@ -177,6 +181,7 @@ func TestCDPProtectsAcrossNavigation(t *testing.T) {
 	t.Run("an init script, then a script navigation onto the vault", env.testVaultNavigation)
 	t.Run("a server redirect into a protected origin", env.testRedirect)
 	t.Run("a server redirect's protected URL stays out of the error page the page drives", env.testRedirectSecret)
+	t.Run("a tab the page intercepts settles after a redirect into a protected origin", env.testRedirectSettles)
 	t.Run("a popup from an allowed tab", env.testPopupNavigation)
 	t.Run("iframes that attach without a URL", env.testFrames)
 	t.Run("a popup that never gets a URL", env.testNoURL)
@@ -363,6 +368,64 @@ func (e *navEnv) testRedirectSecret(t *testing.T) {
 		}
 		if !answers["Page.reload"].OK || !answers["evaluateAfter"].OK {
 			t.Errorf("reloading the error page for %s, or evaluating once it left: %+v %+v", base, answers["Page.reload"], answers["evaluateAfter"])
+		}
+	}
+}
+
+func (e *navEnv) testRedirectSettles(t *testing.T) {
+	for _, base := range []string{e.seven, e.vault} {
+		away := e.allowed + "/redirect-secret?frag=1&to=" + url.QueryEscape(base)
+		direct := e.allowed + "/doc?n=settle-direct"
+		type settled struct {
+			TargetID  string     `json:"targetId"`
+			Failed    bool       `json:"failed"`
+			Guarded   cdpOutcome `json:"guarded"`
+			GuardedMS int        `json:"guardedMs"`
+			Committed bool       `json:"committed"`
+			Direct    bool       `json:"direct"`
+			Paused    int        `json:"paused"`
+			Refused   []string   `json:"refused"`
+			Seen      string     `json:"seen"`
+		}
+		var r settled
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			(&protectEnv{linkEnv: e.linkEnv}).evalJSON(t, "linkTest.protect.redirectSettles("+jsArgs("chrome", e.allowed+"/doc?n=settle", away, e.allowed+"/doc?n=settle-guarded", direct)+")", &r)
+		}()
+		var id string
+		for deadline := time.Now().Add(30 * time.Second); id == "" && time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+			for tid, u := range pageTargets(t, e.b) {
+				if strings.Contains(u, "n=settle-guarded") {
+					id = tid
+				}
+			}
+		}
+		if id == "" {
+			<-done
+			t.Fatalf("the page's own navigation after the redirect into %s never committed: %+v", base, r)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		s, err := e.b.client.Attach(ctx, id)
+		if err == nil {
+			err = s.Call(ctx, "Page.navigate", map[string]any{"url": direct}, nil)
+			_ = s.Detach(context.Background())
+		}
+		cancel()
+		if err != nil {
+			t.Errorf("an unguarded Page.navigate on the tab after the redirect into %s didn't return in 10 s: %v", base, err)
+		}
+		<-done
+		secret := e.log.lastSecret()
+		switch {
+		case !r.Failed || !r.Guarded.OK || r.GuardedMS > 10000 || !r.Committed:
+			t.Fatalf("the page's own navigation after the redirect into %s didn't settle: %+v", base, r)
+		case !r.Direct || r.Paused == 0:
+			t.Fatalf("the unguarded navigation after the redirect into %s didn't commit through the page's interception: %+v", base, r)
+		case len(r.Refused) > 0:
+			t.Fatalf("the page couldn't settle its own interception after the redirect into %s: %v", base, r.Refused)
+		case secret == "" || strings.Contains(r.Seen, secret):
+			t.Fatalf("the page read the redirect's secret into %s: %s", base, r.Seen)
 		}
 	}
 }

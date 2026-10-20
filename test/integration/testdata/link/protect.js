@@ -417,6 +417,31 @@ export function protectTest(getLink, describe) {
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
         return { targetId, detached, after, close };
       }),
+    redirectSettles: (browser, start, away, next, direct) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(start);
+        for (const domain of ['Page', 'Network', 'Runtime']) await c.send(`${domain}.enable`, {}, sessionId);
+        await c.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }, { urlPattern: '*', requestStage: 'Response' }] }, sessionId);
+        const refused = [];
+        let paused = 0;
+        c.on((e) => {
+          if (e.method !== 'Fetch.requestPaused' || e.sessionId !== sessionId) return;
+          paused += 1;
+          c.send('Fetch.continueRequest', { requestId: e.params.requestId }, sessionId).catch((error) => refused.push(error?.cdp?.message ?? String(error)));
+        });
+        const failed = await Promise.race([
+          c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 15000).then(() => true, () => false),
+          c.send('Page.navigate', { url: away }, sessionId).then(() => sleep(15000)).then(() => false),
+        ]);
+        await sleep(300);
+        const start2 = Date.now();
+        const guarded = await Promise.race([outcome(c.send('Page.navigate', { url: next }, sessionId)), sleep(12000).then(() => ({ ok: false, error: { message: 'no answer in 12 s' } }))]);
+        const guardedMs = Date.now() - start2;
+        const committed = await c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === next, 10000).then(() => true, () => false);
+        const directSeen = await c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === direct, 25000).then(() => true, () => false);
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        return { targetId, failed, guarded, guardedMs, committed, direct: directSeen, paused, refused, seen: JSON.stringify(c.events) };
+      }),
     redirectSecret: (browser, start, away) =>
       run(browser, async (c) => {
         await c.send('Target.setDiscoverTargets', { discover: true });
