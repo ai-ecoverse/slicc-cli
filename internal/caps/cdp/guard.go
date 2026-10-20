@@ -124,6 +124,7 @@ type guard struct {
 	navSeenOrder      []requestKey
 	navChains         map[requestKey][]string
 	tainted           map[string]*assetSet
+	clean             map[string]*assetSet
 	assets            map[string]*assetSet
 	heldPauses        map[requestKey][]heldPause
 	heldPauseCount    int
@@ -175,6 +176,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		navSeen:           map[requestKey]bool{},
 		navChains:         map[requestKey][]string{},
 		tainted:           map[string]*assetSet{},
+		clean:             map[string]*assetSet{},
 		assets:            map[string]*assetSet{},
 		heldPauses:        map[requestKey][]heldPause{},
 		maxWorlds:         maxWorlds,

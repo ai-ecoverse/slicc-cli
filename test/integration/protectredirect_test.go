@@ -100,10 +100,13 @@ func redirectServer(t *testing.T, to map[string]string) *httptest.Server {
 			redirect(w, r, to[n])
 		case r.URL.Path == "/assets":
 			w.Header().Set("Content-Type", "text/html")
-			_, _ = w.Write([]byte(`<!doctype html><title>assets</title><style>.own { color: red; }</style><link rel="stylesheet" href="/redirect?n=seven-css"><link rel="stylesheet" href="` + to["asset"] + `?as=css"><script src="/redirect?n=seven-js"></script><script src="` + to["asset"] + `?as=js"></script><script>new Worker("/worker.js")</script><body>`))
+			_, _ = w.Write([]byte(`<!doctype html><title>assets</title><style>.own { color: red; }</style><link rel="stylesheet" href="/redirect?n=seven-css"><link rel="stylesheet" href="` + to["asset"] + `?as=css"><script src="/redirect?n=seven-js"></script><script src="` + to["asset"] + `?as=js"></script><script>new Worker("/worker.js"); new SharedWorker("/worker.js?kind=shared")</script><body>`))
 		case r.URL.Path == "/worker.js":
 			w.Header().Set("Content-Type", "text/javascript")
-			_, _ = w.Write([]byte(`importScripts("` + to["asset"] + `?as=js&worker=1");`))
+			_, _ = w.Write([]byte(`importScripts("/redirect?n=seven-js", "` + to["asset"] + `?as=js&worker=1", "/lib.js");`))
+		case r.URL.Path == "/lib.js":
+			w.Header().Set("Content-Type", "text/javascript")
+			_, _ = w.Write([]byte("var lib = 'ordinary-lib-0033';"))
 		case r.URL.Path == "/embed":
 			w.Header().Set("Content-Type", "text/html")
 			_, _ = w.Write([]byte(`<!doctype html><title>embed</title><link rel="stylesheet" href="/redirect?n=seven"><script src="/redirect?n=seven"></script><img src="/redirect?n=seven"><iframe src="/redirect?n=vault"></iframe><iframe src="/redirect?n=frag"></iframe>`))
@@ -193,7 +196,7 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 	t.Run("protected stylesheets and scripts can't be read", func(t *testing.T) {
 		var r redirectSeen
 		env.evalJSON(t, "linkTest.protect.redirectAssets("+jsArgs("chrome", hop+"/assets")+")", &r)
-		for call, want := range map[string]int{"Page.getResourceContent": 12, "CSS.getStyleSheetText": 2, "Debugger.getScriptSource": 2, "Debugger.searchInContent": 2, "worker Debugger.getScriptSource": 1, "worker Debugger.searchInContent": 1} {
+		for call, want := range map[string]int{"Page.getResourceContent": 12, "CSS.getStyleSheetText": 2, "Debugger.getScriptSource": 2, "Debugger.searchInContent": 2, "worker Debugger.getScriptSource": 2, "worker Debugger.searchInContent": 2, "shared Debugger.getScriptSource": 3} {
 			refused := 0
 			for _, got := range r.result(call) {
 				if strings.Contains(got, "slicc: refused: ") {
@@ -203,6 +206,13 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 			if refused < want {
 				t.Errorf("%s was refused %d times, want at least %d: %v", call, refused, want, r.result(call))
 			}
+		}
+		lib := false
+		for _, got := range r.result("worker Debugger.getScriptSource") {
+			lib = lib || strings.Contains(got, "ordinary-lib-0033")
+		}
+		if !lib {
+			t.Errorf("an ordinary worker import can't be read: %v", r.result("worker Debugger.getScriptSource"))
 		}
 		own := false
 		for _, got := range r.result("CSS.getStyleSheetText") {

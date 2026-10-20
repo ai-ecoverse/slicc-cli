@@ -926,9 +926,18 @@ export function protectTest(getLink, describe) {
         const { root } = await c.send('DOM.getDocument', {}, sessionId);
         const body = await c.send('DOM.querySelector', { nodeId: root.nodeId, selector: 'body' }, sessionId);
         await record('CSS.getMatchedStylesForNode', c.send('CSS.getMatchedStylesForNode', { nodeId: body.nodeId }, sessionId));
+        const { targetInfos } = await c.send('Target.getTargets', {});
+        const shared = targetInfos.find((t) => t.type === 'shared_worker' && t.url.includes('kind=shared'));
+        let sharedSession = null;
+        if (shared) {
+          sharedSession = (await c.send('Target.attachToTarget', { targetId: shared.targetId, flatten: true })).sessionId;
+          sessions.add(sharedSession);
+          await c.send('Debugger.enable', {}, sharedSession);
+          await sleep(500);
+        }
         const scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && sessions.has(e.sessionId) && e.params.url);
         for (const e of scripts) {
-          const call = e.sessionId === sessionId ? '' : 'worker ';
+          const call = e.sessionId === sessionId ? '' : e.sessionId === sharedSession ? 'shared ' : 'worker ';
           await record(`${call}Debugger.getScriptSource`, c.send('Debugger.getScriptSource', { scriptId: e.params.scriptId }, e.sessionId));
           await record(`${call}Debugger.searchInContent`, c.send('Debugger.searchInContent', { scriptId: e.params.scriptId, query: 'fake' }, e.sessionId));
         }

@@ -22,6 +22,10 @@ func (s *assetSet) has(k string) bool {
 	return s != nil && (s.full || s.keys[k])
 }
 
+func (s *assetSet) surely(k string) bool {
+	return s != nil && !s.full && s.keys[k]
+}
+
 func addAsset(m map[string]*assetSet, owner, k string) {
 	s := m[owner]
 	if s == nil {
@@ -47,14 +51,15 @@ func (g *guard) chainLocked(k requestKey, p map[string]any) {
 		chain = chain[len(chain)-maxChain:]
 	}
 	g.navChains[k] = chain
+	into := g.clean
 	for _, c := range chain {
 		if g.o.Loaded(c) {
-			for _, t := range chain {
-				if canon, ok := protect.Canonical(t); ok {
-					addAsset(g.tainted, k.session, canon)
-				}
-			}
-			return
+			into = g.tainted
+		}
+	}
+	for _, t := range chain {
+		if canon, ok := protect.Canonical(t); ok {
+			addAsset(into, k.session, canon)
 		}
 	}
 }
@@ -82,13 +87,25 @@ func (g *guard) styleSheetEvent(m *message, data []byte) browserVerdict {
 	return browserVerdict{forward: data}
 }
 
+func (g *guard) unseenWorkerScriptLocked(session, u string) bool {
+	t := g.sessionTargetLocked(session)
+	if t == nil || !workerTypes[t.typ] || u == "" {
+		return false
+	}
+	canon, ok := protect.Canonical(u)
+	if main, _ := protect.Canonical(t.url); ok && canon == main {
+		return false
+	}
+	return !ok || g.tainted[t.id].has(canon) || !g.clean[t.id].surely(canon)
+}
+
 func (g *guard) noteScriptLocked(m *message) {
 	var p struct {
 		ScriptID string `json:"scriptId"`
 		URL      string `json:"url"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	if g.assetURLLocked(m.SessionID, p.URL) {
+	if g.assetURLLocked(m.SessionID, p.URL) || g.unseenWorkerScriptLocked(m.SessionID, p.URL) {
 		addAsset(g.assets, m.SessionID, assetKinds["scriptId"]+p.ScriptID)
 	}
 }
