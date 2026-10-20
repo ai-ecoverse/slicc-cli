@@ -53,6 +53,7 @@ export class CdpClient {
     this.stream = stream;
     this.opened = stream.opened;
     this.events = [];
+    this.messages = [];
     this.maxMessage = 0;
     this.closed = this.#readLoop();
   }
@@ -68,7 +69,9 @@ export class CdpClient {
           if (want < 0 && reader.available >= 4) want = new DataView(reader.take(4).buffer).getUint32(0);
           if (want < 0 || reader.available < want) break;
           this.maxMessage = Math.max(this.maxMessage, want);
-          this.#dispatch(JSON.parse(decoder.decode(reader.take(want))));
+          const text = decoder.decode(reader.take(want));
+          this.messages.push(text);
+          this.#dispatch(JSON.parse(text));
           want = -1;
         }
       }
