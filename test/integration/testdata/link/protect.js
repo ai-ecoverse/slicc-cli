@@ -382,7 +382,7 @@ export function protectTest(getLink, describe) {
       watching = c;
       return { ok: true };
     },
-    watchedFragments: async (targetIds) => {
+    watchedFragments: async (targetIds, mark) => {
       const c = watching;
       watching = null;
       const list = await c.send('Target.getTargets');
@@ -390,7 +390,7 @@ export function protectTest(getLink, describe) {
       for (const targetId of targetIds) infos.push(await outcome(c.send('Target.getTargetInfo', { targetId })));
       await c.send('Target.setAutoAttach', { autoAttach: false, flatten: true, waitForDebuggerOnStart: false });
       await c.send('Target.setDiscoverTargets', { discover: false });
-      const changed = c.events.filter((e) => e.method === 'Target.targetInfoChanged').map((e) => ({ targetId: e.params.targetInfo.targetId, url: e.params.targetInfo.url, title: e.params.targetInfo.title }));
+      const changed = c.events.slice(mark).filter((e) => e.method === 'Target.targetInfoChanged').map((e) => ({ targetId: e.params.targetInfo.targetId, url: e.params.targetInfo.url, title: e.params.targetInfo.title }));
       const received = JSON.stringify({ events: c.events, list, infos });
       await c.close();
       return { received, listed: list.targetInfos.map(({ targetId, url, title }) => ({ targetId, url, title })), changed };

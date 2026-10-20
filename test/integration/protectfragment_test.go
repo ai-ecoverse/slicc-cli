@@ -41,7 +41,14 @@ func TestCDPKeepsSevensURLFragmentOutOfTargets(t *testing.T) {
 	var ok map[string]any
 	e.evalJSON(t, "linkTest.protect.watchFragments('chrome')", &ok)
 	callback := e.openDirect(t, origin+"/auth/callback#access_token=fake-value-0013")
-	e.setHashDirect(t, tailscale, "tailscale=fake-value-0014")
+	s, detach := e.attachDirect(t, tailscale)
+	defer detach()
+	time.Sleep(time.Second)
+	var mark struct {
+		Mark int `json:"mark"`
+	}
+	e.evalJSON(t, "linkTest.protect.watchMark()", &mark)
+	pollDirect(t, s, "(location.hash = "+jsArgs("tailscale=fake-value-0014")+", document.title.endsWith('fake-value-0014'))")
 	ids := []string{tailscale, proxy, callback}
 	direct := pageTargets(t, b)
 	for id, want := range map[string]string{tailscale: "fake-value-0014", proxy: "fake-value-0012", callback: "fake-value-0013"} {
@@ -56,7 +63,7 @@ func TestCDPKeepsSevensURLFragmentOutOfTargets(t *testing.T) {
 		Listed   []fragmentTarget `json:"listed"`
 		Changed  []fragmentTarget `json:"changed"`
 	}
-	e.evalJSON(t, "linkTest.protect.watchedFragments("+jsArgs(ids)+")", &r)
+	e.evalJSON(t, "linkTest.protect.watchedFragments("+jsArgs(ids, mark.Mark)+")", &r)
 	for _, v := range []string{"fake-value-0011", "fake-value-0012", "fake-value-0013", "fake-value-0014"} {
 		if strings.Contains(r.Received, v) {
 			t.Errorf("%s reached the relay client: %s", v, r.Received)
@@ -76,7 +83,7 @@ func TestCDPKeepsSevensURLFragmentOutOfTargets(t *testing.T) {
 		changed = changed || c.TargetID == tailscale
 	}
 	if !changed {
-		t.Errorf("no Target.targetInfoChanged for the tab whose fragment changed, so that step went untested: %+v", r.Changed)
+		t.Errorf("no Target.targetInfoChanged for the tab after its fragment changed, so that step went untested: %+v", r.Changed)
 	}
 }
 
@@ -99,12 +106,7 @@ func (e *protectEnv) openDirect(t *testing.T, u string) string {
 	return res.TargetID
 }
 
-func (e *protectEnv) setHashDirect(t *testing.T, targetID, hash string) {
-	t.Helper()
-	e.evalDirect(t, targetID, "(location.hash = "+jsArgs(hash)+", document.title.endsWith("+jsArgs(hash)+"))")
-}
-
-func (e *protectEnv) evalDirect(t *testing.T, targetID, expr string) {
+func (e *protectEnv) attachDirect(t *testing.T, targetID string) (*cdp.Session, func()) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -112,7 +114,20 @@ func (e *protectEnv) evalDirect(t *testing.T, targetID, expr string) {
 	if err != nil {
 		t.Fatalf("attach %s directly: %v", targetID, err)
 	}
-	defer func() { _ = s.Detach(context.Background()) }()
+	return s, func() { _ = s.Detach(context.Background()) }
+}
+
+func (e *protectEnv) evalDirect(t *testing.T, targetID, expr string) {
+	t.Helper()
+	s, detach := e.attachDirect(t, targetID)
+	defer detach()
+	pollDirect(t, s, expr)
+}
+
+func pollDirect(t *testing.T, s *cdp.Session, expr string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 	for {
 		var done bool
 		if err := s.Evaluate(ctx, expr, cdp.EvaluateOptions{ReturnByValue: true}, &done); err == nil && done {
@@ -120,7 +135,7 @@ func (e *protectEnv) evalDirect(t *testing.T, targetID, expr string) {
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("%s on %s never held", expr, targetID)
+			t.Fatalf("%s never held", expr)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
