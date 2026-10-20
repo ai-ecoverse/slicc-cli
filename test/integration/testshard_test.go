@@ -243,18 +243,18 @@ func TestShardTimesReadsGoTestLogs(t *testing.T) {
 		}
 		return p
 	}
-	out := write("times.json", `{"win32": {"TestOld": 4}, "darwin": {"TestGone": 9}}`)
+	out := write("times.json", `{"win32": {"TestOld": 4}, "darwin": {"TestGone": 9, "TestDelta": 5}}`)
 	one := write("one.log", "=== RUN   TestAlpha\n--- PASS: TestAlpha (12.34s)\n    --- PASS: TestAlpha/sub (12.00s)\n2026-10-15T06:41:39.2245670Z --- FAIL: TestBravo (0.71s)\r\n")
-	two := write("two.log", "--- SKIP: TestCharlie (0.00s)\nok  \tfixture\t13.1s\n")
+	two := write("two.log", "--- SKIP: TestAlpha (0.00s)\n--- SKIP: TestCharlie (0.00s)\n--- SKIP: TestDelta (0.00s)\nok  \tfixture\t13.1s\n")
 	cmd := exec.Command(node, "../../scripts/shard-times.mjs", "--out", out, "darwin="+one, "darwin="+two)
-	if b, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(b), "darwin: 3 tests, 13 s") {
+	if b, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(b), "darwin: 4 tests, 18 s") {
 		t.Fatalf("shard-times: %v\n%s", err, b)
 	}
 	raw, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "{\n  \"darwin\": {\n    \"TestAlpha\": 12.3,\n    \"TestBravo\": 0.7,\n    \"TestCharlie\": 0\n  },\n  \"win32\": {\n    \"TestOld\": 4\n  }\n}\n"
+	want := "{\n  \"darwin\": {\n    \"TestAlpha\": 12.3,\n    \"TestBravo\": 0.7,\n    \"TestCharlie\": 0,\n    \"TestDelta\": 5\n  },\n  \"win32\": {\n    \"TestOld\": 4\n  }\n}\n"
 	if string(raw) != want {
 		t.Fatalf("shard-times wrote\n%s\nwant\n%s", raw, want)
 	}
@@ -267,25 +267,29 @@ func TestShardTimesReadsGoTestLogs(t *testing.T) {
 	}
 }
 
+var guardVectorTests = map[string]bool{"TestCDPProtectVectorsPrompt": true, "TestCDPProtectVectorsLagging": true, "TestCDPProtectVectorsIgnoreChromeUITargets": true}
+
 func TestEachCIShardFitsItsTimeout(t *testing.T) {
 	node := requireNode(t)
 	declared := declaredTests(t)
 	times := shardTimes(t)
 	platforms := map[string]string{"ubuntu-latest": "linux", "macos-latest": "darwin", "windows-latest": "win32"}
-	run := strings.TrimPrefix(lineWith(t, workflowJobs(t, readWorkflow(t, "ci.yml"))["test"].body, "sh scripts/verdict.sh test-shard"), "run: ")
+	job := workflowJobs(t, readWorkflow(t, "ci.yml"))["test"].body
+	run := strings.TrimPrefix(lineWith(t, job, "sh scripts/verdict.sh test-shard"), "run: ")
+	limit := strings.TrimPrefix(lineWith(t, job, "timeout-minutes:"), "timeout-minutes: ")
 	for _, full := range []any{nil, true} {
 		ctx := ghCtx{"github.event_name": "push", "inputs.full": full}
 		legs, _ := ciMatrix(t, ctx)
 		for _, leg := range legs {
-			if !leg.race || !leg.guards {
-				continue
-			}
 			ctx["matrix.os"], ctx["matrix.shard"] = leg.os, leg.shard
 			m := regexp.MustCompile(` -timeout ([0-9]+)m `).FindStringSubmatch(ghString(ghTemplate(t, run, ctx)))
 			if m == nil {
 				t.Fatalf("%s %s has no -timeout in minutes", leg.os, leg.shard)
 			}
 			minutes, _ := strconv.Atoi(m[1])
+			if job, err := strconv.Atoi(ghString(ghTemplate(t, limit, ctx))); err != nil || job < minutes+5 {
+				t.Errorf("%s %s: its job's timeout-minutes %s leaves less than 5 minutes past its -timeout %dm for setup", leg.os, leg.shard, ghString(ghTemplate(t, limit, ctx)), minutes)
+			}
 			platform := platforms[leg.os]
 			var known []float64
 			for _, name := range declared {
@@ -297,7 +301,7 @@ func TestEachCIShardFitsItsTimeout(t *testing.T) {
 			picks := shardSelector(t, node, leg.shard, "SLICC_TEST_SHARD_PLATFORM="+platform)
 			load := 0.0
 			for _, name := range declared {
-				if !picks(name) {
+				if !picks(name) || (!leg.guards && guardVectorTests[name]) {
 					continue
 				}
 				if s, ok := times[platform][name]; ok {
@@ -306,6 +310,7 @@ func TestEachCIShardFitsItsTimeout(t *testing.T) {
 					load += known[len(known)/2]
 				}
 			}
+			t.Logf("%s %s: %.0f s of its -timeout %dm", leg.os, leg.shard, load, minutes)
 			if budget := float64(minutes*60) * 3 / 4; load > budget {
 				t.Errorf("%s %s: its tests took %.0f s by shard-times.json, more than three quarters of its -timeout %dm (%.0f s); add a shard", leg.os, leg.shard, load, minutes, budget)
 			}

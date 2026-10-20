@@ -125,9 +125,7 @@ func (e *kernelEnv) checkLoopbackOnly(t *testing.T) {
 	if len(b) > 0 {
 		t.Fatalf("a peer on %s got an answer: %q", ip, b)
 	}
-	if !strings.Contains(e.a.stderr.String(), "not loopback") {
-		t.Fatalf("stderr never said the peer on %s was refused:\n%s", ip, e.a.stderr.String())
-	}
+	e.a.waitStderr(t, "kernel: refused "+ip.String()+":", 5*time.Second)
 }
 
 func TestKernelDefaultPort(t *testing.T) {
