@@ -341,7 +341,7 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	t := g.sessionTargetLocked(m.SessionID)
-	if t == nil || p.Frame.ParentID != "" || p.Frame.ID != t.id || !g.o.URL(p.Frame.SecurityOrigin) {
+	if t == nil || p.Frame.ParentID != "" || p.Frame.ID != t.id || !g.o.LoadedOrigin(p.Frame.SecurityOrigin) {
 		return browserVerdict{forward: data}
 	}
 	return browserVerdict{send: g.markLocked(t)}
@@ -356,7 +356,7 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 	switch {
 	case t == nil:
 		return browserVerdict{forward: data}
-	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.URL(p.Context.Origin):
+	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.LoadedOrigin(p.Context.Origin):
 		return browserVerdict{send: g.markLocked(t)}
 	case g.worldContextLocked(t.id, m.SessionID, p.Context):
 		return browserVerdict{}
@@ -419,7 +419,7 @@ func (g *guard) filterWorkers(p map[string]any, field, urlKey, idKey string) boo
 		u, _ := w[urlKey].(string)
 		id, _ := w[idKey].(string)
 		reg, _ := w["registrationId"].(string)
-		if g.o.URL(u) || g.swProtected[reg] {
+		if g.o.Loaded(u) || g.swProtected[reg] {
 			if len(g.swProtected) < maxMarked {
 				g.swProtected[id] = true
 			}

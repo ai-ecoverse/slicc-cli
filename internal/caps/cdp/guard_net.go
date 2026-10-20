@@ -63,7 +63,7 @@ func (g *guard) socketCreatedEvent(m *message, data []byte) browserVerdict {
 		if world {
 			g.worldRequestLocked(g.worldTargetLocked(m.SessionID), id)
 		}
-		if g.o.URL(socketURL(strings.TrimSpace(u))) || world {
+		if g.o.Loaded(socketURL(strings.TrimSpace(u))) || world {
 			g.markRequestLocked(m.SessionID, id)
 		}
 		return true, false, nil
@@ -141,7 +141,7 @@ func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
 		if world {
 			g.worldRequestLocked(g.worldTargetLocked(m.SessionID), id)
 		}
-		if g.o.URL(u) || g.o.URL(ru) || world {
+		if g.o.Loaded(u) || g.o.Loaded(ru) || world {
 			g.markRequestLocked(m.SessionID, id)
 		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
@@ -182,7 +182,7 @@ func (g *guard) responseEvent(m *message, data []byte) browserVerdict {
 		id, _ := p["requestId"].(string)
 		r, _ := p["response"].(map[string]any)
 		u, _ := r["url"].(string)
-		if g.o.URL(u) {
+		if g.o.Loaded(u) {
 			g.markRequestLocked(m.SessionID, id)
 		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
@@ -226,7 +226,7 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 		if msg, ok := g.worldPauseLocked(m, p); ok {
 			return false, false, [][]byte{msg}
 		}
-		if g.o.URL(u) {
+		if g.o.Loaded(u) {
 			delete(g.handed, requestKey{m.SessionID, id})
 			g.markRequestLocked(m.SessionID, id)
 			g.markRequestLocked(m.SessionID, other)

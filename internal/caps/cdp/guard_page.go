@@ -127,8 +127,11 @@ func (g *guard) afterHistory(c *command, res message, ok bool) pageVerdict {
 	_ = json.Unmarshal(res.Result, &h)
 	want, _ := c.params["entryId"].(json.Number)
 	for _, e := range h.Entries {
-		if e.ID.String() == want.String() && (g.o.URL(e.URL) || g.o.URL(e.UserTypedURL)) {
-			return pageVerdict{reply: refusal(c.id, c.session, refusedTarget)}
+		if e.ID.String() != want.String() {
+			continue
+		}
+		if reason := g.destinationReason(e.URL, e.UserTypedURL); reason != "" {
+			return pageVerdict{reply: refusal(c.id, c.session, reason)}
 		}
 	}
 	if g.sessionRefusedLocked(c.session) {
@@ -197,10 +200,44 @@ func (g *guard) checkLocked(c *command) string {
 			return reason
 		}
 	}
+	if reason := g.destinationRule(c); reason != "" {
+		return reason
+	}
 	if reason := g.worldCheckLocked(c); reason != "" {
 		return reason
 	}
 	return g.scan(c.params, c, exemptKeys[c.method], 0)
+}
+
+var destinationKeys = map[string]string{
+	"Page.navigate":                      "url",
+	"Target.createTarget":                "url",
+	"Fetch.continueRequest":              "url",
+	"Network.continueInterceptedRequest": "url",
+	"Network.loadNetworkResource":        "url",
+	"PWA.install":                        "installUrlOrOrigin",
+	"PWA.launch":                         "url",
+}
+
+func (g *guard) destinationRule(c *command) string {
+	if key, ok := destinationKeys[c.method]; ok {
+		return g.destinationReason(c.str(key))
+	}
+	return ""
+}
+
+func (g *guard) destinationReason(urls ...string) string {
+	for _, u := range urls {
+		if g.o.URL(u) {
+			return refusedTarget
+		}
+	}
+	for _, u := range urls {
+		if u != "" && !protect.Parses(u) {
+			return refusedParse
+		}
+	}
+	return ""
 }
 
 var exemptKeys = map[string]map[string]bool{
@@ -278,37 +315,41 @@ func (g *guard) allOriginsRule(c *command) string {
 }
 
 func (g *guard) cookieRule(c *command) string {
-	if g.cookieParamProtectedLocked(c.params) {
-		return refusedCookies
-	}
-	return ""
+	return g.cookieParamReasonLocked(c.params)
 }
 
 func (g *guard) cookiesRule(c *command) string {
 	list, _ := c.params["cookies"].([]any)
 	for _, item := range list {
-		if m, ok := item.(map[string]any); ok && g.cookieParamProtectedLocked(m) {
-			return refusedCookies
+		if m, ok := item.(map[string]any); ok {
+			if reason := g.cookieParamReasonLocked(m); reason != "" {
+				return reason
+			}
 		}
 	}
 	return ""
 }
 
-func (g *guard) cookieParamProtectedLocked(p map[string]any) bool {
+func (g *guard) cookieParamReasonLocked(p map[string]any) string {
 	if g.cookieProtected(p) {
-		return true
+		return refusedCookies
 	}
 	if d, _ := p["domain"].(string); d != "" {
-		return false
+		return ""
 	}
 	raw, _ := p["url"].(string)
 	if raw == "" {
 		raw, _ = p["cookieUrl"].(string)
 	}
-	if raw == "" {
-		return false
+	switch {
+	case raw == "":
+		return ""
+	case g.o.URL(raw) || g.o.CookieDomain(protect.Host(raw)):
+		return refusedCookies
+	case !protect.Parses(raw):
+		return refusedParse
 	}
-	return g.o.URL(raw) || g.o.CookieDomain(protect.Host(raw))
+	return ""
 }
 
 var (

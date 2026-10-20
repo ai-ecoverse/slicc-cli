@@ -168,7 +168,7 @@ func (g *guard) forgetWorldsLocked(target string) {
 }
 
 func (g *guard) worldContextLocked(target, session string, c execContext) bool {
-	if !g.o.URL(c.Origin) || (c.AuxData.IsDefault && c.AuxData.FrameID == target) {
+	if !g.o.LoadedOrigin(c.Origin) || (c.AuxData.IsDefault && c.AuxData.FrameID == target) {
 		if w := g.worlds[target]; w != nil {
 			g.forgetContextLocked(w, c.ID)
 		}

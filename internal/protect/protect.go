@@ -143,6 +143,26 @@ func (o *Origins) URL(raw string) bool {
 	return origin != "" && o != nil && slices.Contains(o.extra, origin)
 }
 
+func (o *Origins) Loaded(raw string) bool {
+	return o.URL(raw) || (raw != "" && !Parses(raw))
+}
+
+func (o *Origins) LoadedOrigin(raw string) bool {
+	return raw != "null" && raw != "://" && o.Loaded(raw)
+}
+
+func Parses(raw string) bool {
+	u := parse(raw)
+	for i := 0; u != nil && i < maxUnwrap && slices.Contains(rules.InnerSchemes, scheme(u)); i++ {
+		inner := strings.TrimPrefix(u.Href(false), u.Protocol())
+		if scheme(u) == "blob" && strings.HasPrefix(inner, "null/") {
+			return true
+		}
+		u = parse(inner)
+	}
+	return u != nil && !slices.Contains(rules.InnerSchemes, scheme(u))
+}
+
 func Inheriting(raw string) bool {
 	if raw == "" {
 		return true
@@ -163,7 +183,7 @@ func (o *Origins) Target(raw string, previous bool, opener Opener) bool {
 	if Inheriting(raw) {
 		return previous || opener == OpenerProtected || opener == OpenerUnknown
 	}
-	return o.URL(raw)
+	return o.Loaded(raw)
 }
 
 func (o *Origins) CookieDomain(domain string) bool {

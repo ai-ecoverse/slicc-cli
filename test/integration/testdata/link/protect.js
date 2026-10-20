@@ -342,6 +342,95 @@ export function protectTest(getLink, describe) {
         await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
         return out;
       }),
+    unparsedPopup: (browser, opener, popup, markers) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(opener);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+        const start = c.events.length;
+        await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(popup)}))`, userGesture: true }, sessionId);
+        let popups = [];
+        for (let i = 0; i < 100 && popups.length === 0; i += 1) {
+          const { targetInfos } = await c.send('Target.getTargets');
+          popups = targetInfos.filter((t) => t.openerId === targetId).map(({ targetId: id, url, title }) => ({ targetId: id, url, title }));
+          if (popups.length === 0) await sleep(100);
+        }
+        await sleep(3000);
+        const { targetInfos } = await c.send('Target.getTargets');
+        popups = targetInfos.filter((t) => t.openerId === targetId).map(({ targetId: id, url, title }) => ({ targetId: id, url, title }));
+        const out = { popups, attach: {}, cookies: {} };
+        for (const p of popups) {
+          const r = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
+          out.attach[p.targetId] = r;
+          if (r.ok) out.cookies[p.targetId] = await outcome(c.evaluate('document.cookie', r.result.sessionId));
+        }
+        for (const e of c.events.slice(start).filter((e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.openerId === targetId)) {
+          out.cookies[e.params.sessionId] = await outcome(c.evaluate('document.cookie', e.params.sessionId));
+        }
+        const seen = JSON.stringify(c.events.slice(start)) + JSON.stringify(out);
+        out.leaked = markers.filter((m) => seen.includes(m));
+        await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+        await c.send('Target.setDiscoverTargets', { discover: false });
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        return out;
+      }),
+    opaqueBlob: (browser) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo('about:blank');
+        await c.send('Page.enable', {}, sessionId);
+        await load(c, sessionId, 'data:text/html,<title>opaque</title>');
+        await c.send('Network.enable', {}, sessionId);
+        const url = await c.evaluate("URL.createObjectURL(new Blob(['<title>blob ok</title>opaque blob'], { type: 'text/html' }))", sessionId);
+        const text = await c.evaluate(`fetch(${JSON.stringify(url)}).then((r) => r.text())`, sessionId);
+        const sent = await c.waitEvent((e) => e.method === 'Network.requestWillBeSent' && e.sessionId === sessionId && e.params.request.url === url, 10000);
+        const { requestId } = sent.params;
+        await c.waitEvent((e) => e.method === 'Network.loadingFinished' && e.sessionId === sessionId && e.params.requestId === requestId, 10000);
+        const body = await outcome(c.send('Network.getResponseBody', { requestId }, sessionId));
+        const navigate = await outcome(c.send('Page.navigate', { url }, sessionId));
+        await sleep(1000);
+        const href = await outcome(c.evaluate('location.href + " " + document.title', sessionId));
+        const { targetInfo } = await c.send('Target.getTargetInfo', { targetId });
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        return { url, text, body, navigate, href, info: targetInfo.url };
+      }),
+    parseRefusals: (browser, base, hole, historyTarget, holeMarker) =>
+      run(browser, async (c) => {
+        const out = {};
+        const { targetId, sessionId } = await c.attachTo(`${base}/doc?n=refusals`);
+        out.setCookie = await outcome(c.send('Network.setCookie', { name: 'x', value: '1', url: hole }, sessionId));
+        out.deleteCookies = await outcome(c.send('Network.deleteCookies', { name: 'seven', url: hole }, sessionId));
+        out.setCookies = await outcome(c.send('Network.setCookies', { cookies: [{ name: 'x', value: '1', url: hole }] }, sessionId));
+        out.storageSetCookies = await outcome(c.send('Storage.setCookies', { cookies: [{ name: 'x', value: '1', url: hole }] }));
+        await c.send('Fetch.enable', { patterns: [{ urlPattern: '*data?n=override*' }] }, sessionId);
+        const paused = c.waitEvent((e) => e.method === 'Fetch.requestPaused' && e.sessionId === sessionId);
+        const body = c.evaluate(`fetch(${JSON.stringify(`${base}/data?n=override`)}).then((r) => r.text())`, sessionId);
+        const { params } = await paused;
+        out.continueRequest = await outcome(c.send('Fetch.continueRequest', { requestId: params.requestId, url: hole }, sessionId));
+        out.continued = await outcome(c.send('Fetch.continueRequest', { requestId: params.requestId }, sessionId));
+        out.body = await body;
+        await c.send('Fetch.disable', {}, sessionId);
+        out.legacyEnable = await outcome(c.send('Network.setRequestInterception', { patterns: [{ urlPattern: '*data?n=legacy*' }] }, sessionId));
+        if (out.legacyEnable.ok) {
+          const intercepted = c.waitEvent((e) => e.method === 'Network.requestIntercepted' && e.sessionId === sessionId);
+          const legacyBody = c.evaluate(`fetch(${JSON.stringify(`${base}/data?n=legacy`)}).then((r) => r.text())`, sessionId);
+          const ev = await intercepted;
+          out.continueIntercepted = await outcome(c.send('Network.continueInterceptedRequest', { interceptionId: ev.params.interceptionId, url: hole }, sessionId));
+          out.legacyContinued = await outcome(c.send('Network.continueInterceptedRequest', { interceptionId: ev.params.interceptionId }, sessionId));
+          out.legacyBody = await legacyBody;
+          await c.send('Network.setRequestInterception', { patterns: [] }, sessionId);
+        }
+        const { frameTree } = await c.send('Page.getFrameTree', {}, sessionId);
+        out.loadNetworkResource = await outcome(c.send('Network.loadNetworkResource', { frameId: frameTree.frame.id, url: hole, options: { disableCache: true, includeCredentials: true } }, sessionId));
+        out.pwaInstall = await outcome(c.send('PWA.install', { manifestId: `${base}/manifest.json`, installUrlOrOrigin: hole }));
+        out.pwaLaunch = await outcome(c.send('PWA.launch', { manifestId: `${base}/manifest.json`, url: hole }));
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        const h = await c.send('Target.attachToTarget', { targetId: historyTarget, flatten: true });
+        const { entries } = await c.send('Page.getNavigationHistory', {}, h.sessionId);
+        const entry = entries.find((e) => e.url.includes(holeMarker));
+        out.history = entry ? await outcome(c.send('Page.navigateToHistoryEntry', { entryId: entry.id }, h.sessionId)) : { ok: false, error: { message: `no history entry on ${holeMarker} in ${JSON.stringify(entries.map((e) => e.url))}` } };
+        await outcome(c.send('Target.detachFromTarget', { sessionId: h.sessionId }));
+        return out;
+      }),
     navHang: (browser, opener, hang, wait) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(opener);

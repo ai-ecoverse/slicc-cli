@@ -130,7 +130,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if json.Unmarshal(m.Params, &p) != nil || p.RequestID == "" {
 		return nil
 	}
-	if p.ResourceType == "Document" && g.o.URL(p.Request.URL) {
+	if p.ResourceType == "Document" && g.o.Loaded(p.Request.URL) {
 		g.logf("cdp: failed a document request into a protected origin in a target this stream touched")
 		msg, _ := g.newCallLocked(nt.session, "Fetch.failRequest", map[string]any{"requestId": p.RequestID, "errorReason": "BlockedByClient"}, false)
 		return [][]byte{msg}
