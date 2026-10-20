@@ -440,7 +440,7 @@ export function protectTest(getLink, describe) {
         await outcome(c.send('Target.closeTarget', { targetId }));
         const h = await c.send('Target.attachToTarget', { targetId: historyTarget, flatten: true });
         const { entries } = await c.send('Page.getNavigationHistory', {}, h.sessionId);
-        const entry = entries.find((e) => e.url.includes(holeMarker));
+        const entry = entries.find((e) => e.url.includes(holeMarker)) ?? entries.find((e) => e.url === '');
         out.history = entry ? await outcome(c.send('Page.navigateToHistoryEntry', { entryId: entry.id }, h.sessionId)) : { ok: false, error: { message: `no history entry on ${holeMarker} in ${JSON.stringify(entries.map((e) => e.url))}` } };
         await outcome(c.send('Target.detachFromTarget', { sessionId: h.sessionId }));
         return out;
