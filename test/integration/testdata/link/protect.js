@@ -213,19 +213,45 @@ export function protectTest(getLink, describe) {
         await c.send('Target.closeTarget', { targetId });
         return { attached, discovered, plain: targetId };
       }),
-    scriptNavigate: (browser, plainURL, sevenURL) =>
+    errorPage: (browser, targetId, sevenURL) =>
       run(browser, async (c) => {
-        const { targetId, sessionId } = await c.attachTo(plainURL);
-        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
         const before = await c.evaluate('location.href', sessionId);
-        const detached = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000);
-        await c.send('Runtime.evaluate', { expression: `setTimeout(() => { location.href = ${JSON.stringify(sevenURL)}; }, 50); true` }, sessionId);
-        await detached;
-        const after = await outcome(c.send('Runtime.evaluate', { expression: 'document.cookie' }, sessionId));
-        const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const failed = (e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl;
+        const committed = c.waitEvent(failed, 20000);
+        await c.send('Runtime.evaluate', { expression: later(sevenURL) }, sessionId);
+        const { params } = await committed;
+        await sleep(500);
+        const gone = () => c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
+        const detached = gone();
+        const { targetInfos } = await c.send('Target.getTargets');
+        const listed = targetInfos.find((t) => t.targetId === targetId) ?? null;
         const { targetInfo } = await c.send('Target.getTargetInfo', { targetId });
-        const leaked = c.events.filter((e) => e.sessionId === sessionId && e.method === 'Runtime.executionContextCreated' && e.params.context.origin === new URL(sevenURL).origin).length;
-        return { targetId, before, after, reattach, url: targetInfo.url, title: targetInfo.title, leaked };
+        const reload = await outcome(c.send('Page.reload', {}, sessionId));
+        await sleep(500);
+        const blank = await outcome(c.send('Page.navigate', { url: 'about:blank' }, sessionId));
+        await sleep(300);
+        const href = await c.evaluate('location.href', sessionId);
+        const leaked = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
+        const restore = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
+          () => true,
+          () => false,
+        );
+        await outcome(c.send('Runtime.evaluate', { expression: 'setTimeout(() => history.go(-3), 50); true' }, sessionId));
+        const locked = await restore;
+        const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+        const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        const other = await c.attachTo('about:blank');
+        await c.send('Page.enable', {}, other.sessionId);
+        const second = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === other.sessionId && e.params.frame.unreachableUrl, 20000);
+        await c.send('Runtime.evaluate', { expression: later(sevenURL) }, other.sessionId);
+        await second;
+        await sleep(300);
+        const closeError = await outcome(c.send('Target.closeTarget', { targetId: other.targetId }));
+        return { before, unreachable: params.frame.unreachableUrl, detached, listed, info: { url: targetInfo.url, title: targetInfo.title }, reload, blank, href, leaked, locked, after, reattach, close, closeError };
       }),
     popup: (browser, openerId) =>
       run(browser, async (c) => {

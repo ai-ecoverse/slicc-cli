@@ -141,12 +141,18 @@ func (g *guard) infoLocked(v any) [][]byte {
 		return nil
 	}
 	send := g.observeLocked(info)
-	if g.targetProtectedLocked(info.TargetID) {
-		redacted := redactURL(info.URL)
-		obj["url"] = redacted
-		obj["title"] = redacted
-	}
+	g.redactInfoLocked(obj, info)
 	return send
+}
+
+func (g *guard) redactInfoLocked(obj map[string]any, info targetInfo) bool {
+	if obj == nil || !g.targetProtectedLocked(info.TargetID) && !g.o.URL(info.URL) {
+		return false
+	}
+	redacted := redactURL(info.URL)
+	obj["url"] = redacted
+	obj["title"] = redacted
+	return true
 }
 
 func (g *guard) relayEventLocked(m *message) browserVerdict {
@@ -237,9 +243,9 @@ func (g *guard) withParams(m *message, data []byte, fn func(p map[string]any) (k
 
 func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
-		info, _ := toInfo(p["targetInfo"])
+		info, obj := toInfo(p["targetInfo"])
 		send := g.infoLocked(p["targetInfo"])
-		return listed(info), g.targetProtectedLocked(info.TargetID), send
+		return listed(info), obj != nil && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL)), send
 	})
 }
 
@@ -288,7 +294,14 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
 	}
-	return browserVerdict{forward: data, send: append(send, g.touchLocked(info.TargetID, info.Type)...)}
+	send = append(send, g.touchLocked(info.TargetID, info.Type)...)
+	if params := decodeParams(m.Params); params != nil {
+		if obj, _ := params["targetInfo"].(map[string]any); g.redactInfoLocked(obj, info) {
+			m.Params = encode(params)
+			return browserVerdict{forward: encode(m), send: send}
+		}
+	}
+	return browserVerdict{forward: data, send: send}
 }
 
 func (g *guard) attachAnsweredLocked(parent string, res map[string]any, t *target) {

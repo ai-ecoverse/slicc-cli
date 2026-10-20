@@ -65,7 +65,7 @@ func TestCDPHidesExtensionWorlds(t *testing.T) {
 	t.Run("profiles, coverage and stacks leave out an extension's world", env.testExtensionProfile)
 	t.Run("requests an extension's world makes show only their origin", env.testExtensionRequests)
 	t.Run("the seven tab is still cut", env.testAttach)
-	t.Run("script navigation onto seven still detaches", env.testScriptNavigate)
+	t.Run("an error page for seven's URL still leaves the tab drivable", env.testErrorPage)
 	t.Run("the link still works", env.testStillLinked)
 }
 

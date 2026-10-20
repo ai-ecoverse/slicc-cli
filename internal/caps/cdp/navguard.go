@@ -13,6 +13,10 @@ var slowGuard = 2 * time.Second
 
 var navTypes = map[string]bool{"page": true, "iframe": true, "background_page": true, "webview": true}
 
+var sameDocument = map[string]bool{"sameDocument": true, "historySameDocument": true}
+
+const maxLoading = 64
+
 type navTarget struct {
 	target   string
 	session  string
@@ -23,6 +27,9 @@ type navTarget struct {
 	pending  int
 	done     bool
 	failed   bool
+	loading  map[string]bool
+	unsure   bool
+	errorURL string
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -94,6 +101,7 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 		{"Network.enable", map[string]any{"maxTotalBufferSize": 0, "maxResourceBufferSize": 0, "maxPostDataSize": 0}},
 		{"Network.setBypassServiceWorker", map[string]any{"bypass": true}},
 		{"Runtime.enable", nil},
+		{"Page.enable", nil},
 	}
 	nt.pending = len(calls)
 	out := make([][]byte, 0, len(calls))
@@ -117,6 +125,7 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	g.navWorldLocked(nt, m)
+	nt.commitLocked(m)
 	if m.Method != "Fetch.requestPaused" {
 		return nil
 	}
@@ -194,4 +203,64 @@ func (g *guard) navCheckLocked(sessionID string) string {
 		return refusedGuard + ": " + nt.reason
 	}
 	return refusedGuard
+}
+
+func (nt *navTarget) commitLocked(m *message) {
+	var p struct {
+		FrameID        string `json:"frameId"`
+		LoaderID       string `json:"loaderId"`
+		RequestID      string `json:"requestId"`
+		NavigationType string `json:"navigationType"`
+		Type           string `json:"type"`
+		Frame          struct {
+			ID             string `json:"id"`
+			ParentID       string `json:"parentId"`
+			LoaderID       string `json:"loaderId"`
+			UnreachableURL string `json:"unreachableUrl"`
+		} `json:"frame"`
+	}
+	switch m.Method {
+	case "Page.frameStartedNavigating", "Page.frameNavigated", "Page.frameStoppedLoading", "Network.loadingFailed":
+	default:
+		return
+	}
+	if json.Unmarshal(m.Params, &p) != nil {
+		nt.unsure = true
+		return
+	}
+	switch m.Method {
+	case "Page.frameStartedNavigating":
+		if p.FrameID != nt.target || sameDocument[p.NavigationType] {
+			return
+		}
+		if nt.loading == nil {
+			nt.loading = map[string]bool{}
+		}
+		if p.LoaderID == "" || len(nt.loading) >= maxLoading {
+			nt.unsure = true
+			return
+		}
+		nt.loading[p.LoaderID] = true
+	case "Network.loadingFailed":
+		delete(nt.loading, p.RequestID)
+	case "Page.frameStoppedLoading":
+		if p.FrameID == nt.target {
+			clear(nt.loading)
+			nt.unsure = false
+		}
+	case "Page.frameNavigated":
+		if p.Frame.ID != nt.target || p.Frame.ParentID != "" {
+			return
+		}
+		delete(nt.loading, p.Frame.LoaderID)
+		if p.Type == "BackForwardCacheRestore" {
+			clear(nt.loading)
+		}
+		nt.errorURL = p.Frame.UnreachableURL
+	}
+}
+
+func (g *guard) errorPageLocked(t *target) bool {
+	nt, ok := g.navTargets[t.id]
+	return ok && nt.done && !nt.failed && !nt.unsure && len(nt.loading) == 0 && nt.errorURL != "" && nt.errorURL == t.url
 }

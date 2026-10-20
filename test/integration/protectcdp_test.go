@@ -67,7 +67,7 @@ func TestCDPProtectsSevensOrigin(t *testing.T) {
 	t.Run("navigate is refused", env.testNavigate)
 	t.Run("the seven tab is redacted and can't be attached", env.testAttach)
 	t.Run("auto-attach skips the seven tab", env.testAutoAttach)
-	t.Run("script navigation detaches", env.testScriptNavigate)
+	t.Run("an error page for seven's URL doesn't lock the tab", env.testErrorPage)
 	t.Run("a blank popup from seven is seven's", env.testPopup)
 	t.Run("history entries on seven are refused", env.testHistory)
 	t.Run("cookies", env.testCookies)
@@ -222,23 +222,56 @@ func (e *protectEnv) testAutoAttach(t *testing.T) {
 	}
 }
 
-func (e *protectEnv) testScriptNavigate(t *testing.T) {
-	var r struct {
-		TargetID string     `json:"targetId"`
-		Before   string     `json:"before"`
-		After    cdpOutcome `json:"after"`
-		Reattach cdpOutcome `json:"reattach"`
-		URL      string     `json:"url"`
-		Title    string     `json:"title"`
-		Leaked   int        `json:"leaked"`
-	}
-	e.evalJSON(t, "linkTest.protect.scriptNavigate("+jsArgs("chrome", e.allowed+"/?n=script", e.seven+"/nowhere?secret=1")+")", &r)
-	if !strings.HasPrefix(r.Before, e.allowed) || !r.After.refused() || !r.Reattach.refused() || r.URL != e.seven || r.Title != e.seven || r.Leaked != 0 {
-		t.Fatalf("script navigation onto seven: %+v", r)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (e *protectEnv) testErrorPage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_ = e.b.client.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": r.TargetID}, nil)
+	var res struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := e.b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": e.seven + "/frame.html?n=real"}, &res); err != nil {
+		t.Fatal(err)
+	}
+	defer e.b.closeTarget(res.TargetID)
+	s, err := e.b.client.Attach(ctx, res.TargetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, s, e.seven+"/frame.html")
+	if err := s.Call(ctx, "Page.navigate", map[string]any{"url": e.allowed + "/?n=error"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, s, e.allowed)
+	_ = s.Detach(ctx)
+	failed := e.seven + "/nowhere?secret=1"
+	var r struct {
+		Before      string         `json:"before"`
+		Unreachable string         `json:"unreachable"`
+		Detached    bool           `json:"detached"`
+		Listed      *protectTarget `json:"listed"`
+		Info        protectTarget  `json:"info"`
+		Reload      cdpOutcome     `json:"reload"`
+		Blank       cdpOutcome     `json:"blank"`
+		Href        string         `json:"href"`
+		Leaked      bool           `json:"leaked"`
+		Locked      bool           `json:"locked"`
+		After       cdpOutcome     `json:"after"`
+		Reattach    cdpOutcome     `json:"reattach"`
+		Close       cdpOutcome     `json:"close"`
+		CloseError  cdpOutcome     `json:"closeError"`
+	}
+	e.evalJSON(t, "linkTest.protect.errorPage("+jsArgs("chrome", res.TargetID, failed)+")", &r)
+	switch {
+	case !strings.HasPrefix(r.Before, e.allowed) || r.Unreachable == "":
+		t.Fatalf("the script navigation onto seven didn't commit an error page: %+v", r)
+	case r.Detached || !r.Reload.OK || !r.Blank.OK || r.Href != "about:blank":
+		t.Fatalf("an error page for seven's URL locked the tab: %+v", r)
+	case r.Listed == nil || r.Listed.URL != e.seven || r.Listed.Title != e.seven || r.Info.URL != e.seven || r.Info.Title != e.seven || r.Leaked:
+		t.Fatalf("the error page's attempted URL was listed in full: %+v", r)
+	case !r.Locked || !r.After.refused() || !r.Reattach.refused() || !r.Close.refused():
+		t.Fatalf("seven's document, restored into the same tab, didn't lock it: %+v", r)
+	case !r.CloseError.OK:
+		t.Fatalf("closing a tab on an error page for seven's URL: %+v", r)
+	}
 }
 
 func (e *protectEnv) testPopup(t *testing.T) {

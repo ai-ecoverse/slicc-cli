@@ -272,8 +272,8 @@ func (e *navEnv) testScriptNavigation(t *testing.T) {
 	nonce := e.nonce("script")
 	r := e.navInit(t, nonce, e.seven+"/doc?n="+nonce)
 	defer e.closeTarget(r.TargetID)
-	if !r.Detached {
-		t.Errorf("the page's session stayed attached: %+v", r)
+	if r.Detached {
+		t.Errorf("the error page for seven's URL detached the page's session: %+v", r)
 	}
 	e.assertBlocked(t, r.TargetID, nonce, nonce, true)
 }
