@@ -32,9 +32,9 @@ type worldContext struct {
 	} `json:"auxData"`
 }
 
-func launchExtensionBrowser(t *testing.T, extra ...string) *chromeProc {
+func launchExtensionBrowser(t *testing.T, ext string, extra ...string) *chromeProc {
 	t.Helper()
-	dir, err := filepath.Abs(filepath.Join("testdata", "extension"))
+	dir, err := filepath.Abs(ext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func launchExtensionBrowser(t *testing.T, extra ...string) *chromeProc {
 
 func setupProtectExtension(t *testing.T) *protectEnv {
 	t.Helper()
-	return setupProtectOn(t, launchExtensionBrowser(t))
+	return setupProtectOn(t, launchExtensionBrowser(t, filepath.Join("testdata", "extension")))
 }
 
 func TestCDPHidesExtensionWorlds(t *testing.T) {
@@ -60,7 +60,7 @@ func TestCDPHidesExtensionWorlds(t *testing.T) {
 	t.Run("an extension's world is hidden and its page stays usable", env.testExtensionWorld)
 	t.Run("call frames in an extension's world are refused", env.testExtensionFrame)
 	t.Run("a live world stays hidden through any churn of other worlds", env.testExtensionChurn)
-	t.Run("a context slicc never showed can't be named by its unique id", env.testExtensionStale)
+	t.Run("a context slicc never showed can't be named by its id", env.testExtensionStale)
 	t.Run("breakpoint conditions can't run in an extension's world", env.testExtensionBreakpoint)
 	t.Run("profiles, coverage and stacks leave out an extension's world", env.testExtensionProfile)
 	t.Run("the seven tab is still cut", env.testAttach)
@@ -299,10 +299,17 @@ func (e *protectEnv) testExtensionStale(t *testing.T) {
 	_, _, _, _, other := e.extensionWorlds(t, "other")
 	target, _, _, _ := e.extensionPage(t, "fresh")
 	var r struct {
-		Own      cdpOutcome   `json:"own"`
-		Stale    []cdpOutcome `json:"stale"`
-		After    cdpOutcome   `json:"after"`
-		Detached bool         `json:"detached"`
+		Own     cdpOutcome   `json:"own"`
+		Stale   []cdpOutcome `json:"stale"`
+		Numeric []struct {
+			ID      int64  `json:"id"`
+			Exposed bool   `json:"exposed"`
+			OK      bool   `json:"ok"`
+			Message string `json:"message"`
+			Leaked  bool   `json:"leaked"`
+		} `json:"numeric"`
+		After    cdpOutcome `json:"after"`
+		Detached bool       `json:"detached"`
 	}
 	ids := []string{world.UniqueID, main.UniqueID, other.UniqueID, "1234567890.987654321"}
 	e.evalJSON(t, "linkTest.protect.extensionStale("+jsArgs("chrome", target, ids)+")", &r)
@@ -316,6 +323,25 @@ func (e *protectEnv) testExtensionStale(t *testing.T) {
 		if o.Error.Message != "slicc: refused: that execution context is not exposed" {
 			t.Errorf("uniqueContextId %s, which slicc never showed on this page: %+v", ids[i], o)
 		}
+	}
+	shown, unexposedIDs := 0, 0
+	for _, n := range r.Numeric {
+		switch {
+		case n.Leaked:
+			t.Errorf("contextId %d reached the extension's world: %+v", n.ID, n)
+		case n.Exposed:
+			shown++
+			if !n.OK {
+				t.Errorf("contextId %d, which slicc showed the page, failed: %+v", n.ID, n)
+			}
+		case n.Message == "slicc: refused: that execution context is not exposed":
+			unexposedIDs++
+		case n.Message != refusedWorld:
+			t.Errorf("contextId %d, which slicc never showed, wasn't refused: %+v", n.ID, n)
+		}
+	}
+	if shown == 0 || unexposedIDs == 0 {
+		t.Errorf("of 32 numeric context ids, %d were shown and %d refused as not exposed: %+v", shown, unexposedIDs, r.Numeric)
 	}
 	if r.Detached || !r.After.OK {
 		t.Errorf("the page was cut: detached %v, evaluate after %+v", r.Detached, r.After)

@@ -318,6 +318,10 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		t.Skip("the guard vectors run on Linux for pull requests and on every OS on main")
 	}
 	pkg := guardPackage(t)
+	ext := filepath.Join("..", "..", "node_modules", "@ai-ecoverse", "slicc-shared-web", "harness", "extension")
+	if _, err := os.Stat(filepath.Join(ext, "manifest.json")); err != nil {
+		t.Fatalf("slicc-shared-web's harness extension is missing; run npm ci: %v", err)
+	}
 	fix := startGuardFixture(t)
 	srv := guardPageServer(t, pkg, fix.port)
 	fp := strconv.Itoa(fix.port)
@@ -337,7 +341,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	rules := "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1,MAP sliccy.ai 127.0.0.1,MAP *.test 127.0.0.1"
 	chromes := make([]*chromeProc, n)
 	for i := range chromes {
-		chromes[i] = launchExtensionBrowser(t, rules, "--remote-allow-origins="+srv.URL)
+		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL)
 	}
 	args := []string{"--cdp", chromes[0].endpoint}
 	for _, b := range chromes[1:] {
