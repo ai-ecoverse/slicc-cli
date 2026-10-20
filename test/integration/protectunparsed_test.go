@@ -208,23 +208,44 @@ func (e *unparsedEnv) testLoadedForm(t *testing.T, u, marker string, cookie, opt
 
 func (e *unparsedEnv) testPopupTo(t *testing.T, u, marker string) {
 	var r struct {
+		Opener string                `json:"opener"`
 		Popups []protectTarget       `json:"popups"`
 		Attach map[string]cdpOutcome `json:"attach"`
 		Cookie map[string]cdpOutcome `json:"cookies"`
 		Leaked []string              `json:"leaked"`
 	}
 	e.evalJSON(t, "linkTest.protect.unparsedPopup("+jsArgs("chrome", e.allowed+"/doc?n=opener", u, []string{marker, sliccyCookie, "cdp nav"})+")", &r)
-	if len(r.Popups) != 1 {
-		t.Fatalf("want one popup listed, got %+v", r.Popups)
+	defer e.b.closeTarget(r.Opener)
+	if len(r.Popups) != 0 {
+		t.Errorf("the page lists the popup: %+v", r.Popups)
 	}
-	p := r.Popups[0]
-	defer e.b.closeTarget(p.TargetID)
-	e.realDocument(t, p.TargetID, marker, strings.Contains(u, "sliccy.ai"))
-	if a := r.Attach[p.TargetID]; a.Error.Message != refusedText {
-		t.Errorf("Target.attachToTarget on the popup: %+v", a)
+	var all struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			OpenerID string `json:"openerId"`
+		} `json:"targetInfos"`
 	}
-	if len(r.Cookie) != 0 || len(r.Leaked) != 0 {
-		t.Errorf("the page reached the popup: cookies %+v, saw %v", r.Cookie, r.Leaked)
+	e.unguardedCall(t, "Target.getTargets", nil, &all)
+	popup := ""
+	for _, ti := range all.TargetInfos {
+		if ti.OpenerID == r.Opener {
+			popup = ti.TargetID
+		}
+	}
+	if popup == "" {
+		t.Fatalf("window.open made no popup of %s", r.Opener)
+	}
+	defer e.b.closeTarget(popup)
+	e.realDocument(t, popup, marker, strings.Contains(u, "sliccy.ai"))
+	var a map[string]json.RawMessage
+	e.evalJSON(t, "linkTest.protect.attach("+jsArgs("chrome", popup)+")", &a)
+	var o cdpOutcome
+	_ = json.Unmarshal(a["Target.attachToTarget"], &o)
+	if o.Error.Message != refusedText {
+		t.Errorf("Target.attachToTarget on the popup: %s", a["Target.attachToTarget"])
+	}
+	if len(r.Cookie) != 0 || len(r.Leaked) != 0 || strings.Contains(string(a["info"]), marker) {
+		t.Errorf("the page reached the popup: cookies %+v, saw %v, info %s", r.Cookie, r.Leaked, a["info"])
 	}
 }
 

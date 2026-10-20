@@ -349,16 +349,10 @@ export function protectTest(getLink, describe) {
         await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
         const start = c.events.length;
         await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(popup)}))`, userGesture: true }, sessionId);
-        let popups = [];
-        for (let i = 0; i < 100 && popups.length === 0; i += 1) {
-          const { targetInfos } = await c.send('Target.getTargets');
-          popups = targetInfos.filter((t) => t.openerId === targetId).map(({ targetId: id, url, title }) => ({ targetId: id, url, title }));
-          if (popups.length === 0) await sleep(100);
-        }
         await sleep(3000);
         const { targetInfos } = await c.send('Target.getTargets');
-        popups = targetInfos.filter((t) => t.openerId === targetId).map(({ targetId: id, url, title }) => ({ targetId: id, url, title }));
-        const out = { popups, attach: {}, cookies: {} };
+        const popups = targetInfos.filter((t) => t.openerId === targetId).map(({ targetId: id, url, title }) => ({ targetId: id, url, title }));
+        const out = { opener: targetId, popups, attach: {}, cookies: {} };
         for (const p of popups) {
           const r = await outcome(c.send('Target.attachToTarget', { targetId: p.targetId, flatten: true }));
           out.attach[p.targetId] = r;
@@ -371,7 +365,6 @@ export function protectTest(getLink, describe) {
         out.leaked = markers.filter((m) => seen.includes(m));
         await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
         await c.send('Target.setDiscoverTargets', { discover: false });
-        await outcome(c.send('Target.closeTarget', { targetId }));
         return out;
       }),
     opaqueBlob: (browser) =>
