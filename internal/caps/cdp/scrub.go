@@ -28,8 +28,9 @@ func (g *guard) scrub(data []byte) []byte {
 		return data
 	}
 	worlds := g.scrubWorlds(m)
+	assets := g.scrubAssets(m)
 	failed := g.scrubFailed(m)
-	if !g.scrubValue(m) && !worlds && !failed {
+	if !g.scrubValue(m) && !worlds && !assets && !failed {
 		return data
 	}
 	return encode(m)
@@ -97,8 +98,27 @@ func (g *guard) scrubValue(root any) bool {
 	return changed
 }
 
+func (g *guard) blankFragments(t map[string]any) bool {
+	loaded := false
+	for k, val := range t {
+		if s, ok := val.(string); ok && urlKey(k) && g.o.Loaded(s) {
+			loaded = true
+		}
+	}
+	changed := false
+	for k, val := range t {
+		if s, ok := val.(string); ok && loaded && s != "" && strings.HasSuffix(strings.ToLower(k), "fragment") {
+			t[k], changed = "", true
+		}
+	}
+	return changed
+}
+
 func (g *guard) scrubMap(t map[string]any, headers bool, changed *bool) []scrubItem {
 	var more []scrubItem
+	if g.blankFragments(t) {
+		*changed = true
+	}
 	for k, val := range t {
 		if !headers && opaque[k] {
 			continue
@@ -167,26 +187,92 @@ func schemeStarts(s string, at int) []int {
 	return starts
 }
 
+func sepPart(s string, i int, raw byte, enc string) int {
+	switch {
+	case i < len(s) && s[i] == raw:
+		return 1
+	case i+len(enc) <= len(s) && strings.EqualFold(s[i:i+len(enc)], enc):
+		return len(enc)
+	}
+	return 0
+}
+
+func sepAt(s string, i int) int {
+	n := sepPart(s, i, ':', "%3a")
+	if n == 0 {
+		return 0
+	}
+	for range 2 {
+		m := sepPart(s, i+n, '/', "%2f")
+		if m == 0 {
+			return 0
+		}
+		n += m
+	}
+	return n
+}
+
+func nextSep(s string, from int) (int, int) {
+	for i := from; i < len(s); i++ {
+		if n := sepAt(s, i); n > 0 {
+			return i, n
+		}
+	}
+	return -1, 0
+}
+
+func unhex(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
+}
+
+func unescapeOnce(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) {
+			hi, ok1 := unhex(s[i+1])
+			lo, ok2 := unhex(s[i+2])
+			if ok1 && ok2 {
+				b.WriteByte(hi<<4 | lo)
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 func (g *guard) cutEmbedded(s string) (string, bool) {
-	if !strings.Contains(s, "://") {
+	if !strings.Contains(s, "://") && !strings.Contains(s, "%") {
 		return s, false
 	}
 	var b strings.Builder
 	changed := false
 	i := 0
 	for {
-		j := strings.Index(s[i:], "://")
+		j, n := nextSep(s, i)
 		if j < 0 {
 			break
 		}
-		j += i
-		end := j + 3
-		for end < len(s) && !urlEnd(s[end]) {
+		end := j + n
+		for end < len(s) && !urlEnd(s[end]) && (n == 3 || s[end] != '&') {
 			end++
 		}
 		cut := false
 		for _, start := range schemeStarts(s, j) {
-			if u := s[start:end]; g.o.Loaded(u) {
+			u := s[start:end]
+			if n != 3 {
+				u = unescapeOnce(u)
+			}
+			if g.o.Loaded(u) {
 				b.WriteString(s[i:start])
 				b.WriteString(redactURL(u))
 				i, cut, changed = end, true, true
@@ -194,8 +280,8 @@ func (g *guard) cutEmbedded(s string) (string, bool) {
 			}
 		}
 		if !cut {
-			b.WriteString(s[i : j+3])
-			i = j + 3
+			b.WriteString(s[i : j+n])
+			i = j + n
 		}
 	}
 	b.WriteString(s[i:])

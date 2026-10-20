@@ -122,6 +122,9 @@ type guard struct {
 	worldRequestsFull map[string]bool
 	navSeen           map[requestKey]bool
 	navSeenOrder      []requestKey
+	navChains         map[requestKey][]string
+	tainted           map[string]*assetSet
+	assets            map[string]*assetSet
 	heldPauses        map[requestKey][]heldPause
 	heldPauseCount    int
 	commitMarks       map[callKey]commitMark
@@ -171,6 +174,9 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		worldRequestCount: map[string]int{},
 		worldRequestsFull: map[string]bool{},
 		navSeen:           map[requestKey]bool{},
+		navChains:         map[requestKey][]string{},
+		tainted:           map[string]*assetSet{},
+		assets:            map[string]*assetSet{},
 		heldPauses:        map[requestKey][]heldPause{},
 		commitMarks:       map[callKey]commitMark{},
 		maxWorlds:         maxWorlds,
@@ -406,6 +412,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.markedCount -= len(g.marked[id])
 	delete(g.marked, id)
 	delete(g.saturated, id)
+	delete(g.assets, id)
 	g.forgetExtrasLocked(id)
 	for k := range g.pending {
 		if k.session == id {

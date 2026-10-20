@@ -435,6 +435,7 @@ func (g *guard) scriptEvent(m *message, data []byte) browserVerdict {
 		ID       int64  `json:"executionContextId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	g.noteScriptLocked(m)
 	target := g.worldTargetLocked(m.SessionID)
 	if !g.contextHiddenLocked(target, p.ID) {
 		return browserVerdict{forward: data}
@@ -792,8 +793,12 @@ func (g *guard) navRequestLocked(nt *navTarget, m *message) browserVerdict {
 		g.navSeenOrder = append(g.navSeenOrder, k)
 		if len(g.navSeenOrder) > maxWorldRequests {
 			delete(g.navSeen, g.navSeenOrder[0])
+			delete(g.navChains, g.navSeenOrder[0])
 			g.navSeenOrder = g.navSeenOrder[1:]
 		}
+	}
+	if m.Method == "Network.requestWillBeSent" {
+		g.chainLocked(k, p)
 	}
 	return g.releasePausesLocked(k)
 }

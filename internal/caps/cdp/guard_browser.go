@@ -205,6 +205,7 @@ var eventHandlers = map[string]eventHandler{
 	"Runtime.exceptionThrown":                    (*guard).contextEvent,
 	"Runtime.bindingCalled":                      (*guard).contextEvent,
 	"Debugger.scriptParsed":                      (*guard).scriptEvent,
+	"CSS.styleSheetAdded":                        (*guard).styleSheetEvent,
 	"Debugger.scriptFailedToParse":               (*guard).scriptEvent,
 	"Debugger.breakpointResolved":                (*guard).breakpointEvent,
 	"Debugger.paused":                            (*guard).debuggerPausedEvent,

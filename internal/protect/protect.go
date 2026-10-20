@@ -284,6 +284,14 @@ func (o *Origins) DocumentPatterns() []string {
 	return out
 }
 
+func Canonical(raw string) (string, bool) {
+	u := parse(raw)
+	if u == nil {
+		return "", false
+	}
+	return u.Href(true), true
+}
+
 func Redact(raw string) string {
 	if raw == "" {
 		return ""
