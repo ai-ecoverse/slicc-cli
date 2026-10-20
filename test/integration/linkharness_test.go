@@ -217,7 +217,25 @@ func (b *chromeProc) tryOpenPage(t *testing.T, url string) (*page, error) {
 	}
 	t.Cleanup(func() { b.closeTarget(res.TargetID) })
 	p := &page{t: t, b: b, target: res.TargetID, session: s}
+	err = p.loaded(url, 15*time.Second)
+	if err == nil || !p.droppedModule() {
+		return p, err
+	}
+	fmt.Fprintf(os.Stderr, "%s: Chrome failed a module fetch of %s that never reached the page server; reloading the page once:\n%v\n", t.Name(), url, err)
+	rctx, rcancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer rcancel()
+	if rerr := s.Call(rctx, "Page.reload", map[string]any{"ignoreCache": true}, nil); rerr != nil {
+		return p, fmt.Errorf("%w; Page.reload: %v", err, rerr)
+	}
 	return p, p.loaded(url, 15*time.Second)
+}
+
+func (p *page) droppedModule() bool {
+	var dropped bool
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := p.session.Evaluate(ctx, `typeof globalThis.linkTest !== 'object' && document.readyState === 'complete' && performance.getEntriesByType('resource').some((e) => e.name.endsWith('.js') && e.responseStatus === 0)`, cdp.EvaluateOptions{ReturnByValue: true}, &dropped)
+	return err == nil && dropped
 }
 
 func (p *page) waitLoaded(url string, timeout time.Duration) {
@@ -236,7 +254,7 @@ func (p *page) loaded(url string, timeout time.Duration) error {
 	var state any
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	serr := p.session.Evaluate(ctx, `({ href: location.href, readyState: document.readyState, resources: performance.getEntriesByType('resource').map((e) => e.name + ' ' + Math.round(e.duration) + 'ms') })`, cdp.EvaluateOptions{ReturnByValue: true}, &state)
+	serr := p.session.Evaluate(ctx, `({ href: location.href, readyState: document.readyState, resources: performance.getEntriesByType('resource').map((e) => e.name + ' ' + e.responseStatus + ' ' + Math.round(e.duration) + 'ms') })`, cdp.EvaluateOptions{ReturnByValue: true}, &state)
 	return fmt.Errorf("%s did not load in %s (%v); page state %v (%v); page server since %s:\n%s%s", url, timeout, err, state, serr, start.Format("15:04:05.000"), pageRequests.since(start.Add(-time.Second)), p.b.report())
 }
 
