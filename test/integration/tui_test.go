@@ -545,9 +545,24 @@ func TestTUIOffersTheDefaultBrowserRow(t *testing.T) {
 		if strings.Index(v, "Pair") > strings.Index(v, "Launch") {
 			t.Errorf("section order:\n%s", v)
 		}
-		cmd := h.keys("enter")
-		if len(h.started) != 1 || len(h.started[0].Entries) != 1 || h.started[0].Entries[0].ID != flow.PairID || !isQuit(cmd) {
-			t.Fatalf("started %+v, quit %v", h.started, isQuit(cmd))
+		h.keys("enter")
+		if len(h.started) != 1 || len(h.started[0].Entries) != 1 || h.started[0].Entries[0].ID != flow.PairID || h.model().Mode() != tui.ModeDashboard {
+			t.Fatalf("started %+v, mode %s", h.started, h.model().Mode())
+		}
+		h.send(tui.EventMsg(flow.Event{Event: flow.Serving, Caps: []string{"net"}, Policy: "local"}))
+		h.send(tui.EventMsg(flow.Event{Event: flow.Pairing, URL: "https://seven.sliccy.ai/#slicc-pair=17117.x.y"}))
+		v = h.view()
+		for _, s := range []string{"Default browser  paired over loopback · no cdp  hosts seven", "pairing   https://seven.sliccy.ai/#slicc-pair=17117.x.y", "waiting for seven", "↵ new pairing URL", "y copy it"} {
+			if !strings.Contains(v, s) {
+				t.Errorf("dashboard lacks %q:\n%s", s, v)
+			}
+		}
+		if strings.Contains(v, "BROWSERS") || strings.Contains(v, "c capabilities") {
+			t.Errorf("dashboard offers what pairing can't:\n%s", v)
+		}
+		h.send(tui.EventMsg(flow.Event{Event: flow.Linked, Peer: "seven"}))
+		if v = h.view(); strings.Contains(v, "#slicc-pair=") || !strings.Contains(v, "↵ for a URL to pair another seven") {
+			t.Errorf("linked dashboard:\n%s", v)
 		}
 	})
 
