@@ -375,6 +375,26 @@ export function protectTest(getLink, describe) {
       watching = c;
       return { ok: true };
     },
+    watchFragments: async (browser) => {
+      const c = await CdpClient.open(getLink(), browser);
+      await c.send('Target.setDiscoverTargets', { discover: true });
+      await c.send('Target.setAutoAttach', { autoAttach: true, flatten: true, waitForDebuggerOnStart: false });
+      watching = c;
+      return { ok: true };
+    },
+    watchedFragments: async (targetIds, mark) => {
+      const c = watching;
+      watching = null;
+      const list = await c.send('Target.getTargets');
+      const infos = [];
+      for (const targetId of targetIds) infos.push(await outcome(c.send('Target.getTargetInfo', { targetId })));
+      await c.send('Target.setAutoAttach', { autoAttach: false, flatten: true, waitForDebuggerOnStart: false });
+      await c.send('Target.setDiscoverTargets', { discover: false });
+      const changed = c.events.slice(mark).filter((e) => e.method === 'Target.targetInfoChanged').map((e) => ({ targetId: e.params.targetInfo.targetId, url: e.params.targetInfo.url, title: e.params.targetInfo.title }));
+      const received = JSON.stringify({ events: c.events, list, infos });
+      await c.close();
+      return { received, listed: list.targetInfos.map(({ targetId, url, title }) => ({ targetId, url, title })), changed };
+    },
     watchMark: async () => ({ mark: watching.events.length }),
     watchedTargets: async (targetId, mark) => {
       const c = watching;
