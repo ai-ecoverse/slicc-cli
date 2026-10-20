@@ -280,7 +280,7 @@ func (g *guard) decide(t *target, previous bool) bool {
 	if t.typ == "browser" {
 		return false
 	}
-	if !protect.HiddenType(t.typ) && g.errorPageLocked(t) {
+	if !protect.HiddenType(t.typ) && !protect.Unparseable(t.url) && g.errorPageLocked(t) {
 		return previous
 	}
 	return g.o.TargetOf(t.url, t.typ, previous, g.openerState(t))

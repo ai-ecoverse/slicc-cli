@@ -28,12 +28,20 @@ async function load(c, sessionId, url) {
 }
 
 async function leave(c, sessionId, url) {
-  const gone = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
-    () => true,
-    () => false,
-  );
+  const gone = (e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId;
+  const failed = (e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl;
+  let off;
+  const settled = Promise.race([
+    new Promise((resolve) => {
+      off = c.on((e) => (gone(e) || failed(e)) && resolve());
+    }),
+    sleep(20000),
+  ]);
   await c.send('Runtime.evaluate', { expression: later(url) }, sessionId);
-  return gone;
+  await settled;
+  off();
+  await sleep(500);
+  return c.events.some(gone);
 }
 
 async function instrument(c, sessionId, base, tag) {
@@ -391,15 +399,31 @@ export function protectTest(getLink, describe) {
         const detached = await leave(c, sessionId, away);
         return { targetId, before, detached };
       }),
+    leaveFor: (browser, start, away) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(start);
+        await c.send('Page.enable', {}, sessionId);
+        const detached = await leave(c, sessionId, away);
+        const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        return { targetId, detached, after, close };
+      }),
     redirectSecret: (browser, start, away) =>
       run(browser, async (c) => {
         await c.send('Target.setDiscoverTargets', { discover: true });
         const { targetId, sessionId } = await c.attachTo(start);
         for (const domain of ['Page', 'Network', 'Runtime', 'DOM', 'Log']) await c.send(`${domain}.enable`, {}, sessionId);
+        c.on((e) => {
+          if (e.method === 'Page.screencastFrame' && e.sessionId === sessionId) c.send('Page.screencastFrameAck', { sessionId: e.params.sessionId }, sessionId).catch(() => {});
+        });
+        await c.send('Page.startScreencast', { format: 'jpeg', quality: 10, everyNthFrame: 1 }, sessionId);
         const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 20000);
         await c.send('Runtime.evaluate', { expression: later(away) }, sessionId);
         const { params } = await committed;
-        await sleep(500);
+        const framesBefore = c.events.filter((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId).length;
+        const committedAt = c.events.findIndex((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl);
+        await sleep(1500);
+        const framesOnError = c.events.slice(committedAt + 1).filter((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId).length;
         const ask = (method, params = {}) => outcome(c.send(method, params, sessionId));
         const answers = {
           'Runtime.evaluate': await ask('Runtime.evaluate', { expression: 'JSON.stringify(globalThis.loadTimeData?.data_ ?? null) + document.documentElement.outerHTML + location.href', returnByValue: true }),
@@ -428,7 +452,7 @@ export function protectTest(getLink, describe) {
         const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === targetId) ?? null;
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
         await sleep(300);
-        return { unreachable: params.frame.unreachableUrl, detached, answers, blank, listed, close, seen: JSON.stringify([answers, c.events]) };
+        return { unreachable: params.frame.unreachableUrl, detached, answers, blank, listed, close, framesBefore, framesOnError, seen: JSON.stringify([answers, c.events.filter((e) => e.method !== 'Page.screencastFrame')]) };
       }),
     navPopup: (browser, base, tag, opener, popup, away, direct) =>
       run(browser, async (c) => {

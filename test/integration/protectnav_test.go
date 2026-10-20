@@ -331,6 +331,8 @@ func (e *navEnv) testRedirectSecret(t *testing.T) {
 			Answers     json.RawMessage `json:"answers"`
 			Blank       cdpOutcome      `json:"blank"`
 			Listed      *protectTarget  `json:"listed"`
+			Before      int             `json:"framesBefore"`
+			OnError     int             `json:"framesOnError"`
 			Close       cdpOutcome      `json:"close"`
 			Seen        string          `json:"seen"`
 		}
@@ -342,6 +344,8 @@ func (e *navEnv) testRedirectSecret(t *testing.T) {
 			t.Fatalf("the redirect into %s never committed an error page: %+v", base, r)
 		case strings.Contains(r.Seen, secret) || strings.Contains(r.Seen, "fake-code-"):
 			t.Fatalf("the page read the redirect's protected URL into %s: %s", base, r.Seen)
+		case r.Before == 0 || r.OnError != 0:
+			t.Fatalf("screencast frames: %d before the error page for %s and %d on it", r.Before, base, r.OnError)
 		case r.Detached || !r.Blank.OK || !r.Close.OK || r.Listed == nil || r.Listed.URL != "about:blank#blocked":
 			t.Fatalf("the error page for %s isn't drivable: %+v", base, r)
 		}

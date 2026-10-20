@@ -300,6 +300,13 @@ var errorPageDomains = map[string]bool{"Page": true, "Runtime": true, "Target": 
 
 var errorPageEvents = map[string]bool{
 	"Runtime.executionContextCreated": true, "Runtime.executionContextDestroyed": true, "Runtime.executionContextsCleared": true,
+	"Page.frameNavigated": true, "Page.frameStartedNavigating": true, "Page.frameRequestedNavigation": true,
+	"Page.frameScheduledNavigation": true, "Page.frameClearedScheduledNavigation": true, "Page.navigatedWithinDocument": true,
+	"Page.frameStartedLoading": true, "Page.frameStoppedLoading": true, "Page.frameAttached": true, "Page.frameDetached": true,
+	"Page.frameSubtreeWillBeDetached": true, "Page.frameResized": true, "Page.lifecycleEvent": true, "Page.loadEventFired": true,
+	"Page.domContentEventFired": true, "Page.documentOpened": true, "Page.backForwardCacheNotUsed": true, "Page.windowOpen": true,
+	"Page.downloadWillBegin": true, "Page.downloadProgress": true, "Page.interstitialShown": true, "Page.interstitialHidden": true,
+	"Page.screencastVisibilityChanged": true,
 }
 
 func (g *guard) errorPageSessionLocked(sessionID string) bool {
@@ -325,7 +332,7 @@ func (g *guard) errorPageCheckLocked(c *command) string {
 func errorPageEvent(method string) bool {
 	domain, _, _ := strings.Cut(method, ".")
 	switch domain {
-	case "Page", "Target", "Inspector", "Network", "Fetch":
+	case "Target", "Inspector", "Network", "Fetch":
 		return true
 	}
 	return errorPageEvents[method]
