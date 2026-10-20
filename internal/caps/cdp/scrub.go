@@ -28,7 +28,8 @@ func (g *guard) scrub(data []byte) []byte {
 		return data
 	}
 	worlds := g.scrubWorlds(m)
-	if !g.scrubValue(m) && !worlds {
+	assets := g.scrubAssets(m)
+	if !g.scrubValue(m) && !worlds && !assets {
 		return data
 	}
 	return encode(m)
@@ -130,26 +131,72 @@ func schemeStarts(s string, at int) []int {
 	return starts
 }
 
+const encodedSep = "%3a%2f%2f"
+
+func nextSep(s string, from int) (int, int) {
+	for i := from; i+3 <= len(s); i++ {
+		if s[i:i+3] == "://" {
+			return i, 3
+		}
+		if s[i] == '%' && i+len(encodedSep) <= len(s) && strings.EqualFold(s[i:i+len(encodedSep)], encodedSep) {
+			return i, len(encodedSep)
+		}
+	}
+	return -1, 0
+}
+
+func unhex(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
+}
+
+func unescapeOnce(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) {
+			hi, ok1 := unhex(s[i+1])
+			lo, ok2 := unhex(s[i+2])
+			if ok1 && ok2 {
+				b.WriteByte(hi<<4 | lo)
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 func (g *guard) cutEmbedded(s string) (string, bool) {
-	if !strings.Contains(s, "://") {
+	if !strings.Contains(s, "://") && !strings.Contains(strings.ToLower(s), encodedSep) {
 		return s, false
 	}
 	var b strings.Builder
 	changed := false
 	i := 0
 	for {
-		j := strings.Index(s[i:], "://")
+		j, n := nextSep(s, i)
 		if j < 0 {
 			break
 		}
-		j += i
-		end := j + 3
-		for end < len(s) && !urlEnd(s[end]) {
+		end := j + n
+		for end < len(s) && !urlEnd(s[end]) && (n == 3 || s[end] != '&') {
 			end++
 		}
 		cut := false
 		for _, start := range schemeStarts(s, j) {
-			if u := s[start:end]; g.o.Loaded(u) {
+			u := s[start:end]
+			if n != 3 {
+				u = unescapeOnce(u)
+			}
+			if g.o.Loaded(u) {
 				b.WriteString(s[i:start])
 				b.WriteString(redactURL(u))
 				i, cut, changed = end, true, true
@@ -157,8 +204,8 @@ func (g *guard) cutEmbedded(s string) (string, bool) {
 			}
 		}
 		if !cut {
-			b.WriteString(s[i : j+3])
-			i = j + 3
+			b.WriteString(s[i : j+n])
+			i = j + n
 		}
 	}
 	b.WriteString(s[i:])

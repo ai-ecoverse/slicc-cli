@@ -865,6 +865,36 @@ export function protectTest(getLink, describe) {
         const events = c.events.filter((e) => e.sessionId === sessionId).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
         return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })) };
       }),
+    redirectAssets: (browser, page) =>
+      run(browser, async (c) => {
+        const results = [];
+        const record = async (call, promise) => results.push({ call, ...(await outcome(promise)) });
+        const { targetId, sessionId } = await c.attachTo('about:blank');
+        for (const domain of ['Page', 'Network', 'DOM', 'CSS', 'Debugger', 'Runtime']) await c.send(`${domain}.enable`, {}, sessionId);
+        await outcome(load(c, sessionId, page));
+        await sleep(1000);
+        const tree = await c.send('Page.getResourceTree', {}, sessionId);
+        for (const r of tree.frameTree.resources ?? []) {
+          await record('Page.getResourceContent', c.send('Page.getResourceContent', { frameId: tree.frameTree.frame.id, url: r.url }, sessionId));
+          await record('Page.searchInResource', c.send('Page.searchInResource', { frameId: tree.frameTree.frame.id, url: r.url, query: 'fake' }, sessionId));
+        }
+        const sheets = c.events.filter((e) => e.method === 'CSS.styleSheetAdded' && e.sessionId === sessionId).map((e) => e.params.header.styleSheetId);
+        for (const styleSheetId of sheets) {
+          await record('CSS.getStyleSheetText', c.send('CSS.getStyleSheetText', { styleSheetId }, sessionId));
+          await record('CSS.collectClassNames', c.send('CSS.collectClassNames', { styleSheetId }, sessionId));
+        }
+        const { root } = await c.send('DOM.getDocument', {}, sessionId);
+        const body = await c.send('DOM.querySelector', { nodeId: root.nodeId, selector: 'body' }, sessionId);
+        await record('CSS.getMatchedStylesForNode', c.send('CSS.getMatchedStylesForNode', { nodeId: body.nodeId }, sessionId));
+        const scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId && e.params.url).map((e) => e.params.scriptId);
+        for (const scriptId of scripts) {
+          await record('Debugger.getScriptSource', c.send('Debugger.getScriptSource', { scriptId }, sessionId));
+          await record('Debugger.searchInContent', c.send('Debugger.searchInContent', { scriptId, query: 'fake' }, sessionId));
+        }
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        const events = c.events.filter((e) => e.sessionId === sessionId).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
+        return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })), sheets: sheets.length, scripts: scripts.length };
+      }),
     extraInfo: (browser, last) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Network.responseReceivedExtraInfo' && e.params.requestId === last, 15000);
