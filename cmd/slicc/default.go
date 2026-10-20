@@ -295,11 +295,13 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
 	if interactive {
 		cfg.Chosen = true
-		code, pair := runTUI(cfg, f.fallbackAllowed(), lc, stdout, stderr)
-		if pair {
-			return runPair(f, mounts, "", stdout, stderr)
+		var pair pairFunc
+		if f.fallbackAllowed() {
+			pair = func(ctx context.Context, emit func(flow.Event), renew <-chan struct{}) int {
+				return servePairIn(ctx, f, mounts, emit, renew)
+			}
 		}
-		return code
+		return runTUI(cfg, pair, lc, stdout, stderr)
 	}
 	cfg.Chosen = len(f.browsers) > 0 || f.six != nil
 	return runPlain(cfg, f, mounts, stdout, stderr)
@@ -318,7 +320,7 @@ func runPlain(cfg flow.Config, f defaultFlags, mounts []hostfs.Mount, stdout, st
 	out.event(flow.Event{Schema: flow.Schema, Event: flow.Discovered, Entries: r.Entries})
 	if f.fallbackAllowed() && flow.Fallback(cfg.Browser, r.Entries) {
 		stop()
-		return runPair(f, mounts, flow.FallbackNotice, stdout, stderr)
+		return runFallback(f, mounts, stdout, stderr)
 	}
 	var sel []browser.Entry
 	var err error
@@ -447,13 +449,17 @@ func tuiDir(o browser.Options) func(browser.Entry, string) string {
 	}
 }
 
-func runTUI(cfg flow.Config, pairable bool, lc *liveCaps, stdout, stderr io.Writer) (int, bool) {
+type pairFunc func(ctx context.Context, emit func(flow.Event), renew <-chan struct{}) int
+
+var errPairFailed = errors.New("pairing seven in the default browser failed")
+
+func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var p *tea.Program
 	var started sync.WaitGroup
 	var failed error
-	pair := false
+	renew := make(chan struct{}, 1)
 	tcfg := tui.Config{
 		Profile:  cfg.Profile,
 		Last:     browser.LoadLast(cfg.Browser),
@@ -463,6 +469,12 @@ func runTUI(cfg flow.Config, pairable bool, lc *liveCaps, stdout, stderr io.Writ
 		Profiles: tuiProfiles(cfg.Browser),
 		Stop:     cancel,
 		Runner:   defaultRunner(),
+		NewPairing: func() {
+			select {
+			case renew <- struct{}{}:
+			default:
+			}
+		},
 	}
 	cfg.Relink = lc.relink
 	if j, _ := jerk.Find(jerkDirs()...); j != nil {
@@ -475,10 +487,6 @@ func runTUI(cfg flow.Config, pairable bool, lc *liveCaps, stdout, stderr io.Writ
 		lc.apply(s, relink, status)
 	}
 	tcfg.Start = func(c tui.Choice) {
-		if len(c.Entries) > 0 && flow.IsPair(c.Entries[0]) {
-			pair = true
-			return
-		}
 		fc := cfg
 		fc.Profiles = c.Profiles
 		events := make(chan tea.Msg, 4096)
@@ -491,7 +499,14 @@ func runTUI(cfg flow.Config, pairable bool, lc *liveCaps, stdout, stderr io.Writ
 		}()
 		go func() {
 			defer started.Done()
-			err := flow.Go(ctx, fc, c.Entries)
+			var err error
+			if len(c.Entries) > 0 && flow.IsPair(c.Entries[0]) {
+				if pair(ctx, fc.Emit, renew) != 0 {
+					err = errPairFailed
+				}
+			} else {
+				err = flow.Go(ctx, fc, c.Entries)
+			}
 			failed = err
 			events <- tui.DoneMsg{Err: err}
 			close(events)
@@ -500,7 +515,7 @@ func runTUI(cfg flow.Config, pairable bool, lc *liveCaps, stdout, stderr io.Writ
 	p = tea.NewProgram(tui.New(tcfg), tea.WithOutput(stdout))
 	go func() {
 		entries := browser.Discover(ctx, cfg.Browser).Entries
-		if pairable {
+		if pair != nil {
 			entries = flow.WithPair(cfg.Browser, entries)
 		}
 		p.Send(tui.EntriesMsg(flow.WithSixRows(cfg.Browser, entries)))
@@ -510,16 +525,13 @@ func runTUI(cfg flow.Config, pairable bool, lc *liveCaps, stdout, stderr io.Writ
 	started.Wait()
 	if err != nil && !errors.Is(err, tea.ErrProgramKilled) && !errors.Is(err, tea.ErrInterrupted) {
 		fmt.Fprintf(stderr, "slicc: %v\n", err)
-		return 1, false
-	}
-	if pair {
-		return 0, true
+		return 1
 	}
 	if failed != nil {
 		fmt.Fprintf(stderr, "slicc: %v\n", failed)
-		return 1, false
+		return 1
 	}
-	return 0, false
+	return 0
 }
 
 func pageOrigins(page string, extra []string) []string {

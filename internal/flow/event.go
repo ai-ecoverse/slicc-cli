@@ -30,6 +30,7 @@ const (
 	BrowserSlow Kind = "browser-slow"
 	Closed      Kind = "closed"
 	Error       Kind = "error"
+	Pairing     Kind = "pairing"
 
 	ForeignBrowser Kind = "foreign-browser"
 )
@@ -70,6 +71,7 @@ type Event struct {
 	Compute      string          `json:"compute,omitempty"`
 	OpenedTab    *bool           `json:"openedTab,omitempty"`
 	Elapsed      int             `json:"elapsed,omitempty"`
+	URL          string          `json:"url,omitempty"`
 	Time         time.Time       `json:"-"`
 }
 

@@ -292,18 +292,12 @@ func (m Model) goChoice() (tea.Model, tea.Cmd) {
 			profiles[e.ID] = p
 		}
 	}
-	if flow.IsPair(sel[0]) {
-		m.mode = ModeDone
-		if m.cfg.Start != nil {
-			m.cfg.Start(Choice{Entries: sel})
-		}
-		return m, tea.Quit
-	}
 	notice := m.dash.notice
 	m.went = true
 	m.mode = ModeDashboard
 	m.dash = newDashboard(m.cfg.Now())
 	m.dash.notice = notice
+	m.dash.pair = flow.IsPair(sel[0])
 	if m.cfg.Start != nil {
 		m.cfg.Start(Choice{Entries: sel, Profiles: profiles})
 	}

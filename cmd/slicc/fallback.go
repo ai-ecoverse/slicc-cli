@@ -3,11 +3,13 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
 
 	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
+	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 )
 
 func (f defaultFlags) fallbackAllowed() bool {
@@ -28,7 +30,11 @@ func (f defaultFlags) openFlags(mounts []hostfs.Mount) openFlags {
 	return o
 }
 
-func runPair(f defaultFlags, mounts []hostfs.Mount, notice string, stdout, stderr io.Writer) int {
+func runFallback(f defaultFlags, mounts []hostfs.Mount, stdout, stderr io.Writer) int {
 	tty := isTerminal(os.Stdin) && isTerminal(stdout)
-	return serveOpen(f.openFlags(mounts), openOptions{mode: "default", open: tty || f.open, json: f.json, notice: notice}, os.Stdin, stdout, stderr)
+	return serveOpen(f.openFlags(mounts), openOptions{mode: "default", open: tty || f.open, json: f.json, notice: flow.FallbackNotice}, os.Stdin, stdout, stderr)
+}
+
+func servePairIn(ctx context.Context, f defaultFlags, mounts []hostfs.Mount, emit func(flow.Event), renew <-chan struct{}) int {
+	return serveOpen(f.openFlags(mounts), openOptions{mode: "default", open: true, ctx: ctx, emit: emit, renew: renew}, nil, io.Discard, io.Discard)
 }

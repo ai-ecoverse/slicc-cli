@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	ossignal "os/signal"
@@ -95,6 +96,9 @@ type openOptions struct {
 	open   bool
 	json   bool
 	notice string
+	ctx    context.Context
+	emit   func(flow.Event)
+	renew  <-chan struct{}
 }
 
 func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags, int) {
@@ -230,35 +234,77 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 	r := &openRun{opts: opts, f: f, stdout: stdout}
 	r.status = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) }
 	r.logf = func(string, ...any) {}
-	if os.Getenv("SLICC_DEBUG") != "" {
+	if os.Getenv("SLICC_DEBUG") != "" && opts.emit == nil {
 		r.logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
 	ctx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	if opts.emit != nil {
+		r.status = statusTo(opts.emit)
+		ctx, stop = context.WithCancel(opts.ctx)
+	}
 	defer stop()
+	fail := func(err error) int {
+		r.status("%v", err)
+		r.emitEvent(flow.Event{Event: flow.Error, Message: err.Error()})
+		return 1
+	}
 	if opts.notice != "" {
 		r.status("%s", opts.notice)
 		r.event(map[string]any{"schema": flow.Schema, "event": "mode", "mode": "loopback", "reason": "no-browser"})
 	}
 	if err := r.listen(); err != nil {
 		telemetry.ReportError(telemetry.Signal, err)
-		r.status("%v", err)
-		return 1
+		return fail(err)
 	}
 	defer func() { _ = r.ln.Close() }()
 	release, err := r.serveCaps(ctx)
 	if err != nil {
-		r.status("%v", err)
-		return 1
+		return fail(err)
 	}
 	defer release()
 	if err := r.pair(); err != nil {
-		r.status("%v", err)
-		return 1
+		return fail(err)
 	}
-	go r.readStdin(stdin)
+	if opts.renew != nil {
+		go func() {
+			for range opts.renew {
+				r.renewed()
+			}
+		}()
+	} else {
+		go r.readStdin(stdin)
+	}
 	_ = r.ln.Serve(ctx, r.node.Serve)
 	r.event(map[string]any{"schema": flow.Schema, "event": flow.Closed, "browsers": []string{}})
+	r.emitEvent(flow.Event{Event: flow.Closed})
 	return 0
+}
+
+func (r *openRun) emitEvent(e flow.Event) {
+	if r.opts.emit != nil {
+		r.opts.emit(e)
+	}
+}
+
+func (r *openRun) dashEvent(e node.Event) {
+	switch e.Kind {
+	case node.EventConnecting:
+		r.emitEvent(flow.Event{Event: flow.Connecting})
+	case node.EventLinked:
+		r.emitEvent(flow.Event{Event: flow.Linked, Peer: e.Peer.Name, Caps: r.node.Caps(), Policy: r.pol.Summary()})
+	case node.EventLinkDown:
+		ev := flow.Event{Event: flow.LinkLost, Reason: e.Reason}
+		if e.Err != nil {
+			ev.Message = e.Err.Error()
+		}
+		r.emitEvent(ev)
+	case node.EventStreamOpen:
+		r.emitEvent(flow.Event{Event: flow.StreamOpen, Stream: e.Stream})
+	case node.EventStreamClose:
+		r.emitEvent(flow.Event{Event: flow.StreamDone, Stream: e.Stream})
+	case node.EventDropped:
+		r.emitEvent(flow.Event{Event: flow.Dropped, Stream: e.Stream, Count: e.Count})
+	}
 }
 
 func (r *openRun) linkEvent(e node.Event) {
@@ -380,13 +426,21 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 		closeKernel = func() { _ = kern.Close() }
 		n.Subscribe(func(e node.Event) {
 			if e.Kind == node.EventLinked {
-				go kern.Add(e.Link)
+				go func() {
+					kern.Add(e.Link)
+					if a, ok := kern.Addr().(*net.TCPAddr); ok {
+						r.emitEvent(flow.Event{Event: flow.Kernel, Kernel: kernelin.URL("<port>", a.Port)})
+					}
+				}()
 			}
 		})
 	}
 	n.Handle(loopback.CapUnlink, loopback.KindUnlink, r.ln.Unlink)
 	n.Subscribe(func(e node.Event) {
 		r.linkEvent(e)
+		if r.opts.emit != nil {
+			r.dashEvent(e)
+		}
 		switch {
 		case e.Link == nil:
 		case e.Kind == node.EventConnecting:
@@ -397,6 +451,7 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	})
 	n.API()
 	r.status("offering %s; policy: %s", strings.Join(n.Caps(), ", "), r.pol.Summary())
+	r.emitEvent(flow.Event{Event: flow.Serving, Caps: n.Caps(), Policy: r.pol.Summary(), Compute: r.f.compute.dashboard()})
 	kernelPort := r.f.kernelPort
 	if r.f.noKernel {
 		kernelPort = 0
@@ -432,7 +487,11 @@ func (r *openRun) pair() error {
 	if err != nil {
 		return err
 	}
-	r.status("to link seven, open the pairing URL below; seven asks to link %s (%s). It works once, for 10 minutes; press Enter for a new one", r.host, loopback.ShortFingerprint(r.id.Fingerprint))
+	if r.opts.emit == nil {
+		r.status("to link seven, open the pairing URL below; seven asks to link %s (%s). It works once, for 10 minutes; press Enter for a new one", r.host, loopback.ShortFingerprint(r.id.Fingerprint))
+	} else {
+		r.status("seven asks to link %s (%s)", r.host, loopback.ShortFingerprint(r.id.Fingerprint))
+	}
 	r.printURL(u)
 	if r.opts.open {
 		if err := openBrowser(u); err != nil {
@@ -450,13 +509,24 @@ func (r *openRun) readStdin(stdin io.Reader) {
 	}
 	sc := bufio.NewScanner(stdin)
 	for sc.Scan() {
-		u, err := r.mint()
-		if err != nil {
+		if !r.renewed() {
 			return
 		}
-		r.status("a new pairing URL, good once for 10 minutes:")
-		r.printURL(u)
 	}
+}
+
+func (r *openRun) renewed() bool {
+	u, err := r.mint()
+	if err != nil {
+		return false
+	}
+	if r.opts.emit == nil {
+		r.status("a new pairing URL, good once for 10 minutes:")
+	} else {
+		r.status("a new pairing URL, good once for 10 minutes")
+	}
+	r.printURL(u)
+	return true
 }
 
 func (r *openRun) event(e map[string]any) {
@@ -470,6 +540,10 @@ func (r *openRun) event(e map[string]any) {
 }
 
 func (r *openRun) printURL(u string) {
+	if r.opts.emit != nil {
+		r.emitEvent(flow.Event{Event: flow.Pairing, URL: u})
+		return
+	}
 	if r.opts.json {
 		r.event(map[string]any{"schema": flow.Schema, "event": "pairing", "url": u})
 		return
