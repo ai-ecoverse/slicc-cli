@@ -289,6 +289,8 @@ func guardSHA() string {
 	return "unknown"
 }
 
+var guardSkipped = []string{"C9.world-debugger"}
+
 func TestCDPProtectVectorsPrompt(t *testing.T) {
 	runGuardVectors(t, "prompt")
 }
@@ -383,6 +385,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		"sha":          sha,
 		"rowTimeoutMs": run.rowTimeout.Milliseconds(),
 		"only":         run.only,
+		"skip":         guardSkipped,
 		"inject":       run.inject,
 		"settleScale":  guardSettleScale(),
 	}
@@ -457,6 +460,9 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		t.Errorf("%d rows skipped for want of an unguarded observer", sum.ObserverSkipped)
 	}
 	for _, r := range sum.Results {
+		if slices.Contains(guardSkipped, r.ID) {
+			t.Errorf("%s ran, but the run skips it", r.ID)
+		}
 		name := r.ID + " " + r.Target + " " + r.Variant
 		switch {
 		case r.Control == "not-run":
@@ -489,7 +495,7 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	_ = json.Unmarshal(sliccbrowsers.GuardVectorsJSON(), &set)
 	var ran []string
 	for _, v := range set.Vectors {
-		if v.Kind != "cdp" {
+		if v.Kind != "cdp" || slices.Contains(guardSkipped, v.ID) {
 			continue
 		}
 		if passed[v.ID] == 0 {
