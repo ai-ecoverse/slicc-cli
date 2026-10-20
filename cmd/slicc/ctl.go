@@ -72,7 +72,9 @@ func nodeOffers(h link.Hello, kernelPort int) []string {
 			out = append(out, "fs")
 		}
 	}
-	if kernelPort > 0 {
+	if h.Kernel != nil {
+		out = append(out, "kernel:"+strconv.Itoa(h.Kernel.Port))
+	} else if kernelPort > 0 {
 		out = append(out, "kernel:"+strconv.Itoa(kernelPort))
 	}
 	return out

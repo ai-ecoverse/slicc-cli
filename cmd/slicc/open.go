@@ -239,6 +239,9 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 		r.status("%s", opts.notice)
 		r.event(map[string]any{"schema": flow.Schema, "event": "mode", "mode": "loopback", "reason": "no-browser"})
 	}
+	if !r.f.noKernel {
+		r.f.kernelPort = kernelin.Pick(r.f.kernelPort, r.status)
+	}
 	if err := r.listen(); err != nil {
 		telemetry.ReportError(telemetry.Signal, err)
 		r.status("%v", err)
@@ -376,6 +379,7 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	closeMounts := serveMounts(n, mounts, r.status)
 	closeKernel := func() {}
 	if !r.f.noKernel {
+		n.OnHello(kernelin.Announce(r.f.kernelPort))
 		kern := kernelin.New(kernelin.Config{Port: r.f.kernelPort, Logf: r.logf, Status: r.status})
 		closeKernel = func() { _ = kern.Close() }
 		n.Subscribe(func(e node.Event) {

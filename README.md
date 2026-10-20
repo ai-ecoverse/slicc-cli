@@ -353,7 +353,7 @@ slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]...
 
 Without `--browser`, the first row of the ranking that can host seven is chosen, an endpoint slicc didn't launch included, but never one in SLICC six's profile. When that happens without the picker, slicc says so on stderr, for an endpoint that isn't in a SLICC profile and that no `--cdp` named: `slicc: using Google Chrome (profile default) at http://127.0.0.1:9222, which slicc didn't launch; opened a new seven tab. Use --browser or --cdp to choose another.` It says `found a seven tab` when one was open already. The profile is `default` for a browser's default user-data dir, the base name of the user-data dir otherwise, and left out (with its parentheses) when unknown. With `--json` the line comes as the `foreign-browser` event too. Picking a row in the picker, `--browser`, or a `--cdp` for that endpoint means the user chose it, and there is no notice. An Electron app can't host seven. Each further browser is an extra: an installed one is launched without a start page, and an endpoint is used as it is. Then the link is set up as for `slicc attach` (see [Local setup](#local-setup-slicc-attach)): over CDP with the browser that hosts seven, the first page tab on an allowed origin.
 
-**What the link offers:** `net` (tcp, resolve), `http`, `ws`, `udp`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected, and this machine's other debugging ports too (see [Network policy](#network-policy)); and kernel services on `--kernel-port` (default 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)); and `ssh` only with `--runner` (see [SSH server](#ssh-server)); and `fs` with each `--mount` folder (see [Host folders](#host-folders)). seven gets full control of every listed browser, the one it runs in too. The `cdp` list (HELLO `browsers`) has only the browser that hosts seven and the extras picked with `--browser` or in the picker; the other browsers discovery found are never offered.
+**What the link offers:** `net` (tcp, resolve), `http`, `ws`, `udp`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected, and this machine's other debugging ports too (see [Network policy](#network-policy)); and kernel services on `--kernel-port` (default 80, or a spare port when this user can't have 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)); and `ssh` only with `--runner` (see [SSH server](#ssh-server)); and `fs` with each `--mount` folder (see [Host folders](#host-folders)). seven gets full control of every listed browser, the one it runs in too. The `cdp` list (HELLO `browsers`) has only the browser that hosts seven and the extras picked with `--browser` or in the picker; the other browsers discovery found are never offered.
 
 The cdp list follows the browsers: an extra that stops answering is taken off the list (`browser-gone`), and listed again with the same id when it answers on the same endpoint again (`browser-back`).
 
@@ -544,7 +544,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - `--eval <argv…>` and `--eval-quiet <duration>`: the REPL behind the `slicc-eval` subsystem (for example `--eval python3 -i`), and the silence that ends one response (default `500ms`).
 - `--sftp`, `--no-sftp`: serve the `sftp` subsystem or not. The default is on only for a plain local shell as the runner.
 - `--mount <path>[:<name>][:ro]`: share this folder with seven's kernel (cap `fs`, repeatable); see [Host folders](#host-folders).
-- `--kernel-port`: the local port for [kernel services](#kernel-services) (1–65535, default `80`).
+- `--kernel-port`: the local port for [kernel services](#kernel-services) (1–65535, default `80`; with `80`, a spare port in 17180–17189 when `80` can't be bound).
 - `--no-kernel`: no kernel services; nothing listens.
 - `--no-jerk`: don't offer this machine's slicc-jerk (caps `jerk` and `jerk-seal`, see [`jerk`](#jerk-slicc-jerk-over-the-link)).
 
@@ -663,7 +663,7 @@ One WebRTC peer connection. seven offers and the node answers. The node:
 - **Resets with `EOPNOTSUPP`:** an OPEN for a kind it doesn't serve.
 - **Closes the link:** an unknown frame type, a short or malformed frame (END with a payload, CREDIT that isn't 4 bytes), stream id 0, a reused id, an id with the wrong parity (page streams are odd, node streams even), or a second OPEN on a stream channel.
 
-HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "node", "caps": ["net", "http", "credentialed", "ws", "udp", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`. With `--mount`, `caps` adds `"fs"` and HELLO adds `"mounts"` (see [Host folders](#host-folders)). With host jerk, `caps` adds `"jerk"` and `"jerk-seal"` and HELLO adds `"jerk": { "version" }` (see [`jerk`](#jerk-slicc-jerk-over-the-link)).
+HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "node", "caps": ["net", "http", "credentialed", "ws", "udp", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`. With `--mount`, `caps` adds `"fs"` and HELLO adds `"mounts"` (see [Host folders](#host-folders)). With host jerk, `caps` adds `"jerk"` and `"jerk-seal"` and HELLO adds `"jerk": { "version" }` (see [`jerk`](#jerk-slicc-jerk-over-the-link)). Unless `--no-kernel`, HELLO adds `"kernel": { "port" }`, the port the kernel listener uses (see [Kernel services](#kernel-services)).
 
 **`ssh`** (cap `ssh`), page → node, with `--runner` only:
 - OPEN `{ "kind": "ssh" }`, OPENED `{}` at once. The stream's bytes are one SSH connection to the node's SSH server.
@@ -851,8 +851,10 @@ Only browsers the user named are listed: the one seven runs in, `--cdp` and `--c
 seven's kernel runs servers (vite, `python -m http.server`), and kernel port `N` is `http://N.kernel.localhost/`. seven's service worker carries subresources itself, but not top-level navigations or WebSockets. `*.kernel.localhost` resolves to loopback, so `attach` runs a listener that carries those connections into the page as `kernel` streams.
 
 **Listener.**
-- It binds `127.0.0.1:<kernel port>` (default `80`, which macOS lets any user bind) when the first page whose HELLO lists `kernel-in` links up, and keeps it until `attach` exits. With `--kernel-port 8080` the URLs carry the port: `http://5173.kernel.localhost:8080/`. `--no-kernel` turns it off, and remote nodes never listen.
-- If the port can't be bound (something else uses it, or Linux refuses an unprivileged bind on `80`), `attach` prints `kernel services are off: cannot listen on 127.0.0.1:<port> (<reason>); try --kernel-port` and runs on without it. It tries once.
+- It binds `127.0.0.1:<kernel port>` (default `80`) when the first page whose HELLO lists `kernel-in` links up, and keeps it until `attach` exits. With `--kernel-port 8080` the URLs carry the port: `http://5173.kernel.localhost:8080/`. `--no-kernel` turns it off, and remote nodes never listen.
+- **macOS** refuses a normal user `127.0.0.1:80` (`permission denied`) but lets any user bind `0.0.0.0:80`: it exempts only the wildcard address from the privileged-port rule. So on macOS, when `127.0.0.1:<port>` gets `permission denied`, the listener binds `0.0.0.0:<port>` instead and refuses every connection whose peer isn't a loopback address: it resets it before reading a byte, and the page never hears of it. Only this machine reaches kernel services, as with `127.0.0.1`. The macOS firewall, when it's on, may ask once whether slicc may accept incoming connections; either answer works, since the firewall never blocks loopback. Another user can't take `127.0.0.1:80` in front of it, for the same rule.
+- **Port 80 out of reach.** Linux refuses an unprivileged bind on `80` at any address (unless `net.ipv4.ip_unprivileged_port_start` allows it or slicc has `CAP_NET_BIND_SERVICE`), and something else may hold `80` on any system (`http.sys` on Windows, a local web server). So with the port `80` (the default, or `--kernel-port 80`), slicc checks at startup whether it can bind it as above, and otherwise takes the first port in 17180–17189 it can bind on `127.0.0.1`, and says `cannot listen on <address> (<reason>), so kernel services use port <n>`. The URLs then carry that port (`http://5173.kernel.localhost:17180/`), and HELLO's `kernel.port` tells seven. Any other `--kernel-port` is used as given.
+- If the port can't be bound when the page links up (something took it since startup, or none of 17180–17189 was free), `attach` prints `kernel services are off: cannot listen on <address> (<reason>); try --kernel-port` and runs on without it. It tries once.
 - The kernel port is denied in the [network policy](#network-policy) from startup, like the browser's debugging port, unless `--no-kernel` is given.
 
 **Each connection.**
@@ -878,7 +880,7 @@ seven's kernel runs servers (vite, `python -m http.server`), and kernel port `N`
 
 The browser's connection waits unread for `OPENED`.
 
-**Security.** The `Host` check defends against DNS rebinding. Kernel services are reachable like any dev server on localhost: by any local process, and by any web page Chrome lets reach loopback. Use `--no-kernel` to keep them inside the page.
+**Security.** The `Host` check defends against DNS rebinding. Kernel services are reachable like any dev server on localhost: by any local process, and by any web page Chrome lets reach loopback. They are never reachable from another machine: the macOS wildcard bind resets every peer that isn't loopback, which a connection to this machine's own LAN address isn't either. Use `--no-kernel` to keep them inside the page.
 
 ## Host folders
 
@@ -1546,7 +1548,8 @@ Page-opened streams are odd and node-opened streams even, never 0, and never reu
   "mode": "local",
   "caps": ["net", "http"],
   "routes": { "prefixes": [], "exit": true },
-  "policy": { "allow": [], "deny": ["127.0.0.1/32:9222"], "summary": "every public address, this machine, and the local network" }
+  "policy": { "allow": [], "deny": ["127.0.0.1/32:9222"], "summary": "every public address, this machine, and the local network" },
+  "kernel": { "port": 80 }
 }
 ```
 
@@ -1559,6 +1562,7 @@ Page-opened streams are odd and node-opened streams even, never 0, and never reu
   - page: `kernel-in` ([§5.4](#54-kernel-page-cap-kernel-in-node--page)).
 - **`routes`** (node only): the prefixes it offers as specific routes, plus `exit: true` when it's willing to be a default exit.
 - **`policy`:** for display only; the node enforces it ([§6](#6-policy-node)).
+- **`kernel`** (local node only, with kernel services): the port of the node's kernel listener ([§5.9](#59-kernel-listener-on-the-node-local-only)).
 - **Versions:** each side ignores fields it doesn't know. If `v` differs, the side with the lower `v` decides, or closes the link when it can't.
 - **Before HELLO:** neither side sends OPEN until it has received the peer's HELLO.
 - **Unsupported kinds:** OPEN for a kind the receiver didn't advertise gets RESET `EOPNOTSUPP`.
@@ -1715,7 +1719,10 @@ On a [§1.3](#13-local-setup-without-cdp-loopback-signalling) loopback link, `un
 - **Per connection:** the node opens `OPEN { "kind": "kernel", "port": N }` to the page, sends the bytes it has read, then pipes both ways.
   - The node refuses port 9222 itself, before any OPEN.
   - Its listener port joins the policy's protected ports.
-- **Binding:** if the port can't be bound, the node prints `kernel services are off: … try --kernel-port` and goes on without them.
+- **Binding:** on macOS, where an unprivileged user may bind port 80 only on the wildcard address, a `permission denied` on `127.0.0.1` makes the node bind `0.0.0.0:<kernel port>` and reset every connection from a peer that isn't loopback, before reading from it.
+  - With the default port 80 out of reach (Linux without `CAP_NET_BIND_SERVICE`, or taken), the node picks the first port in 17180–17189 it can bind, at startup.
+  - **HELLO:** a local node with kernel services adds `"kernel": { "port": <n> }`, the port it listens on (80, a spare port or `--kernel-port`). The page should build kernel URLs from it: `http://<kernel port>.kernel.localhost/` for 80, `http://<kernel port>.kernel.localhost:<n>/` otherwise. A node without the field listens on 80, if at all.
+  - If the port can't be bound, the node prints `kernel services are off: … try --kernel-port` and goes on without them.
 - **Remote nodes** never listen.
 
 #### 5.10 `fs` (cap `fs`), page → node: host folders over the link
