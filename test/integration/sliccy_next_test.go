@@ -147,7 +147,7 @@ func TestSliccyNextDryRunChecksThePreviousReleaseWhileTheLatestPublishes(t *test
 	reg := newFakeRegistry(t, append(platformDepsAt("1.2.3"), latest[1:]...)...)
 	r := sliccyNext(t, node, repo, out, registryEnvWaiting(t, reg, 120), "--dry-run")
 	if r.code != 0 || strings.Contains(r.stdout, "waiting for") || !strings.Contains(r.stdout, "npm doesn't serve every platform package of v1.2.4 yet, so its release is still publishing; the dry run checks v1.2.3 instead") || !strings.Contains(r.stdout, "sliccy-next: PASS sliccy@7.0.0-next.1.2.3 (dry run)") {
-		t.Fatalf("a nightly that starts while v1.2.4 reaches npm waited out its job: %+v", r)
+		t.Fatalf("a full build that starts while v1.2.4 reaches npm waited out its job: %+v", r)
 	}
 	if launcherJS, err := os.ReadFile(filepath.Join(out, "slicc", "bin", "slicc.js")); err != nil || string(launcherJS) != "launcher 1.2.3\n" {
 		t.Fatalf("launcher %q (%v), want the one at v1.2.3", launcherJS, err)
