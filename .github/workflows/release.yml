@@ -13,7 +13,7 @@ on:
       - scripts/is-main.mjs
       - scripts/verdict.sh
       - scripts/npm-*.mjs
-      - scripts/nightly-gate.mjs
+      - scripts/release-issue.mjs
       - scripts/package.sh
       - scripts/release-plan.mjs
       - scripts/sliccy-next.mjs
@@ -97,47 +97,28 @@ jobs:
             echo "verdict=current" >> "$GITHUB_OUTPUT"
           fi
 
-  nightly:
-    needs: fresh
+  full:
+    needs: [ci, fresh]
     if: >-
-      ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && !inputs.sliccy_next_only
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && !inputs.sliccy_next_only && needs.ci.result == 'success'
       || github.event_name == 'workflow_run' && (needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown')) }}
-    name: Latest nightly passed
-    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 5
     permissions:
-      actions: read
       contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          sparse-checkout: scripts
-          persist-credentials: false
+      pull-requests: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      full: true
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24
-
-      - name: Refuse the release unless the latest nightly on main passed within 36 hours
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: sh scripts/verdict.sh nightly node scripts/nightly-gate.mjs
-
-  release:
-    needs: [ci, fresh, nightly]
+  build:
+    needs: [ci, fresh]
     if: >-
       ${{ !cancelled() && (github.event_name != 'workflow_run' || needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown') && (needs.ci.result == 'success' || github.event_name == 'pull_request' || github.event_name == 'workflow_run'
       && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
-      && github.event.workflow_run.head_repository.full_name == github.repository) && (github.ref != 'refs/heads/main' || needs.nightly.result == 'success') }}
+      && github.event.workflow_run.head_repository.full_name == github.repository) }}
     runs-on: macos-latest
     timeout-minutes: 90
     permissions:
       contents: write
-      issues: write
-      pull-requests: write
-      id-token: write
-      attestations: write
     outputs:
       version: ${{ steps.plan.outputs.version }}
     env:
@@ -204,23 +185,70 @@ jobs:
           sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dir dist/npm-next --tag next --dry-run
           sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs --dry-run
 
+      - name: Pack what the release publishes, keeping file modes
+        if: steps.plan.outputs.version != ''
+        run: tar -cf slicc-release.tar dist/VERSION artifacts/release dist/npm dist/npm-next
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: steps.plan.outputs.version != ''
         with:
           name: slicc-release
-          path: |
-            artifacts/release/
-            dist/npm/
-            dist/npm-next/
+          path: slicc-release.tar
           retention-days: 7
 
+  release:
+    needs: [build, full, smoke]
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.build.result == 'success' && needs.build.outputs.version != ''
+      && needs.full.result == 'success' && needs.smoke.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ steps.built.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: slicc-release
+
+      - name: Unpack the build
+        id: built
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tar -xf slicc-release.tar
+          rm slicc-release.tar
+          test "$(cat dist/VERSION)" = "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
-        if: steps.plan.outputs.version != '' && env.DRY_RUN != 'true' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         with:
           subject-checksums: artifacts/release/SHA256SUMS
 
       - name: Release
-        if: steps.plan.outputs.version != '' && env.DRY_RUN != 'true' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLICC_NPM_PUBLISH: ${{ vars.SLICC_NPM_PUBLISH }}
@@ -229,11 +257,11 @@ jobs:
         run: npx semantic-release
 
       - name: Warm the Go module proxy
-        if: ${{ !cancelled() && steps.plan.outputs.version != '' && env.DRY_RUN != 'true' && github.ref == 'refs/heads/main' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         continue-on-error: true
         timeout-minutes: 5
         env:
-          VERSION: ${{ steps.plan.outputs.version }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: scripts/go-warm.sh "$VERSION"
 
   sliccy-next:
@@ -263,8 +291,8 @@ jobs:
         run: sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs
 
   smoke:
-    needs: release
-    if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.version != '' }}
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.version != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -292,8 +320,9 @@ jobs:
         shell: bash
         env:
           ASSET: ${{ matrix.asset }}
-          VERSION: ${{ needs.release.outputs.version }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
+          tar -xf slicc-release.tar artifacts/release
           cd artifacts/release
           grep " $ASSET\$" SHA256SUMS > one.sum
           if command -v sha256sum >/dev/null; then sha256sum -c one.sum; else shasum -a 256 -c one.sum; fi
@@ -336,3 +365,29 @@ jobs:
           fi
           echo "$got"
           test "$got" = "$WANT"
+
+  report:
+    needs: [full, build, smoke, release, sliccy-next, install-smoke]
+    if: ${{ always() && github.ref == 'refs/heads/main' && needs.full.result != 'skipped' }}
+    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Open, comment on or close the release-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          RESULTS: full=${{ needs.full.result }} build=${{ needs.build.result }} smoke=${{ needs.smoke.result }} release=${{ needs.release.result }} sliccy-next=${{ needs.sliccy-next.result }} install-smoke=${{ needs.install-smoke.result }}
+        run: sh scripts/verdict.sh release-issue node scripts/release-issue.mjs

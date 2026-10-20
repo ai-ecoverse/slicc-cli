@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 type ghCtx map[string]any
@@ -337,67 +336,105 @@ func TestPushToMainRunsOnlyTheLightMatrix(t *testing.T) {
 	}
 }
 
-func TestNightlyRunsTheFullMatrixOnMain(t *testing.T) {
+func releaseCtx(event, ref string) ghCtx {
+	return ghCtx{
+		"github.event_name": event, "github.ref": ref, "github.repository": "ai-ecoverse/slicc-cli", "cancelled()": false,
+		"inputs.sliccy_next_only": false, "needs.fresh.outputs.verdict": "", "needs.ci.result": "skipped", "needs.full.result": "skipped",
+		"github.event.workflow_run.conclusion": nil, "github.event.workflow_run.event": nil, "github.event.workflow_run.head_repository.full_name": nil,
+	}
+}
+
+func releaseAfterCI(verdict string) ghCtx {
+	ctx := releaseCtx("workflow_run", "refs/heads/main")
+	ctx["github.event.workflow_run.conclusion"], ctx["github.event.workflow_run.event"] = "success", "push"
+	ctx["github.event.workflow_run.head_repository.full_name"] = "ai-ecoverse/slicc-cli"
+	ctx["needs.fresh.outputs.verdict"] = verdict
+	return ctx
+}
+
+func with(ctx ghCtx, kv ...any) ghCtx {
+	out := ghCtx{}
+	for k, v := range ctx {
+		out[k] = v
+	}
+	for i := 0; i+1 < len(kv); i += 2 {
+		out[kv[i].(string)] = kv[i+1]
+	}
+	return out
+}
+
+func TestTheReleaseRunsTheFullMatrixOnTheCommitItReleases(t *testing.T) {
+	if _, err := os.Stat("../../.github/workflows/nightly.yml"); err == nil {
+		t.Fatal("nightly.yml is back; the release runs the full matrix on its own commit, so nothing that failed earlier holds a release up")
+	}
 	ci := readWorkflow(t, "ci.yml")
 	if !strings.Contains(ci, "\n  workflow_call:\n    inputs:\n      full:\n") || !strings.Contains(ci, "        type: boolean\n        default: false\n") {
 		t.Fatal("ci.yml must take a boolean workflow_call input full, false by default")
 	}
-	nightly := readWorkflow(t, "nightly.yml")
-	if !strings.HasPrefix(nightly, "name: Nightly\n") {
-		t.Fatal("nightly.yml must be named Nightly")
-	}
-	cron := regexp.MustCompile(`\n  schedule:\n    - cron: '([0-9]{1,2}) ([0-9]{1,2}) \* \* \*'\n  workflow_dispatch:\n`).FindStringSubmatch(nightly)
-	if cron == nil {
-		t.Fatal("nightly.yml must run once a day on a schedule and by workflow_dispatch")
-	}
-	if strings.Contains(nightly, "\n  push:") || strings.Contains(nightly, "\n  pull_request") {
-		t.Fatal("nightly.yml must not run on pushes or pull requests")
-	}
-	jobs := workflowJobs(t, nightly)
+	release := readWorkflow(t, "release.yml")
+	jobs := workflowJobs(t, release)
 	full := jobs["full"]
-	if !strings.Contains(full.body, "    uses: ./.github/workflows/ci.yml\n") {
-		t.Fatalf("the nightly's full job must call ci.yml:\n%s", full.body)
+	if !strings.Contains(full.body, "    uses: ./.github/workflows/ci.yml\n") || !strings.Contains(full.body, "    needs: [ci, fresh]\n") {
+		t.Fatalf("release.yml's full job must call ci.yml after the ci and fresh jobs:\n%s", full.body)
 	}
-	with := regexp.MustCompile(`\n    with:\n      full: (\S+)\n`).FindStringSubmatch(full.body)
-	if with == nil {
-		t.Fatalf("the nightly's full job passes no full input:\n%s", full.body)
+	m := regexp.MustCompile(`\n    with:\n      full: (\S+)\n`).FindStringSubmatch(full.body)
+	if m == nil {
+		t.Fatalf("release.yml's full job passes no full input:\n%s", full.body)
 	}
-	input := ghEval(t, with[1], ghCtx{})
-	for _, ref := range []string{"refs/heads/main", "refs/heads/other"} {
-		got := ghTruthy(ghTemplate(t, full.cond, ghCtx{"github.ref": ref}))
-		if got != (ref == "refs/heads/main") {
-			t.Errorf("the nightly's full job runs on %s: %v", ref, got)
+	input := ghEval(t, m[1], ghCtx{})
+	dispatch := with(releaseCtx("workflow_dispatch", "refs/heads/main"), "needs.ci.result", "success")
+	for _, c := range []struct {
+		name string
+		ctx  ghCtx
+		want bool
+	}{
+		{"after CI on main", releaseAfterCI("current"), true},
+		{"after CI when main can't be read", releaseAfterCI("unknown"), true},
+		{"after CI on a commit main has moved past", releaseAfterCI("stale"), false},
+		{"a manual run on main", dispatch, true},
+		{"a manual run whose CI failed", with(dispatch, "needs.ci.result", "failure"), false},
+		{"the sliccy_next_only recovery", with(dispatch, "inputs.sliccy_next_only", true, "needs.ci.result", "skipped"), false},
+		{"a manual dry run on a branch", with(releaseCtx("workflow_dispatch", "refs/heads/other"), "needs.ci.result", "success"), false},
+		{"a pull request dry run", releaseCtx("pull_request", "refs/pull/7/merge"), false},
+		{"a cancelled run", with(releaseAfterCI("current"), "cancelled()", true), false},
+	} {
+		if got := ghTruthy(ghTemplate(t, full.cond, c.ctx)); got != c.want {
+			t.Errorf("%s: the full build runs: %v, want %v", c.name, got, c.want)
 		}
 	}
-	legs, installers := ciMatrix(t, ghCtx{"github.event_name": "schedule", "inputs.full": input})
-	if want := legsOf(fullMatrix); fmt.Sprint(legs) != fmt.Sprint(want) {
-		t.Errorf("the nightly tests\n  %v\nwant every shard on every OS with -race and the guard vectors:\n  %v", legs, want)
+	if jobs["watch"].body != "" || strings.Contains(release, "gh run cancel") {
+		t.Fatal("release.yml polls or cancels its own run again; the full matrix's fail-fast frees its runners without an API call or a runner of its own")
 	}
-	if got := strings.Join(installers, " "); got != "ubuntu-curl macos-curl alpine-wget" {
-		t.Errorf("the nightly checks the installer on %q, want ubuntu-curl macos-curl alpine-wget", got)
+	failFast := strings.TrimPrefix(lineWith(t, workflowJobs(t, ci)["test"].body, "fail-fast:"), "fail-fast: ")
+	for _, c := range []struct {
+		full any
+		want bool
+	}{{input, true}, {nil, false}, {false, false}} {
+		if got := ghTruthy(ghTemplate(t, failFast, ghCtx{"inputs.full": c.full})); got != c.want {
+			t.Errorf("with full %v the test matrix fails fast: %v, want %v", c.full, got, c.want)
+		}
+	}
+	for _, event := range []string{"workflow_run", "workflow_dispatch"} {
+		legs, installers := ciMatrix(t, ghCtx{"github.event_name": event, "inputs.full": input})
+		if want := legsOf(fullMatrix); fmt.Sprint(legs) != fmt.Sprint(want) {
+			t.Errorf("the release's full build (%s) tests\n  %v\nwant every shard on every OS with -race and the guard vectors:\n  %v", event, legs, want)
+		}
+		if got := strings.Join(installers, " "); got != "ubuntu-curl macos-curl alpine-wget" {
+			t.Errorf("the release's full build (%s) checks the installer on %q, want ubuntu-curl macos-curl alpine-wget", event, got)
+		}
 	}
 	grant := permissionsOf(full.body)
 	for name, job := range workflowJobs(t, ci) {
 		for perm, level := range permissionsOf(job.body) {
 			if rank(grant[perm]) < rank(level) {
-				t.Errorf("ci.yml's %s job needs %s: %s, which the nightly's full job doesn't grant", name, perm, level)
+				t.Errorf("ci.yml's %s job needs %s: %s, which release.yml's full job doesn't grant", name, perm, level)
 			}
 		}
 	}
 	for name, job := range jobs {
-		if got := permissionsOf(job.body)["issues"]; (got == "write") != (name == "report") {
-			t.Errorf("nightly.yml's %s job has issues: %q; only report may write issues", name, got)
+		if got := permissionsOf(job.body)["issues"]; (got == "write") != (name == "report" || name == "release") {
+			t.Errorf("release.yml's %s job has issues: %q; only report (and semantic-release's release job) may write issues", name, got)
 		}
-	}
-	if strings.Contains(strings.SplitN(nightly, "\njobs:\n", 2)[0], "issues:") {
-		t.Error("nightly.yml grants issues to every job")
-	}
-	report := jobs["report"]
-	if !strings.Contains(report.body, "    needs: full\n") || !ghTruthy(ghTemplate(t, report.cond, ghCtx{"github.ref": "refs/heads/main"})) || !strings.Contains(report.cond, "always()") {
-		t.Errorf("the report job must follow the full job on main whatever its result: %q", report.cond)
-	}
-	if !strings.Contains(report.body, "    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}\n") || !strings.Contains(report.body, "          RESULT: ${{ needs.full.result }}\n") {
-		t.Errorf("the report job must run on the light runner with the full job's result:\n%s", report.body)
 	}
 }
 
@@ -421,74 +458,81 @@ func rank(level string) int {
 	return map[string]int{"read": 1, "write": 2}[level]
 }
 
-func TestReleaseRequiresTheNightlyGateOnMain(t *testing.T) {
+func TestReleasePublishesOnlyAfterItsOwnFullBuildPassed(t *testing.T) {
 	jobs := workflowJobs(t, readWorkflow(t, "release.yml"))
-	gate, release := jobs["nightly"], jobs["release"]
-	if gate.body == "" {
-		t.Fatal("release.yml has no nightly gate job")
+	build, release, smoke, report := jobs["build"], jobs["release"], jobs["smoke"], jobs["report"]
+	if jobs["nightly"].body != "" {
+		t.Fatal("release.yml has a nightly gate again; a failure some time ago must not hold up a release")
 	}
-	if !strings.Contains(gate.body, "    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}\n") {
-		t.Errorf("the nightly gate must run on vars.CERT_LIGHT_RUNNER:\n%s", gate.body)
+	if !strings.Contains(build.body, "    needs: [ci, fresh]\n") || !strings.Contains(build.body, "    runs-on: macos-latest\n") {
+		t.Fatalf("the build job must run on macOS beside the full build, after ci and fresh:\n%s", build.body)
 	}
-	if !strings.Contains(gate.body, "        run: sh scripts/verdict.sh nightly node scripts/nightly-gate.mjs\n") {
-		t.Errorf("the nightly gate must require the gate's verdict:\n%s", gate.body)
+	if !strings.Contains(release.body, "    needs: [build, full, smoke]\n") || !strings.Contains(smoke.body, "    needs: build\n") {
+		t.Fatal("the release job must wait for the build, the full build and the smoke tests")
 	}
-	if !strings.Contains(release.body, "    needs: [ci, fresh, nightly]\n") {
-		t.Errorf("the release job doesn't wait for the nightly gate")
-	}
-	base := func(event, ref string) ghCtx {
-		return ghCtx{
-			"github.event_name": event, "github.ref": ref, "github.repository": "ai-ecoverse/slicc-cli", "cancelled()": false,
-			"inputs.sliccy_next_only": false, "needs.fresh.outputs.verdict": "", "needs.ci.result": "skipped",
-			"github.event.workflow_run.conclusion": nil, "github.event.workflow_run.event": nil, "github.event.workflow_run.head_repository.full_name": nil,
+	dispatch := with(releaseCtx("workflow_dispatch", "refs/heads/main"), "needs.ci.result", "success")
+	for _, c := range []struct {
+		name string
+		ctx  ghCtx
+		want bool
+	}{
+		{"after CI on main", releaseAfterCI("current"), true},
+		{"after CI on a commit main has moved past", releaseAfterCI("stale"), false},
+		{"manual run on main", dispatch, true},
+		{"manual run whose CI failed", with(dispatch, "needs.ci.result", "failure"), false},
+		{"manual dry run on a branch", with(releaseCtx("workflow_dispatch", "refs/heads/other"), "needs.ci.result", "success"), true},
+		{"pull request dry run", releaseCtx("pull_request", "refs/pull/7/merge"), true},
+	} {
+		if got := ghTruthy(ghTemplate(t, build.cond, c.ctx)); got != c.want {
+			t.Errorf("%s: the build job runs: %v, want %v", c.name, got, c.want)
 		}
 	}
-	afterCI := base("workflow_run", "refs/heads/main")
-	afterCI["github.event.workflow_run.conclusion"], afterCI["github.event.workflow_run.event"] = "success", "push"
-	afterCI["github.event.workflow_run.head_repository.full_name"] = "ai-ecoverse/slicc-cli"
-	afterCI["needs.fresh.outputs.verdict"] = "current"
-	dispatch := base("workflow_dispatch", "refs/heads/main")
-	dispatch["needs.ci.result"] = "success"
-	branch := base("workflow_dispatch", "refs/heads/other")
-	branch["needs.ci.result"] = "success"
-	pr := base("pull_request", "refs/pull/7/merge")
+	green := with(releaseAfterCI("current"), "needs.build.result", "success", "needs.build.outputs.version", "1.45.1", "needs.full.result", "success", "needs.smoke.result", "success")
 	for _, c := range []struct {
-		name   string
-		ctx    ghCtx
-		gates  bool
-		result map[string]bool
+		name string
+		ctx  ghCtx
+		want bool
 	}{
-		{"after CI on main", afterCI, true, map[string]bool{"success": true, "failure": false, "cancelled": false, "skipped": false}},
-		{"manual run on main", dispatch, true, map[string]bool{"success": true, "failure": false, "skipped": false}},
-		{"manual dry run on a branch", branch, false, map[string]bool{"skipped": true}},
-		{"pull request dry run", pr, false, map[string]bool{"skipped": true}},
+		{"everything passed on main", green, true},
+		{"a manual run on main", with(green, "github.event_name", "workflow_dispatch"), true},
+		{"the full build failed", with(green, "needs.full.result", "failure"), false},
+		{"the full build was cancelled", with(green, "needs.full.result", "cancelled"), false},
+		{"the build failed", with(green, "needs.build.result", "failure"), false},
+		{"a smoke test failed", with(green, "needs.smoke.result", "failure"), false},
+		{"no release due", with(green, "needs.build.outputs.version", ""), false},
+		{"a cancelled run", with(green, "cancelled()", true), false},
+		{"a dry run on a branch", with(green, "github.ref", "refs/heads/other", "github.event_name", "workflow_dispatch"), false},
+		{"a pull request dry run", with(green, "github.ref", "refs/pull/7/merge", "github.event_name", "pull_request", "needs.full.result", "skipped"), false},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			if got := ghTruthy(ghTemplate(t, gate.cond, c.ctx)); got != c.gates {
-				t.Errorf("the nightly gate runs: %v, want %v", got, c.gates)
-			}
-			for result, want := range c.result {
-				ctx := ghCtx{"needs.nightly.result": result}
-				for k, v := range c.ctx {
-					ctx[k] = v
-				}
-				if got := ghTruthy(ghTemplate(t, release.cond, ctx)); got != want {
-					t.Errorf("with the nightly gate %s, the release job runs: %v, want %v", result, got, want)
-				}
-			}
-		})
+		if got := ghTruthy(ghTemplate(t, release.cond, c.ctx)); got != c.want {
+			t.Errorf("%s: the release job runs: %v, want %v", c.name, got, c.want)
+		}
 	}
-	stale := base("workflow_run", "refs/heads/main")
-	stale["needs.fresh.outputs.verdict"] = "stale"
-	if ghTruthy(ghTemplate(t, gate.cond, stale)) {
-		t.Error("the nightly gate runs for a stale CI run, which releases nothing")
+	if !strings.Contains(report.body, "    needs: [full, build, smoke, release, sliccy-next, install-smoke]\n") {
+		t.Errorf("the report job must follow the full build, the build, the release and its smoke tests:\n%s", report.body)
+	}
+	if !strings.Contains(report.body, "    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}\n") || !strings.Contains(report.body, "          RESULTS: full=${{ needs.full.result }} build=${{ needs.build.result }} smoke=${{ needs.smoke.result }} release=${{ needs.release.result }} sliccy-next=${{ needs.sliccy-next.result }} install-smoke=${{ needs.install-smoke.result }}\n") {
+		t.Errorf("the report job must run on the light runner with every result:\n%s", report.body)
+	}
+	for _, c := range []struct {
+		name string
+		ctx  ghCtx
+		want bool
+	}{
+		{"a failed full build on main", with(releaseAfterCI("current"), "needs.full.result", "failure"), true},
+		{"a green full build on main", with(releaseAfterCI("current"), "needs.full.result", "success"), true},
+		{"a cancelled run", with(releaseAfterCI("current"), "needs.full.result", "cancelled", "cancelled()", true), true},
+		{"a stale run that built nothing", releaseAfterCI("stale"), false},
+		{"a pull request dry run", releaseCtx("pull_request", "refs/pull/7/merge"), false},
+	} {
+		if got := ghTruthy(ghTemplate(t, report.cond, c.ctx)); got != c.want {
+			t.Errorf("%s: the report job runs: %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 
 type fakeActionsAPI struct {
 	mu     sync.Mutex
-	runs   []map[string]any
-	fail   bool
 	issues []map[string]any
 	label  bool
 	jobs   []map[string]any
@@ -520,30 +564,20 @@ func newFakeActionsAPI(t *testing.T) *fakeActionsAPI {
 		q := r.URL.Query()
 		send := func(v any) { _ = json.NewEncoder(w).Encode(v) }
 		switch call {
-		case "GET /actions/workflows/nightly.yml/runs":
-			if f.fail {
-				http.Error(w, "boom", http.StatusInternalServerError)
-				return
-			}
-			runs := []map[string]any{}
-			if q.Get("branch") == "main" && q.Get("status") == "completed" {
-				runs = f.runs
-			}
-			send(map[string]any{"total_count": len(runs), "workflow_runs": runs})
 		case "GET /issues":
 			issues := []map[string]any{}
-			if q.Get("labels") == "nightly-red" && q.Get("state") == "open" {
+			if q.Get("labels") == "release-red" && q.Get("state") == "open" {
 				issues = f.issues
 			}
 			send(issues)
 		case "GET /actions/runs/4242/jobs":
 			send(map[string]any{"jobs": f.jobs})
-		case "GET /labels/nightly-red":
+		case "GET /labels/release-red":
 			if !f.label {
 				http.NotFound(w, r)
 				return
 			}
-			send(map[string]any{"name": "nightly-red"})
+			send(map[string]any{"name": "release-red"})
 		case "POST /labels":
 			f.label = true
 			w.WriteHeader(http.StatusCreated)
@@ -605,76 +639,40 @@ func runStep(t *testing.T, line string, env ...string) (string, int) {
 	return string(out), code
 }
 
-func TestNightlyGateRefusesUnlessTheLatestNightlyPassed(t *testing.T) {
-	line := lineWith(t, workflowJobs(t, readWorkflow(t, "release.yml"))["nightly"].body, "scripts/nightly-gate.mjs")
-	const sha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
-	run := func(conclusion string, startedAgo, createdAgo time.Duration) map[string]any {
-		now := time.Now().UTC()
-		return map[string]any{
-			"id": 101, "html_url": "https://github.com/ai-ecoverse/slicc-cli/actions/runs/101", "head_sha": sha, "head_branch": "main",
-			"status": "completed", "conclusion": conclusion,
-			"created_at": now.Add(-createdAgo).Format(time.RFC3339), "run_started_at": now.Add(-startedAgo).Format(time.RFC3339),
-		}
-	}
-	for _, c := range []struct {
-		name string
-		runs []map[string]any
-		fail bool
-		code int
-		want string
-	}{
-		{"green", []map[string]any{run("success", 2*time.Hour, 2*time.Hour)}, false, 0, `nightly: PASS https://github.com/ai-ecoverse/slicc-cli/actions/runs/101 ` + sha + ` 2h0[01]m`},
-		{"green re-run of an older nightly", []map[string]any{run("success", time.Hour, 50*time.Hour)}, false, 0, `nightly: PASS \S+ ` + sha + ` 1h0[01]m`},
-		{"red", []map[string]any{run("failure", 2*time.Hour, 2*time.Hour)}, false, 1, `nightly: FAIL \S+ ` + sha + ` 2h0[01]m: the latest nightly ended failure`},
-		{"cancelled", []map[string]any{run("cancelled", 3*time.Hour, 3*time.Hour)}, false, 1, `the latest nightly ended cancelled`},
-		{"timed out", []map[string]any{run("timed_out", 3*time.Hour, 3*time.Hour)}, false, 1, `the latest nightly ended timed_out`},
-		{"missing", nil, false, 1, `nightly: FAIL no completed nightly.yml run on main`},
-		{"stale", []map[string]any{run("success", 40*time.Hour, 40*time.Hour)}, false, 1, `nightly: FAIL \S+ ` + sha + ` 40h0[01]m: the latest nightly is older than 36h`},
-		{"API down", nil, true, 1, `nightly: FAIL could not read the latest nightly: GET \S+ HTTP 500`},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			api := newFakeActionsAPI(t)
-			api.set(func() { api.runs, api.fail = c.runs, c.fail })
-			out, code := runStep(t, line, "GITHUB_API_URL="+api.srv.URL)
-			if code != c.code || !regexp.MustCompile(c.want).MatchString(out) {
-				t.Fatalf("exit %d, want %d and /%s/:\n%s", code, c.code, c.want, out)
-			}
-			if c.code != 0 && !strings.Contains(out, "gh workflow run nightly.yml --ref main") {
-				t.Errorf("a refusal must say how to unblock:\n%s", out)
-			}
-		})
-	}
-}
-
-func TestNightlyReportOpensCommentsAndClosesTheIssue(t *testing.T) {
-	line := lineWith(t, workflowJobs(t, readWorkflow(t, "nightly.yml"))["report"].body, "scripts/nightly-issue.mjs")
+func TestReleaseReportOpensCommentsAndClosesTheIssue(t *testing.T) {
+	line := lineWith(t, workflowJobs(t, readWorkflow(t, "release.yml"))["report"].body, "scripts/release-issue.mjs")
 	const sha = "1234512345123451234512345123451234512345"
-	open := []map[string]any{{"number": 5, "title": "Nightly full matrix is red"}, {"number": 9, "pull_request": map[string]any{}}}
+	open := []map[string]any{{"number": 5, "title": "Release from main failed"}, {"number": 9, "pull_request": map[string]any{}}}
 	jobs := []map[string]any{
 		{"name": "full / test (macos-latest, 2/4)", "conclusion": "failure", "html_url": "https://github.com/ai-ecoverse/slicc-cli/actions/runs/4242/job/1"},
 		{"name": "full / test (windows-latest, 3/3)", "conclusion": "timed_out", "html_url": "https://github.com/ai-ecoverse/slicc-cli/actions/runs/4242/job/2"},
 		{"name": "full / test (ubuntu-latest, 1/2)", "conclusion": "success", "html_url": "https://github.com/ai-ecoverse/slicc-cli/actions/runs/4242/job/3"},
 		{"name": "report", "conclusion": nil, "html_url": "https://github.com/ai-ecoverse/slicc-cli/actions/runs/4242/job/4"},
 	}
+	const released = "full=success build=success smoke=success release=success sliccy-next=success install-smoke=success"
 	for _, c := range []struct {
-		name   string
-		result string
-		issues []map[string]any
-		label  bool
-		writes string
-		want   string
-		body   string
+		name    string
+		results string
+		issues  []map[string]any
+		label   bool
+		writes  string
+		want    string
+		body    string
+		failed  string
 	}{
-		{"red opens an issue", "failure", nil, false, "POST /issues POST /labels", "nightly-issue: PASS red; opened #77", "POST /issues"},
-		{"cancelled opens an issue", "cancelled", nil, true, "POST /issues", "nightly-issue: PASS red; opened #77", "POST /issues"},
-		{"red comments on the open issue", "failure", open, true, "POST /issues/5/comments", "nightly-issue: PASS red; commented on #5", "POST /issues/5/comments"},
-		{"green closes the open issue", "success", open, true, "PATCH /issues/5 POST /issues/5/comments", "nightly-issue: PASS green; closed #5", ""},
-		{"green without an issue", "success", nil, true, "", "nightly-issue: PASS green; no open nightly-red issue", ""},
+		{"a red full build opens an issue", "full=failure build=cancelled smoke=cancelled release=skipped sliccy-next=skipped install-smoke=skipped", nil, false, "POST /issues POST /labels", "release-issue: PASS red; opened #77", "POST /issues", "**full failure**"},
+		{"a failed build opens an issue", "full=cancelled build=failure smoke=skipped release=skipped sliccy-next=skipped install-smoke=skipped", nil, true, "POST /issues", "release-issue: PASS red; opened #77", "POST /issues", "**build failure**"},
+		{"a run cancelled without a failure reports nothing", "full=cancelled build=cancelled smoke=skipped release=skipped sliccy-next=skipped install-smoke=skipped", open, true, "", "release-issue: PASS cancelled (full, build) without a failure; nothing to report", "", ""},
+		{"a failed release comments on the open issue", "full=success build=success smoke=success release=failure sliccy-next=skipped install-smoke=skipped", open, true, "POST /issues/5/comments", "release-issue: PASS red; commented on #5", "POST /issues/5/comments", "**release failure**"},
+		{"a failed smoke test after the release is red", "full=success build=success smoke=success release=success sliccy-next=success install-smoke=failure", nil, true, "POST /issues", "release-issue: PASS red; opened #77", "POST /issues", "**install-smoke failure**"},
+		{"a green release closes the open issue", released, open, true, "PATCH /issues/5 POST /issues/5/comments", "release-issue: PASS green; closed #5", "", ""},
+		{"a green run that released nothing", "full=success build=success smoke=skipped release=skipped sliccy-next=skipped install-smoke=skipped", nil, true, "", "release-issue: PASS green; no open release-red issue", "", ""},
+		{"no results is red", "", nil, true, "POST /issues", "release-issue: PASS red; opened #77", "POST /issues", "**no job results**"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			api := newFakeActionsAPI(t)
 			api.set(func() { api.issues, api.label, api.jobs = c.issues, c.label, jobs })
-			out, code := runStep(t, line, "GITHUB_API_URL="+api.srv.URL, "GITHUB_SERVER_URL=https://github.com", "GITHUB_RUN_ID=4242", "GITHUB_SHA="+sha, "RESULT="+c.result)
+			out, code := runStep(t, line, "GITHUB_API_URL="+api.srv.URL, "GITHUB_SERVER_URL=https://github.com", "GITHUB_RUN_ID=4242", "SHA="+sha, "RESULTS="+c.results)
 			if code != 0 || !strings.Contains(out, c.want) {
 				t.Fatalf("exit %d, want 0 and %q:\n%s", code, c.want, out)
 			}
@@ -683,7 +681,7 @@ func TestNightlyReportOpensCommentsAndClosesTheIssue(t *testing.T) {
 			}
 			if c.body != "" {
 				text := ghString(api.body(c.body)["body"])
-				for _, want := range []string{"https://github.com/ai-ecoverse/slicc-cli/actions/runs/4242", sha, "full / test (macos-latest, 2/4)", "full / test (windows-latest, 3/3)", "**" + c.result + "**", "gh workflow run nightly.yml --ref main"} {
+				for _, want := range []string{"https://github.com/ai-ecoverse/slicc-cli/actions/runs/4242", sha, "full / test (macos-latest, 2/4)", "full / test (windows-latest, 3/3)", c.failed, "gh workflow run release.yml --ref main"} {
 					if !strings.Contains(text, want) {
 						t.Errorf("%s body lacks %q:\n%s", c.body, want, text)
 					}
@@ -692,17 +690,17 @@ func TestNightlyReportOpensCommentsAndClosesTheIssue(t *testing.T) {
 					t.Errorf("%s body lists a job that didn't fail:\n%s", c.body, text)
 				}
 			}
-			if c.body == "POST /issues" && fmt.Sprint(api.body("POST /issues")["labels"]) != "[nightly-red]" {
-				t.Errorf("the new issue is labelled %v, want [nightly-red]", api.body("POST /issues")["labels"])
+			if c.body == "POST /issues" && fmt.Sprint(api.body("POST /issues")["labels"]) != "[release-red]" {
+				t.Errorf("the new issue is labelled %v, want [release-red]", api.body("POST /issues")["labels"])
 			}
 			if strings.Contains(c.writes, "PATCH") && ghString(api.body("PATCH /issues/5")["state"]) != "closed" {
-				t.Errorf("the green nightly sent %v, want state closed", api.body("PATCH /issues/5"))
+				t.Errorf("the green release sent %v, want state closed", api.body("PATCH /issues/5"))
 			}
 		})
 	}
 	api := newFakeActionsAPI(t)
-	out, code := runStep(t, line, "GITHUB_API_URL="+api.srv.URL, "GITHUB_RUN_ID=", "GITHUB_SHA=", "RESULT=failure")
-	if code == 0 || !strings.Contains(out, "nightly-issue: FAIL") {
+	out, code := runStep(t, line, "GITHUB_API_URL="+api.srv.URL, "GITHUB_RUN_ID=", "SHA=", "RESULTS=full=failure")
+	if code == 0 || !strings.Contains(out, "release-issue: FAIL") {
 		t.Errorf("without a run id the report must fail, got exit %d:\n%s", code, out)
 	}
 }
