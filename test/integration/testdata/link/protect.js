@@ -765,9 +765,9 @@ export function protectTest(getLink, describe) {
     calls: (browser, calls) =>
       run(browser, async (c) => {
         const out = [];
-        for (const [method, params] of calls) {
+        for (const [method, params, sessionId] of calls) {
           const started = Date.now();
-          const r = await outcome(c.send(method, params));
+          const r = await outcome(c.send(method, params, sessionId));
           out.push({ method, ms: Date.now() - started, ...r });
         }
         return { out };
