@@ -10,11 +10,14 @@ const usage = 'usage: shard-times.mjs [--out <file>] (--run <CI run id> [--repo 
 
 export function parseLog(text) {
   const times = {};
+  const ran = new Set();
   for (const line of text.split(/\r?\n/)) {
-    const m = line.replace(/^\S+Z /, '').match(/^--- (?:PASS|FAIL|SKIP): (Test\w+) \(([0-9.]+)s\)/);
-    if (m) times[m[1]] = Math.max(times[m[1]] ?? 0, Number(m[2]));
+    const m = line.replace(/^\S+Z /, '').match(/^--- (PASS|FAIL|SKIP): (Test\w+) \(([0-9.]+)s\)/);
+    if (!m) continue;
+    times[m[2]] = Math.max(times[m[2]] ?? 0, Number(m[3]));
+    if (m[1] !== 'SKIP') ran.add(m[2]);
   }
-  return times;
+  return { times, ran };
 }
 
 export function platformOf(jobName) {
@@ -25,13 +28,20 @@ export function platformOf(jobName) {
 export function merge(existing, logs) {
   const out = { ...existing };
   const fresh = {};
-  for (const [os, text] of logs) fresh[os] = { ...(fresh[os] ?? {}), ...parseLog(text) };
-  for (const [os, times] of Object.entries(fresh)) {
+  for (const [os, text] of logs) {
+    const { times, ran } = parseLog(text);
+    const f = (fresh[os] ??= { times: {}, ran: new Set() });
+    Object.assign(f.times, times);
+    for (const n of ran) f.ran.add(n);
+  }
+  for (const [os, { times, ran }] of Object.entries(fresh)) {
     if (Object.keys(times).length === 0) throw new Error(`no test timings in the ${os} logs; run go test with -v`);
+    const before = existing[os] ?? {};
+    const pick = (n) => (ran.has(n) || typeof before[n] !== 'number' ? times[n] : before[n]);
     out[os] = Object.fromEntries(
       Object.keys(times)
         .sort()
-        .map((n) => [n, Math.round(times[n] * 10) / 10]),
+        .map((n) => [n, Math.round(pick(n) * 10) / 10]),
     );
   }
   return Object.fromEntries(Object.keys(out).sort().map((os) => [os, out[os]]));
