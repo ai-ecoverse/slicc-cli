@@ -31,7 +31,9 @@ export function merge(existing, logs) {
   for (const [os, text] of logs) {
     const { times, ran } = parseLog(text);
     const f = (fresh[os] ??= { times: {}, ran: new Set() });
-    Object.assign(f.times, times);
+    for (const [n, sec] of Object.entries(times)) {
+      if (ran.has(n) || !f.ran.has(n)) f.times[n] = sec;
+    }
     for (const n of ran) f.ran.add(n);
   }
   for (const [os, { times, ran }] of Object.entries(fresh)) {

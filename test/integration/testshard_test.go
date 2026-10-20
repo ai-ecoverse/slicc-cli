@@ -245,7 +245,7 @@ func TestShardTimesReadsGoTestLogs(t *testing.T) {
 	}
 	out := write("times.json", `{"win32": {"TestOld": 4}, "darwin": {"TestGone": 9, "TestDelta": 5}}`)
 	one := write("one.log", "=== RUN   TestAlpha\n--- PASS: TestAlpha (12.34s)\n    --- PASS: TestAlpha/sub (12.00s)\n2026-10-15T06:41:39.2245670Z --- FAIL: TestBravo (0.71s)\r\n")
-	two := write("two.log", "--- SKIP: TestCharlie (0.00s)\n--- SKIP: TestDelta (0.00s)\nok  \tfixture\t13.1s\n")
+	two := write("two.log", "--- SKIP: TestAlpha (0.00s)\n--- SKIP: TestCharlie (0.00s)\n--- SKIP: TestDelta (0.00s)\nok  \tfixture\t13.1s\n")
 	cmd := exec.Command(node, "../../scripts/shard-times.mjs", "--out", out, "darwin="+one, "darwin="+two)
 	if b, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(b), "darwin: 4 tests, 18 s") {
 		t.Fatalf("shard-times: %v\n%s", err, b)
