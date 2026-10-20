@@ -807,6 +807,7 @@ export function protectTest(getLink, describe) {
           sessions.add(sessionId);
           await c.send('Page.enable', {}, sessionId);
           await c.send('Network.enable', {}, sessionId);
+          await c.send('Network.setExtraHTTPHeaders', { headers: { Authorization: 'Basic fake-value-0042' } }, sessionId);
           await outcome(c.send('Audits.enable', {}, sessionId));
           await outcome(c.send('Log.enable', {}, sessionId));
           await c.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }, { urlPattern: '*', requestStage: 'Response' }] }, sessionId);

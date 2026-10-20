@@ -77,6 +77,8 @@ func (g *guard) markedDropEvent(m *message, data []byte) browserVerdict {
 	})
 }
 
+var requestCredentials = []string{"cookie", "authorization", "proxy-authorization"}
+
 func stripHeaders(v any, names ...string) bool {
 	h, ok := v.(map[string]any)
 	if !ok {
@@ -120,9 +122,9 @@ func stripResponse(r map[string]any) bool {
 		return false
 	}
 	changed := stripHeaders(r["headers"], "set-cookie", "set-cookie2")
-	changed = stripHeaders(r["requestHeaders"], "cookie") || changed
+	changed = stripHeaders(r["requestHeaders"], requestCredentials...) || changed
 	changed = stripHeaderLines(r, "headersText", "set-cookie", "set-cookie2") || changed
-	return stripHeaderLines(r, "requestHeadersText", "cookie") || changed
+	return stripHeaderLines(r, "requestHeadersText", requestCredentials...) || changed
 }
 
 func stripHeaderLines(p map[string]any, field string, names ...string) bool {
@@ -166,7 +168,7 @@ func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
 		if !g.requestMarkedLocked(m.SessionID, id) {
 			return true, world, nil
 		}
-		changed := stripHeaders(req["headers"], "cookie") || world
+		changed := stripHeaders(req["headers"], requestCredentials...) || world
 		return true, stripResponse(redirect) || changed, nil
 	})
 }
@@ -174,7 +176,7 @@ func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
 func (g *guard) requestExtra(p map[string]any, marked bool) bool {
 	changed := g.filterAssociated(p, "associatedCookies")
 	if changed || marked {
-		changed = stripHeaders(p["headers"], "cookie") || changed
+		changed = stripHeaders(p["headers"], requestCredentials...) || changed
 	}
 	return changed
 }
@@ -262,7 +264,7 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 		}
 		changed := stripHeaderList(p, "responseHeaders", "set-cookie", "set-cookie2")
 		changed = stripHeaders(p["responseHeaders"], "set-cookie", "set-cookie2") || changed
-		changed = stripHeaders(req["headers"], "cookie") || changed
+		changed = stripHeaders(req["headers"], requestCredentials...) || changed
 		return true, changed, nil
 	})
 }

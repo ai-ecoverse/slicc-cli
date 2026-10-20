@@ -179,6 +179,19 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 			}
 		}
 		sevenOrigin := "http://seven.sliccy.ai:" + su.Port()
+		credential := false
+		for _, e := range r.Events {
+			if !strings.Contains(e.Text, "fake-value-0042") {
+				continue
+			}
+			credential = true
+			if strings.Contains(e.Text, `"url":"`+sevenOrigin+`"`) {
+				t.Errorf("a request into seven kept its Authorization header: %s %s", e.Method, e.Text)
+			}
+		}
+		if !credential {
+			t.Error("no ordinary request carried the Authorization header the page set")
+		}
 		inPlace := false
 		for _, e := range r.Events {
 			if e.Method == "Network.responseReceivedExtraInfo" && strings.Contains(e.Text, `"statusCode":302`) && strings.Contains(e.Text, `"headersText":"`) && strings.Contains(e.Text, `Location: `+sevenOrigin+`\r\n`) {
