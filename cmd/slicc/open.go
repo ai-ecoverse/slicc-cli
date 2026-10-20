@@ -493,10 +493,11 @@ func (r *openRun) pair() error {
 	}
 	if r.opts.emit == nil {
 		r.status("to link seven, open the pairing URL below; seven asks to link %s (%s). It works once, for 10 minutes; press Enter for a new one", r.host, loopback.ShortFingerprint(r.id.Fingerprint))
+		r.printURL(u)
 	} else {
+		r.printURL(u)
 		r.status("seven asks to link %s (%s)", r.host, loopback.ShortFingerprint(r.id.Fingerprint))
 	}
-	r.printURL(u)
 	if r.opts.open {
 		if err := openBrowser(u); err != nil {
 			r.status("could not open the default browser (%v); open the URL above yourself", err)
@@ -526,10 +527,11 @@ func (r *openRun) renewed() bool {
 	}
 	if r.opts.emit == nil {
 		r.status("a new pairing URL, good once for 10 minutes:")
+		r.printURL(u)
 	} else {
+		r.printURL(u)
 		r.status("a new pairing URL, good once for 10 minutes")
 	}
-	r.printURL(u)
 	return true
 }
 

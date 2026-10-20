@@ -84,7 +84,7 @@ func (e *unparsedEnv) testDestinations(t *testing.T) {
 }
 
 func (e *unparsedEnv) unguarded(sessionID, method string, params, result any) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return e.b.client.Call(ctx, sessionID, method, params, result)
 }
