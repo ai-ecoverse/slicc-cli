@@ -185,7 +185,7 @@ func (g *guard) checkLocked(c *command) string {
 	if g.sessionRefusedLocked(c.session) {
 		return refusedTarget
 	}
-	if reason := g.navCheckLocked(c.session); reason != "" {
+	if reason := g.navCheckLocked(c.session); reason != "" && !g.startsUnheldLocked(c) {
 		return reason
 	}
 	k := callKey{c.session, c.id}

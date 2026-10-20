@@ -129,8 +129,6 @@ type guard struct {
 	heldPauses        map[requestKey][]heldPause
 	heldPauseCount    int
 	maxWorlds         int
-	answered          time.Time
-	probing           bool
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {

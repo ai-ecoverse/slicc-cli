@@ -15,8 +15,21 @@ var navTypes = map[string]bool{"page": true, "iframe": true, "background_page": 
 
 var workerTypes = map[string]bool{"worker": true, "shared_worker": true, "service_worker": true}
 
+var unheldStart = map[string]bool{"shared_worker": true, "service_worker": true}
+
 func guarded(typ string) bool {
 	return navTypes[typ] || workerTypes[typ]
+}
+
+func (g *guard) startsUnheldLocked(c *command) bool {
+	s, ok := g.sessions[c.session]
+	return ok && c.method == "Runtime.runIfWaitingForDebugger" && unheldStart[s.typ]
+}
+
+func (g *guard) startsUnheld(c *command) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.startsUnheldLocked(c)
 }
 
 type navTarget struct {
@@ -83,6 +96,7 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 		return nil
 	}
 	nt.session = res.SessionID
+	nt.progress = time.Now()
 	g.navSessions[res.SessionID] = nt
 	sent := time.Now()
 	step := func(method string) func(m message) [][]byte {

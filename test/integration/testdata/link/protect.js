@@ -891,16 +891,24 @@ export function protectTest(getLink, describe) {
         const record = async (call, promise) => results.push({ call, ...(await outcome(promise)) });
         const { targetId, sessionId } = await c.attachTo('about:blank');
         const sessions = new Set([sessionId]);
+        const kinds = new Map([[sessionId, '']]);
+        const autoAttach = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
         c.on((e) => {
-          if (e.method !== 'Target.attachedToTarget' || e.sessionId !== sessionId) return;
-          const worker = e.params.sessionId;
-          sessions.add(worker);
-          c.send('Debugger.enable', {}, worker)
-            .then(() => c.send('Runtime.runIfWaitingForDebugger', {}, worker))
+          if (e.method !== 'Target.attachedToTarget') return;
+          const { sessionId: child, targetInfo } = e.params;
+          let kind = null;
+          if (targetInfo.type === 'worker' && kinds.get(e.sessionId) === '') kind = 'worker ';
+          else if (targetInfo.type === 'worker' && kinds.get(e.sessionId) === 'worker ') kind = 'nested ';
+          if (kind === null) return;
+          sessions.add(child);
+          kinds.set(child, kind);
+          (kind === 'worker ' ? c.send('Target.setAutoAttach', autoAttach, child) : Promise.resolve())
+            .then(() => c.send('Debugger.enable', {}, child))
+            .then(() => c.send('Runtime.runIfWaitingForDebugger', {}, child))
             .catch(() => {});
         });
         for (const domain of ['Page', 'Network', 'DOM', 'CSS', 'Debugger', 'Runtime']) await c.send(`${domain}.enable`, {}, sessionId);
-        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
+        await c.send('Target.setAutoAttach', autoAttach, sessionId);
         await outcome(load(c, sessionId, page));
         await sleep(2000);
         const tree = await c.send('Page.getResourceTree', {}, sessionId);
@@ -937,13 +945,65 @@ export function protectTest(getLink, describe) {
         }
         const scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && sessions.has(e.sessionId) && e.params.url);
         for (const e of scripts) {
-          const call = e.sessionId === sessionId ? '' : e.sessionId === sharedSession ? 'shared ' : 'worker ';
+          const call = e.sessionId === sharedSession ? 'shared ' : kinds.get(e.sessionId);
           await record(`${call}Debugger.getScriptSource`, c.send('Debugger.getScriptSource', { scriptId: e.params.scriptId }, e.sessionId));
           await record(`${call}Debugger.searchInContent`, c.send('Debugger.searchInContent', { scriptId: e.params.scriptId, query: 'fake' }, e.sessionId));
         }
         await outcome(c.send('Target.closeTarget', { targetId }));
         const events = c.events.filter((e) => sessions.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
         return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })) };
+      }),
+    serviceWorkerImports: (browser, page) =>
+      run(browser, async (c) => {
+        const results = [];
+        const log = [];
+        const started = Date.now();
+        const step = (what) => log.push(`${Date.now() - started}ms ${what}`);
+        const record = async (call, promise) => results.push({ call, ...(await outcome(promise)) });
+        const { targetId, sessionId } = await c.attachTo(page);
+        const workers = new Set();
+        const kinds = new Map();
+        c.on((e) => {
+          if (e.method !== 'Target.attachedToTarget' || e.sessionId) return;
+          const { sessionId: child, targetInfo } = e.params;
+          step(`attached ${targetInfo.type} waiting=${e.params.waitingForDebugger}`);
+          if (targetInfo.type === 'service_worker' || targetInfo.type === 'shared_worker') {
+            workers.add(child);
+            kinds.set(child, targetInfo.type === 'shared_worker' ? 'shared' : 'sw');
+            c.send('Debugger.enable', {}, child)
+              .then(() => step('sw Debugger.enable answered'), (err) => step(`sw Debugger.enable failed ${err.message}`));
+          }
+          c.send('Runtime.runIfWaitingForDebugger', {}, child)
+            .then(() => step(`${targetInfo.type} runIfWaitingForDebugger answered`), (err) => step(`${targetInfo.type} run failed ${err.message}`));
+        });
+        await record('early shared', c.evaluate(`new Promise((resolve) => { new SharedWorker('/worker.js?kind=early'); setTimeout(() => resolve('started'), 1000); })`, sessionId));
+        step('early shared started');
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+        step('auto-attach on');
+        await record('sw ready', c.evaluate(`Promise.race([navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready).then(() => 'ready'), new Promise((r) => setTimeout(() => r('timeout'), 15000))])`, sessionId));
+        step('ready settled');
+        await record('shared started', c.evaluate(`new Promise((resolve) => { const w = new SharedWorker('/worker.js?kind=shared2'); w.onerror = () => resolve('error'); setTimeout(() => resolve('started'), 1500); })`, sessionId));
+        step('shared started');
+        const { targetInfos } = await c.send('Target.getTargets', {});
+        const early = targetInfos.find((t) => t.type === 'shared_worker' && t.url.includes('kind=early'));
+        if (early) {
+          const { sessionId: explicit } = await c.send('Target.attachToTarget', { targetId: early.targetId, flatten: true });
+          step('early explicitly attached');
+          await record('early Debugger.enable', Promise.race([c.send('Debugger.enable', {}, explicit), sleep(40000).then(() => { throw new Error('timeout'); })]));
+          step('early Debugger.enable settled');
+        }
+        await record('sw redirect', c.evaluate(`navigator.serviceWorker.register('/r/sw.js', { scope: '/r/' }).then(() => 'registered')`, sessionId));
+        await sleep(1000);
+        const scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && workers.has(e.sessionId) && e.params.url);
+        for (const e of scripts) {
+          await record(`${kinds.get(e.sessionId)} Debugger.getScriptSource`, c.send('Debugger.getScriptSource', { scriptId: e.params.scriptId }, e.sessionId));
+        }
+        step('sources read');
+        await outcome(c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false }));
+        await outcome(c.evaluate(`navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister()))).then(() => 'gone')`, sessionId));
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        const events = c.events.filter((e) => workers.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
+        return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })), log };
       }),
     extraInfo: (browser, last) =>
       run(browser, async (c) => {
