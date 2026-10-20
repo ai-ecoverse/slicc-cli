@@ -342,7 +342,7 @@ func (e *protectEnv) testExtensionStale(t *testing.T) {
 		}
 	}
 	if shown == 0 || unexposedIDs == 0 {
-		t.Errorf("of 32 numeric context ids, %d were shown and %d refused as not exposed: %+v", shown, unexposedIDs, r.Numeric)
+		t.Errorf("of %d numeric context ids, %d were shown and %d refused as not exposed: %+v", len(r.Numeric), shown, unexposedIDs, r.Numeric)
 	}
 	if r.Detached || !r.After.OK {
 		t.Errorf("the page was cut: detached %v, evaluate after %+v", r.Detached, r.After)
