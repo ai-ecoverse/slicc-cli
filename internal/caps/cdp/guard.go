@@ -16,6 +16,7 @@ const (
 	refusedCookies      = "cookies on seven's origin"
 	refusedLost         = "slicc lost track of the browser's targets"
 	refusedPaused       = "slicc didn't pass this paused request to the page, so it could be seven's"
+	refusedRedirect     = "that URL redirects to seven's origin"
 	refusedLoadResource = "Network.loadNetworkResource follows redirects inside the browser, so it could load seven's pages"
 	LostGrace           = 2 * time.Second
 	maxTombstones       = 4096
@@ -124,13 +125,12 @@ type guard struct {
 	navSeenOrder      []requestKey
 	navChains         map[requestKey][]string
 	tainted           map[string]*assetSet
+	clean             map[string]*assetSet
 	assets            map[string]*assetSet
 	heldPauses        map[requestKey][]heldPause
 	heldPauseCount    int
 	commitMarks       map[callKey]commitMark
 	maxWorlds         int
-	answered          time.Time
-	probing           bool
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -176,6 +176,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		navSeen:           map[requestKey]bool{},
 		navChains:         map[requestKey][]string{},
 		tainted:           map[string]*assetSet{},
+		clean:             map[string]*assetSet{},
 		assets:            map[string]*assetSet{},
 		heldPauses:        map[requestKey][]heldPause{},
 		commitMarks:       map[callKey]commitMark{},

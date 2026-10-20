@@ -22,6 +22,16 @@ type fakeCDPBrowser struct {
 	got    []string
 	slow   map[string]time.Duration
 	pulse  []string
+	gates  map[string]string
+}
+
+func (f *fakeCDPBrowser) gate(method, until string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.gates == nil {
+		f.gates = map[string]string{}
+	}
+	f.gates[method] = until
 }
 
 func (f *fakeCDPBrowser) every(event string) {
@@ -86,6 +96,7 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	pulse := append([]string(nil), f.pulse...)
 	f.mu.Unlock()
+	held := map[string][]string{}
 	if len(pulse) > 0 {
 		go func() {
 			t := time.NewTicker(time.Second)
@@ -141,7 +152,12 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		d := f.slow[m.Method]
+		until := f.gates[m.Method]
 		f.mu.Unlock()
+		if until != "" {
+			held[until] = append(held[until], reply)
+			continue
+		}
 		if d > 0 {
 			go func() {
 				time.Sleep(d)
@@ -152,11 +168,12 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		if c.Write(ctx, websocket.MessageText, []byte(reply)) != nil {
 			return
 		}
-		for _, e := range after {
+		for _, e := range append(after, held[m.Method]...) {
 			if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
 				return
 			}
 		}
+		delete(held, m.Method)
 	}
 }
 

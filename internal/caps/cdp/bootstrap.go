@@ -114,7 +114,7 @@ const (
 
 func (rl *relay) park(data []byte) bool {
 	c, _, ok := parseCommand(data)
-	if !ok || c.session == "" {
+	if !ok || c.session == "" || rl.g.startsUnheld(c) {
 		return false
 	}
 	rl.parkMu.Lock()

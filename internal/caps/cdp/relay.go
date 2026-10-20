@@ -197,7 +197,7 @@ func (rl *relay) run() {
 	done := make(chan struct{})
 	stop := make(chan struct{})
 	defer close(stop)
-	go rl.g.watch(stop, func(msg []byte) { _ = rl.conn.Write(context.Background(), websocket.MessageText, msg) })
+	go rl.g.watch(stop)
 	go func() {
 		defer close(done)
 		rl.toBrowser()

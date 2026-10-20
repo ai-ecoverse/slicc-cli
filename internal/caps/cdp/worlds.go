@@ -745,6 +745,11 @@ func (g *guard) forgetWorldRequestsLocked(target string) {
 			delete(g.navSeen, k)
 		}
 	}
+	for k := range g.navChains {
+		if k.session == target {
+			delete(g.navChains, k)
+		}
+	}
 	delete(g.worldRequestCount, target)
 	delete(g.worldRequestsFull, target)
 }

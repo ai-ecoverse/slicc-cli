@@ -186,7 +186,7 @@ func (g *guard) checkLocked(c *command) string {
 	if g.sessionRefusedLocked(c.session) {
 		return refusedTarget
 	}
-	if reason := g.navCheckLocked(c.session); reason != "" {
+	if reason := g.navCheckLocked(c.session); reason != "" && !g.startsUnheldLocked(c) {
 		return reason
 	}
 	if reason := g.errorPageCheckLocked(c); reason != "" {
@@ -223,9 +223,18 @@ var destinationKeys = map[string]string{
 	"PWA.launch":                         "url",
 }
 
+var overrideKeys = map[string]bool{"Fetch.continueRequest": true, "Network.continueInterceptedRequest": true}
+
 func (g *guard) destinationRule(c *command) string {
-	if key, ok := destinationKeys[c.method]; ok {
-		return g.destinationReason(c.str(key))
+	key, ok := destinationKeys[c.method]
+	if !ok {
+		return ""
+	}
+	if reason := g.destinationReason(c.str(key)); reason != "" {
+		return reason
+	}
+	if u := c.str(key); overrideKeys[c.method] && u != "" && g.taintedLocked(c.session, u) {
+		return refusedRedirect
 	}
 	return ""
 }
