@@ -267,6 +267,10 @@ var methodRules = map[string]func(g *guard, c *command) string{
 		return ""
 	},
 	"Fetch.enable":                (*guard).fetchRule,
+	"Network.loadNetworkResource": (*guard).loadResourceRule,
+	"Page.captureSnapshot": func(*guard, *command) string {
+		return "Page.captureSnapshot serialises every frame, error pages for seven's URLs included"
+	},
 	"IO.read":                     (*guard).streamRule,
 	"Network.replayXHR":           (*guard).replayRule,
 	"Network.clearBrowserCookies": (*guard).clearCookiesRule,
@@ -298,6 +302,13 @@ func (g *guard) fetchRule(c *command) string {
 		return "Fetch.enable on the browser intercepts seven's requests too"
 	}
 	return ""
+}
+
+func (g *guard) loadResourceRule(c *command) string {
+	if reason := g.destinationRule(c); reason != "" {
+		return reason
+	}
+	return refusedLoadResource
 }
 
 func (g *guard) clearCookiesRule(c *command) string {
