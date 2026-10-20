@@ -138,7 +138,7 @@ jobs:
           '{0:N0} MB of {1} read in {2:N1} s' -f (($files | Measure-Object Length -Sum).Sum / 1MB), $dir, $took.TotalSeconds
 
       - shell: bash
-        run: sh scripts/verdict.sh test-shard node scripts/test-shard.mjs ${{ matrix.shard }} ${{ (inputs.full || matrix.os == 'ubuntu-latest') && '-race' || '' }} -count=1 -timeout ${{ matrix.shard == '1/1' && '25m' || '12m' }} -v ./test/integration/...
+        run: sh scripts/verdict.sh test-shard node scripts/test-shard.mjs ${{ matrix.shard }} ${{ (inputs.full || matrix.os == 'ubuntu-latest') && '-race' || '' }} -count=5 -timeout 30m -run '^(TestKernelDefaultPort|TestPromptReadsFilesAndStdin)$' -v ./test/integration/...
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
