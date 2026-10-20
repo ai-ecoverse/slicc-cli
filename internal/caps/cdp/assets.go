@@ -1,6 +1,10 @@
 package cdp
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
+)
 
 const (
 	maxAssets = 65536
@@ -46,15 +50,22 @@ func (g *guard) chainLocked(k requestKey, p map[string]any) {
 	for _, c := range chain {
 		if g.o.Loaded(c) {
 			for _, t := range chain {
-				addAsset(g.tainted, k.session, t)
+				if canon, ok := protect.Canonical(t); ok {
+					addAsset(g.tainted, k.session, canon)
+				}
 			}
 			return
 		}
 	}
 }
 
+func (g *guard) taintedLocked(session, u string) bool {
+	canon, ok := protect.Canonical(u)
+	return !ok || g.tainted[g.worldTargetLocked(session)].has(canon)
+}
+
 func (g *guard) assetURLLocked(session, u string) bool {
-	return u != "" && (g.o.Loaded(u) || g.tainted[g.worldTargetLocked(session)].has(u))
+	return u != "" && (g.o.Loaded(u) || g.taintedLocked(session, u))
 }
 
 func (g *guard) styleSheetEvent(m *message, data []byte) browserVerdict {
@@ -83,7 +94,11 @@ func (g *guard) noteScriptLocked(m *message) {
 }
 
 func (g *guard) resourceRule(c *command) string {
-	if g.tainted[g.worldTargetLocked(c.session)].has(c.str("url")) {
+	u := c.str("url")
+	if protect.Unparseable(u) {
+		return refusedParse
+	}
+	if g.taintedLocked(c.session, u) {
 		return refusedBody
 	}
 	return ""

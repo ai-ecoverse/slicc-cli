@@ -870,13 +870,33 @@ export function protectTest(getLink, describe) {
         const results = [];
         const record = async (call, promise) => results.push({ call, ...(await outcome(promise)) });
         const { targetId, sessionId } = await c.attachTo('about:blank');
+        const sessions = new Set([sessionId]);
+        c.on((e) => {
+          if (e.method !== 'Target.attachedToTarget' || e.sessionId !== sessionId) return;
+          const worker = e.params.sessionId;
+          sessions.add(worker);
+          c.send('Debugger.enable', {}, worker)
+            .then(() => c.send('Runtime.runIfWaitingForDebugger', {}, worker))
+            .catch(() => {});
+        });
         for (const domain of ['Page', 'Network', 'DOM', 'CSS', 'Debugger', 'Runtime']) await c.send(`${domain}.enable`, {}, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
         await outcome(load(c, sessionId, page));
-        await sleep(1000);
+        await sleep(2000);
         const tree = await c.send('Page.getResourceTree', {}, sessionId);
+        const variants = (u) => {
+          const out = [u, `${u}#x`];
+          try {
+            const p = new URL(u);
+            out.push(u.replace(p.host, p.host.toUpperCase()));
+          } catch {}
+          return out;
+        };
         for (const r of tree.frameTree.resources ?? []) {
-          await record('Page.getResourceContent', c.send('Page.getResourceContent', { frameId: tree.frameTree.frame.id, url: r.url }, sessionId));
-          await record('Page.searchInResource', c.send('Page.searchInResource', { frameId: tree.frameTree.frame.id, url: r.url, query: 'fake' }, sessionId));
+          for (const url of variants(r.url)) {
+            await record('Page.getResourceContent', c.send('Page.getResourceContent', { frameId: tree.frameTree.frame.id, url }, sessionId));
+            await record('Page.searchInResource', c.send('Page.searchInResource', { frameId: tree.frameTree.frame.id, url, query: 'fake' }, sessionId));
+          }
         }
         const sheets = c.events.filter((e) => e.method === 'CSS.styleSheetAdded' && e.sessionId === sessionId).map((e) => e.params.header.styleSheetId);
         for (const styleSheetId of sheets) {
@@ -886,14 +906,15 @@ export function protectTest(getLink, describe) {
         const { root } = await c.send('DOM.getDocument', {}, sessionId);
         const body = await c.send('DOM.querySelector', { nodeId: root.nodeId, selector: 'body' }, sessionId);
         await record('CSS.getMatchedStylesForNode', c.send('CSS.getMatchedStylesForNode', { nodeId: body.nodeId }, sessionId));
-        const scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId && e.params.url).map((e) => e.params.scriptId);
-        for (const scriptId of scripts) {
-          await record('Debugger.getScriptSource', c.send('Debugger.getScriptSource', { scriptId }, sessionId));
-          await record('Debugger.searchInContent', c.send('Debugger.searchInContent', { scriptId, query: 'fake' }, sessionId));
+        const scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && sessions.has(e.sessionId) && e.params.url);
+        for (const e of scripts) {
+          const call = e.sessionId === sessionId ? '' : 'worker ';
+          await record(`${call}Debugger.getScriptSource`, c.send('Debugger.getScriptSource', { scriptId: e.params.scriptId }, e.sessionId));
+          await record(`${call}Debugger.searchInContent`, c.send('Debugger.searchInContent', { scriptId: e.params.scriptId, query: 'fake' }, e.sessionId));
         }
         await outcome(c.send('Target.closeTarget', { targetId }));
-        const events = c.events.filter((e) => e.sessionId === sessionId).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
-        return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })), sheets: sheets.length, scripts: scripts.length };
+        const events = c.events.filter((e) => sessions.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
+        return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })) };
       }),
     extraInfo: (browser, last) =>
       run(browser, async (c) => {

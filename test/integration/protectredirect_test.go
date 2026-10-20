@@ -12,7 +12,7 @@ import (
 
 const protectedBody = "fake-body-0008"
 
-var redirectMarkers = []string{"fake-value-0003", "fake-value-0004", "fake-value-0005", "fake-value-0006", "/auth/callback", "/oauth/mcp-callback", protectedBody}
+var redirectMarkers = []string{"fake-value-0003", "fake-value-0004", "fake-value-0005", "fake-value-0006", "/auth/callback", "/oauth/mcp-callback", "fake-value-0031", protectedBody}
 
 type redirectSeen struct {
 	Events []struct {
@@ -100,10 +100,13 @@ func redirectServer(t *testing.T, to map[string]string) *httptest.Server {
 			redirect(w, r, to[n])
 		case r.URL.Path == "/assets":
 			w.Header().Set("Content-Type", "text/html")
-			_, _ = w.Write([]byte(`<!doctype html><title>assets</title><style>.own { color: red; }</style><link rel="stylesheet" href="/redirect?n=seven-css"><link rel="stylesheet" href="` + to["asset"] + `?as=css"><script src="/redirect?n=seven-js"></script><script src="` + to["asset"] + `?as=js"></script><body>`))
+			_, _ = w.Write([]byte(`<!doctype html><title>assets</title><style>.own { color: red; }</style><link rel="stylesheet" href="/redirect?n=seven-css"><link rel="stylesheet" href="` + to["asset"] + `?as=css"><script src="/redirect?n=seven-js"></script><script src="` + to["asset"] + `?as=js"></script><script>new Worker("/worker.js")</script><body>`))
+		case r.URL.Path == "/worker.js":
+			w.Header().Set("Content-Type", "text/javascript")
+			_, _ = w.Write([]byte(`importScripts("` + to["asset"] + `?as=js&worker=1");`))
 		case r.URL.Path == "/embed":
 			w.Header().Set("Content-Type", "text/html")
-			_, _ = w.Write([]byte(`<!doctype html><title>embed</title><link rel="stylesheet" href="/redirect?n=seven"><script src="/redirect?n=seven"></script><img src="/redirect?n=seven"><iframe src="/redirect?n=vault"></iframe>`))
+			_, _ = w.Write([]byte(`<!doctype html><title>embed</title><link rel="stylesheet" href="/redirect?n=seven"><script src="/redirect?n=seven"></script><img src="/redirect?n=seven"><iframe src="/redirect?n=vault"></iframe><iframe src="/redirect?n=frag"></iframe>`))
 		default:
 			w.Header().Set("Content-Type", "text/html")
 			_, _ = w.Write([]byte("<!doctype html><title>redirect start</title>"))
@@ -130,16 +133,26 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 	to["seven-js"] = seven + "&as=js"
 	to["asset"] = "http://seven.sliccy.ai:" + su.Port() + "/asset"
 	to["nested"] = hop + "/landing?next=" + url.QueryEscape(seven)
-	to["kept"] = hop + "/landing?code=kept-value-0007"
+	to["half"] = hop + "/landing?next=" + strings.ReplaceAll(url.QueryEscape(seven), "%2F", "/")
+	to["half2"] = hop + "/landing?next=" + strings.Replace(url.QueryEscape(seven), "%3A", ":", 1)
+	to["frag"] = seven + "#access_token=fake-value-0031"
+	to["kept"] = hop + "/landing?code=kept-value-0007#kept-frag-0032"
 	via := func(n string) string { return hop + "/redirect?n=" + n }
 	t.Run("redirect headers into seven and the vault are cut", func(t *testing.T) {
 		var r redirectSeen
-		env.evalJSON(t, "linkTest.protect.redirectHeaders("+jsArgs("chrome", hop+"/start", []string{via("seven"), via("vault"), via("nested"), via("kept")})+")", &r)
+		env.evalJSON(t, "linkTest.protect.redirectHeaders("+jsArgs("chrome", hop+"/start", []string{via("seven"), via("vault"), via("nested"), via("half"), via("half2"), via("frag"), via("kept")})+")", &r)
 		r.noMarkers(t)
 		for _, got := range r.result("Network.loadNetworkResource") {
 			if !strings.Contains(got, "Network.loadNetworkResource follows redirects") {
 				t.Errorf("Network.loadNetworkResource wasn't refused: %s", got)
 			}
+		}
+		kept := false
+		for _, m := range r.carrying("kept-frag-0032") {
+			kept = kept || strings.HasPrefix(m, "Network.requestWillBeSent ") && strings.Contains(m, `"urlFragment":"#kept-frag-0032"`)
+		}
+		if !kept {
+			t.Error("a redirect to an unprotected URL lost its urlFragment")
 		}
 		for _, want := range []string{"Network.responseReceivedExtraInfo", "Network.requestWillBeSent", "Fetch.requestPaused"} {
 			seen := map[string]bool{}
@@ -180,7 +193,7 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 	t.Run("protected stylesheets and scripts can't be read", func(t *testing.T) {
 		var r redirectSeen
 		env.evalJSON(t, "linkTest.protect.redirectAssets("+jsArgs("chrome", hop+"/assets")+")", &r)
-		for call, want := range map[string]int{"Page.getResourceContent": 4, "CSS.getStyleSheetText": 2, "Debugger.getScriptSource": 2, "Debugger.searchInContent": 2} {
+		for call, want := range map[string]int{"Page.getResourceContent": 12, "CSS.getStyleSheetText": 2, "Debugger.getScriptSource": 2, "Debugger.searchInContent": 2, "worker Debugger.getScriptSource": 1, "worker Debugger.searchInContent": 1} {
 			refused := 0
 			for _, got := range r.result(call) {
 				if strings.Contains(got, "slicc: refused: ") {

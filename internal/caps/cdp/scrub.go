@@ -61,8 +61,27 @@ func (g *guard) scrubValue(root any) bool {
 	return changed
 }
 
+func (g *guard) blankFragments(t map[string]any) bool {
+	loaded := false
+	for k, val := range t {
+		if s, ok := val.(string); ok && urlKey(k) && g.o.Loaded(s) {
+			loaded = true
+		}
+	}
+	changed := false
+	for k, val := range t {
+		if s, ok := val.(string); ok && loaded && s != "" && strings.HasSuffix(strings.ToLower(k), "fragment") {
+			t[k], changed = "", true
+		}
+	}
+	return changed
+}
+
 func (g *guard) scrubMap(t map[string]any, headers bool, changed *bool) []scrubItem {
 	var more []scrubItem
+	if g.blankFragments(t) {
+		*changed = true
+	}
 	for k, val := range t {
 		if !headers && opaque[k] {
 			continue
@@ -131,15 +150,35 @@ func schemeStarts(s string, at int) []int {
 	return starts
 }
 
-const encodedSep = "%3a%2f%2f"
+func sepPart(s string, i int, raw byte, enc string) int {
+	switch {
+	case i < len(s) && s[i] == raw:
+		return 1
+	case i+len(enc) <= len(s) && strings.EqualFold(s[i:i+len(enc)], enc):
+		return len(enc)
+	}
+	return 0
+}
+
+func sepAt(s string, i int) int {
+	n := sepPart(s, i, ':', "%3a")
+	if n == 0 {
+		return 0
+	}
+	for range 2 {
+		m := sepPart(s, i+n, '/', "%2f")
+		if m == 0 {
+			return 0
+		}
+		n += m
+	}
+	return n
+}
 
 func nextSep(s string, from int) (int, int) {
-	for i := from; i+3 <= len(s); i++ {
-		if s[i:i+3] == "://" {
-			return i, 3
-		}
-		if s[i] == '%' && i+len(encodedSep) <= len(s) && strings.EqualFold(s[i:i+len(encodedSep)], encodedSep) {
-			return i, len(encodedSep)
+	for i := from; i < len(s); i++ {
+		if n := sepAt(s, i); n > 0 {
+			return i, n
 		}
 	}
 	return -1, 0
@@ -175,7 +214,7 @@ func unescapeOnce(s string) string {
 }
 
 func (g *guard) cutEmbedded(s string) (string, bool) {
-	if !strings.Contains(s, "://") && !strings.Contains(strings.ToLower(s), encodedSep) {
+	if !strings.Contains(s, "://") && !strings.Contains(s, "%") {
 		return s, false
 	}
 	var b strings.Builder
