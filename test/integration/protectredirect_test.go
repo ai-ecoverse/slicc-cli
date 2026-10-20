@@ -43,7 +43,7 @@ func (r redirectSeen) carrying(marker string) []string {
 			}
 		}
 		for _, c := range r.Results {
-			if strings.Contains(c.Text, form) {
+			if c.Call != "fetch" && strings.Contains(c.Text, form) {
 				out = append(out, c.Call+" "+c.Text)
 			}
 		}
