@@ -606,7 +606,15 @@ func (g *guard) scrubWorlds(m map[string]any) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	session, _ := m["sessionId"].(string)
-	return g.scrubStacksLocked(g.worlds[g.worldTargetLocked(session)], m)
+	target := g.worldTargetLocked(session)
+	changed := g.scrubStacksLocked(g.worlds[target], m)
+	for _, key := range []string{"params", "result"} {
+		if p, _ := m[key].(map[string]any); p != nil && g.fromWorldLocked(target, p) {
+			g.cutWorldRequest(p)
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (g *guard) pageSessionLocked(sessionID string) bool {
@@ -632,7 +640,7 @@ func (g *guard) logEntryEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
 		e, _ := p["entry"].(map[string]any)
 		u, _ := e["url"].(string)
-		if (u != "" && g.o.URL(u)) || g.scrubStacksLocked(w, e) {
+		if (u != "" && g.o.URL(u)) || g.scrubStacksLocked(w, e) || g.fromWorldLocked(g.worldTargetLocked(m.SessionID), e) {
 			return false, false, nil
 		}
 		return true, false, nil
@@ -647,11 +655,15 @@ func (g *guard) consoleProfileEvent(m *message, data []byte) browserVerdict {
 }
 
 func (g *guard) initiatorLocked(sessionID string, p map[string]any) bool {
+	return g.initiatorOfLocked(g.worldTargetLocked(sessionID), p)
+}
+
+func (g *guard) initiatorOfLocked(target string, p map[string]any) bool {
 	ini, _ := p["initiator"].(map[string]any)
 	if ini == nil {
 		return false
 	}
-	return g.scrubStacksLocked(g.worlds[g.worldTargetLocked(sessionID)], ini) || g.scrubInitiatorLocked(ini)
+	return g.scrubStacksLocked(g.worlds[target], ini) || g.scrubInitiatorLocked(ini)
 }
 
 func (g *guard) narrowBindingLocked(c *command) {
@@ -676,4 +688,236 @@ func (g *guard) forgetWorldSessionLocked(id string) {
 			delete(sc.seen, id)
 		}
 	}
+}
+
+const (
+	maxWorldRequests = 65536
+	maxHeldPauses    = 4096
+)
+
+var worldDropped = map[string]bool{"postData": true, "postDataEntries": true, "headersText": true, "requestHeadersText": true, "associatedCookies": true, "exemptedCookies": true, "blockedCookies": true}
+
+var requestIDKeys = map[string]bool{"requestId": true, "networkId": true, "transportId": true}
+
+type heldPause struct {
+	m    message
+	data []byte
+}
+
+func requestIDIn(p map[string]any) string {
+	for _, k := range []string{"requestId", "transportId"} {
+		if id, _ := p[k].(string); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func (g *guard) worldRequestLocked(target, id string) {
+	k := requestKey{target, id}
+	if id == "" || target == "" || g.worldRequests[k] {
+		return
+	}
+	if g.worldRequestCount[target] >= maxWorldRequests {
+		if !g.worldRequestsFull[target] {
+			g.logf("cdp: a target made more requests from extension worlds than slicc tracks; cutting every request there to its origin")
+		}
+		g.worldRequestsFull[target] = true
+		return
+	}
+	g.worldRequests[k] = true
+	g.worldRequestCount[target]++
+}
+
+func (g *guard) worldRequestKnownLocked(target, id string) bool {
+	return id != "" && (g.worldRequests[requestKey{target, id}] || g.worldRequestsFull[target])
+}
+
+func (g *guard) forgetWorldRequestsLocked(target string) {
+	for k := range g.worldRequests {
+		if k.session == target {
+			delete(g.worldRequests, k)
+		}
+	}
+	for k := range g.navSeen {
+		if k.session == target {
+			delete(g.navSeen, k)
+		}
+	}
+	delete(g.worldRequestCount, target)
+	delete(g.worldRequestsFull, target)
+}
+
+func (g *guard) fromWorldLocked(target string, root any) bool {
+	if target == "" || (len(g.worldRequests) == 0 && !g.worldRequestsFull[target]) {
+		return false
+	}
+	stack := []any{root}
+	for len(stack) > 0 {
+		v := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch t := v.(type) {
+		case map[string]any:
+			for k, val := range t {
+				if id, ok := val.(string); ok && (requestIDKeys[k] || strings.HasSuffix(k, "RequestId")) && g.worldRequestKnownLocked(target, id) {
+					return true
+				}
+				stack = append(stack, val)
+			}
+		case []any:
+			stack = append(stack, t...)
+		}
+	}
+	return false
+}
+
+func (g *guard) navRequestLocked(nt *navTarget, m *message) browserVerdict {
+	if m.Method != "Network.requestWillBeSent" && m.Method != "Network.webSocketCreated" && m.Method != "Network.webTransportCreated" {
+		return browserVerdict{}
+	}
+	p, ok := decodeObject(m.Params)
+	if !ok {
+		return browserVerdict{}
+	}
+	id := requestIDIn(p)
+	if g.initiatorOfLocked(nt.target, p) {
+		g.worldRequestLocked(nt.target, id)
+	}
+	if id == "" {
+		return browserVerdict{}
+	}
+	k := requestKey{nt.target, id}
+	if !g.navSeen[k] {
+		g.navSeen[k] = true
+		g.navSeenOrder = append(g.navSeenOrder, k)
+		if len(g.navSeenOrder) > maxWorldRequests {
+			delete(g.navSeen, g.navSeenOrder[0])
+			g.navSeenOrder = g.navSeenOrder[1:]
+		}
+	}
+	return g.releasePausesLocked(k)
+}
+
+func (g *guard) releasePausesLocked(k requestKey) browserVerdict {
+	held := g.heldPauses[k]
+	delete(g.heldPauses, k)
+	g.heldPauseCount -= len(held)
+	var out browserVerdict
+	for _, h := range held {
+		if g.sessionRefusedLocked(h.m.SessionID) || g.sessionTargetLocked(h.m.SessionID) == nil {
+			continue
+		}
+		v := pauseHandler(g, &h.m, h.data)
+		if v.forward != nil {
+			out.page = append(out.page, v.forward)
+		}
+		out.page = append(out.page, v.page...)
+		out.send = append(out.send, v.send...)
+		out.extra = append(out.extra, v.extra...)
+		out.answers = append(out.answers, v.answers...)
+	}
+	return out
+}
+
+func (g *guard) expirePause(k requestKey) (page, send [][]byte) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.heldPauses[k]) > 0 {
+		g.logf("cdp: handed out a paused request the navigation guard never reported")
+	}
+	v := g.releasePausesLocked(k)
+	return v.page, v.send
+}
+
+var pauseHandler = afterRequestBy((*guard).pausedEvent, levelSettled, pausedIDOf)
+
+func (g *guard) pauseGateEvent(m *message, data []byte) browserVerdict {
+	var p struct {
+		NetworkID string `json:"networkId"`
+		RequestID string `json:"requestId"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	if m.Method == "Network.requestIntercepted" {
+		p.NetworkID = p.RequestID
+	}
+	t := g.worldTargetLocked(m.SessionID)
+	nt := g.navTargets[t]
+	k := requestKey{t, p.NetworkID}
+	if p.NetworkID == "" || nt == nil || nt.session == "" || g.navSeen[k] || g.worldRequestKnownLocked(t, p.NetworkID) {
+		return pauseHandler(g, m, data)
+	}
+	if g.heldPauseCount >= maxHeldPauses {
+		g.logf("cdp: too many paused requests wait for the navigation guard; continuing one without showing it to the page")
+		return g.continuePauseLocked(m)
+	}
+	g.heldPauses[k] = append(g.heldPauses[k], heldPause{m: *m, data: data})
+	g.heldPauseCount++
+	return browserVerdict{pauses: []requestKey{k}}
+}
+
+func (g *guard) cutWorldRequest(root any) {
+	stack := []any{root}
+	for len(stack) > 0 {
+		v := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch t := v.(type) {
+		case map[string]any:
+			for k, val := range t {
+				s, isString := val.(string)
+				switch {
+				case worldDropped[k]:
+					delete(t, k)
+				case headerLists[k]:
+					t[k] = map[string]any{}
+				case isString && urlKey(k) && strings.Contains(s, ":"):
+					t[k] = redactURL(s)
+				default:
+					stack = append(stack, val)
+				}
+			}
+		case []any:
+			stack = append(stack, t...)
+		}
+	}
+}
+
+func (g *guard) continuePauseLocked(m *message) browserVerdict {
+	p, _ := decodeObject(m.Params)
+	id, other := pausedIDs(m.Method, p)
+	g.markRequestLocked(m.SessionID, id)
+	g.markRequestLocked(m.SessionID, other)
+	method, params := continueWorld(m.Method, id, p)
+	msg, _ := g.newCallLocked(m.SessionID, method, params, false)
+	return browserVerdict{send: [][]byte{msg}}
+}
+
+func continueWorld(event, id string, p map[string]any) (string, map[string]any) {
+	method, params := "Fetch.continueRequest", map[string]any{"requestId": id}
+	switch event {
+	case "Network.requestIntercepted":
+		method, params = "Network.continueInterceptedRequest", map[string]any{"interceptionId": id}
+		if _, ok := p["authChallenge"]; ok {
+			params["authChallengeResponse"] = map[string]any{"response": "Default"}
+		}
+	case "Fetch.authRequired":
+		method = "Fetch.continueWithAuth"
+		params["authChallengeResponse"] = map[string]any{"response": "Default"}
+	}
+	return method, params
+}
+
+func (g *guard) worldPauseLocked(m *message, p map[string]any) ([]byte, bool) {
+	id, other := pausedIDs(m.Method, p)
+	t := g.worldTargetLocked(m.SessionID)
+	auth := m.Method == "Fetch.authRequired" && g.requestMarkedLocked(m.SessionID, id)
+	if !auth && !g.worldRequestKnownLocked(t, other) && !g.worldRequestKnownLocked(t, id) {
+		return nil, false
+	}
+	delete(g.handed, requestKey{m.SessionID, id})
+	g.markRequestLocked(m.SessionID, id)
+	g.markRequestLocked(m.SessionID, other)
+	method, params := continueWorld(m.Method, id, p)
+	g.logf("cdp: continued a request a browser extension's world made without showing it to the page")
+	msg, _ := g.newCallLocked(m.SessionID, method, params, false)
+	return msg, true
 }
