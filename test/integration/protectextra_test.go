@@ -97,6 +97,7 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 	pulse := append([]string(nil), f.pulse...)
 	f.mu.Unlock()
 	held := map[string][]string{}
+	seen := map[string]bool{}
 	if len(pulse) > 0 {
 		go func() {
 			t := time.NewTicker(time.Second)
@@ -150,11 +151,12 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		if m.SessionID != "" {
 			reply = fmt.Sprintf(`{"id":%d,"sessionId":%q,%s}`, m.ID, m.SessionID, field)
 		}
+		seen[m.Method] = true
 		f.mu.Lock()
 		d := f.slow[m.Method]
 		until := f.gates[m.Method]
 		f.mu.Unlock()
-		if until != "" {
+		if until != "" && !seen[until] {
 			held[until] = append(held[until], reply)
 			continue
 		}
