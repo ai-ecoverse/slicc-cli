@@ -249,9 +249,14 @@ export function protectTest(getLink, describe) {
         const second = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === other.sessionId && e.params.frame.unreachableUrl, 20000);
         await c.send('Runtime.evaluate', { expression: later(sevenURL) }, other.sessionId);
         await second;
+        const listedFailed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === other.targetId) ?? null;
         await sleep(300);
+        const wiped = await outcome(c.send('Page.navigate', { url: 'about:blank#blocked' }, other.sessionId));
+        await sleep(300);
+        const listedError = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === other.targetId) ?? null;
         const closeError = await outcome(c.send('Target.closeTarget', { targetId: other.targetId }));
-        return { before, unreachable: params.frame.unreachableUrl, detached, listed, info: { url: targetInfo.url, title: targetInfo.title }, reload, blank, href, leaked, locked, after, reattach, close, closeError };
+        const shown = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
+        return { before, unreachable: params.frame.unreachableUrl, detached, listed, info: { url: targetInfo.url, title: targetInfo.title }, reload, blank, href, leaked: leaked || shown, locked, after, reattach, close, wiped, listedFailed, listedError, closeError };
       }),
     popup: (browser, openerId) =>
       run(browser, async (c) => {

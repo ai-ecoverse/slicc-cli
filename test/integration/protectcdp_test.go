@@ -244,20 +244,23 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 	_ = s.Detach(ctx)
 	failed := e.seven + "/nowhere?secret=1"
 	var r struct {
-		Before      string         `json:"before"`
-		Unreachable string         `json:"unreachable"`
-		Detached    bool           `json:"detached"`
-		Listed      *protectTarget `json:"listed"`
-		Info        protectTarget  `json:"info"`
-		Reload      cdpOutcome     `json:"reload"`
-		Blank       cdpOutcome     `json:"blank"`
-		Href        string         `json:"href"`
-		Leaked      bool           `json:"leaked"`
-		Locked      bool           `json:"locked"`
-		After       cdpOutcome     `json:"after"`
-		Reattach    cdpOutcome     `json:"reattach"`
-		Close       cdpOutcome     `json:"close"`
-		CloseError  cdpOutcome     `json:"closeError"`
+		Before       string         `json:"before"`
+		Unreachable  string         `json:"unreachable"`
+		Detached     bool           `json:"detached"`
+		Listed       *protectTarget `json:"listed"`
+		Info         protectTarget  `json:"info"`
+		Reload       cdpOutcome     `json:"reload"`
+		Blank        cdpOutcome     `json:"blank"`
+		Href         string         `json:"href"`
+		Leaked       bool           `json:"leaked"`
+		Locked       bool           `json:"locked"`
+		After        cdpOutcome     `json:"after"`
+		Reattach     cdpOutcome     `json:"reattach"`
+		Close        cdpOutcome     `json:"close"`
+		Wiped        cdpOutcome     `json:"wiped"`
+		ListedFailed *protectTarget `json:"listedFailed"`
+		ListedError  *protectTarget `json:"listedError"`
+		CloseError   cdpOutcome     `json:"closeError"`
 	}
 	e.evalJSON(t, "linkTest.protect.errorPage("+jsArgs("chrome", res.TargetID, failed)+")", &r)
 	switch {
@@ -269,8 +272,10 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 		t.Fatalf("the error page's attempted URL was listed in full: %+v", r)
 	case !r.Locked || !r.After.refused() || !r.Reattach.refused() || !r.Close.refused():
 		t.Fatalf("seven's document, restored into the same tab, didn't lock it: %+v", r)
-	case !r.CloseError.OK:
-		t.Fatalf("closing a tab on an error page for seven's URL: %+v", r)
+	case r.ListedFailed == nil || r.ListedFailed.URL != e.seven || r.ListedFailed.Title != e.seven:
+		t.Fatalf("a tab on an error page for seven's URL is listed as %+v", r.ListedFailed)
+	case !r.Wiped.OK || !r.CloseError.OK || r.ListedError == nil || r.ListedError.URL != "about:blank#blocked":
+		t.Fatalf("wiping and closing a tab on an error page for seven's URL: %+v wiped to %+v", r, r.ListedError)
 	}
 }
 

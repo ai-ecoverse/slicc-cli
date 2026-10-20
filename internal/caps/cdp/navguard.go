@@ -27,7 +27,8 @@ type navTarget struct {
 	pending  int
 	done     bool
 	failed   bool
-	loading  map[string]bool
+	loading  map[string]int
+	started  int
 	unsure   bool
 	errorURL string
 }
@@ -234,13 +235,14 @@ func (nt *navTarget) commitLocked(m *message) {
 			return
 		}
 		if nt.loading == nil {
-			nt.loading = map[string]bool{}
+			nt.loading = map[string]int{}
 		}
 		if p.LoaderID == "" || len(nt.loading) >= maxLoading {
 			nt.unsure = true
 			return
 		}
-		nt.loading[p.LoaderID] = true
+		nt.started++
+		nt.loading[p.LoaderID] = nt.started
 	case "Network.loadingFailed":
 		delete(nt.loading, p.RequestID)
 	case "Page.frameStoppedLoading":
@@ -252,9 +254,15 @@ func (nt *navTarget) commitLocked(m *message) {
 		if p.Frame.ID != nt.target || p.Frame.ParentID != "" {
 			return
 		}
-		delete(nt.loading, p.Frame.LoaderID)
 		if p.Type == "BackForwardCacheRestore" {
 			clear(nt.loading)
+		}
+		if n, ok := nt.loading[p.Frame.LoaderID]; ok {
+			for l, m := range nt.loading {
+				if m <= n {
+					delete(nt.loading, l)
+				}
+			}
 		}
 		nt.errorURL = p.Frame.UnreachableURL
 	}
