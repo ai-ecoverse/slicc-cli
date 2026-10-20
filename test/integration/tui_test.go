@@ -514,3 +514,60 @@ func TestTUIRunnerKeepsArgumentBoundaries(t *testing.T) {
 		t.Fatalf("applied %+v", applied)
 	}
 }
+
+func newEntriesTUI(t *testing.T, entries []browser.Entry) *tuiHarness {
+	h := &tuiHarness{t: t, now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
+	h.m = tui.New(tui.Config{
+		Entries: entries,
+		Start:   func(c tui.Choice) { h.started = append(h.started, c) },
+		Stop:    func() { h.stopped++ },
+		Now:     func() time.Time { return h.now },
+	})
+	return h
+}
+
+func TestTUIOffersTheDefaultBrowserRow(t *testing.T) {
+	o := browser.Options{ProfilesDir: t.TempDir()}
+	chrome := browser.Installed{ID: "chrome", Name: "Google Chrome", Engine: browser.EngineChromium, Version: "155.0.1.2", Path: "/g", Executable: "g", DebugSupport: browser.DebugSupported}
+
+	t.Run("first and the best match when slicc would fall back", func(t *testing.T) {
+		h := newEntriesTUI(t, flow.WithPair(o, browser.Rank(nil, []browser.Installed{chrome})))
+		rows := h.rows()
+		if len(rows) != 2 || !strings.Contains(rows[0], "Default browser") || !strings.Contains(rows[0], "best match") || !strings.Contains(rows[0], "no cdp") || strings.Contains(rows[1], "best match") {
+			t.Fatalf("rows:\n%s", h.view())
+		}
+		v := h.view()
+		for _, s := range []string{"Pair  seven in your everyday browser, linked over loopback without cdp", "↵ Opens seven in your default browser and pairs it over loopback (no cdp: slicc controls no browser)"} {
+			if !strings.Contains(v, s) {
+				t.Errorf("view lacks %q:\n%s", s, v)
+			}
+		}
+		if strings.Index(v, "Pair") > strings.Index(v, "Launch") {
+			t.Errorf("section order:\n%s", v)
+		}
+		cmd := h.keys("enter")
+		if len(h.started) != 1 || len(h.started[0].Entries) != 1 || h.started[0].Entries[0].ID != flow.PairID || !isQuit(cmd) {
+			t.Fatalf("started %+v, quit %v", h.started, isQuit(cmd))
+		}
+	})
+
+	t.Run("after the browsers slicc can control otherwise", func(t *testing.T) {
+		entries := flow.WithPair(o, tuiEntries())
+		if entries[0].ID == flow.PairID {
+			t.Fatalf("pair first with endpoints: %v", ids(entries))
+		}
+		h := newEntriesTUI(t, entries)
+		rows := h.rows()
+		if len(rows) != 5 || !strings.Contains(rows[0], "best match") || !strings.Contains(rows[4], "Default browser") || strings.Contains(rows[4], "best match") {
+			t.Fatalf("rows:\n%s", h.view())
+		}
+	})
+
+	t.Run("never with other browsers", func(t *testing.T) {
+		h := newEntriesTUI(t, flow.WithPair(o, browser.Rank(nil, []browser.Installed{chrome})))
+		h.keys("space", "down", "space", "enter")
+		if len(h.started) != 0 || !strings.Contains(h.model().Message(), "can't go with other browsers") {
+			t.Fatalf("started %+v, message %q", h.started, h.model().Message())
+		}
+	})
+}

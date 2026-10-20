@@ -23,12 +23,15 @@ const (
 	groupRunning
 	groupLaunch
 	groupSix
+	groupPair
 	groupHeadless
 	groupElectron
 )
 
 func groupOf(e browser.Entry) group {
 	switch {
+	case flow.IsPair(e):
+		return groupPair
 	case flow.IsSix(e):
 		return groupSix
 	case flow.IsHeadless(e) && e.Endpoint.Source != browser.SourceFlag:
@@ -289,6 +292,13 @@ func (m Model) goChoice() (tea.Model, tea.Cmd) {
 			profiles[e.ID] = p
 		}
 	}
+	if flow.IsPair(sel[0]) {
+		m.mode = ModeDone
+		if m.cfg.Start != nil {
+			m.cfg.Start(Choice{Entries: sel})
+		}
+		return m, tea.Quit
+	}
 	notice := m.dash.notice
 	m.went = true
 	m.mode = ModeDashboard
@@ -418,6 +428,8 @@ func (m Model) sectionHeader(g group) string {
 		label, desc = "Launch", "in a SLICC profile of its own, for testing SLICC seven"
 	case groupSix:
 		return m.sectionLine("SLICC six profiles", "") + "  " + m.risk().Render("re-use existing SLICC profile (might lose data)")
+	case groupPair:
+		label, desc = "Pair", "seven in your everyday browser, linked over loopback without cdp"
 	}
 	return m.sectionLine(label, desc)
 }
@@ -508,7 +520,7 @@ func (m Model) entryRow(i, ei, w, cw int) string {
 		nameStyle = m.st.good.Bold(m.cfg.Color)
 	}
 	version := majorVersion(e.Version)
-	if groupOf(e) == groupSix {
+	if groupOf(e) == groupSix || groupOf(e) == groupPair {
 		version = ""
 	}
 	name := displayName(e)
@@ -633,6 +645,8 @@ func (m Model) right(e browser.Entry) string {
 			s += " · SLICC six's profile"
 		}
 		return s
+	case groupPair:
+		return "no cdp"
 	case groupSix:
 		if e.Installed != nil {
 			return "opens in " + m.sixBrowser(e)
@@ -660,6 +674,8 @@ func (m Model) opens(e browser.Entry) string {
 		return "Opens seven in " + name + " at " + hostPort(e.Endpoint.CDP) + " (new tab)"
 	case groupSix:
 		return "Re-uses existing SLICC profile " + name + " in " + m.sixBrowser(e) + " " + m.risk().Render("(might lose data)")
+	case groupPair:
+		return "Opens seven in your " + m.st.title.Render("default browser") + " and pairs it over loopback (no cdp: slicc controls no browser)"
 	}
 	return "Adds " + name + " as an extra browser"
 }
@@ -731,6 +747,8 @@ func (m Model) detail() (string, string) {
 			dir = e.Six.Dir
 		}
 		return enter + m.opens(e), tilde(dir)
+	case groupPair:
+		return enter + m.opens(e), "the pairing URL works in any browser, once, for 10 minutes"
 	default:
 		if e.Installed.DebugSupport == browser.DebugDisabled {
 			return "  " + m.st.faint.Render(displayName(e)+" blocks remote debugging, so it can't be picked"), tilde(e.Installed.Path)

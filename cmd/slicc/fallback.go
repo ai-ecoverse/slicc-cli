@@ -8,7 +8,6 @@ import (
 
 	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
-	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 )
 
 func (f defaultFlags) fallbackAllowed() bool {
@@ -29,7 +28,7 @@ func (f defaultFlags) openFlags(mounts []hostfs.Mount) openFlags {
 	return o
 }
 
-func runFallback(f defaultFlags, mounts []hostfs.Mount, stdout, stderr io.Writer) int {
+func runPair(f defaultFlags, mounts []hostfs.Mount, notice string, stdout, stderr io.Writer) int {
 	tty := isTerminal(os.Stdin) && isTerminal(stdout)
-	return serveOpen(f.openFlags(mounts), openOptions{mode: "default", open: tty || f.open, json: f.json, notice: flow.FallbackNotice}, os.Stdin, stdout, stderr)
+	return serveOpen(f.openFlags(mounts), openOptions{mode: "default", open: tty || f.open, json: f.json, notice: notice}, os.Stdin, stdout, stderr)
 }

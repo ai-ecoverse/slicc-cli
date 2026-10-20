@@ -295,15 +295,11 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
 	if interactive {
 		cfg.Chosen = true
-		var found *browser.Result
-		if f.fallbackAllowed() {
-			r := browser.Discover(context.Background(), cfg.Browser)
-			if flow.Fallback(cfg.Browser, r.Entries) {
-				return runFallback(f, mounts, stdout, stderr)
-			}
-			found = &r
+		code, pair := runTUI(cfg, f.fallbackAllowed(), lc, stdout, stderr)
+		if pair {
+			return runPair(f, mounts, "", stdout, stderr)
 		}
-		return runTUI(cfg, found, lc, stdout, stderr)
+		return code
 	}
 	cfg.Chosen = len(f.browsers) > 0 || f.six != nil
 	return runPlain(cfg, f, mounts, stdout, stderr)
@@ -322,7 +318,7 @@ func runPlain(cfg flow.Config, f defaultFlags, mounts []hostfs.Mount, stdout, st
 	out.event(flow.Event{Schema: flow.Schema, Event: flow.Discovered, Entries: r.Entries})
 	if f.fallbackAllowed() && flow.Fallback(cfg.Browser, r.Entries) {
 		stop()
-		return runFallback(f, mounts, stdout, stderr)
+		return runPair(f, mounts, flow.FallbackNotice, stdout, stderr)
 	}
 	var sel []browser.Entry
 	var err error
@@ -451,12 +447,13 @@ func tuiDir(o browser.Options) func(browser.Entry, string) string {
 	}
 }
 
-func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr io.Writer) int {
+func runTUI(cfg flow.Config, pairable bool, lc *liveCaps, stdout, stderr io.Writer) (int, bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var p *tea.Program
 	var started sync.WaitGroup
 	var failed error
+	pair := false
 	tcfg := tui.Config{
 		Profile:  cfg.Profile,
 		Last:     browser.LoadLast(cfg.Browser),
@@ -478,6 +475,10 @@ func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr
 		lc.apply(s, relink, status)
 	}
 	tcfg.Start = func(c tui.Choice) {
+		if len(c.Entries) > 0 && flow.IsPair(c.Entries[0]) {
+			pair = true
+			return
+		}
 		fc := cfg
 		fc.Profiles = c.Profiles
 		events := make(chan tea.Msg, 4096)
@@ -498,26 +499,27 @@ func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr
 	}
 	p = tea.NewProgram(tui.New(tcfg), tea.WithOutput(stdout))
 	go func() {
-		var r browser.Result
-		if found != nil {
-			r = *found
-		} else {
-			r = browser.Discover(ctx, cfg.Browser)
+		entries := browser.Discover(ctx, cfg.Browser).Entries
+		if pairable {
+			entries = flow.WithPair(cfg.Browser, entries)
 		}
-		p.Send(tui.EntriesMsg(flow.WithSixRows(cfg.Browser, r.Entries)))
+		p.Send(tui.EntriesMsg(flow.WithSixRows(cfg.Browser, entries)))
 	}()
 	_, err := p.Run()
 	cancel()
 	started.Wait()
 	if err != nil && !errors.Is(err, tea.ErrProgramKilled) && !errors.Is(err, tea.ErrInterrupted) {
 		fmt.Fprintf(stderr, "slicc: %v\n", err)
-		return 1
+		return 1, false
+	}
+	if pair {
+		return 0, true
 	}
 	if failed != nil {
 		fmt.Fprintf(stderr, "slicc: %v\n", failed)
-		return 1
+		return 1, false
 	}
-	return 0
+	return 0, false
 }
 
 func pageOrigins(page string, extra []string) []string {
