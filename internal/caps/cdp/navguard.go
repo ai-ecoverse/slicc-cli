@@ -159,6 +159,7 @@ func (g *guard) navForgetLocked(targetID string) {
 		return
 	}
 	delete(g.navTargets, targetID)
+	delete(g.tainted, targetID)
 	if nt.session != "" {
 		delete(g.navSessions, nt.session)
 	}

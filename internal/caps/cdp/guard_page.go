@@ -268,6 +268,8 @@ var methodRules = map[string]func(g *guard, c *command) string{
 	},
 	"Fetch.enable":                (*guard).fetchRule,
 	"Network.loadNetworkResource": (*guard).loadResourceRule,
+	"Page.getResourceContent":     (*guard).resourceRule,
+	"Page.searchInResource":       (*guard).resourceRule,
 	"Page.captureSnapshot": func(*guard, *command) string {
 		return "Page.captureSnapshot serialises every frame, error pages for seven's URLs included"
 	},
@@ -443,6 +445,8 @@ func (g *guard) scanString(k, s string, c *command) string {
 	switch {
 	case k == "topLevelSite" && g.siteProtected(s):
 		return refusedTarget
+	case assetKinds[k] != "" && g.assets[c.session].has(assetKinds[k]+s):
+		return refusedBody
 	case urlKeys[k] && g.o.URL(s):
 		return refusedTarget
 	case k == "storageKey" && g.o.StorageKey(s):
