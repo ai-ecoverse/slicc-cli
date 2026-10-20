@@ -258,6 +258,48 @@ export function protectTest(getLink, describe) {
         const shown = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
         return { before, unreachable: params.frame.unreachableUrl, detached, listed, info: { url: targetInfo.url, title: targetInfo.title }, reload, blank, href, leaked: leaked || shown, locked, after, reattach, close, wiped, listedFailed, listedError, closeError };
       }),
+    restoreRace: (browser, targetId, sevenOrigin) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const before = await c.evaluate('location.href', sessionId);
+        const seen = [];
+        let stuck = 0;
+        const probe = (sid) => {
+          const r = outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sid)).then((o) => {
+            if (o.ok) seen.push(o.result.result?.value ?? '');
+          });
+          return Promise.race([r, sleep(1000).then(() => (stuck += 1))]);
+        };
+        const gone = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
+          () => true,
+          () => false,
+        );
+        let done = false;
+        gone.then(() => {
+          done = true;
+        });
+        await c.send('Runtime.evaluate', { expression: 'setTimeout(() => history.back(), 50); true' }, sessionId);
+        const deadline = Date.now() + 5000;
+        let attaches = 0;
+        while (Date.now() < deadline) {
+          const burst = [probe(sessionId), probe(sessionId), probe(sessionId)];
+          const a = await Promise.race([outcome(c.send('Target.attachToTarget', { targetId, flatten: true })), sleep(1000).then(() => ({ ok: false }))]);
+          if (a.ok) {
+            attaches += 1;
+            burst.push(probe(a.result.sessionId));
+          }
+          await Promise.all(burst);
+          if (done) break;
+        }
+        const detached = await gone;
+        for (let i = 0; i < 5; i += 1) await Promise.all([probe(sessionId), probe(sessionId)]);
+        const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+        const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        await sleep(2000);
+        const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
+        return { before, probes: seen.length, stuck, attaches, leaked, detached, after, reattach, close };
+      }),
     popup: (browser, openerId) =>
       run(browser, async (c) => {
         const { targetInfos } = await c.send('Target.getTargets');
