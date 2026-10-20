@@ -44,8 +44,8 @@ func TestProtectedVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range v.URLs {
-		if got := o.URL(c.URL); got != c.Protected {
-			t.Errorf("URL(%q) = %v, want %v", c.URL, got, c.Protected)
+		if got := o.Loaded(c.URL); got != c.Protected {
+			t.Errorf("Loaded(%q) = %v, want %v", c.URL, got, c.Protected)
 		}
 	}
 	for i, c := range v.Targets {

@@ -3,6 +3,7 @@ package protect
 import (
 	"fmt"
 	"net"
+	"os"
 	"slices"
 	"strings"
 
@@ -23,8 +24,31 @@ const maxUnwrap = 8
 
 var rules = sliccbrowsers.Default().ProtectedOrigins
 
+const (
+	refusedPrefix      = "slicc: refused: "
+	builtinUnparseable = refusedPrefix + "slicc can't parse this URL, so it could be a protected page"
+)
+
+var unparseableRefusal = failClosed(rules.Unparseable, rules.UnparseableRefusal, warnStderr)
+
+func warnStderr(msg string) {
+	fmt.Fprintln(os.Stderr, "slicc: "+msg)
+}
+
+func failClosed(rule, refusal string, warn func(string)) string {
+	if rule == "protected" && strings.HasPrefix(refusal, refusedPrefix) && len(refusal) > len(refusedPrefix) {
+		return refusal
+	}
+	warn(fmt.Sprintf("slicc-browsers' catalog has unparseable %q with refusal %q; slicc still treats URLs it can't parse as protected", rule, refusal))
+	return builtinUnparseable
+}
+
 func Refusal() string {
 	return rules.Refusal
+}
+
+func UnparseableRefusal() string {
+	return unparseableRefusal
 }
 
 type Origins struct {
@@ -144,21 +168,17 @@ func (o *Origins) URL(raw string) bool {
 }
 
 func (o *Origins) Loaded(raw string) bool {
-	return o.URL(raw) || (raw != "" && !Parses(raw))
+	return o.URL(raw) || Unparseable(raw)
 }
 
-func (o *Origins) LoadedOrigin(raw string) bool {
-	return raw != "null" && raw != "://" && o.Loaded(raw)
+func Unparseable(raw string) bool {
+	return raw != "" && raw != "null" && raw != "://" && !Parses(raw)
 }
 
 func Parses(raw string) bool {
 	u := parse(raw)
 	for i := 0; u != nil && i < maxUnwrap && slices.Contains(rules.InnerSchemes, scheme(u)); i++ {
-		inner := strings.TrimPrefix(u.Href(false), u.Protocol())
-		if scheme(u) == "blob" && strings.HasPrefix(inner, "null/") {
-			return true
-		}
-		u = parse(inner)
+		u = parse(strings.TrimPrefix(u.Href(false), u.Protocol()))
 	}
 	return u != nil && !slices.Contains(rules.InnerSchemes, scheme(u))
 }

@@ -91,8 +91,9 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		list, _ := res["targetInfos"].([]any)
 		kept := make([]any, 0, len(list))
 		for _, item := range list {
+			info, _ := toInfo(item)
 			send = append(send, g.infoLocked(item)...)
-			if info, _ := toInfo(item); !protect.HiddenType(info.Type) {
+			if listed(info) {
 				kept = append(kept, item)
 			}
 		}
@@ -236,10 +237,14 @@ func (g *guard) withParams(m *message, data []byte, fn func(p map[string]any) (k
 
 func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
-		send := g.infoLocked(p["targetInfo"])
 		info, _ := toInfo(p["targetInfo"])
-		return !protect.HiddenType(info.Type), g.targetProtectedLocked(info.TargetID), send
+		send := g.infoLocked(p["targetInfo"])
+		return listed(info), g.targetProtectedLocked(info.TargetID), send
 	})
+}
+
+func listed(info targetInfo) bool {
+	return !protect.HiddenType(info.Type) && !protect.Unparseable(info.URL)
 }
 
 func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
@@ -341,7 +346,7 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	t := g.sessionTargetLocked(m.SessionID)
-	if t == nil || p.Frame.ParentID != "" || p.Frame.ID != t.id || !g.o.LoadedOrigin(p.Frame.SecurityOrigin) {
+	if t == nil || p.Frame.ParentID != "" || p.Frame.ID != t.id || !g.o.Loaded(p.Frame.SecurityOrigin) {
 		return browserVerdict{forward: data}
 	}
 	return browserVerdict{send: g.markLocked(t)}
@@ -356,7 +361,7 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 	switch {
 	case t == nil:
 		return browserVerdict{forward: data}
-	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.LoadedOrigin(p.Context.Origin):
+	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.Loaded(p.Context.Origin):
 		return browserVerdict{send: g.markLocked(t)}
 	case g.worldContextLocked(t.id, m.SessionID, p.Context):
 		return browserVerdict{}
