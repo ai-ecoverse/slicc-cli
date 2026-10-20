@@ -123,6 +123,7 @@ func (p *ghParser) unary() any {
 }
 
 var ghIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*`)
+var ghNumber = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?`)
 
 func (p *ghParser) primary() any {
 	p.skip()
@@ -154,6 +155,11 @@ func (p *ghParser) primary() any {
 		p.pos = end + 1
 		return b.String()
 	}
+	if num := ghNumber.FindString(p.src[p.pos:]); num != "" {
+		p.pos += len(num)
+		v, _ := strconv.ParseFloat(num, 64)
+		return v
+	}
 	name := ghIdent.FindString(p.src[p.pos:])
 	if name == "" {
 		p.t.Fatalf("can't parse %q at %d in %q", p.src[p.pos:], p.pos, p.expr)
@@ -182,6 +188,8 @@ func (p *ghParser) primary() any {
 			return v
 		case "startsWith":
 			return strings.HasPrefix(strings.ToLower(ghString(args[0])), strings.ToLower(ghString(args[1])))
+		case "endsWith":
+			return strings.HasSuffix(strings.ToLower(ghString(args[0])), strings.ToLower(ghString(args[1])))
 		case "always":
 			return true
 		case "cancelled":
@@ -319,7 +327,7 @@ func legsOf(spec string) []ciLeg {
 	return legs
 }
 
-const lightMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/1,-,- windows-latest,1/1,-,-"
+const lightMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/2,-,- macos-latest,2/2,-,- windows-latest,1/2,-,- windows-latest,2/2,-,-"
 const fullMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/4,race,guards macos-latest,2/4,race,guards macos-latest,3/4,race,guards macos-latest,4/4,race,guards windows-latest,1/3,race,guards windows-latest,2/3,race,guards windows-latest,3/3,race,guards"
 
 func TestPushToMainRunsOnlyTheLightMatrix(t *testing.T) {
