@@ -50,6 +50,7 @@ func TestCDPFailsClosedOnUnparseableURLs(t *testing.T) {
 	t.Run("an exotic host that isn't protected is cut too", func(t *testing.T) { env.testLoadedTab(t, env.exotic, "an%20exotic", false) })
 	t.Run("window.open to an unparseable sliccy.ai host is cut", func(t *testing.T) { env.testPopupTo(t, env.hole, "exa%20mple") })
 	t.Run("window.open to an exotic host is cut too", func(t *testing.T) { env.testPopupTo(t, env.exotic, "an%20exotic") })
+	t.Run("a tab that leaves for an unparseable host drops out of the page's target events", env.testLeavesForHole)
 	t.Run("a blob from an opaque origin is protected", env.testOpaqueBlob)
 	t.Run("a joiner host Chrome loads on sliccy.ai is cut", func(t *testing.T) { env.testLoadedForm(t, env.zwj, "xn--1ug.sliccy.ai", true, true) })
 	t.Run("an invalid xn-- label Chrome loads on sliccy.ai is cut", func(t *testing.T) { env.testLoadedForm(t, env.xna, "xn--a.sliccy.ai", true, true) })
@@ -249,6 +250,59 @@ func (e *unparsedEnv) testPopupTo(t *testing.T, u, marker string) {
 	}
 }
 
+func (e *unparsedEnv) testLeavesForHole(t *testing.T) {
+	var ok struct {
+		OK bool `json:"ok"`
+	}
+	e.evalJSON(t, "linkTest.protect.watchTargets('chrome')", &ok)
+	if !ok.OK {
+		t.Fatal("the page couldn't watch targets")
+	}
+	var made struct {
+		TargetID string `json:"targetId"`
+	}
+	e.unguardedCall(t, "Target.createTarget", map[string]any{"url": e.allowed + "/doc?n=leaves"}, &made)
+	defer e.b.closeTarget(made.TargetID)
+	e.realDocument(t, made.TargetID, "n=leaves", false)
+	var att struct {
+		SessionID string `json:"sessionId"`
+	}
+	e.unguardedCall(t, "Target.attachToTarget", map[string]any{"targetId": made.TargetID, "flatten": true}, &att)
+	time.Sleep(500 * time.Millisecond)
+	var m struct {
+		Mark int `json:"mark"`
+	}
+	e.evalJSON(t, "linkTest.protect.watchMark()", &m)
+	if err := e.unguarded(att.SessionID, "Page.navigate", map[string]any{"url": e.hole}, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.realDocument(t, made.TargetID, "exa%20mple", true)
+	time.Sleep(time.Second)
+	var r struct {
+		Before []struct {
+			Method string `json:"method"`
+			URL    string `json:"url"`
+		} `json:"before"`
+		After []struct {
+			Method string `json:"method"`
+			URL    string `json:"url"`
+		} `json:"after"`
+		Listed bool `json:"listed"`
+	}
+	e.evalJSON(t, "linkTest.protect.watchedTargets("+jsArgs(made.TargetID, m.Mark)+")", &r)
+	if len(r.Before) == 0 {
+		t.Fatal("the control: the page saw no event for the tab while it was ordinary")
+	}
+	if r.Listed {
+		t.Errorf("Target.getTargets lists the tab after it left for %q", e.hole)
+	}
+	for _, ev := range r.After {
+		if ev.URL != r.Before[len(r.Before)-1].URL {
+			t.Errorf("after the tab left for %q the page got %s at %q", e.hole, ev.Method, ev.URL)
+		}
+	}
+}
+
 func (e *unparsedEnv) testOpaqueBlob(t *testing.T) {
 	var r struct {
 		URL  string `json:"url"`
@@ -308,7 +362,7 @@ func (e *unparsedEnv) testOtherDestinations(t *testing.T) {
 	history := e.historyTab(t)
 	var r map[string]json.RawMessage
 	e.evalJSON(t, "linkTest.protect.parseRefusals("+jsArgs("chrome", e.allowed, e.hole, history, "exa%20mple")+")", &r)
-	for _, k := range []string{"setCookie", "getCookies", "deleteCookies", "setCookies", "storageSetCookies", "continueRequest", "loadNetworkResource", "pwaInstall", "pwaLaunch", "history"} {
+	for _, k := range []string{"setCookie", "getCookies", "pageGetCookies", "deleteCookies", "setCookies", "storageSetCookies", "continueRequest", "loadNetworkResource", "pwaInstall", "pwaLaunch", "history"} {
 		var o cdpOutcome
 		if err := json.Unmarshal(r[k], &o); err != nil || o.Error.Message != refusedParseText {
 			t.Errorf("%s with %q: %s", k, e.hole, r[k])

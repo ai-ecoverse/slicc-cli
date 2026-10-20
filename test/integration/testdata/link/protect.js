@@ -42,6 +42,8 @@ async function instrument(c, sessionId, base, tag) {
   await c.send('Page.setBypassCSP', { enabled: true }, sessionId);
 }
 
+let watching = null;
+
 export function protectTest(getLink, describe) {
   const run = async (browser, fn) => {
     let c;
@@ -367,6 +369,23 @@ export function protectTest(getLink, describe) {
         await c.send('Target.setDiscoverTargets', { discover: false });
         return out;
       }),
+    watchTargets: async (browser) => {
+      const c = await CdpClient.open(getLink(), browser);
+      await c.send('Target.setDiscoverTargets', { discover: true });
+      watching = c;
+      return { ok: true };
+    },
+    watchMark: async () => ({ mark: watching.events.length }),
+    watchedTargets: async (targetId, mark) => {
+      const c = watching;
+      watching = null;
+      const pick = (list) => list.filter((e) => (e.method === 'Target.targetCreated' || e.method === 'Target.targetInfoChanged') && e.params.targetInfo.targetId === targetId).map((e) => ({ method: e.method, url: e.params.targetInfo.url }));
+      const { targetInfos } = await c.send('Target.getTargets');
+      await c.send('Target.setDiscoverTargets', { discover: false });
+      const out = { before: pick(c.events.slice(0, mark)), after: pick(c.events.slice(mark)), listed: targetInfos.some((t) => t.targetId === targetId) };
+      await c.close();
+      return out;
+    },
     opaqueBlob: (browser) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo('about:blank');
@@ -392,6 +411,7 @@ export function protectTest(getLink, describe) {
         out.setCookie = await outcome(c.send('Network.setCookie', { name: 'x', value: '1', url: hole }, sessionId));
         out.getCookies = await outcome(c.send('Network.getCookies', { urls: [`${base}/`, hole] }, sessionId));
         out.getCookiesOwn = await outcome(c.send('Network.getCookies', { urls: [`${base}/`] }, sessionId));
+        out.pageGetCookies = await outcome(c.send('Page.getCookies', { urls: [hole] }, sessionId));
         out.deleteCookies = await outcome(c.send('Network.deleteCookies', { name: 'seven', url: hole }, sessionId));
         out.setCookies = await outcome(c.send('Network.setCookies', { cookies: [{ name: 'x', value: '1', url: hole }] }, sessionId));
         out.storageSetCookies = await outcome(c.send('Storage.setCookies', { cookies: [{ name: 'x', value: '1', url: hole }] }));
