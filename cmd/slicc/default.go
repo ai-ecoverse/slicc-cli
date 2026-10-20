@@ -295,15 +295,13 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
 	if interactive {
 		cfg.Chosen = true
-		var found *browser.Result
+		var pair pairFunc
 		if f.fallbackAllowed() {
-			r := browser.Discover(context.Background(), cfg.Browser)
-			if flow.Fallback(cfg.Browser, r.Entries) {
-				return runFallback(f, mounts, stdout, stderr)
+			pair = func(ctx context.Context, emit func(flow.Event), renew <-chan struct{}) int {
+				return servePairIn(ctx, f, mounts, emit, renew)
 			}
-			found = &r
 		}
-		return runTUI(cfg, found, lc, stdout, stderr)
+		return runTUI(cfg, pair, lc, stdout, stderr)
 	}
 	cfg.Chosen = len(f.browsers) > 0 || f.six != nil
 	return runPlain(cfg, f, mounts, stdout, stderr)
@@ -451,12 +449,17 @@ func tuiDir(o browser.Options) func(browser.Entry, string) string {
 	}
 }
 
-func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr io.Writer) int {
+type pairFunc func(ctx context.Context, emit func(flow.Event), renew <-chan struct{}) int
+
+var errPairFailed = errors.New("pairing seven in the default browser failed")
+
+func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var p *tea.Program
 	var started sync.WaitGroup
 	var failed error
+	renew := make(chan struct{}, 1)
 	tcfg := tui.Config{
 		Profile:  cfg.Profile,
 		Last:     browser.LoadLast(cfg.Browser),
@@ -466,6 +469,12 @@ func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr
 		Profiles: tuiProfiles(cfg.Browser),
 		Stop:     cancel,
 		Runner:   defaultRunner(),
+		NewPairing: func() {
+			select {
+			case renew <- struct{}{}:
+			default:
+			}
+		},
 	}
 	cfg.Relink = lc.relink
 	if j, _ := jerk.Find(jerkDirs()...); j != nil {
@@ -490,7 +499,14 @@ func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr
 		}()
 		go func() {
 			defer started.Done()
-			err := flow.Go(ctx, fc, c.Entries)
+			var err error
+			if len(c.Entries) > 0 && flow.IsPair(c.Entries[0]) {
+				if pair(ctx, fc.Emit, renew) != 0 {
+					err = errPairFailed
+				}
+			} else {
+				err = flow.Go(ctx, fc, c.Entries)
+			}
 			failed = err
 			events <- tui.DoneMsg{Err: err}
 			close(events)
@@ -498,13 +514,11 @@ func runTUI(cfg flow.Config, found *browser.Result, lc *liveCaps, stdout, stderr
 	}
 	p = tea.NewProgram(tui.New(tcfg), tea.WithOutput(stdout))
 	go func() {
-		var r browser.Result
-		if found != nil {
-			r = *found
-		} else {
-			r = browser.Discover(ctx, cfg.Browser)
+		entries := browser.Discover(ctx, cfg.Browser).Entries
+		if pair != nil {
+			entries = flow.WithPair(cfg.Browser, entries)
 		}
-		p.Send(tui.EntriesMsg(flow.WithSixRows(cfg.Browser, r.Entries)))
+		p.Send(tui.EntriesMsg(flow.WithSixRows(cfg.Browser, entries)))
 	}()
 	_, err := p.Run()
 	cancel()

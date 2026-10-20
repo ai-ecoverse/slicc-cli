@@ -204,7 +204,8 @@ func TestFallbackTriggersOnlyWithoutProfileAndEndpoint(t *testing.T) {
 	}{
 		{"nothing at all", nil, true},
 		{"an installed browser without a SLICC profile", []browser.Entry{chrome, app}, true},
-		{"only SLICC six's Chrome", []browser.Entry{six}, true},
+		{"only SLICC six's Chrome, running", []browser.Entry{six}, false},
+		{"a SLICC six profile, not running", []browser.Entry{browser.SixProfileEntry(browser.Six{Dir: filepath.Join(dir, "six"), Label: "six"}, nil)}, true},
 		{"a running endpoint", []browser.Entry{chrome, endpoint}, false},
 	}
 	for _, c := range cases {
