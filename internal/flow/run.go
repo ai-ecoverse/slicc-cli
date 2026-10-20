@@ -273,9 +273,9 @@ func (r *run) ensureTab(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	if err := r.client.Call(tctx, "", "Target.createTarget", map[string]any{"url": r.cfg.Page}, nil); err != nil {
-		return false, fmt.Errorf("open %s: %w", r.cfg.Page, err)
+		return false, fmt.Errorf("open %s: %w", protect.Redact(r.cfg.Page), err)
 	}
-	r.emit(Event{Event: Status, Message: "opened " + r.cfg.Page + " in a new tab"})
+	r.emit(Event{Event: Status, Message: "opened " + protect.Redact(r.cfg.Page) + " in a new tab"})
 	return true, nil
 }
 
