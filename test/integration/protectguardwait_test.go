@@ -43,9 +43,12 @@ type guardWaitResult struct {
 	} `json:"other"`
 }
 
-func TestCDPHoldsATargetsCommandsPastAMinuteWhileChromeIsLive(t *testing.T) {
+const guardSessionEvent = `{"method":"Network.dataReceived","sessionId":"S1","params":{"requestId":"r1","timestamp":1,"dataLength":1,"encodedDataLength":1}}`
+
+func TestCDPHoldsATargetsCommandsPastAMinuteWhileItsGuardIsLive(t *testing.T) {
 	env, fake := setupFakeProtect(t, func(string, string) fakeScript { return guardWaitScript("{}") })
 	fake.delay("Network.enable", 90*time.Second)
+	fake.every(guardSessionEvent)
 	var r guardWaitResult
 	env.evalJSONWithin(t, "linkTest.protect.guardWait('chrome-2')", &r, 150*time.Second)
 	if !r.Enable.OK || r.Enable.MS < 89000 {
@@ -65,6 +68,19 @@ type guardHoldResult struct {
 
 func guardBounds(idle, limit string) []string {
 	return []string{"SLICC_CDP_GUARD_IDLE=" + idle, "SLICC_CDP_GUARD_LIMIT=" + limit}
+}
+
+func TestCDPRefusesASilentGuardAtTheIdleBoundWhileChromeAnswersOtherCommands(t *testing.T) {
+	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "60s"), func(string, string) fakeScript { return guardWaitScript("{}") })
+	fake.delay("Network.enable", 10*time.Minute)
+	var r guardWaitResult
+	env.evalJSON(t, "linkTest.protect.guardWait('chrome-2')", &r)
+	if !r.Enable.refused() || !strings.Contains(r.Enable.Error.Message, "its guard made no progress in 2s") || r.Enable.MS > 15000 {
+		t.Errorf("Page.enable on a target whose guard is silent while the browser answers: %+v, want slicc's refusal at the 2 s idle bound", r.Enable)
+	}
+	if !r.Other.OK || r.Other.MS > 10000 {
+		t.Errorf("a browser command on the same stream: %+v, want it answered", r.Other)
+	}
 }
 
 func TestCDPRefusesAHeldTargetAtTheIdleBoundWhenChromeIsSilent(t *testing.T) {
@@ -198,9 +214,10 @@ func TestCDPDecidesAHeldSessionsCommandsOnceItRegisters(t *testing.T) {
 	}
 }
 
-func TestCDPRefusesAHeldTargetAtTheOuterBoundWhileChromeIsLive(t *testing.T) {
+func TestCDPRefusesAHeldTargetAtTheOuterBoundWhileItsGuardIsLive(t *testing.T) {
 	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(string, string) fakeScript { return guardWaitScript("{}") })
 	fake.delay("Network.enable", 10*time.Minute)
+	fake.every(guardSessionEvent)
 	var r guardHoldResult
 	env.evalJSON(t, "linkTest.protect.guardHold('chrome-2')", &r)
 	if !r.Enable.refused() || !strings.Contains(r.Enable.Error.Message, "slicc can't keep seven's origin out of this target: its guard wasn't ready in 8s") || r.Enable.MS < 6000 || r.Enable.MS > 30000 {
@@ -208,15 +225,15 @@ func TestCDPRefusesAHeldTargetAtTheOuterBoundWhileChromeIsLive(t *testing.T) {
 	}
 }
 
-func TestCDPCountsATargetsEventsAsItsGuardsProgress(t *testing.T) {
+func TestCDPCountsOnlyItsGuardSessionAsAGuardsProgress(t *testing.T) {
 	targetEvent := func(id string) string {
 		return `{"method":"Target.targetInfoChanged","sessionId":"RELAY","params":{"targetInfo":{"targetId":"` + id + `","type":"page","url":"about:blank","title":"","attached":true}}}`
 	}
 	for _, tc := range []struct {
 		name, event, want string
 	}{
-		{"an event on the guard's session", `{"method":"Network.dataReceived","sessionId":"S1","params":{"requestId":"r1","timestamp":1,"dataLength":1,"encodedDataLength":1}}`, "its guard wasn't ready in 8s"},
-		{"a Target event for the target", targetEvent("T1"), "its guard wasn't ready in 8s"},
+		{"an event on the guard's session", guardSessionEvent, "its guard wasn't ready in 8s"},
+		{"a Target event for the target", targetEvent("T1"), "its guard made no progress in 2s"},
 		{"a Target event for another target", targetEvent("T9"), "its guard made no progress in 2s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -265,5 +282,39 @@ func TestCDPRefusesATargetsCommandsAtOnceWhenItsGuardFails(t *testing.T) {
 	env.evalJSON(t, "linkTest.protect.guardWait('chrome-2')", &r)
 	if r.Enable.OK || !strings.Contains(r.Enable.Error.Message, "slicc can't keep seven's origin out of this target") || r.Enable.MS > 5000 {
 		t.Errorf("Page.enable on the target: %+v, want slicc's refusal at once", r.Enable)
+	}
+}
+
+func pausedServiceWorkerScript(allowed string) fakeScript {
+	return func(method string, _ json.RawMessage) (string, []string) {
+		switch method {
+		case "Target.setAutoAttach":
+			return "{}", []string{`{"method":"Target.attachedToTarget","params":{"sessionId":"PSW","targetInfo":{"targetId":"SW1","type":"service_worker","url":"` + allowed + `/sw.js","title":"","attached":true},"waitingForDebugger":true}}`}
+		case "Target.attachToTarget":
+			return `{"sessionId":"G1"}`, nil
+		case "Browser.getVersion":
+			return `{"product":"Chrome/154.0.8037.98","protocolVersion":"1.3"}`, nil
+		}
+		return "{}", nil
+	}
+}
+
+func TestCDPLetsAPausedServiceWorkerStartBeforeItsGuard(t *testing.T) {
+	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(_, allowed string) fakeScript { return pausedServiceWorkerScript(allowed) })
+	fake.gate("Network.enable", "Runtime.runIfWaitingForDebugger")
+	var r struct {
+		Out []struct {
+			cdpOutcome
+			Method string `json:"method"`
+			MS     int    `json:"ms"`
+		} `json:"out"`
+	}
+	env.evalJSON(t, "linkTest.protect.calls("+jsArgs("chrome-2", [][]any{
+		{"Target.setAutoAttach", map[string]any{"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}},
+		{"Runtime.runIfWaitingForDebugger", map[string]any{}, "PSW"},
+		{"Debugger.enable", map[string]any{}, "PSW"},
+	})+")", &r)
+	if len(r.Out) != 3 || !r.Out[1].OK || r.Out[1].MS > 1500 || !r.Out[2].OK {
+		t.Errorf("a service worker paused until its debugger runs it, whose guard Chrome answers only after that: %+v, want runIfWaitingForDebugger answered at once and the guard ready after it", r.Out)
 	}
 }

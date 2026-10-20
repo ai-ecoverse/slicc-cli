@@ -77,6 +77,8 @@ func (g *guard) markedDropEvent(m *message, data []byte) browserVerdict {
 	})
 }
 
+var requestCredentials = []string{"cookie", "authorization", "proxy-authorization"}
+
 func stripHeaders(v any, names ...string) bool {
 	h, ok := v.(map[string]any)
 	if !ok {
@@ -120,14 +122,33 @@ func stripResponse(r map[string]any) bool {
 		return false
 	}
 	changed := stripHeaders(r["headers"], "set-cookie", "set-cookie2")
-	changed = stripHeaders(r["requestHeaders"], "cookie") || changed
-	for _, k := range []string{"headersText", "requestHeadersText"} {
-		if _, ok := r[k]; ok {
-			delete(r, k)
-			changed = true
+	changed = stripHeaders(r["requestHeaders"], requestCredentials...) || changed
+	changed = stripHeaderLines(r, "headersText", "set-cookie", "set-cookie2") || changed
+	return stripHeaderLines(r, "requestHeadersText", requestCredentials...) || changed
+}
+
+func stripHeaderLines(p map[string]any, field string, names ...string) bool {
+	text, ok := p[field].(string)
+	if !ok {
+		return false
+	}
+	lines := strings.Split(text, "\r\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		name, _, found := strings.Cut(line, ":")
+		drop := false
+		for _, n := range names {
+			drop = drop || found && strings.EqualFold(strings.TrimSpace(name), n)
+		}
+		if !drop {
+			kept = append(kept, line)
 		}
 	}
-	return changed
+	if len(kept) == len(lines) {
+		return false
+	}
+	p[field] = strings.Join(kept, "\r\n")
+	return true
 }
 
 func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
@@ -147,7 +168,7 @@ func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
 		if !g.requestMarkedLocked(m.SessionID, id) {
 			return true, world, nil
 		}
-		changed := stripHeaders(req["headers"], "cookie") || world
+		changed := stripHeaders(req["headers"], requestCredentials...) || world
 		return true, stripResponse(redirect) || changed, nil
 	})
 }
@@ -155,7 +176,7 @@ func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
 func (g *guard) requestExtra(p map[string]any, marked bool) bool {
 	changed := g.filterAssociated(p, "associatedCookies")
 	if changed || marked {
-		changed = stripHeaders(p["headers"], "cookie") || changed
+		changed = stripHeaders(p["headers"], requestCredentials...) || changed
 	}
 	return changed
 }
@@ -199,7 +220,8 @@ func (g *guard) responseExtra(p map[string]any, marked bool) bool {
 		return changed
 	}
 	changed = stripHeaders(p["headers"], "set-cookie", "set-cookie2") || changed
-	for _, k := range []string{"headersText", "blockedCookies", "exemptedCookies"} {
+	changed = stripHeaderLines(p, "headersText", "set-cookie", "set-cookie2") || changed
+	for _, k := range []string{"blockedCookies", "exemptedCookies"} {
 		if _, ok := p[k]; ok {
 			delete(p, k)
 			changed = true
@@ -233,15 +255,16 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 			return false, false, [][]byte{g.settlePausedLocked(m, p, id)}
 		}
 		g.handOutLocked(requestKey{m.SessionID, id})
-		if g.requestMarkedLocked(m.SessionID, other) {
+		if g.requestMarkedLocked(m.SessionID, other) || g.namesProtectedLocked(p["responseHeaders"]) {
 			g.markRequestLocked(m.SessionID, id)
+			g.markRequestLocked(m.SessionID, other)
 		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
 			return true, false, nil
 		}
 		changed := stripHeaderList(p, "responseHeaders", "set-cookie", "set-cookie2")
 		changed = stripHeaders(p["responseHeaders"], "set-cookie", "set-cookie2") || changed
-		changed = stripHeaders(req["headers"], "cookie") || changed
+		changed = stripHeaders(req["headers"], requestCredentials...) || changed
 		return true, changed, nil
 	})
 }
@@ -320,4 +343,34 @@ func (g *guard) handOutLocked(k requestKey) {
 		}
 		g.handedOrder = g.handedOrder[1:]
 	}
+}
+
+func (g *guard) namesProtectedLocked(headers any) bool {
+	var values []string
+	switch h := headers.(type) {
+	case []any:
+		for _, item := range h {
+			e, _ := item.(map[string]any)
+			if v, ok := e["value"].(string); ok {
+				values = append(values, v)
+			}
+		}
+	case map[string]any:
+		for _, v := range h {
+			if s, ok := v.(string); ok {
+				values = append(values, s)
+			}
+		}
+	}
+	for _, v := range values {
+		if _, cut := g.cutEmbedded(v); cut || g.cutWhole(v) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) cutWhole(v string) bool {
+	_, ok := g.cut(v)
+	return ok
 }

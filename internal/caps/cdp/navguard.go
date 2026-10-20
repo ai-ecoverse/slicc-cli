@@ -13,6 +13,25 @@ var slowGuard = 2 * time.Second
 
 var navTypes = map[string]bool{"page": true, "iframe": true, "background_page": true, "webview": true}
 
+var workerTypes = map[string]bool{"worker": true, "shared_worker": true, "service_worker": true}
+
+var unheldStart = map[string]bool{"shared_worker": true, "service_worker": true}
+
+func guarded(typ string) bool {
+	return navTypes[typ] || workerTypes[typ]
+}
+
+func (g *guard) startsUnheldLocked(c *command) bool {
+	s, ok := g.sessions[c.session]
+	return ok && c.method == "Runtime.runIfWaitingForDebugger" && unheldStart[s.typ]
+}
+
+func (g *guard) startsUnheld(c *command) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.startsUnheldLocked(c)
+}
+
 type navTarget struct {
 	target   string
 	session  string
@@ -23,6 +42,7 @@ type navTarget struct {
 	pending  int
 	done     bool
 	failed   bool
+	worker   bool
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -48,13 +68,13 @@ func (g *guard) callbackLocked(sessionID, method string, params any, fn func(m m
 }
 
 func (g *guard) touchLocked(targetID, typ string) [][]byte {
-	if targetID == "" || !navTypes[typ] || g.relaySession == "" {
+	if targetID == "" || !guarded(typ) || g.relaySession == "" {
 		return nil
 	}
 	if _, ok := g.navTargets[targetID]; ok {
 		return nil
 	}
-	nt := &navTarget{target: targetID, ready: make(chan struct{}), start: time.Now()}
+	nt := &navTarget{target: targetID, ready: make(chan struct{}), start: time.Now(), worker: workerTypes[typ]}
 	g.navTargets[targetID] = nt
 	sent := time.Now()
 	msg := g.callbackLocked(g.relaySession, "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, func(m message) [][]byte {
@@ -76,6 +96,7 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 		return nil
 	}
 	nt.session = res.SessionID
+	nt.progress = time.Now()
 	g.navSessions[res.SessionID] = nt
 	sent := time.Now()
 	step := func(method string) func(m message) [][]byte {
@@ -86,14 +107,19 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 			return nt.stepLocked(g, m)
 		}
 	}
-	calls := []struct {
+	type call struct {
 		method string
 		params any
-	}{
+	}
+	network := call{"Network.enable", map[string]any{"maxTotalBufferSize": 0, "maxResourceBufferSize": 0, "maxPostDataSize": 0}}
+	calls := []call{
 		{"Fetch.enable", map[string]any{"patterns": g.patterns}},
-		{"Network.enable", map[string]any{"maxTotalBufferSize": 0, "maxResourceBufferSize": 0, "maxPostDataSize": 0}},
+		network,
 		{"Network.setBypassServiceWorker", map[string]any{"bypass": true}},
 		{"Runtime.enable", nil},
+	}
+	if nt.worker {
+		calls = []call{network}
 	}
 	nt.pending = len(calls)
 	out := make([][]byte, 0, len(calls))
@@ -160,6 +186,7 @@ func (g *guard) navForgetLocked(targetID string) {
 	}
 	delete(g.navTargets, targetID)
 	delete(g.tainted, targetID)
+	delete(g.clean, targetID)
 	if nt.session != "" {
 		delete(g.navSessions, nt.session)
 	}
@@ -168,7 +195,7 @@ func (g *guard) navForgetLocked(targetID string) {
 
 func (g *guard) navWaitLocked(sessionID string) <-chan struct{} {
 	s, ok := g.sessions[sessionID]
-	if !ok || !navTypes[s.typ] {
+	if !ok || !guarded(s.typ) {
 		return nil
 	}
 	nt, ok := g.navTargets[s.target]
@@ -180,7 +207,7 @@ func (g *guard) navWaitLocked(sessionID string) <-chan struct{} {
 
 func (g *guard) navCheckLocked(sessionID string) string {
 	s, ok := g.sessions[sessionID]
-	if !ok || !navTypes[s.typ] {
+	if !ok || !guarded(s.typ) {
 		return ""
 	}
 	nt, ok := g.navTargets[s.target]
