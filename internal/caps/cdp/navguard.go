@@ -328,7 +328,13 @@ func (g *guard) errorPageSessionLocked(sessionID string) bool {
 }
 
 func (g *guard) errorPageCheckLocked(c *command) string {
-	if !g.errorPageSessionLocked(c.session) || errorPageMethods[c.method] {
+	if !g.errorPageSessionLocked(c.session) {
+		return ""
+	}
+	if c.method == "Page.reload" && c.params["scriptToEvaluateOnLoad"] != nil {
+		return refusedErrorPage
+	}
+	if errorPageMethods[c.method] {
 		return ""
 	}
 	domain, verb, _ := strings.Cut(c.method, ".")

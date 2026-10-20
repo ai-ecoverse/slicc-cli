@@ -462,6 +462,7 @@ export function protectTest(getLink, describe) {
         answers['Page.addScriptToEvaluateOnNewDocument'] = await ask('Page.addScriptToEvaluateOnNewDocument', { source: 'console.log(document.documentElement.outerHTML, JSON.stringify(globalThis.loadTimeData?.data_ ?? null))' });
         answers['DOM.enable'] = await ask('DOM.enable');
         answers['javascript:'] = await ask('Page.navigate', { url: 'javascript:console.log(document.documentElement.outerHTML)' });
+        answers['Page.reload with a script'] = await ask('Page.reload', { scriptToEvaluateOnLoad: 'console.log(document.documentElement.outerHTML, JSON.stringify(globalThis.loadTimeData?.data_ ?? null))' });
         const reloaded = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 20000);
         answers['Page.reload'] = await ask('Page.reload');
         await reloaded;

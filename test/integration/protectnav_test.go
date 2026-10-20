@@ -356,7 +356,7 @@ func (e *navEnv) testRedirectSecret(t *testing.T) {
 		}
 		var answers map[string]cdpOutcome
 		_ = json.Unmarshal(r.Answers, &answers)
-		for _, m := range []string{"Runtime.evaluate", "DOM.getDocument", "Page.captureSnapshot", "Page.addScriptToEvaluateOnNewDocument", "DOM.enable", "javascript:", "evaluateReloaded"} {
+		for _, m := range []string{"Runtime.evaluate", "DOM.getDocument", "Page.captureSnapshot", "Page.addScriptToEvaluateOnNewDocument", "DOM.enable", "javascript:", "Page.reload with a script", "evaluateReloaded"} {
 			if !answers[m].refused() {
 				t.Errorf("%s on the error page for %s: %+v", m, base, answers[m])
 			}
