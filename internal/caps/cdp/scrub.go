@@ -28,10 +28,47 @@ func (g *guard) scrub(data []byte) []byte {
 		return data
 	}
 	worlds := g.scrubWorlds(m)
-	if !g.scrubValue(m) && !worlds {
+	failed := g.scrubFailed(m)
+	if !g.scrubValue(m) && !worlds && !failed {
 		return data
 	}
 	return encode(m)
+}
+
+func (g *guard) scrubFailed(m map[string]any) bool {
+	session, _ := m["sessionId"].(string)
+	g.mu.Lock()
+	forms := g.failedFormsLocked(session)
+	g.mu.Unlock()
+	if len(forms) == 0 {
+		return false
+	}
+	changed := false
+	var walk func(v any) any
+	walk = func(v any) any {
+		switch t := v.(type) {
+		case string:
+			for _, f := range forms {
+				if strings.Contains(t, f.form) {
+					t, changed = strings.ReplaceAll(t, f.form, f.redacted), true
+				}
+			}
+			return t
+		case map[string]any:
+			for k, val := range t {
+				t[k] = walk(val)
+			}
+		case []any:
+			for i, val := range t {
+				t[i] = walk(val)
+			}
+		}
+		return v
+	}
+	for k, val := range m {
+		m[k] = walk(val)
+	}
+	return changed
 }
 
 func (g *guard) cut(v any) (string, bool) {

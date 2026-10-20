@@ -188,6 +188,9 @@ func (g *guard) checkLocked(c *command) string {
 	if reason := g.navCheckLocked(c.session); reason != "" {
 		return reason
 	}
+	if reason := g.errorPageCheckLocked(c); reason != "" {
+		return reason
+	}
 	k := callKey{c.session, c.id}
 	if _, busy := g.pending[k]; busy {
 		return "id " + itoa(c.id) + " is in use"
@@ -259,6 +262,12 @@ var methodRules = map[string]func(g *guard, c *command) string{
 	},
 	"Extensions.loadUnpacked": func(*guard, *command) string {
 		return "Extensions.loadUnpacked could load an extension into seven's origin"
+	},
+	"Page.navigate": func(_ *guard, c *command) string {
+		if protect.Scheme(c.str("url")) == "javascript" {
+			return "Page.navigate to a javascript: URL runs script in the page; use Runtime.evaluate"
+		}
+		return ""
 	},
 	"Target.getTargetInfo": func(g *guard, c *command) string {
 		if g.hiddenTargetLocked(c.str("targetId")) {

@@ -301,6 +301,14 @@ func Redact(raw string) string {
 	return scheme(u) + ":"
 }
 
+func Scheme(raw string) string {
+	u := parse(raw)
+	if u == nil {
+		return ""
+	}
+	return scheme(u)
+}
+
 func Host(raw string) string {
 	u := unwrap(parse(raw))
 	if u == nil {

@@ -2,6 +2,9 @@ package integration
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +31,26 @@ type navLog struct {
 	mu      sync.Mutex
 	hits    []string
 	beacons map[string][]string
+	secrets []string
+}
+
+func (l *navLog) secret() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	code := "fake-code-" + hex.EncodeToString(b)
+	l.secrets = append(l.secrets, code)
+	return code
+}
+
+func (l *navLog) lastSecret() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.secrets) == 0 {
+		return ""
+	}
+	return l.secrets[len(l.secrets)-1]
 }
 
 func (l *navLog) hit(host, uri string) {
@@ -80,6 +103,10 @@ func navServer(t *testing.T, log *navLog) *httptest.Server {
 		http.Redirect(w, r, r.URL.Query().Get("to"), http.StatusFound)
 	})
 	vectorRoutes(mux, log)
+	mux.HandleFunc("/redirect-secret", func(w http.ResponseWriter, r *http.Request) {
+		code := log.secret()
+		http.Redirect(w, r, r.URL.Query().Get("to")+"/doc?code="+code, http.StatusFound)
+	})
 	mux.HandleFunc("/beacon", func(w http.ResponseWriter, r *http.Request) {
 		log.beacon(r.URL.Query().Get("tag"), r.URL.Query().Get("origin"))
 		w.WriteHeader(http.StatusNoContent)
@@ -149,6 +176,7 @@ func TestCDPProtectsAcrossNavigation(t *testing.T) {
 	t.Run("an init script, then a script navigation onto seven", env.testScriptNavigation)
 	t.Run("an init script, then a script navigation onto the vault", env.testVaultNavigation)
 	t.Run("a server redirect into a protected origin", env.testRedirect)
+	t.Run("a server redirect's protected URL stays out of the error page the page drives", env.testRedirectSecret)
 	t.Run("a popup from an allowed tab", env.testPopupNavigation)
 	t.Run("iframes that attach without a URL", env.testFrames)
 	t.Run("a popup that never gets a URL", env.testNoURL)
@@ -292,6 +320,41 @@ func (e *navEnv) testRedirect(t *testing.T) {
 		r := e.navInit(t, nonce, away)
 		e.assertBlocked(t, r.TargetID, nonce, nonce, true)
 		e.closeTarget(r.TargetID)
+	}
+}
+
+func (e *navEnv) testRedirectSecret(t *testing.T) {
+	for _, base := range []string{e.seven, e.vault} {
+		var r struct {
+			Unreachable string          `json:"unreachable"`
+			Detached    bool            `json:"detached"`
+			Answers     json.RawMessage `json:"answers"`
+			Blank       cdpOutcome      `json:"blank"`
+			Listed      *protectTarget  `json:"listed"`
+			Close       cdpOutcome      `json:"close"`
+			Seen        string          `json:"seen"`
+		}
+		away := e.allowed + "/redirect-secret?to=" + url.QueryEscape(base)
+		(&protectEnv{linkEnv: e.linkEnv}).evalJSON(t, "linkTest.protect.redirectSecret("+jsArgs("chrome", e.allowed+"/doc?n=secret", away)+")", &r)
+		secret := e.log.lastSecret()
+		switch {
+		case secret == "" || r.Unreachable == "":
+			t.Fatalf("the redirect into %s never committed an error page: %+v", base, r)
+		case strings.Contains(r.Seen, secret) || strings.Contains(r.Seen, "fake-code-"):
+			t.Fatalf("the page read the redirect's protected URL into %s: %s", base, r.Seen)
+		case r.Detached || !r.Blank.OK || !r.Close.OK || r.Listed == nil || r.Listed.URL != "about:blank#blocked":
+			t.Fatalf("the error page for %s isn't drivable: %+v", base, r)
+		}
+		var answers map[string]cdpOutcome
+		_ = json.Unmarshal(r.Answers, &answers)
+		for _, m := range []string{"Runtime.evaluate", "DOM.getDocument", "Page.captureSnapshot", "Page.addScriptToEvaluateOnNewDocument", "DOM.enable", "javascript:", "evaluateReloaded"} {
+			if !answers[m].refused() {
+				t.Errorf("%s on the error page for %s: %+v", m, base, answers[m])
+			}
+		}
+		if !answers["Page.reload"].OK || !answers["evaluateAfter"].OK {
+			t.Errorf("reloading the error page for %s, or evaluating once it left: %+v %+v", base, answers["Page.reload"], answers["evaluateAfter"])
+		}
 	}
 }
 

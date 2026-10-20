@@ -2,11 +2,15 @@ package cdp
 
 import (
 	"encoding/json"
+	"net/url"
+	"slices"
+	"strings"
 	"time"
 )
 
 const (
-	refusedGuard = "slicc can't keep seven's origin out of this target"
+	refusedGuard     = "slicc can't keep seven's origin out of this target"
+	refusedErrorPage = "the target shows Chrome's error page for a protected URL, which names it; slicc only lets a page navigate, reload or close it"
 )
 
 var slowGuard = 2 * time.Second
@@ -15,22 +19,26 @@ var navTypes = map[string]bool{"page": true, "iframe": true, "background_page": 
 
 var sameDocument = map[string]bool{"sameDocument": true, "historySameDocument": true}
 
-const maxLoading = 64
+const (
+	maxLoading = 64
+	maxFailed  = 16
+)
 
 type navTarget struct {
-	target   string
-	session  string
-	start    time.Time
-	progress time.Time
-	reason   string
-	ready    chan struct{}
-	pending  int
-	done     bool
-	failed   bool
-	loading  map[string]int
-	started  int
-	unsure   bool
-	errorURL string
+	target     string
+	session    string
+	start      time.Time
+	progress   time.Time
+	reason     string
+	ready      chan struct{}
+	pending    int
+	done       bool
+	failed     bool
+	loading    map[string]int
+	started    int
+	unsure     bool
+	errorURL   string
+	failedURLs []string
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -127,6 +135,12 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	g.navWorldLocked(nt, m)
 	nt.commitLocked(m)
+	if g.o.Loaded(nt.errorURL) && !slices.Contains(nt.failedURLs, nt.errorURL) {
+		nt.failedURLs = append(nt.failedURLs, nt.errorURL)
+		if len(nt.failedURLs) > maxFailed {
+			nt.failedURLs = nt.failedURLs[1:]
+		}
+	}
 	if m.Method != "Fetch.requestPaused" {
 		return nil
 	}
@@ -271,4 +285,79 @@ func (nt *navTarget) commitLocked(m *message) {
 func (g *guard) errorPageLocked(t *target) bool {
 	nt, ok := g.navTargets[t.id]
 	return ok && nt.done && !nt.failed && !nt.unsure && len(nt.loading) == 0 && nt.errorURL != "" && nt.errorURL == t.url
+}
+
+var errorPageMethods = map[string]bool{
+	"Page.navigate": true, "Page.reload": true, "Page.stopLoading": true, "Page.close": true, "Page.bringToFront": true,
+	"Page.navigateToHistoryEntry": true, "Page.getNavigationHistory": true, "Page.resetNavigationHistory": true,
+	"Page.getFrameTree": true, "Page.setLifecycleEventsEnabled": true, "Page.removeScriptToEvaluateOnNewDocument": true,
+	"Runtime.runIfWaitingForDebugger": true,
+	"Target.setAutoAttach":            true, "Target.detachFromTarget": true, "Target.closeTarget": true,
+	"Target.getTargetInfo": true, "Target.activateTarget": true,
+}
+
+var errorPageDomains = map[string]bool{"Page": true, "Runtime": true, "Target": true, "Inspector": true, "Network": true, "Log": true}
+
+var errorPageEvents = map[string]bool{
+	"Runtime.executionContextCreated": true, "Runtime.executionContextDestroyed": true, "Runtime.executionContextsCleared": true,
+}
+
+func (g *guard) errorPageSessionLocked(sessionID string) bool {
+	s, ok := g.sessions[sessionID]
+	if !ok {
+		return false
+	}
+	nt, ok := g.navTargets[s.target]
+	return ok && nt.errorURL != "" && g.o.Loaded(nt.errorURL)
+}
+
+func (g *guard) errorPageCheckLocked(c *command) string {
+	if !g.errorPageSessionLocked(c.session) || errorPageMethods[c.method] {
+		return ""
+	}
+	domain, verb, _ := strings.Cut(c.method, ".")
+	if errorPageDomains[domain] && (verb == "enable" || verb == "disable") {
+		return ""
+	}
+	return refusedErrorPage
+}
+
+func errorPageEvent(method string) bool {
+	domain, _, _ := strings.Cut(method, ".")
+	switch domain {
+	case "Page", "Target", "Inspector", "Network", "Fetch":
+		return true
+	}
+	return errorPageEvents[method]
+}
+
+type failedForm struct {
+	form     string
+	redacted string
+}
+
+func (g *guard) failedFormsLocked(sessionID string) []failedForm {
+	s, ok := g.sessions[sessionID]
+	if !ok {
+		return nil
+	}
+	nt, ok := g.navTargets[s.target]
+	if !ok {
+		return nil
+	}
+	var forms []failedForm
+	for _, u := range nt.failedURLs {
+		r := redactURL(u)
+		for _, f := range []string{u, url.QueryEscape(u), url.PathEscape(u)} {
+			forms = append(forms, failedForm{f, r})
+		}
+		if d, err := url.QueryUnescape(u); err == nil {
+			forms = append(forms, failedForm{d, r})
+		}
+		if d, err := url.PathUnescape(u); err == nil {
+			forms = append(forms, failedForm{d, r})
+		}
+	}
+	slices.SortStableFunc(forms, func(a, b failedForm) int { return len(b.form) - len(a.form) })
+	return forms
 }
