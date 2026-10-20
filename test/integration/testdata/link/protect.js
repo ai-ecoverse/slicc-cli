@@ -695,7 +695,8 @@ export function protectTest(getLink, describe) {
         await c.evaluate('new Promise((resolve) => setTimeout(() => resolve(true), 300))', sessionId);
         const shown = new Set(c.events.filter((e) => e.method === 'Runtime.executionContextCreated' && e.sessionId === sessionId).map((e) => e.params.context.id));
         out.numeric = [];
-        for (let id = 1; id <= 32; id += 1) {
+        const top = Math.max(0, ...shown) + 8;
+        for (let id = Math.max(1, top - 40); id <= top; id += 1) {
           const r = await outcome(c.send('Runtime.evaluate', { expression: 'globalThis.sliccFixtureWorld?.secret ?? location.href', returnByValue: true, contextId: id }, sessionId));
           out.numeric.push({ id, exposed: shown.has(id), ok: r.ok && !r.result.exceptionDetails, message: r.error?.message ?? '', leaked: JSON.stringify(r).includes('fake-value-0001') });
         }
