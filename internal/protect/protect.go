@@ -148,21 +148,17 @@ func (o *Origins) URL(raw string) bool {
 }
 
 func (o *Origins) Loaded(raw string) bool {
-	return o.URL(raw) || (rules.Unparseable == "protected" && raw != "" && !Parses(raw))
+	return o.URL(raw) || Unparseable(raw)
 }
 
-func (o *Origins) LoadedOrigin(raw string) bool {
-	return raw != "null" && raw != "://" && o.Loaded(raw)
+func Unparseable(raw string) bool {
+	return rules.Unparseable == "protected" && raw != "" && raw != "null" && raw != "://" && !Parses(raw)
 }
 
 func Parses(raw string) bool {
 	u := parse(raw)
 	for i := 0; u != nil && i < maxUnwrap && slices.Contains(rules.InnerSchemes, scheme(u)); i++ {
-		inner := strings.TrimPrefix(u.Href(false), u.Protocol())
-		if scheme(u) == "blob" && strings.HasPrefix(inner, "null/") {
-			return true
-		}
-		u = parse(inner)
+		u = parse(strings.TrimPrefix(u.Href(false), u.Protocol()))
 	}
 	return u != nil && !slices.Contains(rules.InnerSchemes, scheme(u))
 }

@@ -50,7 +50,7 @@ func TestCDPFailsClosedOnUnparseableURLs(t *testing.T) {
 	t.Run("an exotic host that isn't protected is cut too", func(t *testing.T) { env.testLoadedTab(t, env.exotic, "an%20exotic", false) })
 	t.Run("window.open to an unparseable sliccy.ai host is cut", func(t *testing.T) { env.testPopupTo(t, env.hole, "exa%20mple") })
 	t.Run("window.open to an exotic host is cut too", func(t *testing.T) { env.testPopupTo(t, env.exotic, "an%20exotic") })
-	t.Run("a blob from an opaque origin stays readable", env.testOpaqueBlob)
+	t.Run("a blob from an opaque origin is protected", env.testOpaqueBlob)
 	t.Run("a joiner host Chrome loads on sliccy.ai is cut", func(t *testing.T) { env.testLoadedForm(t, env.zwj, "xn--1ug.sliccy.ai", true, true) })
 	t.Run("an invalid xn-- label Chrome loads on sliccy.ai is cut", func(t *testing.T) { env.testLoadedForm(t, env.xna, "xn--a.sliccy.ai", true, true) })
 	t.Run("every other destination that doesn't parse is refused", env.testOtherDestinations)
@@ -188,7 +188,7 @@ func (e *unparsedEnv) testLoadedForm(t *testing.T, u, marker string, cookie, opt
 	}
 	e.realDocument(t, made.TargetID, marker, cookie)
 	for _, tg := range e.targets(t) {
-		if tg.TargetID == made.TargetID && (strings.Contains(tg.URL, marker) || strings.Contains(tg.Title, "cdp nav")) {
+		if tg.TargetID == made.TargetID && (!optional || strings.Contains(tg.URL, marker) || strings.Contains(tg.Title, "cdp nav")) {
 			t.Errorf("the tab is listed as %+v", tg)
 		}
 	}
@@ -249,10 +249,10 @@ func (e *unparsedEnv) testOpaqueBlob(t *testing.T) {
 	if !strings.HasPrefix(r.URL, "blob:null/") || !strings.Contains(r.Text, "opaque blob") {
 		t.Fatalf("the data: page made %q holding %q, want a blob:null/ URL", r.URL, r.Text)
 	}
-	if !r.Body.OK || !strings.Contains(r.Body.Result.Body, "opaque blob") {
+	if r.Body.OK || strings.Contains(r.Body.Result.Body, "opaque blob") {
 		t.Errorf("Network.getResponseBody of the blob: %+v", r.Body)
 	}
-	if !r.Navigate.OK || !strings.Contains(r.Href.Result, "blob ok") || r.Info != r.URL {
+	if r.Navigate.Error.Message != refusedParseText || strings.Contains(r.Href.Result, "blob ok") || strings.Contains(r.Info, "blob:") {
 		t.Errorf("the tab on the blob: navigate %+v, page %+v, listed at %q", r.Navigate, r.Href, r.Info)
 	}
 }
@@ -287,13 +287,14 @@ func (e *unparsedEnv) testOtherDestinations(t *testing.T) {
 	history := e.historyTab(t)
 	var r map[string]json.RawMessage
 	e.evalJSON(t, "linkTest.protect.parseRefusals("+jsArgs("chrome", e.allowed, e.hole, history, "exa%20mple")+")", &r)
-	for _, k := range []string{"setCookie", "deleteCookies", "setCookies", "storageSetCookies", "continueRequest", "loadNetworkResource", "pwaInstall", "pwaLaunch", "history"} {
+	for _, k := range []string{"setCookie", "getCookies", "deleteCookies", "setCookies", "storageSetCookies", "continueRequest", "loadNetworkResource", "pwaInstall", "pwaLaunch", "history"} {
 		var o cdpOutcome
 		if err := json.Unmarshal(r[k], &o); err != nil || o.Error.Message != refusedParseText {
 			t.Errorf("%s with %q: %s", k, e.hole, r[k])
 		}
 	}
 	var after struct {
+		Own       cdpOutcome `json:"getCookiesOwn"`
 		Continued cdpOutcome `json:"continued"`
 		Body      string     `json:"body"`
 		Legacy    cdpOutcome `json:"legacyEnable"`
@@ -302,6 +303,9 @@ func (e *unparsedEnv) testOtherDestinations(t *testing.T) {
 	}
 	b, _ := json.Marshal(r)
 	_ = json.Unmarshal(b, &after)
+	if !after.Own.OK {
+		t.Errorf("Network.getCookies by the page's own URL: %+v", after.Own)
+	}
 	if !after.Continued.OK || strings.Contains(after.Body, "cdp nav hole") {
 		t.Errorf("the paused request after the refusal: %+v, body %q", after.Continued, after.Body)
 	}

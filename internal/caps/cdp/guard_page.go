@@ -233,7 +233,7 @@ func (g *guard) destinationReason(urls ...string) string {
 		}
 	}
 	for _, u := range urls {
-		if u != "" && !protect.Parses(u) {
+		if protect.Unparseable(u) {
 			return refusedParse
 		}
 	}
@@ -279,6 +279,18 @@ var methodRules = map[string]func(g *guard, c *command) string{
 	"Page.deleteCookie":           (*guard).cookieRule,
 	"Network.setCookies":          (*guard).cookiesRule,
 	"Storage.setCookies":          (*guard).cookiesRule,
+	"Network.getCookies":          (*guard).cookieURLsRule,
+	"Page.getCookies":             (*guard).cookieURLsRule,
+}
+
+func (g *guard) cookieURLsRule(c *command) string {
+	list, _ := c.params["urls"].([]any)
+	for _, item := range list {
+		if u, ok := item.(string); ok && protect.Unparseable(u) {
+			return refusedParse
+		}
+	}
+	return ""
 }
 
 func (g *guard) fetchRule(c *command) string {
@@ -346,7 +358,7 @@ func (g *guard) cookieParamReasonLocked(p map[string]any) string {
 		return ""
 	case g.o.URL(raw) || g.o.CookieDomain(protect.Host(raw)):
 		return refusedCookies
-	case !protect.Parses(raw):
+	case protect.Unparseable(raw):
 		return refusedParse
 	}
 	return ""

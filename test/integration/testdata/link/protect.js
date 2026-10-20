@@ -382,10 +382,9 @@ export function protectTest(getLink, describe) {
         await c.send('Network.enable', {}, sessionId);
         const url = await c.evaluate("URL.createObjectURL(new Blob(['<title>blob ok</title>opaque blob'], { type: 'text/html' }))", sessionId);
         const text = await c.evaluate(`fetch(${JSON.stringify(url)}).then((r) => r.text())`, sessionId);
-        const sent = await c.waitEvent((e) => e.method === 'Network.requestWillBeSent' && e.sessionId === sessionId && e.params.request.url === url, 10000);
-        const { requestId } = sent.params;
-        await c.waitEvent((e) => e.method === 'Network.loadingFinished' && e.sessionId === sessionId && e.params.requestId === requestId, 10000);
-        const body = await outcome(c.send('Network.getResponseBody', { requestId }, sessionId));
+        await sleep(500);
+        const sent = c.events.find((e) => e.method === 'Network.requestWillBeSent' && e.sessionId === sessionId && e.params.request.url.startsWith('blob:'));
+        const body = sent ? await outcome(c.send('Network.getResponseBody', { requestId: sent.params.requestId }, sessionId)) : { ok: false, error: { message: 'no request for the blob reached the page' } };
         const navigate = await outcome(c.send('Page.navigate', { url }, sessionId));
         await sleep(1000);
         const href = await outcome(c.evaluate('location.href + " " + document.title', sessionId));
@@ -398,6 +397,8 @@ export function protectTest(getLink, describe) {
         const out = {};
         const { targetId, sessionId } = await c.attachTo(`${base}/doc?n=refusals`);
         out.setCookie = await outcome(c.send('Network.setCookie', { name: 'x', value: '1', url: hole }, sessionId));
+        out.getCookies = await outcome(c.send('Network.getCookies', { urls: [`${base}/`, hole] }, sessionId));
+        out.getCookiesOwn = await outcome(c.send('Network.getCookies', { urls: [`${base}/`] }, sessionId));
         out.deleteCookies = await outcome(c.send('Network.deleteCookies', { name: 'seven', url: hole }, sessionId));
         out.setCookies = await outcome(c.send('Network.setCookies', { cookies: [{ name: 'x', value: '1', url: hole }] }, sessionId));
         out.storageSetCookies = await outcome(c.send('Storage.setCookies', { cookies: [{ name: 'x', value: '1', url: hole }] }));
