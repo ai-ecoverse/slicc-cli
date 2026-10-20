@@ -394,7 +394,7 @@ func TestSixDiscoveryMarksSixRanksItLastAndNeverChoosesIt(t *testing.T) {
 	}
 
 	rows := flow.WithSixRows(o, entries)
-	var sixRows []string
+	var sixRows, runningRows []string
 	for _, e := range rows {
 		if e.Kind == browser.KindSix {
 			sixRows = append(sixRows, e.ID)
@@ -402,9 +402,15 @@ func TestSixDiscoveryMarksSixRanksItLastAndNeverChoosesIt(t *testing.T) {
 				t.Fatalf("six row %+v", e)
 			}
 		}
-		if e.Endpoint != nil && e.Endpoint.Six {
+		if e.Kind != browser.KindSix && e.Endpoint != nil && e.Endpoint.Six {
 			t.Fatalf("six's endpoint %s is listed next to its profile's row", e.ID)
 		}
+		if e.Kind == browser.KindSix && e.Endpoint != nil {
+			runningRows = append(runningRows, e.ID)
+		}
+	}
+	if len(runningRows) == 0 {
+		t.Fatalf("no six row carries its running endpoint: %v", ids(rows))
 	}
 	if want := []string{"six", "six:5711", "six:5720"}; !reflect.DeepEqual(sixRows, want) {
 		t.Fatalf("six rows %v, want %v", sixRows, want)

@@ -12,15 +12,16 @@ import (
 )
 
 const (
-	refusedTarget  = "target is on seven's origin"
-	refusedCookies = "cookies on seven's origin"
-	refusedLost    = "slicc lost track of the browser's targets"
-	refusedPaused  = "slicc didn't pass this paused request to the page, so it could be seven's"
-	LostGrace      = 2 * time.Second
-	maxTombstones  = 4096
-	maxRefused     = 4096
-	maxMarked      = 65536
-	relayIDBase    = 1 << 30
+	refusedTarget       = "target is on seven's origin"
+	refusedCookies      = "cookies on seven's origin"
+	refusedLost         = "slicc lost track of the browser's targets"
+	refusedPaused       = "slicc didn't pass this paused request to the page, so it could be seven's"
+	refusedLoadResource = "Network.loadNetworkResource follows redirects inside the browser, so it could load seven's pages"
+	LostGrace           = 2 * time.Second
+	maxTombstones       = 4096
+	maxRefused          = 4096
+	maxMarked           = 65536
+	relayIDBase         = 1 << 30
 )
 
 var refusedParse = strings.TrimPrefix(protect.UnparseableRefusal(), "slicc: refused: ")

@@ -601,7 +601,7 @@ export function protectTest(getLink, describe) {
         await outcome(c.send('Target.closeTarget', { targetId }));
         const h = await c.send('Target.attachToTarget', { targetId: historyTarget, flatten: true });
         const { entries } = await c.send('Page.getNavigationHistory', {}, h.sessionId);
-        const entry = entries.find((e) => e.url.includes(holeMarker));
+        const entry = entries.find((e) => e.url.includes(holeMarker)) ?? entries.find((e) => e.url === '');
         out.history = entry ? await outcome(c.send('Page.navigateToHistoryEntry', { entryId: entry.id }, h.sessionId)) : { ok: false, error: { message: `no history entry on ${holeMarker} in ${JSON.stringify(entries.map((e) => e.url))}` } };
         await outcome(c.send('Target.detachFromTarget', { sessionId: h.sessionId }));
         return out;
@@ -925,6 +925,106 @@ export function protectTest(getLink, describe) {
           attempts[id] = await outcome(c.send('Network.continueInterceptedRequest', { interceptionId: id, rawResponse: btoa('HTTP/1.1 200 OK\r\n\r\nforged') }));
         }
         return { seen, attempts };
+      }),
+    redirectHeaders: (browser, start, hops) =>
+      run(browser, async (c) => {
+        const results = [];
+        const sessions = new Set();
+        c.on((e) => {
+          if (e.method !== 'Fetch.requestPaused' || !sessions.has(e.sessionId)) return;
+          const { requestId, responseStatusCode } = e.params;
+          const go = () => c.send('Fetch.continueRequest', { requestId }, e.sessionId).catch(() => {});
+          if (responseStatusCode >= 300 && responseStatusCode < 400) {
+            outcome(c.send('Fetch.getResponseBody', { requestId }, e.sessionId)).then((r) => {
+              results.push({ call: 'Fetch.getResponseBody', ...r });
+              go();
+            });
+            return;
+          }
+          go();
+        });
+        const tab = async () => {
+          const { targetId, sessionId } = await c.attachTo(start);
+          sessions.add(sessionId);
+          await c.send('Page.enable', {}, sessionId);
+          await c.send('Network.enable', {}, sessionId);
+          await outcome(c.send('Audits.enable', {}, sessionId));
+          await outcome(c.send('Log.enable', {}, sessionId));
+          await c.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }, { urlPattern: '*', requestStage: 'Response' }] }, sessionId);
+          return { targetId, sessionId };
+        };
+        const bodies = async (sessionId) => {
+          const ids = [...new Set(c.events.filter((e) => e.sessionId === sessionId && e.method.startsWith('Network.') && e.params.requestId).map((e) => e.params.requestId))];
+          for (const requestId of ids) results.push({ call: 'Network.getResponseBody', ...(await outcome(c.send('Network.getResponseBody', { requestId }, sessionId))) });
+        };
+        for (const hop of hops) {
+          const a = await tab();
+          results.push({ call: 'fetch', ...(await outcome(c.evaluate(`fetch(${JSON.stringify(hop)}, { mode: 'no-cors', credentials: 'include' }).then((r) => r.type + ' ' + r.status + ' ' + r.url, (e) => String(e))`, a.sessionId))) });
+          const stream = await outcome(c.send('Network.loadNetworkResource', { frameId: a.targetId, url: hop, options: { disableCache: true, includeCredentials: true } }, a.sessionId));
+          results.push({ call: 'Network.loadNetworkResource', ...stream });
+          if (stream.ok && stream.result.resource.stream) results.push({ call: 'IO.read', ...(await outcome(c.send('IO.read', { handle: stream.result.resource.stream }, a.sessionId))) });
+          await sleep(500);
+          await bodies(a.sessionId);
+          await outcome(c.send('Target.closeTarget', { targetId: a.targetId }));
+          const b = await tab();
+          results.push({ call: 'Page.navigate', ...(await outcome(c.send('Page.navigate', { url: hop }, b.sessionId))) });
+          await sleep(1500);
+          await bodies(b.sessionId);
+          await outcome(c.send('Target.closeTarget', { targetId: b.targetId }));
+        }
+        const events = c.events.filter((e) => sessions.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
+        return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })) };
+      }),
+    redirectReads: (browser, embed, flip, override) =>
+      run(browser, async (c) => {
+        const results = [];
+        const { targetId, sessionId } = await c.attachTo('about:blank');
+        const record = async (call, promise) => results.push({ call, ...(await outcome(promise)) });
+        c.on((e) => {
+          if (e.method !== 'Fetch.requestPaused' || e.sessionId !== sessionId) return;
+          const { requestId, request } = e.params;
+          if (request.url.includes('n=override')) record('Fetch.continueRequest', c.send('Fetch.continueRequest', { requestId, url: override }, sessionId));
+          c.send('Fetch.continueRequest', { requestId }, sessionId).catch(() => {});
+        });
+        await c.send('Page.enable', {}, sessionId);
+        await c.send('Network.enable', {}, sessionId);
+        await c.send('DOM.enable', {}, sessionId);
+        await c.send('CSS.enable', {}, sessionId);
+        await c.send('Runtime.enable', {}, sessionId);
+        await outcome(load(c, sessionId, embed));
+        await sleep(1000);
+        const tree = await c.send('Page.getResourceTree', {}, sessionId);
+        const frames = [tree.frameTree, ...(tree.frameTree.childFrames ?? [])];
+        for (const f of frames) {
+          for (const r of [{ url: f.frame.url }, ...(f.resources ?? [])]) {
+            await record('Page.getResourceContent ' + r.url, c.send('Page.getResourceContent', { frameId: f.frame.id, url: r.url }, sessionId));
+            await record('Page.searchInResource', c.send('Page.searchInResource', { frameId: f.frame.id, url: r.url, query: 'fake' }, sessionId));
+          }
+        }
+        await record('Page.captureSnapshot', c.send('Page.captureSnapshot', { format: 'mhtml' }, sessionId));
+        await record('DOM.getDocument', c.send('DOM.getDocument', { depth: -1, pierce: true }, sessionId));
+        await record('Page.getFrameTree', c.send('Page.getFrameTree', {}, sessionId));
+        await record('targets', c.send('Target.getTargets', {}));
+        const contexts = c.events.filter((e) => e.method === 'Runtime.executionContextCreated' && e.sessionId === sessionId).map((e) => e.params.context.id);
+        for (const contextId of contexts) await record('Runtime.evaluate', c.send('Runtime.evaluate', { contextId, expression: 'document.documentElement.outerHTML', returnByValue: true }, sessionId));
+        for (const e of c.events.filter((x) => x.method === 'CSS.styleSheetAdded' && x.sessionId === sessionId)) {
+          await record('CSS.getStyleSheetText', c.send('CSS.getStyleSheetText', { styleSheetId: e.params.header.styleSheetId }, sessionId));
+        }
+        await record('xhr', c.evaluate(`new Promise((resolve) => { const x = new XMLHttpRequest(); x.open('GET', ${JSON.stringify(flip)}); x.onloadend = () => resolve(x.status + ' ' + x.responseText); x.send(); })`, sessionId));
+        await sleep(300);
+        const xhr = c.events.find((e) => e.sessionId === sessionId && e.method === 'Network.requestWillBeSent' && e.params.request.url === flip);
+        if (xhr) await record('Network.replayXHR', c.send('Network.replayXHR', { requestId: xhr.params.requestId }, sessionId));
+        await sleep(1500);
+        await c.send('Fetch.enable', { patterns: [{ urlPattern: '*n=override*', requestStage: 'Request' }] }, sessionId);
+        await record('fetch override', c.evaluate(`fetch(${JSON.stringify(embed + '?n=override')}).then((r) => r.text(), (e) => String(e))`, sessionId));
+        await sleep(500);
+        const ids = [...new Set(c.events.filter((e) => e.sessionId === sessionId && e.method.startsWith('Network.') && e.params.requestId).map((e) => e.params.requestId))];
+        for (const requestId of ids) await record('Network.getResponseBody', c.send('Network.getResponseBody', { requestId }, sessionId));
+        await record('Network.loadNetworkResource', c.send('Network.loadNetworkResource', { frameId: targetId, url: embed, options: { disableCache: true, includeCredentials: true } }, sessionId));
+        await record('Network.loadNetworkResource browser', c.send('Network.loadNetworkResource', { url: embed, options: { disableCache: true, includeCredentials: false } }));
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        const events = c.events.filter((e) => e.sessionId === sessionId).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
+        return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })) };
       }),
     extraInfo: (browser, last) =>
       run(browser, async (c) => {

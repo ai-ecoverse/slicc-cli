@@ -15,7 +15,7 @@ import (
 var ErrNoBrowser = errors.New("no browser to control: run `slicc open` to link seven in your everyday browser")
 
 func CanHost(e browser.Entry) error {
-	if e.Kind == browser.KindEndpoint || e.Kind == browser.KindSix {
+	if e.Kind == browser.KindEndpoint || e.Kind == browser.KindSix || IsPair(e) {
 		return nil
 	}
 	if e.Installed == nil {
@@ -118,6 +118,9 @@ func Check(sel []browser.Entry) error {
 	}
 	if err := CanHost(sel[0]); err != nil {
 		return err
+	}
+	if len(sel) > 1 && slices.ContainsFunc(sel, IsPair) {
+		return errPairAlone
 	}
 	for _, e := range sel[1:] {
 		if err := CanExtra(e); err != nil {

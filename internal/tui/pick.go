@@ -23,12 +23,15 @@ const (
 	groupRunning
 	groupLaunch
 	groupSix
+	groupPair
 	groupHeadless
 	groupElectron
 )
 
 func groupOf(e browser.Entry) group {
 	switch {
+	case flow.IsPair(e):
+		return groupPair
 	case flow.IsSix(e):
 		return groupSix
 	case flow.IsHeadless(e) && e.Endpoint.Source != browser.SourceFlag:
@@ -294,6 +297,7 @@ func (m Model) goChoice() (tea.Model, tea.Cmd) {
 	m.mode = ModeDashboard
 	m.dash = newDashboard(m.cfg.Now())
 	m.dash.notice = notice
+	m.dash.pair = flow.IsPair(sel[0])
 	if m.cfg.Start != nil {
 		m.cfg.Start(Choice{Entries: sel, Profiles: profiles})
 	}
@@ -418,6 +422,8 @@ func (m Model) sectionHeader(g group) string {
 		label, desc = "Launch", "in a SLICC profile of its own, for testing SLICC seven"
 	case groupSix:
 		return m.sectionLine("SLICC six profiles", "") + "  " + m.risk().Render("re-use existing SLICC profile (might lose data)")
+	case groupPair:
+		label, desc = "Pair", "seven in your everyday browser, linked over loopback without cdp"
 	}
 	return m.sectionLine(label, desc)
 }
@@ -508,7 +514,7 @@ func (m Model) entryRow(i, ei, w, cw int) string {
 		nameStyle = m.st.good.Bold(m.cfg.Color)
 	}
 	version := majorVersion(e.Version)
-	if groupOf(e) == groupSix {
+	if groupOf(e) == groupSix || groupOf(e) == groupPair {
 		version = ""
 	}
 	name := displayName(e)
@@ -600,7 +606,12 @@ func (m Model) chips(ei int) []span {
 			out = append(out, span{m.st.faint, "new profile " + p})
 		}
 	case groupSix:
-		if t, ok := m.used[e.ID]; ok {
+		if e.Endpoint != nil {
+			out = append(out, span{m.st.good, "running"})
+			if e.Endpoint.SevenOpen {
+				out = append(out, span{m.st.good, "seven is open"})
+			}
+		} else if t, ok := m.used[e.ID]; ok {
 			out = append(out, span{m.st.faint, usedAgo(m.cfg.Now(), t)})
 		}
 	case groupElectron:
@@ -633,7 +644,12 @@ func (m Model) right(e browser.Entry) string {
 			s += " · SLICC six's profile"
 		}
 		return s
+	case groupPair:
+		return "no cdp"
 	case groupSix:
+		if e.Six != nil && e.Endpoint != nil {
+			return m.sixBrowser(e) + " at " + hostPort(e.Endpoint.CDP)
+		}
 		if e.Installed != nil {
 			return "opens in " + m.sixBrowser(e)
 		}
@@ -659,7 +675,15 @@ func (m Model) opens(e browser.Entry) string {
 		}
 		return "Opens seven in " + name + " at " + hostPort(e.Endpoint.CDP) + " (new tab)"
 	case groupSix:
+		if e.Endpoint != nil && e.Endpoint.SevenOpen {
+			return "Links the seven tab in SLICC profile " + name + ", running in " + m.sixBrowser(e) + " at " + hostPort(e.Endpoint.CDP)
+		}
+		if e.Endpoint != nil {
+			return "Opens seven in SLICC profile " + name + ", running in " + m.sixBrowser(e) + " at " + hostPort(e.Endpoint.CDP) + " (new tab) " + m.risk().Render("(might lose data)")
+		}
 		return "Re-uses existing SLICC profile " + name + " in " + m.sixBrowser(e) + " " + m.risk().Render("(might lose data)")
+	case groupPair:
+		return "Opens seven in your " + m.st.title.Render("default browser") + " and pairs it over loopback (no cdp: slicc controls no browser)"
 	}
 	return "Adds " + name + " as an extra browser"
 }
@@ -731,6 +755,8 @@ func (m Model) detail() (string, string) {
 			dir = e.Six.Dir
 		}
 		return enter + m.opens(e), tilde(dir)
+	case groupPair:
+		return enter + m.opens(e), "the pairing URL works in any browser, once, for 10 minutes"
 	default:
 		if e.Installed.DebugSupport == browser.DebugDisabled {
 			return "  " + m.st.faint.Render(displayName(e)+" blocks remote debugging, so it can't be picked"), tilde(e.Installed.Path)

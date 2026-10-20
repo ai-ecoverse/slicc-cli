@@ -49,6 +49,8 @@ type dashboard struct {
 	notice   string
 	closed   []string
 	failed   string
+	pair     bool
+	pairURL  string
 }
 
 const (
@@ -138,6 +140,8 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 	case flow.Closed:
 		d.closed = e.Browsers
 		d.setState(StateClosed, now)
+	case flow.Pairing:
+		d.pairURL = e.URL
 	}
 }
 
@@ -288,6 +292,9 @@ func (m Model) dashView() string {
 		right = st.faint.Render("up " + uptime(m.cfg.Now().Sub(d.since)))
 	}
 	b = append(b, m.spread(st.title.Render("slicc")+st.faint.Render(" · ")+m.stateChip(), right), "")
+	if d.pair {
+		return m.pairView(b)
+	}
 	b = append(b, m.sectionLine("BROWSERS", ""))
 	if len(d.browsers) == 0 {
 		b = append(b, "  "+st.faint.Render("starting…"))
@@ -382,13 +389,19 @@ func (m Model) dashCaps() []string {
 	case d.kernel != "":
 		kernel, on = d.kernel, true
 	case d.kernOff != "":
-		kernel = st.bad.Render("off: "+d.kernOff) + "  " + st.key.Render("c") + st.faint.Render(" pick a port")
+		kernel = st.bad.Render("off: " + d.kernOff)
+		if !d.pair {
+			kernel += "  " + st.key.Render("c") + st.faint.Render(" pick a port")
+		}
 	case m.settings.Kernel > 0:
 		kernel = st.faint.Render(fmt.Sprintf(":%d · waiting for seven", m.settings.Kernel))
 	}
 	out = append(out, row(on, "kernel", kernel))
 	folders := m.settings.shared()
 	if len(folders) == 0 {
+		if d.pair {
+			return append(out, row(false, "folders", off))
+		}
 		out = append(out, row(false, "folders", off+"  "+st.key.Render("m")+st.faint.Render(" share one")))
 		return out
 	}

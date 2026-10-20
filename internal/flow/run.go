@@ -72,6 +72,7 @@ type run struct {
 	browsers []Browser
 	client   *cdp.Client
 	allowed  *signal.Origins
+	kernel   int
 }
 
 func PageOrigins(page string, extra []string) ([]string, error) {
@@ -317,11 +318,7 @@ func (r *run) policy(ctx context.Context) (*policy.Policy, error) {
 			given = append(given, p)
 		}
 	}
-	var kernel uint16
-	if r.cfg.Kernel > 0 {
-		kernel = uint16(r.cfg.Kernel)
-	}
-	pol := policy.Local(kernel).With(r.cfg.Allow, r.cfg.Deny)
+	pol := policy.Local(uint16(r.kernel)).With(r.cfg.Allow, r.cfg.Deny)
 	o := r.cfg.Browser
 	o.Status = func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) }
 	if err := browser.Guard(ctx, pol, o, given, r.cfg.Expose, r.cfg.Logf); err != nil {
@@ -351,11 +348,18 @@ func (r *run) serve(ctx context.Context) error {
 func (r *run) serveLink(ctx context.Context) (bool, error) {
 	lctx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
+	r.kernel = 0
+	if r.cfg.Kernel > 0 {
+		r.kernel = kernelin.Pick(r.cfg.Kernel, func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) })
+	}
 	pol, err := r.policy(lctx)
 	if err != nil {
 		return false, err
 	}
 	n := node.New(node.Config{Name: r.cfg.Name, Host: r.cfg.Name, Version: r.cfg.Version, Mode: "local", Policy: pol, Exit: true, Logf: r.cfg.Logf, Status: r.cfg.Logf})
+	if r.kernel > 0 {
+		n.OnHello(kernelin.Announce(r.kernel))
+	}
 	caps, err := r.cfg.Register(lctx, n, pol, append([]Browser(nil), r.browsers...))
 	if err != nil {
 		return false, err
@@ -473,11 +477,11 @@ func roleOf(b Browser) string {
 }
 
 func (r *run) serveKernel(n *node.Node) func() {
-	if r.cfg.Kernel <= 0 {
+	if r.kernel <= 0 {
 		return func() {}
 	}
 	status := func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) }
-	kern := kernelin.New(kernelin.Config{Port: r.cfg.Kernel, Logf: r.cfg.Logf, Status: status})
+	kern := kernelin.New(kernelin.Config{Port: r.kernel, Logf: r.cfg.Logf, Status: status})
 	unsubscribe := n.Subscribe(func(e node.Event) {
 		if e.Kind != node.EventLinked {
 			return

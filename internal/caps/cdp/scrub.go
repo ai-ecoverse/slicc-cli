@@ -109,7 +109,13 @@ func (g *guard) scrubMap(t map[string]any, headers bool, changed *bool) []scrubI
 				continue
 			}
 		}
-		more = append(more, scrubItem{v: val, headers: headerLists[k] || (headers && !isString(val)), urls: urlKey(k)})
+		if str, ok := val.(string); ok {
+			if r, ok := g.cutEmbedded(str); ok {
+				t[k], *changed = r, true
+			}
+			continue
+		}
+		more = append(more, scrubItem{v: val, headers: headerLists[k] || headers, urls: urlKey(k)})
 	}
 	return more
 }
@@ -123,12 +129,75 @@ func (g *guard) scrubList(t []any, it scrubItem, changed *bool) []scrubItem {
 				continue
 			}
 		}
+		if str, ok := val.(string); ok {
+			if r, ok := g.cutEmbedded(str); ok {
+				t[i], *changed = r, true
+			}
+			continue
+		}
 		more = append(more, scrubItem{v: val, headers: it.headers, urls: it.urls})
 	}
 	return more
 }
 
-func isString(v any) bool {
-	_, ok := v.(string)
-	return ok
+func schemeByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'
+}
+
+func urlEnd(c byte) bool {
+	return c <= ' ' || c == 0x7f || strings.IndexByte("<>\"'`", c) >= 0
+}
+
+func schemeStarts(s string, at int) []int {
+	var starts []int
+	for at > 0 {
+		start := at
+		for start > 0 && schemeByte(s[start-1]) {
+			start--
+		}
+		if start == at {
+			break
+		}
+		starts = append(starts, start)
+		if start == 0 || s[start-1] != ':' {
+			break
+		}
+		at = start - 1
+	}
+	return starts
+}
+
+func (g *guard) cutEmbedded(s string) (string, bool) {
+	if !strings.Contains(s, "://") {
+		return s, false
+	}
+	var b strings.Builder
+	changed := false
+	i := 0
+	for {
+		j := strings.Index(s[i:], "://")
+		if j < 0 {
+			break
+		}
+		j += i
+		end := j + 3
+		for end < len(s) && !urlEnd(s[end]) {
+			end++
+		}
+		cut := false
+		for _, start := range schemeStarts(s, j) {
+			if u := s[start:end]; g.o.Loaded(u) {
+				b.WriteString(s[i:start])
+				b.WriteString(redactURL(u))
+				i, cut, changed = end, true, true
+				break
+			}
+		}
+		if !cut {
+			b.WriteString(s[i : j+3])
+			i = j + 3
+		}
+	}
+	b.WriteString(s[i:])
+	return b.String(), changed
 }

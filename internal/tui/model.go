@@ -30,6 +30,7 @@ type Config struct {
 	CheckRunner func([]string) error
 	LiveMounts  func() bool
 	Apply       func(s Settings, relink bool)
+	NewPairing  func()
 }
 
 type Choice struct {
@@ -204,6 +205,9 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case ModeNewProfile:
 		return m.newProfileKey(k)
 	case ModeDashboard:
+		if m.dash.pair {
+			return m.pairKey(k)
+		}
 		switch k.String() {
 		case "q":
 			return m.quit()
