@@ -17,7 +17,7 @@ var errPairAlone = errors.New("your default browser links without cdp, so it can
 func Fallback(o browser.Options, entries []browser.Entry) bool {
 	for _, e := range entries {
 		switch {
-		case IsPair(e) || IsSix(e) || e.Kind == browser.KindSix:
+		case IsPair(e) || e.Kind == browser.KindSix:
 		case e.Kind == browser.KindEndpoint:
 			return false
 		case e.Kind == browser.KindInstalled && e.Installed != nil && e.Installed.Engine != browser.EngineElectron && len(Profiles(o, *e.Installed)) > 0:

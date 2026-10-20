@@ -612,7 +612,12 @@ func (m Model) chips(ei int) []span {
 			out = append(out, span{m.st.faint, "new profile " + p})
 		}
 	case groupSix:
-		if t, ok := m.used[e.ID]; ok {
+		if e.Endpoint != nil {
+			out = append(out, span{m.st.good, "running"})
+			if e.Endpoint.SevenOpen {
+				out = append(out, span{m.st.good, "seven is open"})
+			}
+		} else if t, ok := m.used[e.ID]; ok {
 			out = append(out, span{m.st.faint, usedAgo(m.cfg.Now(), t)})
 		}
 	case groupElectron:
@@ -648,6 +653,9 @@ func (m Model) right(e browser.Entry) string {
 	case groupPair:
 		return "no cdp"
 	case groupSix:
+		if e.Six != nil && e.Endpoint != nil {
+			return m.sixBrowser(e) + " at " + hostPort(e.Endpoint.CDP)
+		}
 		if e.Installed != nil {
 			return "opens in " + m.sixBrowser(e)
 		}
@@ -673,6 +681,12 @@ func (m Model) opens(e browser.Entry) string {
 		}
 		return "Opens seven in " + name + " at " + hostPort(e.Endpoint.CDP) + " (new tab)"
 	case groupSix:
+		if e.Endpoint != nil && e.Endpoint.SevenOpen {
+			return "Links the seven tab in SLICC profile " + name + ", running in " + m.sixBrowser(e) + " at " + hostPort(e.Endpoint.CDP)
+		}
+		if e.Endpoint != nil {
+			return "Opens seven in SLICC profile " + name + ", running in " + m.sixBrowser(e) + " at " + hostPort(e.Endpoint.CDP) + " (new tab) " + m.risk().Render("(might lose data)")
+		}
 		return "Re-uses existing SLICC profile " + name + " in " + m.sixBrowser(e) + " " + m.risk().Render("(might lose data)")
 	case groupPair:
 		return "Opens seven in your " + m.st.title.Render("default browser") + " and pairs it over loopback (no cdp: slicc controls no browser)"

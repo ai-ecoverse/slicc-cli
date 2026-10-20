@@ -86,27 +86,32 @@ func WithSixRows(o browser.Options, entries []browser.Entry) []browser.Entry {
 		return entries
 	}
 	var out []browser.Entry
+	running := map[string]*browser.Endpoint{}
 	for _, e := range entries {
-		if e.Endpoint != nil && e.Endpoint.Six && coveredBy(e.Endpoint.UserDataDir, profiles) {
-			continue
+		if e.Endpoint != nil && e.Endpoint.Six {
+			if p, ok := coveredBy(e.Endpoint.UserDataDir, profiles); ok {
+				running[p] = e.Endpoint
+				continue
+			}
 		}
 		out = append(out, e)
 	}
 	for _, six := range profiles {
 		row, _ := sixEntry(six, entries, "")
+		row.Endpoint = running[six.Dir]
 		out = append(out, row)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Tier < out[j].Tier })
 	return out
 }
 
-func coveredBy(dir string, profiles []browser.Six) bool {
+func coveredBy(dir string, profiles []browser.Six) (string, bool) {
 	for _, p := range profiles {
 		if dir != "" && browser.SameDir(dir, p.Dir) {
-			return true
+			return p.Dir, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func SixLabel(e browser.Entry) string {

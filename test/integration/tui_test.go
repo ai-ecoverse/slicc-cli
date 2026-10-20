@@ -571,3 +571,23 @@ func TestTUIOffersTheDefaultBrowserRow(t *testing.T) {
 		}
 	})
 }
+
+func TestTUIShowsARunningSixProfile(t *testing.T) {
+	chrome := browser.Installed{ID: "chrome", Name: "Google Chrome", Engine: browser.EngineChromium, Version: "155.0.1.2", Path: "/g", Executable: "g", DebugSupport: browser.DebugSupported}
+	running := browser.SixProfileEntry(browser.Six{Dir: filepath.Join(t.TempDir(), "six"), Label: "six"}, &chrome)
+	running.Endpoint = &browser.Endpoint{CDP: "http://127.0.0.1:9222", Six: true, SevenOpen: true}
+	idle := browser.SixProfileEntry(browser.Six{Dir: filepath.Join(t.TempDir(), "six-5711"), Label: "six:5711", Port: 5711}, &chrome)
+	h := newEntriesTUI(t, append(browser.Rank(nil, []browser.Installed{chrome}), running, idle))
+	rows := h.rows()
+	if len(rows) != 3 || !strings.Contains(rows[1], "running") || !strings.Contains(rows[1], "seven is open") || !strings.Contains(rows[1], "Google Chrome 155 at :9222") || strings.Contains(rows[2], "running") {
+		t.Fatalf("rows:\n%s", h.view())
+	}
+	h.keys("down")
+	if v := h.view(); !strings.Contains(v, "↵ Links the seven tab in SLICC profile six, running in Google Chrome 155 at :9222") {
+		t.Fatalf("detail:\n%s", v)
+	}
+	h.keys("enter")
+	if len(h.started) != 1 || h.started[0].Entries[0].ID != "six" {
+		t.Fatalf("started %+v", h.started)
+	}
+}
