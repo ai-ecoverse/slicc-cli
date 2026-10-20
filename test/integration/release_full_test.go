@@ -402,16 +402,16 @@ func TestTheReleaseRunsTheFullMatrixOnTheCommitItReleases(t *testing.T) {
 			t.Errorf("%s: the full build runs: %v, want %v", c.name, got, c.want)
 		}
 	}
-	watch := jobs["watch"]
-	if watch.cond != full.cond {
-		t.Errorf("the watch job must run exactly when the full build does:\n  %q\n  %q", watch.cond, full.cond)
+	if jobs["watch"].body != "" || strings.Contains(release, "gh run cancel") {
+		t.Fatal("release.yml polls or cancels its own run again; the full matrix's fail-fast frees its runners without an API call or a runner of its own")
 	}
-	if perms := permissionsOf(watch.body); len(perms) != 1 || perms["actions"] != "write" {
-		t.Errorf("the watch job must have actions: write and nothing else: %v", perms)
-	}
-	for _, want := range []string{"    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}\n", `gh run cancel "$RUN"`, `$3 == "full / ci"`, `$3 == "build"`, `$2 == "failure"`} {
-		if !strings.Contains(watch.body, want) {
-			t.Errorf("the watch job lacks %q:\n%s", want, watch.body)
+	failFast := strings.TrimPrefix(lineWith(t, workflowJobs(t, ci)["test"].body, "fail-fast:"), "fail-fast: ")
+	for _, c := range []struct {
+		full any
+		want bool
+	}{{input, true}, {nil, false}, {false, false}} {
+		if got := ghTruthy(ghTemplate(t, failFast, ghCtx{"inputs.full": c.full})); got != c.want {
+			t.Errorf("with full %v the test matrix fails fast: %v, want %v", c.full, got, c.want)
 		}
 	}
 	for _, event := range []string{"workflow_run", "workflow_dispatch"} {
@@ -521,7 +521,7 @@ func TestReleasePublishesOnlyAfterItsOwnFullBuildPassed(t *testing.T) {
 	}{
 		{"a failed full build on main", with(releaseAfterCI("current"), "needs.full.result", "failure"), true},
 		{"a green full build on main", with(releaseAfterCI("current"), "needs.full.result", "success"), true},
-		{"a run the watch job cancelled", with(releaseAfterCI("current"), "needs.full.result", "failure", "cancelled()", true), true},
+		{"a cancelled run", with(releaseAfterCI("current"), "needs.full.result", "cancelled", "cancelled()", true), true},
 		{"a stale run that built nothing", releaseAfterCI("stale"), false},
 		{"a pull request dry run", releaseCtx("pull_request", "refs/pull/7/merge"), false},
 	} {

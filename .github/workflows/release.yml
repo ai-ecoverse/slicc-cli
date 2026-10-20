@@ -109,41 +109,6 @@ jobs:
     with:
       full: true
 
-  watch:
-    needs: [ci, fresh]
-    if: >-
-      ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && !inputs.sliccy_next_only && needs.ci.result == 'success'
-      || github.event_name == 'workflow_run' && (needs.fresh.outputs.verdict == 'current' || needs.fresh.outputs.verdict == 'unknown')) }}
-    name: Stop at the first failure
-    runs-on: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 150
-    permissions:
-      actions: write
-    steps:
-      - name: Cancel the run, freeing its runners, as soon as a job fails
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN: ${{ github.run_id }}
-          ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          url="repos/$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT/jobs?per_page=100"
-          while :; do
-            jobs="$(gh api --paginate "$url" --jq '.jobs[] | "\(.status)\t\(.conclusion // "")\t\(.name)"')" || jobs=""
-            failed="$(printf '%s\n' "$jobs" | awk -F '\t' '$2 == "failure" || $2 == "timed_out" || $2 == "startup_failure" { print $3 }' | paste -sd, -)"
-            if [ -n "$failed" ]; then
-              echo "::error::$failed failed; cancelling the run so the rest of the full build stops"
-              gh run cancel "$RUN" -R "$GITHUB_REPOSITORY"
-              exit 1
-            fi
-            done_full="$(printf '%s\n' "$jobs" | awk -F '\t' '$1 == "completed" && $3 == "full / ci"' | wc -l)"
-            done_build="$(printf '%s\n' "$jobs" | awk -F '\t' '$1 == "completed" && $3 == "build"' | wc -l)"
-            if [ "$done_full" -gt 0 ] && [ "$done_build" -gt 0 ]; then
-              echo "the full build and the release build finished without a failure"
-              exit 0
-            fi
-            sleep 20
-          done
-
   build:
     needs: [ci, fresh]
     if: >-
