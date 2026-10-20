@@ -178,6 +178,16 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 				t.Errorf("no Fetch.getResponseBody on a paused redirect %s: %v", n, paused)
 			}
 		}
+		sevenOrigin := "http://seven.sliccy.ai:" + su.Port()
+		inPlace := false
+		for _, e := range r.Events {
+			if e.Method == "Network.responseReceivedExtraInfo" && strings.Contains(e.Text, `"statusCode":302`) && strings.Contains(e.Text, `"headersText":"`) && strings.Contains(e.Text, `Location: `+sevenOrigin+`\r\n`) {
+				inPlace = true
+			}
+		}
+		if !inPlace {
+			t.Error("no 302 extra info into seven kept its headersText with the Location cut in place")
+		}
 		kept := false
 		for _, m := range r.carrying("kept-frag-0032") {
 			kept = kept || strings.HasPrefix(m, "Network.requestWillBeSent ") && strings.Contains(m, `"urlFragment":"#kept-frag-0032"`)
@@ -204,7 +214,7 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 	})
 	t.Run("nothing reads a redirected protected body", func(t *testing.T) {
 		var r redirectSeen
-		env.evalJSON(t, "linkTest.protect.redirectReads("+jsArgs("chrome", hop+"/embed", hop+"/flip?n=seven", seven)+")", &r)
+		env.evalJSON(t, "linkTest.protect.redirectReads("+jsArgs("chrome", hop+"/embed", hop+"/flip?n=seven", seven, via("seven"))+")", &r)
 		r.noMarkers(t)
 		for _, call := range []string{"Network.loadNetworkResource", "Network.loadNetworkResource browser"} {
 			if got := r.result(call); len(got) != 1 || !strings.Contains(got[0], "Network.loadNetworkResource follows redirects") {
@@ -213,6 +223,9 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 		}
 		if got := r.result("Page.captureSnapshot"); len(got) != 1 || !strings.Contains(got[0], "Page.captureSnapshot serialises every frame") {
 			t.Errorf("Page.captureSnapshot wasn't refused: %v", got)
+		}
+		if got := r.result("Fetch.continueRequest redirector"); len(got) != 1 || !strings.Contains(got[0], "slicc: refused: that URL redirects to seven's origin") {
+			t.Errorf("Fetch.continueRequest with a url that redirected into seven wasn't refused: %v", got)
 		}
 		if got := r.result("Fetch.continueRequest"); len(got) != 1 || !strings.Contains(got[0], refusedText) {
 			t.Errorf("Fetch.continueRequest with a url on seven wasn't refused: %v", got)

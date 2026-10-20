@@ -16,6 +16,7 @@ const (
 	refusedCookies      = "cookies on seven's origin"
 	refusedLost         = "slicc lost track of the browser's targets"
 	refusedPaused       = "slicc didn't pass this paused request to the page, so it could be seven's"
+	refusedRedirect     = "that URL redirects to seven's origin"
 	refusedLoadResource = "Network.loadNetworkResource follows redirects inside the browser, so it could load seven's pages"
 	LostGrace           = 2 * time.Second
 	maxTombstones       = 4096

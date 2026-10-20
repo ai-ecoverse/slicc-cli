@@ -834,7 +834,7 @@ export function protectTest(getLink, describe) {
         const events = c.events.filter((e) => sessions.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
         return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })) };
       }),
-    redirectReads: (browser, embed, flip, override) =>
+    redirectReads: (browser, embed, flip, override, redirector) =>
       run(browser, async (c) => {
         const results = [];
         const { targetId, sessionId } = await c.attachTo('about:blank');
@@ -842,7 +842,8 @@ export function protectTest(getLink, describe) {
         c.on((e) => {
           if (e.method !== 'Fetch.requestPaused' || e.sessionId !== sessionId) return;
           const { requestId, request } = e.params;
-          if (request.url.includes('n=override')) record('Fetch.continueRequest', c.send('Fetch.continueRequest', { requestId, url: override }, sessionId));
+          if (request.url.includes('n=override2')) record('Fetch.continueRequest redirector', c.send('Fetch.continueRequest', { requestId, url: redirector }, sessionId));
+          else if (request.url.includes('n=override')) record('Fetch.continueRequest', c.send('Fetch.continueRequest', { requestId, url: override }, sessionId));
           c.send('Fetch.continueRequest', { requestId }, sessionId).catch(() => {});
         });
         await c.send('Page.enable', {}, sessionId);
@@ -876,6 +877,7 @@ export function protectTest(getLink, describe) {
         await sleep(1500);
         await c.send('Fetch.enable', { patterns: [{ urlPattern: '*n=override*', requestStage: 'Request' }] }, sessionId);
         await record('fetch override', c.evaluate(`fetch(${JSON.stringify(embed + '?n=override')}).then((r) => r.text(), (e) => String(e))`, sessionId));
+        await record('fetch override2', c.evaluate(`fetch(${JSON.stringify(embed + '?n=override2')}).then((r) => r.text(), (e) => String(e))`, sessionId));
         await sleep(500);
         const ids = [...new Set(c.events.filter((e) => e.sessionId === sessionId && e.method.startsWith('Network.') && e.params.requestId).map((e) => e.params.requestId))];
         for (const requestId of ids) await record('Network.getResponseBody', c.send('Network.getResponseBody', { requestId }, sessionId));

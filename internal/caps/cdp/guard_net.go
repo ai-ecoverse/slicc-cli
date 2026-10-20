@@ -121,13 +121,32 @@ func stripResponse(r map[string]any) bool {
 	}
 	changed := stripHeaders(r["headers"], "set-cookie", "set-cookie2")
 	changed = stripHeaders(r["requestHeaders"], "cookie") || changed
-	for _, k := range []string{"headersText", "requestHeadersText"} {
-		if _, ok := r[k]; ok {
-			delete(r, k)
-			changed = true
+	changed = stripHeaderLines(r, "headersText", "set-cookie", "set-cookie2") || changed
+	return stripHeaderLines(r, "requestHeadersText", "cookie") || changed
+}
+
+func stripHeaderLines(p map[string]any, field string, names ...string) bool {
+	text, ok := p[field].(string)
+	if !ok {
+		return false
+	}
+	lines := strings.Split(text, "\r\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		name, _, found := strings.Cut(line, ":")
+		drop := false
+		for _, n := range names {
+			drop = drop || found && strings.EqualFold(strings.TrimSpace(name), n)
+		}
+		if !drop {
+			kept = append(kept, line)
 		}
 	}
-	return changed
+	if len(kept) == len(lines) {
+		return false
+	}
+	p[field] = strings.Join(kept, "\r\n")
+	return true
 }
 
 func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
@@ -199,7 +218,8 @@ func (g *guard) responseExtra(p map[string]any, marked bool) bool {
 		return changed
 	}
 	changed = stripHeaders(p["headers"], "set-cookie", "set-cookie2") || changed
-	for _, k := range []string{"headersText", "blockedCookies", "exemptedCookies"} {
+	changed = stripHeaderLines(p, "headersText", "set-cookie", "set-cookie2") || changed
+	for _, k := range []string{"blockedCookies", "exemptedCookies"} {
 		if _, ok := p[k]; ok {
 			delete(p, k)
 			changed = true
