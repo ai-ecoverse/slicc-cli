@@ -11,6 +11,7 @@ import (
 const (
 	refusedGuard     = "slicc can't keep seven's origin out of this target"
 	refusedErrorPage = "the target shows Chrome's error page for a protected URL, which names it; slicc only lets a page navigate, reload or close it"
+	refusedOutlived  = "the target committed Chrome's error page for a protected URL while this command ran, so slicc dropped its answer"
 )
 
 var slowGuard = 2 * time.Second
@@ -39,6 +40,8 @@ type navTarget struct {
 	unsure     bool
 	errorURL   string
 	failedURLs []string
+	commits    int
+	failCommit int
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -134,7 +137,11 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	g.navWorldLocked(nt, m)
+	before := nt.commits
 	nt.commitLocked(m)
+	if nt.commits != before && g.o.Loaded(nt.errorURL) {
+		nt.failCommit = nt.commits
+	}
 	if g.o.Loaded(nt.errorURL) && !slices.Contains(nt.failedURLs, nt.errorURL) {
 		nt.failedURLs = append(nt.failedURLs, nt.errorURL)
 		if len(nt.failedURLs) > maxFailed {
@@ -279,6 +286,7 @@ func (nt *navTarget) commitLocked(m *message) {
 			}
 		}
 		nt.errorURL = p.Frame.UnreachableURL
+		nt.commits++
 	}
 }
 
@@ -338,6 +346,11 @@ func errorPageEvent(method string) bool {
 	return errorPageEvents[method]
 }
 
+type commitMark struct {
+	nt      *navTarget
+	commits int
+}
+
 type failedForm struct {
 	form     string
 	redacted string
@@ -367,4 +380,23 @@ func (g *guard) failedFormsLocked(sessionID string) []failedForm {
 	}
 	slices.SortStableFunc(forms, func(a, b failedForm) int { return len(b.form) - len(a.form) })
 	return forms
+}
+
+func (g *guard) noteCommitLocked(k callKey, c *command) {
+	if errorPageMethods[c.method] {
+		return
+	}
+	s, ok := g.sessions[c.session]
+	if !ok {
+		return
+	}
+	if nt, ok := g.navTargets[s.target]; ok {
+		g.commitMarks[k] = commitMark{nt: nt, commits: nt.commits}
+	}
+}
+
+func (g *guard) outlivedLocked(k callKey) bool {
+	mk, ok := g.commitMarks[k]
+	delete(g.commitMarks, k)
+	return ok && mk.nt.failCommit > mk.commits
 }

@@ -123,6 +123,7 @@ type guard struct {
 	navSeenOrder      []requestKey
 	heldPauses        map[requestKey][]heldPause
 	heldPauseCount    int
+	commitMarks       map[callKey]commitMark
 	maxWorlds         int
 	answered          time.Time
 	probing           bool
@@ -170,6 +171,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		worldRequestsFull: map[string]bool{},
 		navSeen:           map[requestKey]bool{},
 		heldPauses:        map[requestKey][]heldPause{},
+		commitMarks:       map[callKey]commitMark{},
 		maxWorlds:         maxWorlds,
 		bounds:            boundsFromEnv(),
 	}
@@ -407,6 +409,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	for k := range g.pending {
 		if k.session == id {
 			delete(g.pending, k)
+			delete(g.commitMarks, k)
 			delete(g.bodyCalls, k)
 			g.attachDoneLocked(k)
 		}

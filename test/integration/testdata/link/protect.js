@@ -111,6 +111,15 @@ export function protectTest(getLink, describe) {
         const enable = await outcome(c.send('Page.enable', {}, sessionId));
         return { enable: { ...enable, ms: Date.now() - start } };
       }),
+    outlivedCapture: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const shot = outcome(c.send('Page.captureScreenshot', {}, sessionId));
+        await sleep(200);
+        const trigger = await outcome(c.send('Runtime.evaluate', { expression: '1' }, sessionId));
+        return { shot: await shot, trigger };
+      }),
     lateSession: (browser, sessionId, targetId) =>
       run(browser, async (c) => {
         const start = Date.now();
@@ -417,12 +426,27 @@ export function protectTest(getLink, describe) {
           if (e.method === 'Page.screencastFrame' && e.sessionId === sessionId) c.send('Page.screencastFrameAck', { sessionId: e.params.sessionId }, sessionId).catch(() => {});
         });
         await c.send('Page.startScreencast', { format: 'jpeg', quality: 10, everyNthFrame: 1 }, sessionId);
+        await c.send('Runtime.evaluate', { expression: 'setInterval(() => { document.body.style.background = `hsl(${Date.now() % 360} 50% 50%)`; }, 30); true' }, sessionId);
+        await c.waitEvent((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId, 10000).catch(() => null);
+        let capturing = true;
+        const shots = [];
+        const capture = (async () => {
+          while (capturing) {
+            const r = outcome(c.send('Page.captureScreenshot', { format: 'jpeg', quality: 10 }, sessionId)).then((o) => shots.push({ ok: o.ok, at: c.events.length, message: o.error?.message ?? '' }));
+            await Promise.race([r, sleep(1500)]);
+          }
+        })();
         const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 20000);
         await c.send('Runtime.evaluate', { expression: later(away) }, sessionId);
         const { params } = await committed;
         const framesBefore = c.events.filter((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId).length;
         const committedAt = c.events.findIndex((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl);
         await sleep(1500);
+        capturing = false;
+        await capture;
+        await sleep(1000);
+        const shotsAfter = shots.filter((x) => x.ok && x.at > committedAt).length;
+        const shotsBefore = shots.filter((x) => x.ok && x.at <= committedAt).length;
         const framesOnError = c.events.slice(committedAt + 1).filter((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId).length;
         const ask = (method, params = {}) => outcome(c.send(method, params, sessionId));
         const answers = {
@@ -452,7 +476,7 @@ export function protectTest(getLink, describe) {
         const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === targetId) ?? null;
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
         await sleep(300);
-        return { unreachable: params.frame.unreachableUrl, detached, answers, blank, listed, close, framesBefore, framesOnError, seen: JSON.stringify([answers, c.events.filter((e) => e.method !== 'Page.screencastFrame')]) };
+        return { unreachable: params.frame.unreachableUrl, detached, answers, blank, listed, close, framesBefore, framesOnError, shotsBefore, shotsAfter, shotMessages: [...new Set(shots.map((x) => x.message))], seen: JSON.stringify([answers, c.events.filter((e) => e.method !== 'Page.screencastFrame')]) };
       }),
     navPopup: (browser, base, tag, opener, popup, away, direct) =>
       run(browser, async (c) => {
