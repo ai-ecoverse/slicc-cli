@@ -161,6 +161,23 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 				t.Errorf("Network.loadNetworkResource wasn't refused: %s", got)
 			}
 		}
+		paused := map[string]int{}
+		for _, c := range r.Results {
+			n, ok := strings.CutPrefix(c.Call, "Fetch.getResponseBody "+hop+"/redirect?n=")
+			if !ok {
+				continue
+			}
+			paused[n]++
+			refused := strings.Contains(c.Text, "slicc: refused: the response came from seven's origin")
+			if protected := n != "kept"; refused != protected {
+				t.Errorf("Fetch.getResponseBody on the paused redirect %s: %s", n, c.Text)
+			}
+		}
+		for _, n := range []string{"seven", "vault", "frag", "kept"} {
+			if paused[n] == 0 {
+				t.Errorf("no Fetch.getResponseBody on a paused redirect %s: %v", n, paused)
+			}
+		}
 		kept := false
 		for _, m := range r.carrying("kept-frag-0032") {
 			kept = kept || strings.HasPrefix(m, "Network.requestWillBeSent ") && strings.Contains(m, `"urlFragment":"#kept-frag-0032"`)

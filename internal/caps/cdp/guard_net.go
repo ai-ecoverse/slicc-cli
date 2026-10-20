@@ -233,8 +233,9 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 			return false, false, [][]byte{g.settlePausedLocked(m, p, id)}
 		}
 		g.handOutLocked(requestKey{m.SessionID, id})
-		if g.requestMarkedLocked(m.SessionID, other) {
+		if g.requestMarkedLocked(m.SessionID, other) || g.namesProtectedLocked(p["responseHeaders"]) {
 			g.markRequestLocked(m.SessionID, id)
+			g.markRequestLocked(m.SessionID, other)
 		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
 			return true, false, nil
@@ -320,4 +321,34 @@ func (g *guard) handOutLocked(k requestKey) {
 		}
 		g.handedOrder = g.handedOrder[1:]
 	}
+}
+
+func (g *guard) namesProtectedLocked(headers any) bool {
+	var values []string
+	switch h := headers.(type) {
+	case []any:
+		for _, item := range h {
+			e, _ := item.(map[string]any)
+			if v, ok := e["value"].(string); ok {
+				values = append(values, v)
+			}
+		}
+	case map[string]any:
+		for _, v := range h {
+			if s, ok := v.(string); ok {
+				values = append(values, s)
+			}
+		}
+	}
+	for _, v := range values {
+		if _, cut := g.cutEmbedded(v); cut || g.cutWhole(v) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) cutWhole(v string) bool {
+	_, ok := g.cut(v)
+	return ok
 }

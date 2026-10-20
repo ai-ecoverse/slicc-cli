@@ -795,7 +795,7 @@ export function protectTest(getLink, describe) {
           const go = () => c.send('Fetch.continueRequest', { requestId }, e.sessionId).catch(() => {});
           if (responseStatusCode >= 300 && responseStatusCode < 400) {
             outcome(c.send('Fetch.getResponseBody', { requestId }, e.sessionId)).then((r) => {
-              results.push({ call: 'Fetch.getResponseBody', ...r });
+              results.push({ call: `Fetch.getResponseBody ${e.params.request.url}`, ...r });
               go();
             });
             return;
