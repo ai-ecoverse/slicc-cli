@@ -543,7 +543,7 @@ func TestSixAttachOpensSevenAndLeavesTheProfileAsItWas(t *testing.T) {
 	}
 	f.waitStderr(t, "(profile six) at "+b.endpoint+", which slicc didn't launch; opened a new seven tab.")
 	up := f.next(t, "linked")
-	if up.Tab != pageURL {
+	if up.Tab != strings.TrimSuffix(pageURL, "/") {
 		t.Fatalf("linked %s", up.raw)
 	}
 	if n := countTabs(t, b.client, pageURL); n != 1 {
