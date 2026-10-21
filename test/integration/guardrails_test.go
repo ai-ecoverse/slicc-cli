@@ -202,7 +202,7 @@ func TestDiscoveryNeverLeaksTabsThatArentSeven(t *testing.T) {
 		what := strings.Join(args, " ")
 		requireNoSecret(t, what+" stdout", r.stdout)
 		requireNoSecret(t, what+" stderr", r.stderr)
-		if strings.Contains(what, "json") && (!strings.Contains(r.stdout, "https://lars.sliccy.ai/") || strings.Count(r.stdout, `"sevenOpen":`) < 3) {
+		if strings.Contains(what, "json") && (!strings.Contains(r.stdout, `"https://lars.sliccy.ai"`) || strings.Count(r.stdout, `"sevenOpen":`) < 3) {
 			t.Fatalf("%s: the seven tabs are missing: %+v", what, r)
 		}
 	}

@@ -81,7 +81,7 @@ func TestFlowRelinksWithNewCapsInTheSameTab(t *testing.T) {
 		t.Fatalf("serving compute %q", s.Compute)
 	}
 	up := next(flow.Linked)
-	if up.Tab != pageURL || !slices.Contains(up.Caps, "net") {
+	if up.Tab != srv.URL || !slices.Contains(up.Caps, "net") {
 		t.Fatalf("linked again %+v", up)
 	}
 	echoOverLink(t, p)

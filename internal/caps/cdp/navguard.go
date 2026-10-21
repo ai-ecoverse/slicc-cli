@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
 const (
@@ -45,24 +47,25 @@ func (g *guard) startsUnheld(c *command) bool {
 }
 
 type navTarget struct {
-	target     string
-	session    string
-	start      time.Time
-	progress   time.Time
-	awayAt     time.Duration
-	reason     string
-	ready      chan struct{}
-	pending    int
-	done       bool
-	failed     bool
-	loading    map[string]int
-	started    int
-	unsure     bool
-	errorURL   string
-	failedURLs []string
-	commits    int
-	failCommit int
-	worker     bool
+	target      string
+	session     string
+	start       time.Time
+	progress    time.Time
+	awayAt      time.Duration
+	reason      string
+	ready       chan struct{}
+	pending     int
+	done        bool
+	failed      bool
+	loading     map[string]int
+	started     int
+	unsure      bool
+	errorURL    string
+	documentURL string
+	failedURLs  []string
+	commits     int
+	failCommit  int
+	worker      bool
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -268,6 +271,7 @@ func (nt *navTarget) commitLocked(m *message) {
 			ID             string `json:"id"`
 			ParentID       string `json:"parentId"`
 			LoaderID       string `json:"loaderId"`
+			URL            string `json:"url"`
 			UnreachableURL string `json:"unreachableUrl"`
 		} `json:"frame"`
 	}
@@ -316,13 +320,17 @@ func (nt *navTarget) commitLocked(m *message) {
 			}
 		}
 		nt.errorURL = p.Frame.UnreachableURL
+		nt.documentURL = p.Frame.URL
 		nt.commits++
 	}
 }
 
-func (g *guard) errorPageLocked(t *target) bool {
+func (g *guard) evidenceLocked(t *target) protect.Evidence {
 	nt, ok := g.navTargets[t.id]
-	return ok && nt.done && !nt.failed && !nt.unsure && len(nt.loading) == 0 && nt.errorURL != "" && nt.errorURL == t.url
+	if !ok || !nt.done || nt.failed || nt.errorURL == "" {
+		return protect.Evidence{}
+	}
+	return protect.Evidence{DocumentURL: nt.documentURL, UnreachableURL: nt.errorURL, Navigating: nt.unsure || len(nt.loading) > 0}
 }
 
 var errorPageMethods = map[string]bool{

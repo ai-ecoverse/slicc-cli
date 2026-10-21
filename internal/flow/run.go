@@ -15,6 +15,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 	"github.com/ai-ecoverse/slicc-cli/internal/signal"
 	"github.com/ai-ecoverse/slicc-cli/internal/telemetry"
 )
@@ -272,9 +273,9 @@ func (r *run) ensureTab(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	if err := r.client.Call(tctx, "", "Target.createTarget", map[string]any{"url": r.cfg.Page}, nil); err != nil {
-		return false, fmt.Errorf("open %s: %w", r.cfg.Page, err)
+		return false, fmt.Errorf("open %s: %w", protect.Redact(r.cfg.Page), err)
 	}
-	r.emit(Event{Event: Status, Message: "opened " + r.cfg.Page + " in a new tab"})
+	r.emit(Event{Event: Status, Message: "opened " + protect.Redact(r.cfg.Page) + " in a new tab"})
 	return true, nil
 }
 
@@ -285,7 +286,7 @@ func (r *run) sevenTab(ctx context.Context) string {
 	}
 	for _, t := range targets {
 		if t.Type == "page" && r.allowed.AllowedURL(t.URL) {
-			return t.URL
+			return protect.Redact(t.URL)
 		}
 	}
 	return ""

@@ -17,9 +17,13 @@ class SocketClient {
   constructor(ws) {
     this.ws = ws;
     this.events = [];
+    this.messages = [];
     this.transport = 'direct';
     this.listeners = new Set();
-    ws.onmessage = (m) => this.#dispatch(JSON.parse(m.data));
+    ws.onmessage = (m) => {
+      this.messages.push(m.data);
+      this.#dispatch(JSON.parse(m.data));
+    };
     ws.onclose = () => {
       for (const { reject } of this.#pending.values()) reject(new Error('direct cdp socket closed'));
       this.#pending.clear();
@@ -150,6 +154,7 @@ function sessionBound(c, name, { inject } = {}) {
   };
   return {
     events,
+    messages: c.messages,
     transport: c.transport,
     waitEvent: (match, timeout) => c.waitEvent(match, timeout),
     send(method, params, sessionId) {

@@ -169,7 +169,7 @@ func TestDefaultRelinksAfterACrash(t *testing.T) {
 	if a := second.next(t, "attached"); a.Browser != id || a.Role != "seven" || a.Launched {
 		t.Fatalf("attached %s", a.raw)
 	}
-	if up := second.next(t, "linked"); up.Tab != pageURL {
+	if up := second.next(t, "linked"); up.Tab != srv.URL {
 		t.Fatalf("linked %s", up.raw)
 	}
 	if n := countTabs(t, c.p.b.client, pageURL); n != 1 {

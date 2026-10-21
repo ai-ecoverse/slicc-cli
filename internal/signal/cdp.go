@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
 const (
@@ -217,7 +218,7 @@ func (c *CDP) setup(ctx context.Context, t cdp.TargetInfo) (*cdp.Session, error)
 	}); err != nil {
 		return nil, err
 	}
-	c.opts.Status("found seven at %s", t.URL)
+	c.opts.Status("found seven at %s", protect.Redact(t.URL))
 	c.grantLocalNetwork(ctx, t.URL)
 	if err := bounded(ctx, func(cctx context.Context) error { return s.AddBinding(cctx, BindingName) }); err != nil {
 		c.detach(s)
