@@ -130,7 +130,7 @@ func TestTestShardsPartitionTheSuite(t *testing.T) {
 			loads := make([]float64, count)
 			owner := map[string]int{}
 			for i := 1; i <= count; i++ {
-				picks := shardSelector(t, node, strconv.Itoa(i)+"/"+strconv.Itoa(count), "SLICC_TEST_SHARD_PLATFORM="+platform)
+				picks := shardSelector(t, node, strconv.Itoa(i)+"/"+strconv.Itoa(count), "SLICC_TEST_SHARD_PLATFORM="+platform, "SLICC_GUARD_VECTORS=1")
 				for _, name := range names {
 					if !picks(name) {
 						continue

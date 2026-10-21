@@ -327,8 +327,8 @@ func legsOf(spec string) []ciLeg {
 	return legs
 }
 
-const lightMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/2,-,- macos-latest,2/2,-,- windows-latest,1/2,-,- windows-latest,2/2,-,-"
-const fullMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/4,race,guards macos-latest,2/4,race,guards macos-latest,3/4,race,guards macos-latest,4/4,race,guards windows-latest,1/4,race,guards windows-latest,2/4,race,guards windows-latest,3/4,race,guards windows-latest,4/4,race,guards"
+const lightMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/3,-,- macos-latest,2/3,-,- macos-latest,3/3,-,- windows-latest,1/2,-,- windows-latest,2/2,-,-"
+const fullMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/5,race,guards macos-latest,2/5,race,guards macos-latest,3/5,race,guards macos-latest,4/5,race,guards macos-latest,5/5,race,guards windows-latest,1/4,race,guards windows-latest,2/4,race,guards windows-latest,3/4,race,guards windows-latest,4/4,race,guards"
 
 const linuxMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards"
 
