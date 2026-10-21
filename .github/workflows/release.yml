@@ -210,7 +210,7 @@ jobs:
       id-token: write
       attestations: write
     outputs:
-      version: ${{ steps.built.outputs.version }}
+      version: ${{ steps.published.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -255,6 +255,25 @@ jobs:
           SLICCY_NEXT_PUBLISH: ${{ vars.SLICCY_NEXT_PUBLISH }}
           WASI_SLICC_PUBLISH: ${{ vars.WASI_SLICC_PUBLISH }}
         run: npx semantic-release
+
+      - name: Check that semantic-release published the version on this commit
+        id: published
+        if: github.ref == 'refs/heads/main'
+        env:
+          VERSION: ${{ steps.built.outputs.version }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          tag="refs/tags/v$VERSION"
+          refs="$(git ls-remote origin "$tag" "$tag^{}")"
+          at="$(printf '%s\n' "$refs" | awk -v t="$tag" '$2 == t { c = $1 } $2 == t "^{}" { p = $1 } END { print (p != "" ? p : c) }')"
+          if [ "$at" = "$SHA" ]; then
+            echo "published: PASS v$VERSION is tagged on $SHA"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          elif [ -z "$at" ]; then
+            echo "published: PASS nothing published: no tag v$VERSION; install-smoke and sliccy-next skip"
+          else
+            echo "published: PASS nothing published: v$VERSION is tagged on $at, not $SHA; install-smoke and sliccy-next skip"
+          fi
 
       - name: Warm the Go module proxy
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
