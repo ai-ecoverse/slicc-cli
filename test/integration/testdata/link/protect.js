@@ -111,6 +111,18 @@ export function protectTest(getLink, describe) {
         const enable = await outcome(c.send('Page.enable', {}, sessionId));
         return { enable: { ...enable, ms: Date.now() - start } };
       }),
+    guardBehindSlowPage: (browser, ms) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        c.pause();
+        const start = Date.now();
+        const enable = outcome(c.send('Page.enable', {}, sessionId)).then((r) => ({ ...r, ms: Date.now() - start }));
+        const flood = outcome(c.send('SystemInfo.getInfo'));
+        await sleep(ms);
+        c.resume();
+        return { enable: await enable, flood: (await flood).ok };
+      }),
     outlivedCapture: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });

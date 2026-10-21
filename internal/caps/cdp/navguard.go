@@ -51,6 +51,7 @@ type navTarget struct {
 	session     string
 	start       time.Time
 	progress    time.Time
+	awayAt      time.Duration
 	reason      string
 	ready       chan struct{}
 	pending     int
@@ -97,6 +98,7 @@ func (g *guard) touchLocked(targetID, typ string) [][]byte {
 		return nil
 	}
 	nt := &navTarget{target: targetID, ready: make(chan struct{}), start: time.Now(), worker: workerTypes[typ]}
+	nt.awayAt = g.reads.away(nt.start)
 	g.navTargets[targetID] = nt
 	sent := time.Now()
 	msg := g.callbackLocked(g.relaySession, "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, func(m message) [][]byte {
@@ -118,7 +120,7 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 		return nil
 	}
 	nt.session = res.SessionID
-	nt.progress = time.Now()
+	g.movedLocked(nt, time.Now())
 	g.navSessions[res.SessionID] = nt
 	sent := time.Now()
 	step := func(method string) func(m message) [][]byte {
