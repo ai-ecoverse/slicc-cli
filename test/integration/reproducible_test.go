@@ -131,7 +131,7 @@ func TestReleaseBuildIsReproducibleFromAnyCheckout(t *testing.T) {
 	}
 	gitEnv := []string{"GIT_AUTHOR_NAME=slicc test", "GIT_AUTHOR_EMAIL=test@example.invalid", "GIT_COMMITTER_NAME=slicc test", "GIT_COMMITTER_EMAIL=test@example.invalid", "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"}
 	runIn(t, tagged, gitEnv, "git", "init", "-q", "-b", "main")
-	runIn(t, tagged, gitEnv, "git", "add", "-A")
+	runIn(t, tagged, gitEnv, "git", "add", "-A", "--", ":/")
 	runIn(t, tagged, gitEnv, "git", "commit", "-q", "-m", "fix: the release commit")
 	if err := os.MkdirAll(archived, 0o755); err != nil {
 		t.Fatal(err)

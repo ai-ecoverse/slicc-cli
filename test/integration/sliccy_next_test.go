@@ -35,7 +35,7 @@ func commitLauncher(t *testing.T, repo string, run func(args ...string), content
 	if err := os.WriteFile(filepath.Join(repo, "npm", "slicc.js"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "-A")
+	run("add", "-A", "--", ":/")
 	run("commit", "-q", "-m", content)
 	if tag != "" {
 		run("tag", tag)
