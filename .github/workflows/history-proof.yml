@@ -1,0 +1,49 @@
+name: History command proof
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  history:
+    if: github.head_ref == 'bb/history-command-proof-388'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      GOMAXPROCS: 4
+      GOFLAGS: -p=4 -race
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26
+      - run: npm ci
+      - name: Previous behavior
+        shell: bash
+        run: |
+          git restore --source=v1.47.2 --worktree internal/caps/cdp
+          set +e
+          go test -parallel=1 -run '^TestCDPHistoryConformanceUnderInboundLag$' -count=1 -timeout=90s -v ./test/integration > previous.log 2>&1
+          code=$?
+          set -e
+          test "$code" -ne 0
+          grep -q 'document-reaching calls escaped while inbound was held' previous.log
+          git restore --source=HEAD --worktree internal/caps/cdp
+      - name: Current behavior
+        shell: bash
+        run: go test -parallel=1 -run '^TestCDPHistoryConformanceUnderInboundLag$' -count=20 -timeout=4m -v ./test/integration > current.log 2>&1
+      - name: Workflow recovery
+        shell: bash
+        run: go test -parallel=1 -run '^TestCDPHistoryQuarantineWorkflow$' -count=1 -timeout=90s -v ./test/integration > workflow.log 2>&1
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: history-${{ matrix.os }}
+          path: '*.log'
