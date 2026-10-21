@@ -182,6 +182,28 @@ export function protectTest(getLink, describe) {
         const trigger = await outcome(c.send('Runtime.evaluate', { expression: '1' }, sessionId));
         return { shot: await shot, trigger };
       }),
+    sharedWorkerEnded: (browser, url, explicit) =>
+      run(browser, async (c) => {
+        const auto = (autoAttach) => c.send('Target.setAutoAttach', { autoAttach, waitForDebuggerOnStart: false, flatten: true });
+        const worker = (e) => e.method === 'Target.attachedToTarget' && e.params.targetInfo.type === 'shared_worker';
+        const detached = (sessionId) => c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 15000).then(() => true, () => false);
+        await auto(true);
+        const attached = c.waitEvent(worker, 15000);
+        const { targetId } = await c.send('Target.createTarget', { url });
+        const { params } = await attached;
+        const own = explicit ? await c.send('Target.attachToTarget', { targetId: params.targetInfo.targetId, flatten: true }) : null;
+        await sleep(1000);
+        const gone = detached(params.sessionId);
+        const releasing = own ? detached(own.sessionId) : Promise.resolve(true);
+        await c.send('Target.closeTarget', { targetId });
+        const ended = await gone;
+        const released = await releasing;
+        await sleep(500);
+        await auto(false);
+        const again = await outcome(auto(true));
+        await outcome(auto(false));
+        return { worker: params.targetInfo.targetId, ended, released, again };
+      }),
     lateSession: (browser, sessionId, targetId) =>
       run(browser, async (c) => {
         const start = Date.now();

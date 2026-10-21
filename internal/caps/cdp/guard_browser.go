@@ -194,6 +194,7 @@ var eventHandlers = map[string]eventHandler{
 	"Target.targetInfoChanged":                   (*guard).targetEvent,
 	"Target.targetDestroyed":                     (*guard).targetGoneEvent,
 	"Target.targetCrashed":                       (*guard).targetGoneEvent,
+	"Inspector.targetCrashed":                    (*guard).workerEndedEvent,
 	"Target.attachedToTarget":                    (*guard).attachedEvent,
 	"Target.detachedFromTarget":                  (*guard).detachedEvent,
 	"Target.receivedMessageFromTarget":           (*guard).innerMessageEvent,
@@ -311,6 +312,16 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		}
 	}
 	return browserVerdict{forward: data, send: send}
+}
+
+func (g *guard) workerEndedEvent(m *message, data []byte) browserVerdict {
+	s, ok := g.sessions[m.SessionID]
+	if !ok || s.typ != "shared_worker" {
+		return browserVerdict{forward: data}
+	}
+	g.logf("cdp: detached a session on a shared worker that ended")
+	msg, _ := g.newCallLocked(s.parent, "Target.detachFromTarget", map[string]any{"sessionId": s.id}, false)
+	return browserVerdict{forward: data, send: [][]byte{msg}}
 }
 
 func (g *guard) attachAnsweredLocked(parent string, res map[string]any, t *target) {
