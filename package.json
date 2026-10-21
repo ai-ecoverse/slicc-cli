@@ -25,7 +25,6 @@
     ]
   },
   "scripts": {
-    "prepare": "slicc-install-hooks",
     "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && golangci-lint run",
     "format": "gofmt -w .",
     "test": "go test -race -count=1 -timeout 15m ./test/integration/...",
