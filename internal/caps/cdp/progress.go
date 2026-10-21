@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -100,7 +101,32 @@ func (g *guard) progressLocked(m *message) {
 	}
 	if nt, ok := g.navSessions[m.SessionID]; ok && m.SessionID != "" {
 		g.movedLocked(nt, now)
+		return
 	}
+	if s, ok := g.sessions[m.SessionID]; ok {
+		if nt, ok := g.navTargets[s.target]; ok {
+			nt.heard = now
+		}
+	}
+}
+
+func since(t, now time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return now.Sub(t).Round(100*time.Millisecond).String() + " ago"
+}
+
+func (g *guard) stallLocked(nt *navTarget, now time.Time) string {
+	typ := "a target"
+	if t, ok := g.targets[nt.target]; ok {
+		typ = t.typ
+	}
+	attach := "never attached"
+	if !nt.attached.IsZero() {
+		attach = "attached in " + nt.attached.Sub(nt.start).Round(100*time.Millisecond).String()
+	}
+	return fmt.Sprintf("%s, %s, %d setup calls unanswered, its other sessions heard %s, slicc away %s", typ, attach, nt.pending, since(nt.heard, now), (g.reads.away(now) - nt.awayAt).Round(100*time.Millisecond))
 }
 
 func (g *guard) navWatch(now time.Time) {
@@ -116,7 +142,7 @@ func (g *guard) navWatch(now time.Time) {
 			if nt.worker {
 				kind = "a worker's guard"
 			}
-			g.logf("cdp: %s failed: %s; refusing its commands", kind, reason)
+			g.logf("cdp: %s failed: %s; refusing its commands (%s)", kind, reason, g.stallLocked(nt, now))
 			nt.reason = reason
 			nt.settle(true)
 		}

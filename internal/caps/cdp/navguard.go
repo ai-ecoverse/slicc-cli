@@ -52,6 +52,8 @@ type navTarget struct {
 	start       time.Time
 	progress    time.Time
 	awayAt      time.Duration
+	attached    time.Time
+	heard       time.Time
 	reason      string
 	ready       chan struct{}
 	pending     int
@@ -121,6 +123,7 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 	}
 	nt.session = res.SessionID
 	g.movedLocked(nt, time.Now())
+	nt.attached = nt.progress
 	g.navSessions[res.SessionID] = nt
 	sent := time.Now()
 	step := func(method string) func(m message) [][]byte {
