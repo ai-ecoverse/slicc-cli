@@ -66,6 +66,7 @@ type navTarget struct {
 	commits     int
 	failCommit  int
 	worker      bool
+	shared      bool
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -97,7 +98,7 @@ func (g *guard) touchLocked(targetID, typ string) [][]byte {
 	if _, ok := g.navTargets[targetID]; ok {
 		return nil
 	}
-	nt := &navTarget{target: targetID, ready: make(chan struct{}), start: time.Now(), worker: workerTypes[typ]}
+	nt := &navTarget{target: targetID, ready: make(chan struct{}), start: time.Now(), worker: workerTypes[typ], shared: typ == "shared_worker"}
 	nt.awayAt = g.reads.away(nt.start)
 	g.navTargets[targetID] = nt
 	sent := time.Now()
@@ -167,6 +168,9 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 }
 
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
+	if nt.shared && m.Method == "Inspector.targetCrashed" {
+		return g.navReleaseLocked(nt)
+	}
 	g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
@@ -213,6 +217,14 @@ func (g *guard) navDetachedLocked(sessionID string) {
 	nt.session = ""
 	nt.settle(true)
 	nt.failed = true
+}
+
+func (g *guard) navReleaseLocked(nt *navTarget) [][]byte {
+	sid := nt.session
+	g.logf("cdp: let go of the session guarding a shared worker that ended")
+	g.navForgetLocked(nt.target)
+	msg, _ := g.newCallLocked(g.relaySession, "Target.detachFromTarget", map[string]any{"sessionId": sid}, false)
+	return [][]byte{msg}
 }
 
 func (g *guard) navForgetLocked(targetID string) {
