@@ -278,7 +278,7 @@ func TestEachCIShardFitsItsTimeout(t *testing.T) {
 	run := strings.TrimPrefix(lineWith(t, job, "sh scripts/verdict.sh test-shard"), "run: ")
 	limit := strings.TrimPrefix(lineWith(t, job, "timeout-minutes:"), "timeout-minutes: ")
 	for _, full := range []any{nil, true} {
-		ctx := ghCtx{"github.event_name": "push", "inputs.full": full}
+		ctx := ghCtx{"github.event_name": "push", "inputs.full": full, "needs.runner.outputs.os": "all"}
 		legs, _ := ciMatrix(t, ctx)
 		for _, leg := range legs {
 			ctx["matrix.os"], ctx["matrix.shard"] = leg.os, leg.shard

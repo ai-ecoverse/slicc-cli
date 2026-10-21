@@ -437,6 +437,28 @@ type recordCase struct {
 	incomplete             bool
 	noIssues               bool
 	runs                   []map[string]any
+	extra                  map[string]any
+	body                   string
+}
+
+func linuxOnlyRun(event, os string, mac bool) ([]map[string]any, map[string]any) {
+	suite := map[string]any{"id": 501}
+	runs := []map[string]any{
+		{"id": 601, "name": "runner", "status": "completed", "conclusion": "success", "check_suite": suite},
+		{"id": 602, "name": "ci", "status": "completed", "conclusion": "success", "check_suite": suite},
+		{"id": 603, "name": "test (ubuntu-latest, 1/3)", "status": "completed", "conclusion": "success", "check_suite": suite},
+	}
+	if mac {
+		runs = append(runs, map[string]any{"id": 604, "name": "test (macos-latest, 1/2)", "status": "completed", "conclusion": "success", "check_suite": suite})
+	}
+	notes := []any{}
+	if os != "" {
+		notes = append(notes, map[string]any{"title": "test matrix", "message": "os=" + os})
+	}
+	return runs, map[string]any{
+		"/repos/ai-ecoverse/slicc-cli/actions/runs":               map[string]any{"workflow_runs": []any{map[string]any{"event": event}}},
+		"/repos/ai-ecoverse/slicc-cli/check-runs/601/annotations": notes,
+	}
 }
 
 func TestCertReviewRecordCertifiesOnlyTheBytesItBuiltWithEveryPieceOfEvidence(t *testing.T) {
@@ -449,7 +471,22 @@ func TestCertReviewRecordCertifiesOnlyTheBytesItBuiltWithEveryPieceOfEvidence(t 
 	}
 	noMac := []map[string]any{green[0], green[1], green[3]}
 	certified := map[string]any{"verdict": "certified", "known": []string{"ai-ecoverse/slicc-cli#5"}}
+	prLinux, prLinuxAPI := linuxOnlyRun("pull_request", "linux", false)
+	prMac, prMacAPI := linuxOnlyRun("pull_request", "linux", true)
+	groupLinux, groupLinuxAPI := linuxOnlyRun("merge_group", "linux", false)
+	pushLinux, pushLinuxAPI := linuxOnlyRun("push", "linux", false)
+	prAll, prAllAPI := linuxOnlyRun("pull_request", "all", false)
+	prSilent, prSilentAPI := linuxOnlyRun("pull_request", "", false)
+	notRun := "macos-latest " + "not run on this PR (Linux-only; the merge queue runs every OS)"
 	cases := []recordCase{
+		{name: "a pull request the runner gave Linux only", key: "true", state: "success", want: "certified ai-ecoverse/slicc-cli PR #7", verdict: certified, rebuildMatch: true, runs: prLinux, extra: prLinuxAPI, body: notRun},
+		{name: "a Linux-only pull request whose macOS leg ran", key: "true", state: "success", want: "certified ai-ecoverse/slicc-cli PR #7", verdict: certified, rebuildMatch: true, runs: prMac, extra: prMacAPI, body: "macos-latest success, windows-latest not run on this PR"},
+		{name: "a merge group without a macOS leg", key: "true", state: "error", want: "CI has no macos-latest test run on the head", verdict: certified, rebuildMatch: true, runs: groupLinux, extra: groupLinuxAPI},
+		{name: "a push without a macOS leg", key: "true", state: "error", want: "CI has no macos-latest test run on the head", verdict: certified, rebuildMatch: true, runs: pushLinux, extra: pushLinuxAPI},
+		{name: "a pull request the runner gave every OS, without a macOS leg", key: "true", state: "error", want: "CI has no macos-latest test run on the head", verdict: certified, rebuildMatch: true, runs: prAll, extra: prAllAPI},
+		{name: "a pull request whose runner left no decision", key: "true", state: "error", want: "CI has no windows-latest test run on the head", verdict: certified, rebuildMatch: true, runs: prSilent, extra: prSilentAPI},
+		{name: "a Linux-only pull request whose ci failed", key: "true", state: "error", want: "CI has no macos-latest test run on the head", verdict: certified, rebuildMatch: true, runs: append([]map[string]any{prLinux[0], {"id": 605, "name": "ci", "status": "completed", "conclusion": "failure", "check_suite": map[string]any{"id": 501}}}, prLinux[2]), extra: prLinuxAPI},
+		{name: "a Linux-only decision from another run than ci's", key: "true", state: "error", want: "CI has no macos-latest test run on the head", verdict: certified, rebuildMatch: true, runs: append([]map[string]any{{"id": 601, "name": "runner", "status": "completed", "conclusion": "success", "check_suite": map[string]any{"id": 502}}}, prLinux[1:]...), extra: prLinuxAPI},
 		{name: "everything there", key: "true", state: "success", want: "certified ai-ecoverse/slicc-cli PR #7 at fake-head-00, build 1.2.4-pr.7.1 SHA256SUMS sha256=", verdict: certified, rebuildMatch: true, runs: green},
 		{name: "an unchanged wasm says it skipped seven's canary", key: "true", state: "success", want: "; bios: not needed, wasm unchanged; reproducible:", verdict: certified, rebuildMatch: true, runs: green},
 		{name: "a new wasm that seven's canary passes", key: "true", state: "success", want: "; bios: follow-chat pass at slicc-bios@" + biosPin(t).Commit + "; reproducible:", bios: "true", verdict: certified, rebuildMatch: true, runs: green},
@@ -619,6 +656,9 @@ func recordOnce(t *testing.T, c recordCase) {
 		"/repos/ai-ecoverse/slicc-cli/issues":                            []any{},
 		"/repos/ai-ecoverse/slicc-cli/issues/5":                          map[string]any{"state": "open"},
 	}
+	for k, v := range c.extra {
+		routes[k] = v
+	}
 	if c.noIssues {
 		delete(routes, "/repos/ai-ecoverse/slicc-cli/issues")
 	}
@@ -691,6 +731,12 @@ func recordOnce(t *testing.T, c recordCase) {
 	_ = json.Unmarshal(data, &rec)
 	if rec.State != c.state || !strings.Contains(rec.Line, c.want) {
 		t.Fatalf("state %s, line %q; want %s with %q\n%s", rec.State, rec.Line, c.state, c.want, r.out)
+	}
+	if c.body != "" {
+		body, err := os.ReadFile(filepath.Join(out, "body.md"))
+		if err != nil || !strings.Contains(string(body), c.body) {
+			t.Fatalf("the comment lacks %q (%v):\n%s", c.body, err, body)
+		}
 	}
 	if (r.code == 0) != (c.state == "success") {
 		t.Fatalf("exit %d for %s", r.code, c.state)

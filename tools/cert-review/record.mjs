@@ -58,7 +58,7 @@ async function all(path) {
     const r = await fetch(url, { headers });
     if (!r.ok) throw new Error(`GET ${path}: HTTP ${r.status}`);
     const page = await r.json();
-    out.push(...(Array.isArray(page) ? page : (page.check_runs ?? page.artifacts ?? [])));
+    out.push(...(Array.isArray(page) ? page : (page.check_runs ?? page.artifacts ?? page.workflow_runs ?? [])));
     url = /<([^>]+)>;\s*rel="next"/.exec(r.headers.get('link') ?? '')?.[1];
   }
   return out;
@@ -192,6 +192,26 @@ function bios() {
   return undefined;
 }
 
+async function matrixDecision(runs) {
+  const newest = (name) =>
+    runs
+      .filter((r) => r.name === name)
+      .sort((a, b) => String(b.started_at ?? '').localeCompare(String(a.started_at ?? '')))[0];
+  const ci = newest('ci');
+  const runner = newest('runner');
+  const green = (r) => r?.status === 'completed' && r.conclusion === 'success';
+  const suite = ci?.check_suite?.id;
+  if (!green(ci) || !green(runner) || !suite || runner.check_suite?.id !== suite) return undefined;
+  try {
+    const [run] = await all(`repos/${repo}/actions/runs?check_suite_id=${suite}`);
+    const notes = await all(`repos/${repo}/check-runs/${runner.id}/annotations`);
+    const os = notes.find((a) => a.title === 'test matrix' && /^os=\w+$/.test(a.message ?? ''))?.message.slice(3);
+    return { event: run?.event, os };
+  } catch {
+    return undefined;
+  }
+}
+
 async function ci() {
   const until = Date.now() + Number(values['ci-wait']) * 1000;
   for (;;) {
@@ -201,7 +221,7 @@ async function ci() {
     } catch (error) {
       return missing.push(`CI's results couldn't be read: ${one(error.message)}`);
     }
-    const ev = ciEvidence(runs);
+    const ev = ciEvidence(runs, await matrixDecision(runs));
     const pending = ev.missing.some((m) => /is (queued|in_progress|waiting|pending)$|is missing|has no /.test(m));
     if (!pending || Date.now() > until) {
       facts.ci = ev.per;
@@ -326,7 +346,7 @@ const checks = [
   `- reproducible from a git archive of the merge commit: ${facts.rebuild ? (facts.rebuild.match ? 'yes, byte for byte' : 'NO') : '?'}`,
   `- the NEGATIVE: ${facts.decision ?? '?'}`,
   `- seven's canary on the wasm: ${facts.bios ?? 'NO'}`,
-  `- CI at the head: ${facts.ci ? Object.entries(facts.ci).map(([os, legs]) => `${os} ${legs.length ? legs.map((l) => l.split('=')[1]).join('/') : 'none'}`).join(', ') : '?'}`,
+  `- CI at the head: ${facts.ci ? Object.entries(facts.ci).map(([os, legs]) => `${os} ${legs.length ? legs.map((l) => (l.includes('=') ? l.split('=')[1] : l)).join('/') : 'none'}`).join(', ') : '?'}`,
   `- pull request #${pr}, head ${values.head || '?'}, reviewed as merged onto main (${values.commit || '?'})`,
 ].join('\n');
 const elsewhere = review?.elsewhere?.length

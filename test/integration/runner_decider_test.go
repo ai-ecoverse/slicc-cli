@@ -132,3 +132,78 @@ func TestWorkflowsNameNoPoolAndKeepIDTokenJobsHosted(t *testing.T) {
 		t.Errorf("found %d jobs with id-token: write; release.yml's release and sliccy-next should be among them", idJobs)
 	}
 }
+
+const runnerJobScript = `
+const input = JSON.parse(process.argv[1]);
+const outputs = {};
+const core = { setOutput: (k, v) => { outputs[k] = v; }, notice: (m, p) => { outputs.notice = p.title + ': ' + m; }, summary: { addRaw: () => ({ write: async () => {} }) } };
+const github = {
+  graphql: async () => ({ repository: { mergeQueue: { entries: { nodes: [] } } } }),
+  rest: { issues: { listLabelsOnIssue: 'listLabelsOnIssue' } },
+  paginate: async (fn, params) => {
+    if (fn !== 'listLabelsOnIssue' || params.issue_number !== 7 || params.owner !== 'ai-ecoverse') throw new Error('unexpected call');
+    if (!input.labels) throw new Error('fake API down');
+    return input.labels;
+  },
+};
+const context = { eventName: input.event, payload: input.payload, repo: { owner: 'ai-ecoverse', repo: 'slicc-cli' } };
+process.env.GITHUB_WORKSPACE = input.workspace;
+const AsyncFunction = (async () => {}).constructor;
+new AsyncFunction('context', 'github', 'core', input.script)(context, github, core)
+  .then(() => process.stdout.write(outputs.notice === 'test matrix: os=' + outputs.os ? outputs.os : 'no notice for ' + outputs.os));
+`
+
+func TestPullRequestsTestLinuxUnlessLabelledAllOS(t *testing.T) {
+	ci := readWorkflow(t, "ci.yml")
+	at := strings.Index(ci, "          script: |\n")
+	if at < 0 {
+		t.Fatal("ci.yml's runner job has no script")
+	}
+	var lines []string
+	for _, line := range strings.Split(ci[at+len("          script: |\n"):], "\n") {
+		if !strings.HasPrefix(line, "            ") {
+			break
+		}
+		lines = append(lines, line[12:])
+	}
+	workspace, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	label := func(names ...string) []any {
+		out := []any{}
+		for _, n := range names {
+			out = append(out, map[string]any{"name": n})
+		}
+		return out
+	}
+	pr := func(labels []any) map[string]any {
+		return map[string]any{"pull_request": map[string]any{"number": 7, "labels": labels, "head": map[string]any{"repo": map[string]any{"full_name": "ai-ecoverse/slicc-cli"}}}}
+	}
+	for _, c := range []struct {
+		name  string
+		event string
+		input map[string]any
+		want  string
+	}{
+		{"push", "push", map[string]any{"payload": map[string]any{}}, "all"},
+		{"merge group", "merge_group", map[string]any{"payload": map[string]any{"merge_group": map[string]any{"base_ref": "refs/heads/main", "head_sha": "fake-sha-0001"}}}, "all"},
+		{"release", "workflow_run", map[string]any{"payload": map[string]any{}}, "all"},
+		{"pull request", "pull_request", map[string]any{"payload": pr(label()), "labels": label("cert-review-approved")}, "linux"},
+		{"pull request labelled all-os", "pull_request", map[string]any{"payload": pr(label()), "labels": label("cert-review-approved", "all-os")}, "all"},
+		{"pull request whose label was removed after the event", "pull_request", map[string]any{"payload": pr(label("all-os")), "labels": label()}, "linux"},
+		{"pull request when the API fails", "pull_request", map[string]any{"payload": pr(label("all-os"))}, "all"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			c.input["event"], c.input["script"], c.input["workspace"] = c.event, strings.Join(lines, "\n"), workspace
+			raw, err := json.Marshal(c.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command("node", "-e", runnerJobScript, string(raw)).CombinedOutput()
+			if err != nil || string(out) != c.want {
+				t.Fatalf("os %q (%v), want %q", out, err, c.want)
+			}
+		})
+	}
+}
