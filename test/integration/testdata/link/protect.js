@@ -453,8 +453,10 @@ export function protectTest(getLink, describe) {
         await c.send('Page.startScreencast', { format: 'jpeg', quality: 10, everyNthFrame: 1 }, sessionId);
         await c.send('Runtime.evaluate', { expression: 'setInterval(() => { document.body.style.background = `hsl(${Date.now() % 360} 50% 50%)`; }, 30); true' }, sessionId);
         await c.waitEvent((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId, 10000).catch(() => null);
-        let capturing = true;
         const shots = [];
+        const first = await Promise.race([outcome(c.send('Page.captureScreenshot', { format: 'jpeg', quality: 10 }, sessionId)), sleep(15000).then(() => ({ ok: false, error: { message: 'no answer in 15 s' } }))]);
+        shots.push({ ok: first.ok, at: c.events.length, message: first.error?.message ?? '' });
+        let capturing = true;
         const capture = (async () => {
           while (capturing) {
             const r = outcome(c.send('Page.captureScreenshot', { format: 'jpeg', quality: 10 }, sessionId)).then((o) => shots.push({ ok: o.ok, at: c.events.length, message: o.error?.message ?? '' }));
