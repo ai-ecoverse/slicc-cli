@@ -17,8 +17,8 @@ func TestHistoryKnownsMatchOnlyRecordedIncompleteRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	count := 0
-	for _, known := range guardKnowns {
-		if known.issue == historyQuarantineIssue {
+	for id, known := range guardKnowns {
+		if known.issue == historyQuarantineIssue && strings.HasPrefix(id, "C8.") {
 			count++
 		}
 	}

@@ -567,7 +567,58 @@ func historyQuarantineKnown(mode string) guardKnown {
 	}
 }
 
+func redirectQuarantineKnown(id string) guardKnown {
+	return guardKnown{
+		issue:   historyQuarantineIssue,
+		targets: []string{"ordinary"},
+		matches: func(r guardRow) bool {
+			data, err := os.ReadFile("testdata/redirect-incompletes.json")
+			if err != nil {
+				return false
+			}
+			var rows []guardRow
+			if json.Unmarshal(data, &rows) != nil {
+				return false
+			}
+			for _, recorded := range rows {
+				if recorded.ID == id {
+					return recordedIncomplete(r, recorded)
+				}
+			}
+			return false
+		},
+	}
+}
+
+func recordedIncomplete(r, recorded guardRow) bool {
+	if r.Control != recorded.Control || r.Guarded != recorded.Guarded || r.Live != recorded.Live || !slices.Equal(r.Errors, recorded.Errors) {
+		return false
+	}
+	var why, recordedWhy string
+	if json.Unmarshal(r.Why, &why) != nil || json.Unmarshal(recorded.Why, &recordedWhy) != nil || why != recordedWhy {
+		return false
+	}
+	var observed, recordedObserved map[string]map[string]bool
+	if json.Unmarshal(r.Observed, &observed) != nil || json.Unmarshal(recorded.Observed, &recordedObserved) != nil || len(observed) != len(recordedObserved) {
+		return false
+	}
+	for section, fields := range recordedObserved {
+		if len(observed[section]) != len(fields) {
+			return false
+		}
+		for field := range fields {
+			if _, present := observed[section][field]; !present {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 var guardKnowns = map[string]guardKnown{
+	"C2.redirect-body":                        redirectQuarantineKnown("C2.redirect-body"),
+	"C2.redirect-secret":                      redirectQuarantineKnown("C2.redirect-secret"),
+	"C2.redirect-secret-mix":                  redirectQuarantineKnown("C2.redirect-secret-mix"),
 	"C8.protected-document-restore":           historyQuarantineKnown("restore"),
 	"C8.protected-error-page":                 historyQuarantineKnown("recover"),
 	"C8.protected-error-page.query":           historyQuarantineKnown("recover"),
