@@ -56,6 +56,7 @@ jobs:
               .catch(() => pr.labels ?? []);
             const os = !pr || labels.some((label) => label.name === 'all-os') ? 'all' : 'linux';
             core.setOutput('os', os);
+            core.notice(`os=${os}`, { title: 'test matrix' });
             await core.summary.addRaw(`runner: ${runner}, light: ${light} (${why}), os: ${os}\n`).write();
 
   lint:

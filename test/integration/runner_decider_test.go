@@ -136,7 +136,7 @@ func TestWorkflowsNameNoPoolAndKeepIDTokenJobsHosted(t *testing.T) {
 const runnerJobScript = `
 const input = JSON.parse(process.argv[1]);
 const outputs = {};
-const core = { setOutput: (k, v) => { outputs[k] = v; }, summary: { addRaw: () => ({ write: async () => {} }) } };
+const core = { setOutput: (k, v) => { outputs[k] = v; }, notice: (m, p) => { outputs.notice = p.title + ': ' + m; }, summary: { addRaw: () => ({ write: async () => {} }) } };
 const github = {
   graphql: async () => ({ repository: { mergeQueue: { entries: { nodes: [] } } } }),
   rest: { issues: { listLabelsOnIssue: 'listLabelsOnIssue' } },
@@ -150,7 +150,7 @@ const context = { eventName: input.event, payload: input.payload, repo: { owner:
 process.env.GITHUB_WORKSPACE = input.workspace;
 const AsyncFunction = (async () => {}).constructor;
 new AsyncFunction('context', 'github', 'core', input.script)(context, github, core)
-  .then(() => process.stdout.write(outputs.os));
+  .then(() => process.stdout.write(outputs.notice === 'test matrix: os=' + outputs.os ? outputs.os : 'no notice for ' + outputs.os));
 `
 
 func TestPullRequestsTestLinuxUnlessLabelledAllOS(t *testing.T) {

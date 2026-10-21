@@ -282,7 +282,9 @@ export function decide(row, prev, next) {
 
 export const GAPS = new Set(['no-test', 'no-negative', 'prev-not-run', 'not-run']);
 
-export function ciEvidence(runs) {
+export const LINUX_ONLY = 'not run on this PR (Linux-only; the merge queue runs every OS)';
+
+export function ciEvidence(runs, decision) {
   const missing = [];
   const latest = new Map();
   for (const r of runs ?? []) {
@@ -291,18 +293,21 @@ export function ciEvidence(runs) {
   }
   const all = [...latest.values()];
   const tests = all.filter((r) => /^test \(/.test(r.name));
+  const ci = latest.get('ci');
+  const linuxOnly =
+    ci?.status === 'completed' && ci.conclusion === 'success' && decision?.event === 'pull_request' && decision?.os === 'linux';
   const per = {};
   for (const os of ['ubuntu-latest', 'macos-latest', 'windows-latest']) {
     const legs = tests.filter((r) => r.name.startsWith(`test (${os},`));
     per[os] = legs.map((r) => `${r.name}=${r.status === 'completed' ? r.conclusion : r.status}`);
-    if (legs.length === 0) missing.push(`CI has no ${os} test run on the head`);
+    if (legs.length === 0 && linuxOnly && os !== 'ubuntu-latest') per[os] = [LINUX_ONLY];
+    else if (legs.length === 0) missing.push(`CI has no ${os} test run on the head`);
     for (const r of legs)
       if (r.status !== 'completed' || r.conclusion !== 'success')
         missing.push(
           `CI's ${r.name} on the head is ${r.status === 'completed' ? r.conclusion : r.status}`
         );
   }
-  const ci = latest.get('ci');
   if (!ci) missing.push("CI's ci check is missing on the head");
   else if (ci.status !== 'completed' || ci.conclusion !== 'success')
     missing.push(`CI's ci check on the head is ${ci.status === 'completed' ? ci.conclusion : ci.status}`);
