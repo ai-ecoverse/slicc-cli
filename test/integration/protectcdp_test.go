@@ -67,7 +67,9 @@ func TestCDPProtectsSevensOrigin(t *testing.T) {
 	t.Run("navigate is refused", env.testNavigate)
 	t.Run("the seven tab is redacted and can't be attached", env.testAttach)
 	t.Run("auto-attach skips the seven tab", env.testAutoAttach)
-	t.Run("script navigation detaches", env.testScriptNavigate)
+	t.Run("an error page for seven's URL doesn't lock the tab", env.testErrorPage)
+	t.Run("seven's 404 page is seven's document", env.testNotFound)
+	t.Run("commands racing a restore of seven's document never run in it", env.testRestoreRace)
 	t.Run("a blank popup from seven is seven's", env.testPopup)
 	t.Run("history entries on seven are refused", env.testHistory)
 	t.Run("cookies", env.testCookies)
@@ -222,23 +224,146 @@ func (e *protectEnv) testAutoAttach(t *testing.T) {
 	}
 }
 
-func (e *protectEnv) testScriptNavigate(t *testing.T) {
-	var r struct {
-		TargetID string     `json:"targetId"`
-		Before   string     `json:"before"`
-		After    cdpOutcome `json:"after"`
-		Reattach cdpOutcome `json:"reattach"`
-		URL      string     `json:"url"`
-		Title    string     `json:"title"`
-		Leaked   int        `json:"leaked"`
+func (e *protectEnv) testErrorPage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var res struct {
+		TargetID string `json:"targetId"`
 	}
-	e.evalJSON(t, "linkTest.protect.scriptNavigate("+jsArgs("chrome", e.allowed+"/?n=script", e.seven+"/nowhere?secret=1")+")", &r)
-	if !strings.HasPrefix(r.Before, e.allowed) || !r.After.refused() || !r.Reattach.refused() || r.URL != e.seven || r.Title != e.seven || r.Leaked != 0 {
-		t.Fatalf("script navigation onto seven: %+v", r)
+	if err := e.b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": e.seven + "/frame.html?n=real"}, &res); err != nil {
+		t.Fatal(err)
+	}
+	defer e.b.closeTarget(res.TargetID)
+	s, err := e.b.client.Attach(ctx, res.TargetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, s, e.seven+"/frame.html")
+	if err := s.Call(ctx, "Page.navigate", map[string]any{"url": e.allowed + "/?n=error"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, s, e.allowed)
+	_ = s.Detach(ctx)
+	failed := e.seven + "/nowhere?secret=1"
+	var r struct {
+		Before       string         `json:"before"`
+		Unreachable  string         `json:"unreachable"`
+		Detached     bool           `json:"detached"`
+		Listed       *protectTarget `json:"listed"`
+		Info         protectTarget  `json:"info"`
+		Reload       cdpOutcome     `json:"reload"`
+		Blank        cdpOutcome     `json:"blank"`
+		Href         string         `json:"href"`
+		Leaked       bool           `json:"leaked"`
+		Locked       bool           `json:"locked"`
+		After        cdpOutcome     `json:"after"`
+		Reattach     cdpOutcome     `json:"reattach"`
+		Close        cdpOutcome     `json:"close"`
+		Wiped        cdpOutcome     `json:"wiped"`
+		ListedFailed *protectTarget `json:"listedFailed"`
+		ListedError  *protectTarget `json:"listedError"`
+		CloseError   cdpOutcome     `json:"closeError"`
+	}
+	e.evalJSON(t, "linkTest.protect.errorPage("+jsArgs("chrome", res.TargetID, failed)+")", &r)
+	switch {
+	case !strings.HasPrefix(r.Before, e.allowed) || r.Unreachable == "":
+		t.Fatalf("the script navigation onto seven didn't commit an error page: %+v", r)
+	case r.Detached || !r.Reload.OK || !r.Blank.OK || r.Href != "about:blank":
+		t.Fatalf("an error page for seven's URL locked the tab: %+v", r)
+	case r.Listed == nil || r.Listed.URL != e.seven || r.Listed.Title != e.seven || r.Info.URL != e.seven || r.Info.Title != e.seven || r.Leaked:
+		t.Fatalf("the error page's attempted URL was listed in full: %+v", r)
+	case !r.Locked || !r.After.refused() || !r.Reattach.refused() || !r.Close.refused():
+		t.Fatalf("seven's document, restored into the same tab, didn't lock it: %+v", r)
+	case r.ListedFailed == nil || r.ListedFailed.URL != e.seven || r.ListedFailed.Title != e.seven:
+		t.Fatalf("a tab on an error page for seven's URL is listed as %+v", r.ListedFailed)
+	case !r.Wiped.OK || !r.CloseError.OK || r.ListedError == nil || r.ListedError.URL != "about:blank#blocked":
+		t.Fatalf("wiping and closing a tab on an error page for seven's URL: %+v wiped to %+v", r, r.ListedError)
+	}
+}
+
+func (e *protectEnv) directTab(t *testing.T, u string) (string, *cdp.Session) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var res struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := e.b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": u}, &res); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.b.closeTarget(res.TargetID) })
+	s, err := e.b.client.Attach(ctx, res.TargetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, s, u)
+	return res.TargetID, s
+}
+
+func (e *protectEnv) testNotFound(t *testing.T) {
+	notFound := e.seven + "/nowhere?n=404"
+	id, s := e.directTab(t, notFound)
+	var status struct {
+		Result struct {
+			Value bool `json:"value"`
+		} `json:"result"`
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = e.b.client.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": r.TargetID}, nil)
+	if err := s.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "document.body.innerText.includes('404 page not found')", "returnByValue": true}, &status); err != nil || !status.Result.Value {
+		t.Fatalf("seven's 404 page isn't a document of its own: %+v %v", status, err)
+	}
+	_ = s.Detach(ctx)
+	var a map[string]json.RawMessage
+	e.evalJSON(t, "linkTest.protect.attach("+jsArgs("chrome", id)+")", &a)
+	for _, m := range []string{"Target.attachToTarget", "Target.activateTarget", "Target.closeTarget"} {
+		var o cdpOutcome
+		_ = json.Unmarshal(a[m], &o)
+		if !o.refused() {
+			t.Fatalf("%s on seven's 404 page: %s", m, a[m])
+		}
+	}
+	var info protectTarget
+	_ = json.Unmarshal(a["info"], &info)
+	if info.URL != e.seven || info.Title != e.seven {
+		t.Fatalf("seven's 404 page is listed as %+v", info)
+	}
+}
+
+func (e *protectEnv) testRestoreRace(t *testing.T) {
+	doc := e.seven + "/frame.html?n=race"
+	id, s := e.directTab(t, doc)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.Call(ctx, "Page.navigate", map[string]any{"url": e.allowed + "/?n=race"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, s, e.allowed)
+	_ = s.Detach(ctx)
+	var r struct {
+		Before   string     `json:"before"`
+		Probes   int        `json:"probes"`
+		Stuck    int        `json:"stuck"`
+		Attaches int        `json:"attaches"`
+		Leaked   []string   `json:"leaked"`
+		Detached bool       `json:"detached"`
+		After    cdpOutcome `json:"after"`
+		Reattach cdpOutcome `json:"reattach"`
+		Close    cdpOutcome `json:"close"`
+	}
+	e.evalJSON(t, "linkTest.protect.restoreRace("+jsArgs("chrome", id, e.seven)+")", &r)
+	switch {
+	case !strings.HasPrefix(r.Before, e.allowed) || r.Probes+r.Stuck == 0:
+		t.Fatalf("the race never ran: %+v", r)
+	case len(r.Leaked) > 0:
+		t.Fatalf("commands ran in seven's restored document: %+v", r)
+	case !r.Detached || !r.After.refused() || !r.Reattach.refused() || !r.Close.refused():
+		t.Fatalf("seven's restored document didn't lock the tab: %+v", r)
+	}
+	if href := (&navEnv{linkEnv: e.linkEnv}).directHref(t, id); href != doc {
+		t.Fatalf("history.back left the tab at %q, not seven's document restored from the back/forward cache", href)
+	}
+	t.Logf("%d probes answered, %d unanswered after 1s, and %d attaches raced the restore", r.Probes, r.Stuck, r.Attaches)
 }
 
 func (e *protectEnv) testPopup(t *testing.T) {

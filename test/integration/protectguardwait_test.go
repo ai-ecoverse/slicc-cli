@@ -300,21 +300,34 @@ func pausedServiceWorkerScript(allowed string) fakeScript {
 }
 
 func TestCDPLetsAPausedServiceWorkerStartBeforeItsGuard(t *testing.T) {
-	env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(_, allowed string) fakeScript { return pausedServiceWorkerScript(allowed) })
-	fake.gate("Network.enable", "Runtime.runIfWaitingForDebugger")
-	var r struct {
-		Out []struct {
-			cdpOutcome
-			Method string `json:"method"`
-			MS     int    `json:"ms"`
-		} `json:"out"`
-	}
-	env.evalJSON(t, "linkTest.protect.calls("+jsArgs("chrome-2", [][]any{
-		{"Target.setAutoAttach", map[string]any{"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}},
-		{"Runtime.runIfWaitingForDebugger", map[string]any{}, "PSW"},
-		{"Debugger.enable", map[string]any{}, "PSW"},
-	})+")", &r)
-	if len(r.Out) != 3 || !r.Out[1].OK || r.Out[1].MS > 1500 || !r.Out[2].OK {
-		t.Errorf("a service worker paused until its debugger runs it, whose guard Chrome answers only after that: %+v, want runIfWaitingForDebugger answered at once and the guard ready after it", r.Out)
+	for _, tc := range []struct {
+		name   string
+		attach time.Duration
+	}{
+		{"the guard attaches first", 0},
+		{"the worker runs before the guard attaches", time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, fake := setupFakeProtectEnv(t, guardBounds("2s", "8s"), func(_, allowed string) fakeScript { return pausedServiceWorkerScript(allowed) })
+			fake.gate("Network.enable", "Runtime.runIfWaitingForDebugger")
+			if tc.attach > 0 {
+				fake.delay("Target.attachToTarget", tc.attach)
+			}
+			var r struct {
+				Out []struct {
+					cdpOutcome
+					Method string `json:"method"`
+					MS     int    `json:"ms"`
+				} `json:"out"`
+			}
+			env.evalJSON(t, "linkTest.protect.calls("+jsArgs("chrome-2", [][]any{
+				{"Target.setAutoAttach", map[string]any{"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}},
+				{"Runtime.runIfWaitingForDebugger", map[string]any{}, "PSW"},
+				{"Debugger.enable", map[string]any{}, "PSW"},
+			})+")", &r)
+			if len(r.Out) != 3 || !r.Out[1].OK || r.Out[1].MS > 1500 || !r.Out[2].OK {
+				t.Errorf("a service worker paused until its debugger runs it, whose guard Chrome answers only after that: %+v, want runIfWaitingForDebugger answered at once and the guard ready after it", r.Out)
+			}
+		})
 	}
 }

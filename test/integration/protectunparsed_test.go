@@ -51,6 +51,7 @@ func TestCDPFailsClosedOnUnparseableURLs(t *testing.T) {
 	t.Run("window.open to an unparseable sliccy.ai host is cut", func(t *testing.T) { env.testPopupTo(t, env.hole, "exa%20mple") })
 	t.Run("window.open to an exotic host is cut too", func(t *testing.T) { env.testPopupTo(t, env.exotic, "an%20exotic") })
 	t.Run("a tab that leaves for an unparseable host drops out of the page's target events", env.testLeavesForHole)
+	t.Run("an error page for an unparseable sliccy.ai host still cuts the tab", env.testErrorPageForHole)
 	t.Run("a blob from an opaque origin is protected", env.testOpaqueBlob)
 	t.Run("a joiner host Chrome loads on sliccy.ai is cut", func(t *testing.T) { env.testLoadedForm(t, env.zwj, "xn--1ug.sliccy.ai", true, true) })
 	t.Run("an invalid xn-- label Chrome loads on sliccy.ai is cut", func(t *testing.T) { env.testLoadedForm(t, env.xna, "xn--a.sliccy.ai", true, true) })
@@ -84,7 +85,7 @@ func (e *unparsedEnv) testDestinations(t *testing.T) {
 }
 
 func (e *unparsedEnv) unguarded(sessionID, method string, params, result any) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return e.b.client.Call(ctx, sessionID, method, params, result)
 }
@@ -300,6 +301,23 @@ func (e *unparsedEnv) testLeavesForHole(t *testing.T) {
 		if ev.URL != r.Before[len(r.Before)-1].URL {
 			t.Errorf("after the tab left for %q the page got %s at %q", e.hole, ev.Method, ev.URL)
 		}
+	}
+}
+
+func (e *unparsedEnv) testErrorPageForHole(t *testing.T) {
+	var r struct {
+		TargetID string     `json:"targetId"`
+		Detached bool       `json:"detached"`
+		After    cdpOutcome `json:"after"`
+		Close    cdpOutcome `json:"close"`
+	}
+	e.evalJSON(t, "linkTest.protect.leaveFor("+jsArgs("chrome", e.allowed+"/?n=hole-error", e.hole)+")", &r)
+	defer e.b.closeTarget(r.TargetID)
+	if href := (&navEnv{linkEnv: e.linkEnv}).directHref(t, r.TargetID); !strings.HasPrefix(href, "chrome-error://") {
+		t.Fatalf("the tab is at %q, not on Chrome's error page for %q", href, e.hole)
+	}
+	if !r.Detached || !r.After.refused() || !r.Close.refused() {
+		t.Fatalf("an error page for %q left the tab drivable: %+v", e.hole, r)
 	}
 }
 

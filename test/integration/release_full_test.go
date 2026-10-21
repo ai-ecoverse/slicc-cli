@@ -330,15 +330,23 @@ func legsOf(spec string) []ciLeg {
 const lightMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/2,-,- macos-latest,2/2,-,- windows-latest,1/2,-,- windows-latest,2/2,-,-"
 const fullMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards macos-latest,1/4,race,guards macos-latest,2/4,race,guards macos-latest,3/4,race,guards macos-latest,4/4,race,guards windows-latest,1/3,race,guards windows-latest,2/3,race,guards windows-latest,3/3,race,guards"
 
+const linuxMatrix = "ubuntu-latest,1/3,race,guards ubuntu-latest,2/3,race,guards ubuntu-latest,3/3,race,guards"
+
 func TestPushToMainRunsOnlyTheLightMatrix(t *testing.T) {
-	for _, event := range []string{"push", "pull_request", "merge_group"} {
-		t.Run(event, func(t *testing.T) {
-			legs, installers := ciMatrix(t, ghCtx{"github.event_name": event, "inputs.full": nil})
-			if want := legsOf(lightMatrix); fmt.Sprint(legs) != fmt.Sprint(want) {
-				t.Errorf("a %s run tests\n  %v\nwant the light matrix, -race and the guard vectors on Linux only:\n  %v", event, legs, want)
+	for _, c := range []struct{ event, os, want string }{
+		{"push", "all", lightMatrix},
+		{"merge_group", "all", lightMatrix},
+		{"pull_request", "all", lightMatrix},
+		{"pull_request", "linux", linuxMatrix},
+		{"push", "", lightMatrix},
+	} {
+		t.Run(c.event+"-"+c.os, func(t *testing.T) {
+			legs, installers := ciMatrix(t, ghCtx{"github.event_name": c.event, "inputs.full": nil, "needs.runner.outputs.os": c.os})
+			if want := legsOf(c.want); fmt.Sprint(legs) != fmt.Sprint(want) {
+				t.Errorf("a %s run with os %q tests\n  %v\nwant\n  %v", c.event, c.os, legs, want)
 			}
 			if got := strings.Join(installers, " "); got != "ubuntu-curl alpine-wget" {
-				t.Errorf("a %s run checks the installer on %q, want ubuntu-curl alpine-wget", event, got)
+				t.Errorf("a %s run checks the installer on %q, want ubuntu-curl alpine-wget", c.event, got)
 			}
 		})
 	}
@@ -423,7 +431,7 @@ func TestTheReleaseRunsTheFullMatrixOnTheCommitItReleases(t *testing.T) {
 		}
 	}
 	for _, event := range []string{"workflow_run", "workflow_dispatch"} {
-		legs, installers := ciMatrix(t, ghCtx{"github.event_name": event, "inputs.full": input})
+		legs, installers := ciMatrix(t, ghCtx{"github.event_name": event, "inputs.full": input, "needs.runner.outputs.os": "all"})
 		if want := legsOf(fullMatrix); fmt.Sprint(legs) != fmt.Sprint(want) {
 			t.Errorf("the release's full build (%s) tests\n  %v\nwant every shard on every OS with -race and the guard vectors:\n  %v", event, legs, want)
 		}

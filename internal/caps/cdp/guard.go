@@ -129,6 +129,7 @@ type guard struct {
 	assets            map[string]*assetSet
 	heldPauses        map[requestKey][]heldPause
 	heldPauseCount    int
+	commitMarks       map[callKey]commitMark
 	maxWorlds         int
 }
 
@@ -178,6 +179,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		clean:             map[string]*assetSet{},
 		assets:            map[string]*assetSet{},
 		heldPauses:        map[requestKey][]heldPause{},
+		commitMarks:       map[callKey]commitMark{},
 		maxWorlds:         maxWorlds,
 		bounds:            boundsFromEnv(),
 	}
@@ -287,6 +289,9 @@ func (g *guard) openerState(t *target) protect.Opener {
 func (g *guard) decide(t *target, previous bool) bool {
 	if t.typ == "browser" {
 		return false
+	}
+	if !protect.HiddenType(t.typ) && !protect.Unparseable(t.url) && g.errorPageLocked(t) {
+		return previous
 	}
 	return g.o.TargetOf(t.url, t.typ, previous, g.openerState(t))
 }
@@ -413,6 +418,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	for k := range g.pending {
 		if k.session == id {
 			delete(g.pending, k)
+			delete(g.commitMarks, k)
 			delete(g.bodyCalls, k)
 			g.attachDoneLocked(k)
 		}

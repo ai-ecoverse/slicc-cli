@@ -2,6 +2,9 @@ package integration
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +31,26 @@ type navLog struct {
 	mu      sync.Mutex
 	hits    []string
 	beacons map[string][]string
+	secrets []string
+}
+
+func (l *navLog) secret() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	code := "fake-code-" + hex.EncodeToString(b)
+	l.secrets = append(l.secrets, code)
+	return code
+}
+
+func (l *navLog) lastSecret() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.secrets) == 0 {
+		return ""
+	}
+	return l.secrets[len(l.secrets)-1]
 }
 
 func (l *navLog) hit(host, uri string) {
@@ -80,6 +103,14 @@ func navServer(t *testing.T, log *navLog) *httptest.Server {
 		http.Redirect(w, r, r.URL.Query().Get("to"), http.StatusFound)
 	})
 	vectorRoutes(mux, log)
+	mux.HandleFunc("/redirect-secret", func(w http.ResponseWriter, r *http.Request) {
+		code := log.secret()
+		frag := ""
+		if r.URL.Query().Get("frag") != "" {
+			frag = "#access_token=" + code
+		}
+		http.Redirect(w, r, r.URL.Query().Get("to")+"/doc?code="+code+frag, http.StatusFound)
+	})
 	mux.HandleFunc("/beacon", func(w http.ResponseWriter, r *http.Request) {
 		log.beacon(r.URL.Query().Get("tag"), r.URL.Query().Get("origin"))
 		w.WriteHeader(http.StatusNoContent)
@@ -149,6 +180,8 @@ func TestCDPProtectsAcrossNavigation(t *testing.T) {
 	t.Run("an init script, then a script navigation onto seven", env.testScriptNavigation)
 	t.Run("an init script, then a script navigation onto the vault", env.testVaultNavigation)
 	t.Run("a server redirect into a protected origin", env.testRedirect)
+	t.Run("a server redirect's protected URL stays out of the error page the page drives", env.testRedirectSecret)
+	t.Run("a tab the page intercepts settles after a redirect into a protected origin", env.testRedirectSettles)
 	t.Run("a popup from an allowed tab", env.testPopupNavigation)
 	t.Run("iframes that attach without a URL", env.testFrames)
 	t.Run("a popup that never gets a URL", env.testNoURL)
@@ -272,8 +305,8 @@ func (e *navEnv) testScriptNavigation(t *testing.T) {
 	nonce := e.nonce("script")
 	r := e.navInit(t, nonce, e.seven+"/doc?n="+nonce)
 	defer e.closeTarget(r.TargetID)
-	if !r.Detached {
-		t.Errorf("the page's session stayed attached: %+v", r)
+	if r.Detached {
+		t.Errorf("the error page for seven's URL detached the page's session: %+v", r)
 	}
 	e.assertBlocked(t, r.TargetID, nonce, nonce, true)
 }
@@ -292,6 +325,108 @@ func (e *navEnv) testRedirect(t *testing.T) {
 		r := e.navInit(t, nonce, away)
 		e.assertBlocked(t, r.TargetID, nonce, nonce, true)
 		e.closeTarget(r.TargetID)
+	}
+}
+
+func (e *navEnv) testRedirectSecret(t *testing.T) {
+	for _, base := range []string{e.seven, e.vault} {
+		var r struct {
+			Unreachable string          `json:"unreachable"`
+			Detached    bool            `json:"detached"`
+			Answers     json.RawMessage `json:"answers"`
+			Blank       cdpOutcome      `json:"blank"`
+			Listed      *protectTarget  `json:"listed"`
+			Before      int             `json:"framesBefore"`
+			OnError     int             `json:"framesOnError"`
+			ShotsBefore int             `json:"shotsBefore"`
+			ShotsAfter  int             `json:"shotsAfter"`
+			ShotErrors  []string        `json:"shotMessages"`
+			Close       cdpOutcome      `json:"close"`
+			Seen        string          `json:"seen"`
+		}
+		away := e.allowed + "/redirect-secret?to=" + url.QueryEscape(base)
+		(&protectEnv{linkEnv: e.linkEnv}).evalJSON(t, "linkTest.protect.redirectSecret("+jsArgs("chrome", e.allowed+"/doc?n=secret", away)+")", &r)
+		secret := e.log.lastSecret()
+		switch {
+		case secret == "" || r.Unreachable == "":
+			t.Fatalf("the redirect into %s never committed an error page: %+v", base, r)
+		case strings.Contains(r.Seen, secret) || strings.Contains(r.Seen, "fake-code-"):
+			t.Fatalf("the page read the redirect's protected URL into %s: %s", base, r.Seen)
+		case r.ShotsBefore == 0 || r.ShotsAfter != 0:
+			t.Fatalf("screenshots: %d before the error page for %s and %d answered after it committed (%v)", r.ShotsBefore, base, r.ShotsAfter, r.ShotErrors)
+		case r.Before == 0 || r.OnError != 0:
+			t.Fatalf("screencast frames: %d before the error page for %s and %d on it", r.Before, base, r.OnError)
+		case r.Detached || !r.Blank.OK || !r.Close.OK || r.Listed == nil || r.Listed.URL != "about:blank#blocked":
+			t.Fatalf("the error page for %s isn't drivable: %+v", base, r)
+		}
+		var answers map[string]cdpOutcome
+		_ = json.Unmarshal(r.Answers, &answers)
+		for _, m := range []string{"Runtime.evaluate", "DOM.getDocument", "Page.captureSnapshot", "Page.addScriptToEvaluateOnNewDocument", "DOM.enable", "javascript:", "Page.reload with a script", "evaluateReloaded"} {
+			if !answers[m].refused() {
+				t.Errorf("%s on the error page for %s: %+v", m, base, answers[m])
+			}
+		}
+		if !answers["Page.reload"].OK || !answers["evaluateAfter"].OK {
+			t.Errorf("reloading the error page for %s, or evaluating once it left: %+v %+v", base, answers["Page.reload"], answers["evaluateAfter"])
+		}
+	}
+}
+
+func (e *navEnv) testRedirectSettles(t *testing.T) {
+	for _, base := range []string{e.seven, e.vault} {
+		away := e.allowed + "/redirect-secret?frag=1&to=" + url.QueryEscape(base)
+		direct := e.allowed + "/doc?n=settle-direct"
+		type settled struct {
+			TargetID  string     `json:"targetId"`
+			Failed    bool       `json:"failed"`
+			Guarded   cdpOutcome `json:"guarded"`
+			GuardedMS int        `json:"guardedMs"`
+			Committed bool       `json:"committed"`
+			Direct    bool       `json:"direct"`
+			Paused    int        `json:"paused"`
+			Refused   []string   `json:"refused"`
+			Seen      string     `json:"seen"`
+		}
+		var r settled
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			(&protectEnv{linkEnv: e.linkEnv}).evalJSON(t, "linkTest.protect.redirectSettles("+jsArgs("chrome", e.allowed+"/doc?n=settle", away, e.allowed+"/doc?n=settle-guarded", direct)+")", &r)
+		}()
+		var id string
+		for deadline := time.Now().Add(30 * time.Second); id == "" && time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+			for tid, u := range pageTargets(t, e.b) {
+				if strings.Contains(u, "n=settle-guarded") {
+					id = tid
+				}
+			}
+		}
+		if id == "" {
+			<-done
+			t.Fatalf("the page's own navigation after the redirect into %s never committed: %+v", base, r)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		s, err := e.b.client.Attach(ctx, id)
+		if err == nil {
+			err = s.Call(ctx, "Page.navigate", map[string]any{"url": direct}, nil)
+			_ = s.Detach(context.Background())
+		}
+		cancel()
+		if err != nil {
+			t.Errorf("an unguarded Page.navigate on the tab after the redirect into %s didn't return in 10 s: %v", base, err)
+		}
+		<-done
+		secret := e.log.lastSecret()
+		switch {
+		case !r.Failed || !r.Guarded.OK || r.GuardedMS > 10000 || !r.Committed:
+			t.Fatalf("the page's own navigation after the redirect into %s didn't settle: %+v", base, r)
+		case !r.Direct || r.Paused == 0:
+			t.Fatalf("the unguarded navigation after the redirect into %s didn't commit through the page's interception: %+v", base, r)
+		case len(r.Refused) > 0:
+			t.Fatalf("the page couldn't settle its own interception after the redirect into %s: %v", base, r.Refused)
+		case secret == "" || strings.Contains(r.Seen, secret):
+			t.Fatalf("the page read the redirect's secret into %s: %s", base, r.Seen)
+		}
 	}
 }
 
