@@ -127,6 +127,8 @@ jobs:
           cache: npm
 
       - run: npm ci
+        env:
+          npm_config_script_shell: ${{ runner.os == 'Windows' && 'C:\Program Files\Git\bin\bash.exe' || '' }}
 
       - if: runner.os == 'Windows'
         name: Read Chrome in from the runner's cold disk
