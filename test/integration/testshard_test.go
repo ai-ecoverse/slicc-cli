@@ -172,7 +172,7 @@ func TestTestShardRunsGoTestOnItsShard(t *testing.T) {
 	}
 	dir := t.TempDir()
 	src := "package fixture\n\nimport (\n\t\"os\"\n\t\"testing\"\n\t\"time\"\n)\n\n" +
-		"func TestAlpha(t *testing.T) {}\n\nfunc TestBravo(t *testing.T) {\n\tif os.Getenv(\"FIXTURE_FAIL\") != \"\" {\n\t\tt.Fatal(\"bravo failed\")\n\t}\n\tif os.Getenv(\"FIXTURE_STALL\") != \"\" {\n\t\ttime.Sleep(time.Minute)\n\t}\n}\n\n" +
+		"func TestAlpha(t *testing.T) {}\n\nfunc TestBravo(t *testing.T) {\n\tif os.Getenv(\"FIXTURE_FAIL\") != \"\" {\n\t\tt.Fatal(\"bravo failed\")\n\t}\n\tif f := os.Getenv(\"FIXTURE_FLAKY\"); f != \"\" {\n\t\tif _, err := os.Stat(f); err != nil {\n\t\t\t_ = os.WriteFile(f, nil, 0o644)\n\t\t\tt.Fatal(\"bravo flaked\")\n\t\t}\n\t}\n\tif os.Getenv(\"FIXTURE_STALL\") != \"\" {\n\t\ttime.Sleep(time.Minute)\n\t}\n}\n\n" +
 		"func TestCharlie(t *testing.T) {\n\tt.Run(\"sub\", func(t *testing.T) {})\n}\n"
 	for name, body := range map[string]string{"go.mod": "module fixture\n\ngo 1.26\n", "fixture_test.go": src} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
@@ -213,6 +213,25 @@ func TestTestShardRunsGoTestOnItsShard(t *testing.T) {
 	failed, code := run("2/2", "FIXTURE_FAIL=1")
 	if code != 1 || !strings.Contains(failed, "bravo failed") {
 		t.Fatalf("a failing shard: exit %d\n%s", code, failed)
+	}
+	marker := filepath.Join(t.TempDir(), "flaked")
+	flaky, code := runArgs([]string{"1/1", "--retry", "1", "-count=1", "-v", "."}, "FIXTURE_FLAKY="+marker, "SLICC_TEST_SHARD_PLATFORM=fixture")
+	if got := strings.Join(ran(flaky), " "); code != 0 || got != "TestAlpha TestBravo TestCharlie TestCharlie/sub TestBravo" || !strings.Contains(flaky, "test-shard 1/1: retrying TestBravo (retry 1 of 1)") || !strings.Contains(flaky, "test-shard: PASS fixture 1/1 ran 3 tests; TestBravo passed on retry") || !strings.Contains(flaky, "::warning title=flaky tests::fixture 1/1: TestBravo failed, then passed on retry") {
+		t.Fatalf("a test that fails once and passes on its retry: exit %d, ran %q\n%s", code, got, flaky)
+	}
+	still, code := runArgs([]string{"2/2", "--retry", "1", "-count=1", "-v", "."}, "FIXTURE_FAIL=1", "SLICC_TEST_SHARD_PLATFORM=fixture")
+	if got := strings.Join(ran(still), " "); code != 1 || got != "TestBravo TestBravo" || !strings.Contains(still, "TestBravo failed again on retry 1") || !strings.Contains(still, "test-shard: FAIL fixture 2/2") {
+		t.Fatalf("a test that fails on its retry too: exit %d, ran %q\n%s", code, got, still)
+	}
+	if _, code := run("2/2", "FIXTURE_FLAKY="+filepath.Join(t.TempDir(), "once")); code != 1 {
+		t.Fatalf("without --retry a flaky test fails the shard: exit %d", code)
+	}
+	retimed, code := runArgs([]string{"1/1", "--retry", "1", "-count=1", "-timeout", "2s", "-v", "."}, "FIXTURE_STALL=1", "SLICC_TEST_SHARD_PLATFORM=fixture")
+	if code == 0 || strings.Contains(retimed, "retrying") {
+		t.Fatalf("a shard that hit its -timeout is not retried: exit %d\n%s", code, retimed)
+	}
+	if _, code := runArgs([]string{"1/1", "--retry", "x", "-v", "."}); code != 2 {
+		t.Fatalf("--retry x: exit %d, want 2", code)
 	}
 	stalled, code := runArgs([]string{"1/1", "-count=1", "-timeout", "2s", "-v", "."}, "FIXTURE_STALL=1", "SLICC_TEST_SHARD_PLATFORM=fixture")
 	if want := "test-shard: fixture 1/1 hit its -timeout 2s with TestBravo for "; code == 0 || !strings.Contains(stalled, want) || !strings.Contains(stalled, "the 1 finished tests took 0 s") || !strings.Contains(stalled, "the slowest finished: TestAlpha 0 s") {
@@ -268,6 +287,34 @@ func TestShardTimesReadsGoTestLogs(t *testing.T) {
 }
 
 var guardVectorTests = map[string]bool{"TestCDPProtectVectorsPrompt": true, "TestCDPProtectVectorsLagging": true, "TestCDPProtectVectorsIgnoreChromeUITargets": true}
+
+func TestOnlyTheFullMatrixRetriesAFailedTest(t *testing.T) {
+	job := workflowJobs(t, readWorkflow(t, "ci.yml"))["test"].body
+	run := strings.TrimPrefix(lineWith(t, job, "sh scripts/verdict.sh test-shard"), "run: ")
+	limit := strings.TrimPrefix(lineWith(t, job, "timeout-minutes:"), "timeout-minutes: ")
+	for _, full := range []any{nil, true} {
+		ctx := ghCtx{"github.event_name": "push", "inputs.full": full, "needs.runner.outputs.os": "all"}
+		legs, _ := ciMatrix(t, ctx)
+		for _, leg := range legs {
+			ctx["matrix.os"], ctx["matrix.shard"] = leg.os, leg.shard
+			cmd := " " + ghString(ghTemplate(t, run, ctx)) + " "
+			if got := strings.Contains(cmd, " --retry 1 "); got != (full == true) {
+				t.Errorf("%s %s with full %v retries failed tests: %v; only the release's full matrix retries", leg.os, leg.shard, full, got)
+			}
+			if full != true {
+				continue
+			}
+			m := regexp.MustCompile(` -timeout ([0-9]+)m `).FindStringSubmatch(cmd)
+			job, err := strconv.Atoi(ghString(ghTemplate(t, limit, ctx)))
+			if m == nil || err != nil {
+				t.Fatalf("%s %s: no -timeout or timeout-minutes", leg.os, leg.shard)
+			}
+			if minutes, _ := strconv.Atoi(m[1]); job < 2*minutes+5 {
+				t.Errorf("%s %s: timeout-minutes %d has no room for a retry of its -timeout %dm", leg.os, leg.shard, job, minutes)
+			}
+		}
+	}
+}
 
 func TestEachCIShardFitsItsTimeout(t *testing.T) {
 	node := requireNode(t)
