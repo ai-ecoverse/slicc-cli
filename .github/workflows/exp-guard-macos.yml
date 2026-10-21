@@ -7,11 +7,33 @@ permissions:
   contents: read
 
 jobs:
+  guard:
+    strategy:
+      fail-fast: false
+      matrix:
+        n: [1, 2, 3]
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: go test -race -count=2 -timeout 35m -v -run '^TestCDPProtectVectorsPrompt$' ./test/integration/ 2>&1 | grep -E "C6.storage|no progress|took [0-9]{2}|didn't read|rows in|GUARD-|^--- |FAIL|ok " ; exit "${PIPESTATUS[0]}"
+        shell: bash
+        env:
+          SLICC_GUARD_VECTORS: '1'
   direct:
     strategy:
       fail-fast: false
       matrix:
-        extra: ['', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows']
+        extra: ['', '--enable-features=ForceForegroundPriorityForAllTabs']
+        load: ['0', '3']
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -19,6 +41,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 26
-      - run: node scripts/exp-c6.mjs
+      - run: |
+          for i in $(seq 1 ${{ matrix.load }}); do node -e 'for(;;){}' & done
+          node scripts/exp-c6.mjs
+        shell: bash
         env:
           EXTRA: ${{ matrix.extra }}
