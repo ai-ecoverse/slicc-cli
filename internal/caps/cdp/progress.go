@@ -3,6 +3,7 @@ package cdp
 import (
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -35,7 +36,46 @@ func (b guardBounds) period() time.Duration {
 	return max(min(b.idle, b.limit)/4, minWatchPeriod)
 }
 
-func (b guardBounds) expired(nt *navTarget, now time.Time) string {
+type readClock struct {
+	mu    sync.Mutex
+	total time.Duration
+	since time.Time
+}
+
+func (c *readClock) left(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.since.IsZero() {
+		c.since = now
+	}
+}
+
+func (c *readClock) back(now time.Time) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.since.IsZero() {
+		return 0
+	}
+	d := max(now.Sub(c.since), 0)
+	c.total += d
+	c.since = time.Time{}
+	return d
+}
+
+func (c *readClock) away(now time.Time) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.since.IsZero() {
+		return c.total
+	}
+	return c.total + max(now.Sub(c.since), 0)
+}
+
+func (g *guard) movedLocked(nt *navTarget, now time.Time) {
+	nt.progress, nt.awayAt = now, g.reads.away(now)
+}
+
+func (b guardBounds) expired(nt *navTarget, now time.Time, away time.Duration) string {
 	if now.Sub(nt.start) >= b.limit {
 		return "its guard wasn't ready in " + b.limit.String()
 	}
@@ -43,7 +83,7 @@ func (b guardBounds) expired(nt *navTarget, now time.Time) string {
 	if nt.progress.After(last) {
 		last = nt.progress
 	}
-	if now.Sub(last) >= b.idle {
+	if now.Sub(last)-(away-nt.awayAt) >= b.idle {
 		return "its guard made no progress in " + b.idle.String()
 	}
 	return ""
@@ -55,22 +95,23 @@ func (g *guard) progressLocked(m *message) {
 	}
 	now := time.Now()
 	if u, ok := g.unknown[m.SessionID]; ok && m.ID == nil {
-		u.progress = now
+		g.movedLocked(u, now)
 		return
 	}
 	if nt, ok := g.navSessions[m.SessionID]; ok && m.SessionID != "" {
-		nt.progress = now
+		g.movedLocked(nt, now)
 	}
 }
 
 func (g *guard) navWatch(now time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	away := g.reads.away(now)
 	for _, nt := range g.navTargets {
 		if nt.done {
 			continue
 		}
-		if reason := g.bounds.expired(nt, now); reason != "" {
+		if reason := g.bounds.expired(nt, now, away); reason != "" {
 			kind := "a target's navigation guard"
 			if nt.worker {
 				kind = "a worker's guard"
@@ -85,7 +126,7 @@ func (g *guard) navWatch(now time.Time) {
 		if u.done {
 			continue
 		}
-		if reason := g.bounds.expired(u, now); reason != "" {
+		if reason := g.bounds.expired(u, now, away); reason != "" {
 			g.logf("cdp: a session slicc doesn't know never registered: %s; refusing its commands", reason)
 			u.reason = reason
 			u.settle(true)

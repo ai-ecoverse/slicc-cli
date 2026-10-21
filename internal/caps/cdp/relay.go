@@ -209,7 +209,7 @@ func (rl *relay) run() {
 func (rl *relay) toPage() {
 	ctx := context.Background()
 	for {
-		typ, data, err := rl.conn.Read(ctx)
+		typ, data, err := rl.readBrowser(ctx)
 		if err != nil {
 			rl.browserClosed(err)
 			return
@@ -250,6 +250,15 @@ func (rl *relay) toPage() {
 			}
 		}
 	}
+}
+
+func (rl *relay) readBrowser(ctx context.Context) (websocket.MessageType, []byte, error) {
+	if d := rl.g.reads.back(time.Now()); d > slowGuard {
+		rl.g.logf("cdp: slicc didn't read the browser for %s while it passed messages on; the guards' idle bound leaves that time out", d.Round(time.Millisecond))
+	}
+	typ, data, err := rl.conn.Read(ctx)
+	rl.g.reads.left(time.Now())
+	return typ, data, err
 }
 
 func (rl *relay) expireLater(sessionID string) {

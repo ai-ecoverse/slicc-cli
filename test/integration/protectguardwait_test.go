@@ -331,3 +331,51 @@ func TestCDPLetsAPausedServiceWorkerStartBeforeItsGuard(t *testing.T) {
 		})
 	}
 }
+
+func slowPageScript() fakeScript {
+	script := guardWaitScript("{}")
+	pad := strings.Repeat("x", 64<<10)
+	var flood []string
+	for range 8 {
+		flood = append(flood, `{"method":"Tracing.dataCollected","params":{"value":[{"pad":"`+pad+`"}]}}`)
+	}
+	return func(method string, params json.RawMessage) (string, []string) {
+		if method == "SystemInfo.getInfo" {
+			return "{}", flood
+		}
+		return script(method, params)
+	}
+}
+
+func TestCDPLeavesTheTimeAPageTakesToReadOutOfAGuardsIdleBound(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		enable time.Duration
+		ok     bool
+	}{
+		{"Chrome answers the guard while the page reads nothing", time.Second, true},
+		{"Chrome never answers the guard", 10 * time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, fake := setupFakeProtectEnv(t, guardBounds("2s", "60s"), func(string, string) fakeScript { return slowPageScript() })
+			fake.delay("Network.enable", tc.enable)
+			var r struct {
+				Enable struct {
+					cdpOutcome
+					MS int `json:"ms"`
+				} `json:"enable"`
+				Flood bool `json:"flood"`
+			}
+			env.evalJSON(t, "linkTest.protect.guardBehindSlowPage('chrome-2', 6000)", &r)
+			if !r.Flood {
+				t.Fatalf("the page never got the flood that fills its window: %+v", r)
+			}
+			if tc.ok && (!r.Enable.OK || r.Enable.MS < 5500) {
+				t.Errorf("Page.enable on a target whose guard Chrome answered while slicc waited 6 s on the page: %+v, want it answered once the page reads again", r.Enable)
+			}
+			if !tc.ok && (!r.Enable.refused() || !strings.HasSuffix(r.Enable.Error.Message, ": its guard made no progress in 2s") || r.Enable.MS < 7000 || r.Enable.MS > 20000) {
+				t.Errorf("Page.enable on a target whose guard Chrome never answers, while slicc waited 6 s on the page: %+v, want slicc's refusal at the 2 s idle bound after the page reads again", r.Enable)
+			}
+		})
+	}
+}
