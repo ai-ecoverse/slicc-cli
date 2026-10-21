@@ -39,6 +39,11 @@ const listedOnceCommitted = async (c, targetId) => {
   }
 };
 
+const observerNavigation = async (targetId, params) => {
+  window.protectObserverRequest = { targetId, ...params };
+  await new Promise((resolve) => { window.protectObserverNext = resolve; });
+};
+
 const later = (url) => `setTimeout(() => { location.href = ${JSON.stringify(url)}; }, 50); true`;
 
 async function load(c, sessionId, url) {
@@ -319,10 +324,10 @@ export function protectTest(getLink, describe) {
         await c.send('Target.setDiscoverTargets', { discover: true });
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
         await c.send('Page.enable', {}, sessionId);
-        const before = await c.evaluate('location.href', sessionId);
+        const before = (await c.send('Page.getFrameTree', {}, sessionId)).frameTree.frame.url;
         const failed = (e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl;
         const committed = c.waitEvent(failed, 20000);
-        await c.send('Runtime.evaluate', { expression: later(sevenURL) }, sessionId);
+        await observerNavigation(targetId, { url: sevenURL });
         const { params } = await committed;
         await sleep(500);
         const gone = () => c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
@@ -335,13 +340,13 @@ export function protectTest(getLink, describe) {
         const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === 'about:blank', 20000);
         const blank = await outcome(c.send('Page.navigate', { url: 'about:blank' }, sessionId));
         await left;
-        const href = await pastErrorPage(() => c.evaluate('location.href', sessionId));
+        const href = (await c.send('Page.getFrameTree', {}, sessionId)).frameTree.frame.url;
         const leaked = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
         const restore = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
           () => true,
           () => false,
         );
-        await outcome(c.send('Runtime.evaluate', { expression: 'setTimeout(() => history.go(-3), 50); true' }, sessionId));
+        await observerNavigation(targetId, { delta: -3 });
         const locked = await restore;
         const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
         const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
@@ -363,10 +368,12 @@ export function protectTest(getLink, describe) {
     restoreRace: (browser, targetId, sevenOrigin) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
-        const before = await c.evaluate('location.href', sessionId);
+        const before = (await c.send('Page.getFrameTree', {}, sessionId)).frameTree.frame.url;
         const seen = [];
+        let probes = 0;
         let stuck = 0;
         const probe = (sid) => {
+          probes += 1;
           const r = outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sid)).then((o) => {
             if (o.ok) seen.push(o.result.result?.value ?? '');
           });
@@ -380,7 +387,7 @@ export function protectTest(getLink, describe) {
         gone.then(() => {
           done = true;
         });
-        await c.send('Runtime.evaluate', { expression: 'setTimeout(() => history.back(), 50); true' }, sessionId);
+        await observerNavigation(targetId, { delta: -1 });
         const deadline = Date.now() + 5000;
         let attaches = 0;
         while (Date.now() < deadline) {
@@ -400,7 +407,7 @@ export function protectTest(getLink, describe) {
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
         await sleep(2000);
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
-        return { before, probes: seen.length, stuck, attaches, leaked, detached, after, reattach, close };
+        return { before, probes, stuck, attaches, leaked, detached, after, reattach, close };
       }),
     historyWorkflow: (browser, start, authorize, finish) =>
       run(browser, async (c) => {
@@ -419,12 +426,13 @@ export function protectTest(getLink, describe) {
         const newTab = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, fresh.sessionId));
         await c.send('Target.closeTarget', { targetId });
         await c.send('Target.closeTarget', { targetId: fresh.targetId });
-        return { navigate, locked, reset, afterReset, newTab };
+        return { navigate, locked, historyReset: reset, afterReset, newTab };
       }),
     historyConformance: (browser, targetId) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
         await c.send('Page.getNavigationHistory', {}, sessionId);
+        window.historyConformanceOutcomes = new Promise((resolve) => { window.historyConformanceFinish = resolve; });
         window.historyConformanceReady = true;
         await new Promise((resolve) => { window.historyConformanceFire = resolve; });
         const methods = {
@@ -437,6 +445,7 @@ export function protectTest(getLink, describe) {
           'IO.read': { handle: 'guard-probe' },
         };
         window.historyConformanceResult = Object.fromEntries(await Promise.all(Object.entries(methods).map(async ([method, params]) => [method, await outcome(c.send(method, params, sessionId))])));
+        window.historyConformanceFinish(window.historyConformanceResult);
         return { ...window.historyConformanceResult };
       }),
     popup: (browser, openerId) =>

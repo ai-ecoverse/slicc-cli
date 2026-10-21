@@ -142,6 +142,16 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 			result = `{"targetInfos":[]}`
 		default:
 			result, after = f.script(m.Method, m.Params)
+			if result == "{}" && m.Method == "Page.getNavigationHistory" {
+				result = `{"currentIndex":0,"entries":[{"id":1,"url":"about:blank"}]}`
+			}
+			if result == "{}" && m.Method == "Target.getTargetInfo" {
+				var params struct {
+					TargetID string `json:"targetId"`
+				}
+				_ = json.Unmarshal(m.Params, &params)
+				result = fmt.Sprintf(`{"targetInfo":{"targetId":%q,"type":"page","url":"about:blank"}}`, params.TargetID)
+			}
 		}
 		field := `"result":` + result
 		if msg, failed := strings.CutPrefix(result, "!"); failed {

@@ -144,7 +144,7 @@ func TestCDPHistoryQuarantineWorkflow(t *testing.T) {
 	var result struct {
 		Navigate   cdpOutcome `json:"navigate"`
 		Locked     cdpOutcome `json:"locked"`
-		Reset      cdpOutcome `json:"reset"`
+		Reset      cdpOutcome `json:"historyReset"`
 		AfterReset cdpOutcome `json:"afterReset"`
 		NewTab     cdpOutcome `json:"newTab"`
 	}
@@ -216,10 +216,22 @@ func TestCDPHistoryConformanceUnderInboundLag(t *testing.T) {
 		t.Fatalf("protected document was not restored: %q %v", marker, err)
 	}
 	e.p.eval("window.historyConformanceFire(); true", &value)
+	settled, stopSettled := context.WithCancel(ctx)
+	defer stopSettled()
+	outcomes := make(chan error, 1)
+	go func() {
+		var result any
+		outcomes <- e.p.session.Evaluate(settled, "window.historyConformanceOutcomes", cdp.EvaluateOptions{AwaitPromise: true, ReturnByValue: true}, &result)
+	}()
 	select {
 	case <-lag.probe:
+		stopSettled()
+	case err := <-outcomes:
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-ctx.Done():
-		t.Fatal("no command reached the lag proxy")
+		t.Fatal("neither refusal nor forwarding was observed")
 	}
 	var ran int
 	if err := direct.Evaluate(ctx, "window.__guardRan || 0", cdp.EvaluateOptions{ReturnByValue: true}, &ran); err != nil {
