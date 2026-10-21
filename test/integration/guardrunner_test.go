@@ -575,13 +575,6 @@ var guardKnowns = map[string]guardKnown{
 	"C8.protected-error-page-sticky":          historyQuarantineKnown("sticky"),
 	"C8.protected-error-page-sticky.query":    historyQuarantineKnown("sticky"),
 	"C8.protected-error-page-sticky.fragment": historyQuarantineKnown("sticky"),
-	"X1.after-exit": {
-		issue:   "https://github.com/ai-ecoverse/slicc-cli/issues/370",
-		targets: []string{"seven", "vault"},
-		matches: func(r guardRow) bool {
-			return r.Control == "pass" && r.Guarded == "fail" && r.Live == "pass" && string(r.Why) == `"intercepted: got false, want true"`
-		},
-	},
 }
 
 func checkGuardSummary(t *testing.T, sum *guardSummary) {
