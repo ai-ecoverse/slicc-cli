@@ -8,6 +8,8 @@ github.com/ai-ecoverse/go-optel v1.0.1 h1:lHWdyARiSpr4asNSGIxZy4AQ6l43+Zb9kCfRxK
 github.com/ai-ecoverse/go-optel v1.0.1/go.mod h1:zih/Uqhz7WEH9+UX2Zh7LZeBid7+ZaGTjDDGbCC2ts8=
 github.com/ai-ecoverse/slicc-browsers v1.16.0 h1:b++IzD9clSiVoW3jAbXx1z8BEyoNb80gBKFTGa/ZLsA=
 github.com/ai-ecoverse/slicc-browsers v1.16.0/go.mod h1:dJ+Oj65w2xtT/f7EExslJnRmZZrKccJw2semVcYkyL0=
+github.com/ai-ecoverse/slicc-browsers v1.16.2 h1:5Eo1fPttgbG1DSFBHV2aFqJtT7G6cmCn4JH1n0qIp40=
+github.com/ai-ecoverse/slicc-browsers v1.16.2/go.mod h1:dJ+Oj65w2xtT/f7EExslJnRmZZrKccJw2semVcYkyL0=
 github.com/andybalholm/brotli v1.2.6 h1:ftYnfj6usCp+UGV5kSJ3+chpMQgU+gJf/AxsUQ52REI=
 github.com/andybalholm/brotli v1.2.6/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/atotto/clipboard v0.1.4 h1:EH0zSVneZPSuFR11BlR9YppQTVDbh5+16AmcJi4g1z4=
