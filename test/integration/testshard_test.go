@@ -345,7 +345,11 @@ func TestEachCIShardFitsItsTimeout(t *testing.T) {
 				}
 			}
 			sort.Float64s(known)
-			picks := shardSelector(t, node, leg.shard, "SLICC_TEST_SHARD_PLATFORM="+platform)
+			guards := "SLICC_GUARD_VECTORS=1"
+			if !leg.guards {
+				guards = "SLICC_GUARD_VECTORS=0"
+			}
+			picks := shardSelector(t, node, leg.shard, "SLICC_TEST_SHARD_PLATFORM="+platform, guards)
 			load := 0.0
 			for _, name := range declared {
 				if !picks(name) || (!leg.guards && guardVectorTests[name]) {
