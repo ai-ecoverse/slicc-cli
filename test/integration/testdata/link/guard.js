@@ -5,6 +5,7 @@ class SocketClient {
   #nextId = 1;
   #pending = new Map();
   #waiters = new Set();
+  callTimeout = 0;
 
   static open(url) {
     return new Promise((resolve, reject) => {
@@ -25,7 +26,10 @@ class SocketClient {
       this.#dispatch(JSON.parse(m.data));
     };
     ws.onclose = () => {
-      for (const { reject } of this.#pending.values()) reject(new Error('direct cdp socket closed'));
+      for (const { reject, timer } of this.#pending.values()) {
+        clearTimeout(timer);
+        reject(new Error('direct cdp socket closed'));
+      }
       this.#pending.clear();
     };
   }
@@ -35,6 +39,7 @@ class SocketClient {
       const call = this.#pending.get(msg.id);
       this.#pending.delete(msg.id);
       if (!call) return;
+      clearTimeout(call.timer);
       if (msg.error) {
         const error = new Error(msg.error.message);
         error.cdp = msg.error;
@@ -57,11 +62,18 @@ class SocketClient {
     const msg = { id, method, params };
     if (sessionId) msg.sessionId = sessionId;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const timer = this.callTimeout > 0
+        ? setTimeout(() => {
+            this.#pending.delete(id);
+            reject(new Error(`CDP timed out: ${method}`));
+          }, this.callTimeout)
+        : undefined;
+      this.#pending.set(id, { resolve, reject, timer });
       try {
         this.ws.send(JSON.stringify(msg));
       } catch (error) {
         this.#pending.delete(id);
+        clearTimeout(timer);
         reject(error);
       }
     });
@@ -87,6 +99,8 @@ class SocketClient {
     this.ws.close();
   }
 }
+
+const CALL_TIMEOUT_MS = 10000;
 
 const seenSessions = new Map();
 
@@ -209,6 +223,7 @@ export function guardStart(getLink, opts) {
   if (state.launched) return { started: false };
   state.launched = true;
   const browsers = opts.browsers;
+  const callTimeout = CALL_TIMEOUT_MS * (opts.settleScale ?? 1);
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
     if (opts.only) set.vectors = set.vectors.filter((v) => v.id === opts.only);
@@ -218,7 +233,9 @@ export function guardStart(getLink, opts) {
         const b = browsers[slot % browsers.length];
         const client = await retried(() => CdpClient.open(getLink(), b.id));
         client.transport = 'cli';
+        client.callTimeout = callTimeout;
         const unguarded = await retried(() => SocketClient.open(b.ws));
+        unguarded.callTimeout = callTimeout;
         return {
           client: sessionBound(client, 'client', { inject: opts.inject }),
           unguarded: sessionBound(unguarded, 'unguarded'),

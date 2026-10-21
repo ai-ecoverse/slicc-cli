@@ -124,6 +124,35 @@ export function protectTest(getLink, describe) {
         const other = await outcome(c.send('Browser.getVersion')).then((r) => ({ ...r, ms: Date.now() - start }));
         return { enable: await enable, other };
       }),
+    instrumentationPause: (browser, base, callTimeout) =>
+      run(browser, async (c) => {
+        const other = await CdpClient.open(getLink(), browser);
+        try {
+          const page = await c.attachTo(`${base}/start`);
+          const side = await c.attachTo(`${base}/side`);
+          const { sessionId } = page;
+          await c.send('Page.enable', {}, sessionId);
+          await c.send('Debugger.enable', {}, sessionId);
+          await c.send('Debugger.setInstrumentationBreakpoint', { instrumentation: 'beforeScriptWithSourceMapExecution' }, sessionId);
+          const paused = c.waitEvent((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId, 30000);
+          await c.send('Runtime.evaluate', { expression: later(`${base}/mapped`) }, sessionId);
+          const pause = await paused;
+          c.callTimeout = callTimeout;
+          const start = Date.now();
+          const disable = outcome(c.send('Debugger.disable', {}, sessionId)).then((r) => ({ ...r, ms: Date.now() - start }));
+          const sideEval = await outcome(c.evaluate('1 + 1', side.sessionId));
+          const targets = await outcome(c.send('Target.getTargets'));
+          const version = await outcome(other.send('Browser.getVersion'));
+          const disabled = await disable;
+          const resume = await outcome(c.send('Debugger.resume', {}, sessionId));
+          const title = await outcome(c.evaluate("new Promise((resolve) => { const t = () => document.title === 'mapped' ? resolve(document.title) : setTimeout(t, 50); t(); })", sessionId));
+          await c.send('Target.closeTarget', { targetId: page.targetId });
+          await c.send('Target.closeTarget', { targetId: side.targetId });
+          return { reason: pause.params.reason, disable: disabled, sideEval, targets: { ok: targets.ok }, version: { ok: version.ok }, resume, title };
+        } finally {
+          await other.close().catch(() => {});
+        }
+      }),
     guardHold: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
