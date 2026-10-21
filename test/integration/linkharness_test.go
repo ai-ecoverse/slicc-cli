@@ -95,7 +95,7 @@ func launchBrowserWith(t *testing.T, debugPort int, prep func(cmd *exec.Cmd) fun
 	args := []string{
 		"--headless=new", "--remote-debugging-port=" + strconv.Itoa(debugPort), "--user-data-dir=" + dir,
 		"--no-first-run", "--no-default-browser-check", "--disable-background-networking",
-		"--disable-component-update", "--disable-sync",
+		"--disable-component-update", "--disable-sync", "--enable-features=ForceForegroundPriorityForAllTabs",
 	}
 	args = append(args, browser.ThrowawaySwitches...)
 	args = append(append(args, extra...), "about:blank")
