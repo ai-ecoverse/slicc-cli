@@ -18,6 +18,27 @@ async function names(c, method, params, sessionId) {
 
 const beacon = (base, tag) => `try { navigator.sendBeacon(${JSON.stringify(base)} + '/beacon?tag=' + ${JSON.stringify(tag)} + '&origin=' + encodeURIComponent(location.origin)); } catch {}`;
 
+const errorPageLock = "the target shows Chrome's error page";
+
+const pastErrorPage = async (fn) => {
+  for (let tries = 1; ; tries += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (tries >= 50 || !String(error?.message).includes(errorPageLock)) throw error;
+      await sleep(100);
+    }
+  }
+};
+
+const listedOnceCommitted = async (c, targetId) => {
+  for (let tries = 1; ; tries += 1) {
+    const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === targetId) ?? null;
+    if (tries >= 50 || (listed && listed.url !== '' && listed.url !== 'about:blank')) return listed;
+    await sleep(100);
+  }
+};
+
 const later = (url) => `setTimeout(() => { location.href = ${JSON.stringify(url)}; }, 50); true`;
 
 async function load(c, sessionId, url) {
@@ -263,7 +284,7 @@ export function protectTest(getLink, describe) {
         const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === 'about:blank', 20000);
         const blank = await outcome(c.send('Page.navigate', { url: 'about:blank' }, sessionId));
         await left;
-        const href = await c.evaluate('location.href', sessionId);
+        const href = await pastErrorPage(() => c.evaluate('location.href', sessionId));
         const leaked = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
         const restore = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
           () => true,
@@ -279,7 +300,7 @@ export function protectTest(getLink, describe) {
         const second = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === other.sessionId && e.params.frame.unreachableUrl, 20000);
         await c.send('Runtime.evaluate', { expression: later(sevenURL) }, other.sessionId);
         await second;
-        const listedFailed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === other.targetId) ?? null;
+        const listedFailed = await listedOnceCommitted(c, other.targetId);
         await sleep(300);
         const wiped = await outcome(c.send('Page.navigate', { url: 'about:blank#blocked' }, other.sessionId));
         await sleep(300);
