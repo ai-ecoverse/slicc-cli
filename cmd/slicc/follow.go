@@ -64,7 +64,7 @@ flags:
                        browser's privileged pages (chrome://, extension
                        pages, file:// and the like), and its endpoint and
                        port are denied to tcp, http, ws, udp and ssh
-` + jerkFollowUsage + mountUsage + computeUsage + `
+` + jerkFollowUsage + clipboardFollowUsage + mountUsage + computeUsage + `
 With --runner the link also offers ssh: seven's kernel reaches this machine's
 SSH server, which never listens on a port, and its forwarding goes through
 the remote policy. With --mount it also offers fs: the seven on the other
@@ -85,6 +85,7 @@ type followFlags struct {
 	mounts     stringList
 	jerk       bool
 	jerkSeal   bool
+	clip       clipFlags
 }
 
 func joinCommand(args []string, stdout, stderr io.Writer) int {
@@ -124,6 +125,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.jerk, "jerk", false, "")
 	fs.BoolVar(&f.jerkSeal, "jerk-seal", false, "")
+	f.clip.register(fs, true)
 	fs.BoolVar(&f.signalOnly, "signal-only", false, "")
 	fs.DurationVar(&f.timeout, "timeout", defaultSignalOnlyTimeout, "")
 	f.compute.register(fs)
@@ -140,6 +142,10 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 		return f, 2
 	}
 	if err := f.compute.validate(); err != nil {
+		fmt.Fprintf(stderr, "slicc follow: %v\n\n%s", err, followUsage)
+		return f, 2
+	}
+	if err := f.clip.check(); err != nil {
 		fmt.Fprintf(stderr, "slicc follow: %v\n\n%s", err, followUsage)
 		return f, 2
 	}
@@ -263,6 +269,7 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 		stopGuard()
 		return nil, err
 	}
+	serveClipboard(r.node, ff.clip.follow(), status)
 	if ff.jerk || ff.jerkSeal {
 		serveJerk(r.node, ff.jerkSeal, true, status)
 	}

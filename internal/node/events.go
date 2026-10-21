@@ -15,6 +15,7 @@ const (
 	EventStreamOpen  EventKind = "stream-open"
 	EventStreamClose EventKind = "stream-close"
 	EventDropped     EventKind = "dropped"
+	EventNotice      EventKind = "notice"
 )
 
 type Event struct {

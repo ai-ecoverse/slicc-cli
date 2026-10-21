@@ -368,7 +368,7 @@ func (m Model) dashCaps() []string {
 		if on {
 			mark = st.good.Render("●")
 		}
-		return fmt.Sprintf("  %s %s %s", mark, fmt.Sprintf("%-7s", name), value)
+		return fmt.Sprintf("  %s %s %s", mark, fmt.Sprintf("%-9s", name), value)
 	}
 	off := st.faint.Render("off")
 	jerk := off
@@ -376,6 +376,16 @@ func (m Model) dashCaps() []string {
 		jerk = "slicc-jerk " + firstOf(m.cfg.JerkVersion, "on the link")
 	}
 	out = append(out, row(has("jerk"), "jerk", jerk))
+	clip := off
+	switch {
+	case has("clipboard-read"):
+		clip = "read, write via " + firstOf(m.cfg.ClipboardTool, "the host")
+	case has("clipboard"):
+		clip = "write via " + firstOf(m.cfg.ClipboardTool, "the host")
+	case m.cfg.ClipboardWhy != "" && m.settings.Clipboard != ClipOff:
+		clip = st.faint.Render("off: " + m.cfg.ClipboardWhy)
+	}
+	out = append(out, row(has("clipboard"), "clipboard", clip))
 	shell := off
 	switch {
 	case d.compute != "":

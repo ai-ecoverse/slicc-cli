@@ -523,6 +523,18 @@ globalThis.linkTest = {
       return describe(error);
     }
   },
+  async clipboard(op, text64 = null, shared = false) {
+    try {
+      const stream = await state.link.open({ kind: 'clipboard', op }, { shared });
+      if (text64 !== null) await stream.write(fromBase64(text64));
+      stream.end();
+      const got = await stream.readAll();
+      await stream.done;
+      return { opened: stream.opened, text64: toBase64(got) };
+    } catch (error) {
+      return describe(error);
+    }
+  },
   async jerkPair(a, b, delay = 500) {
     const first = this.jerk(a);
     await new Promise((resolve) => setTimeout(resolve, delay));

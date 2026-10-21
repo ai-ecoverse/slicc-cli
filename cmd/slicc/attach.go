@@ -50,7 +50,7 @@ flags:
 ` + exposeUsage + `  --kernel-port <n>    serve http://<port>.kernel.localhost on this local
                        port instead of 80
   --no-kernel          don't serve <port>.kernel.localhost at all
-` + jerkLocalUsage + mountUsage + computeUsage + `
+` + jerkLocalUsage + clipboardLocalUsage + mountUsage + computeUsage + `
 The link offers the net capability (tcp and resolve streams) and the http
 capability (fetches without redirects) under the local policy: public
 addresses, this machine and the local network, but not link-local addresses,
@@ -88,6 +88,7 @@ type attachFlags struct {
 	noKernel   bool
 	mounts     stringList
 	noJerk     bool
+	clip       clipFlags
 }
 
 func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
@@ -114,6 +115,7 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	fs.BoolVar(&f.noKernel, "no-kernel", false, "")
 	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
+	f.clip.register(fs, false)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stderr, attachUsage)
@@ -127,6 +129,10 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 		return f, 2
 	}
 	if err := f.compute.validate(); err != nil {
+		fmt.Fprintf(stderr, "slicc attach: %v\n\n%s", err, attachUsage)
+		return f, 2
+	}
+	if err := f.clip.check(); err != nil {
 		fmt.Fprintf(stderr, "slicc attach: %v\n\n%s", err, attachUsage)
 		return f, 2
 	}
@@ -198,6 +204,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	httpcap.Register(n)
 	wscap.Register(n)
 	udpcap.Register(n)
+	serveClipboard(n, f.clip.local(), status)
 	if !f.noJerk {
 		serveJerk(n, true, false, status)
 	}

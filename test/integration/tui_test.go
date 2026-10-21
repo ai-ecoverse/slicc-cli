@@ -329,8 +329,8 @@ func TestTUIDashboard(t *testing.T) {
 		"Brave", "attached · CDP :9333  extra cdp",
 		"https://seven.sliccy.ai/", `linked with "seven" · up 3m12s`,
 		"network   net · http · cdp", "policy    every public address",
-		"tcp 2 open, 3 total", "cdp 1 open, 1 total", "● kernel  http://<port>.kernel.localhost/",
-		"slicc 9.9.9 is available", "● shell   ssh via bash -c", "c capabilities",
+		"tcp 2 open, 3 total", "cdp 1 open, 1 total", "● kernel    http://<port>.kernel.localhost/",
+		"slicc 9.9.9 is available", "● shell     ssh via bash -c", "c capabilities",
 	} {
 		if !strings.Contains(v, s) {
 			t.Fatalf("dashboard lacks %q:\n%s", s, v)
@@ -448,7 +448,7 @@ func TestTUICapabilities(t *testing.T) {
 		t.Fatalf("after s: mode %s\n%s", h.model().Mode(), h.view())
 	}
 	live = true
-	h.keys("c", "down", "down", "down", "r")
+	h.keys("c", "down", "down", "down", "down", "r")
 	if !strings.Contains(h.view(), "applies live") {
 		t.Fatalf("read-only toggle on a shared folder should apply live:\n%s", h.view())
 	}
@@ -456,7 +456,7 @@ func TestTUICapabilities(t *testing.T) {
 	if len(applied) != 2 || applied[1].relink || applied[1].s.Folders[0].ReadOnly {
 		t.Fatalf("live apply %+v", applied)
 	}
-	h.keys("c", "down", "down", "down", "x", "esc")
+	h.keys("c", "down", "down", "down", "down", "x", "esc")
 	if !strings.Contains(h.view(), "apply these changes?") {
 		t.Fatalf("esc with pending changes:\n%s", h.view())
 	}

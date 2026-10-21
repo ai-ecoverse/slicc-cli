@@ -59,27 +59,32 @@ type Mount struct {
 }
 
 type Hello struct {
-	V          int       `json:"v"`
-	Role       Role      `json:"role"`
-	Name       string    `json:"name,omitempty"`
-	Host       string    `json:"host,omitempty"`
-	Version    string    `json:"version,omitempty"`
-	Mode       string    `json:"mode,omitempty"`
-	Node       string    `json:"node,omitempty"`
-	Caps       []string  `json:"caps"`
-	Routes     *Routes   `json:"routes,omitempty"`
-	Policy     *Policy   `json:"policy,omitempty"`
-	SSHHostKey string    `json:"sshHostKey,omitempty"`
-	Browsers   []Browser `json:"browsers,omitempty"`
-	Mounts     []Mount   `json:"mounts,omitempty"`
-	Jerk       *Jerk     `json:"jerk,omitempty"`
-	Kernel     *Kernel   `json:"kernel,omitempty"`
+	V          int        `json:"v"`
+	Role       Role       `json:"role"`
+	Name       string     `json:"name,omitempty"`
+	Host       string     `json:"host,omitempty"`
+	Version    string     `json:"version,omitempty"`
+	Mode       string     `json:"mode,omitempty"`
+	Node       string     `json:"node,omitempty"`
+	Caps       []string   `json:"caps"`
+	Routes     *Routes    `json:"routes,omitempty"`
+	Policy     *Policy    `json:"policy,omitempty"`
+	SSHHostKey string     `json:"sshHostKey,omitempty"`
+	Browsers   []Browser  `json:"browsers,omitempty"`
+	Mounts     []Mount    `json:"mounts,omitempty"`
+	Jerk       *Jerk      `json:"jerk,omitempty"`
+	Clipboard  *Clipboard `json:"clipboard,omitempty"`
+	Kernel     *Kernel    `json:"kernel,omitempty"`
 
 	Raw json.RawMessage `json:"-"`
 }
 
 type Jerk struct {
 	Version string `json:"version"`
+}
+
+type Clipboard struct {
+	Backend string `json:"backend"`
 }
 
 type Kernel struct {

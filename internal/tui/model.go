@@ -24,13 +24,15 @@ type Config struct {
 	Notice   string
 	Now      func() time.Time
 
-	Settings    Settings
-	JerkVersion string
-	Runner      []string
-	CheckRunner func([]string) error
-	LiveMounts  func() bool
-	Apply       func(s Settings, relink bool)
-	NewPairing  func()
+	Settings      Settings
+	JerkVersion   string
+	ClipboardTool string
+	ClipboardWhy  string
+	Runner        []string
+	CheckRunner   func([]string) error
+	LiveMounts    func() bool
+	Apply         func(s Settings, relink bool)
+	NewPairing    func()
 }
 
 type Choice struct {

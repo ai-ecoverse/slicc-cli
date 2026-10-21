@@ -19,7 +19,7 @@ func (f defaultFlags) fallbackAllowed() bool {
 func (f defaultFlags) openFlags(mounts []hostfs.Mount) openFlags {
 	o := openFlags{
 		page: f.page, origins: f.origins, name: f.name, allow: f.allow, deny: f.deny, expose: f.expose,
-		kernelPort: f.kernel, noKernel: f.noKernel, mounts: f.mounts, noJerk: f.noJerk, compute: f.compute, loaded: mounts,
+		kernelPort: f.kernel, noKernel: f.noKernel, mounts: f.mounts, noJerk: f.noJerk, clip: f.clip, compute: f.compute, loaded: mounts,
 	}
 	if o.noKernel || o.kernelPort == 0 {
 		o.kernelPort = kernelin.DefaultPort

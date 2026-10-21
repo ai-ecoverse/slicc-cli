@@ -342,7 +342,7 @@ slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]...
   - `linked`: `peer?`, `caps` and `policy`, for each link that comes up;
   - `link-lost`: `reason?` or `message?`, for each one that goes;
   - `closed`, with `browsers: []`, last, when slicc exits.
-- **Then** it serves loopback links with this run's `--page`, `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and compute flags, until `SIGINT` or `SIGTERM`.
+- **Then** it serves loopback links with this run's `--page`, `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--clipboard`, `--no-clipboard`, `--mount` and compute flags, until `SIGINT` or `SIGTERM`.
 
 **Discovery** is `slicc browsers`' discovery and ranking (see [Browsers](#browsers)), with each `--cdp` URL added and the `--page` origin counted as a seven origin.
 
@@ -353,7 +353,7 @@ slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]...
 
 Without `--browser`, the first row of the ranking that can host seven is chosen, an endpoint slicc didn't launch included, but never one in SLICC six's profile. When that happens without the picker, slicc says so on stderr, for an endpoint that isn't in a SLICC profile and that no `--cdp` named: `slicc: using Google Chrome (profile default) at http://127.0.0.1:9222, which slicc didn't launch; opened a new seven tab. Use --browser or --cdp to choose another.` It says `found a seven tab` when one was open already. The profile is `default` for a browser's default user-data dir, the base name of the user-data dir otherwise, and left out (with its parentheses) when unknown. With `--json` the line comes as the `foreign-browser` event too. Picking a row in the picker, `--browser`, or a `--cdp` for that endpoint means the user chose it, and there is no notice. An Electron app can't host seven. Each further browser is an extra: an installed one is launched without a start page, and an endpoint is used as it is. Then the link is set up as for `slicc attach` (see [Local setup](#local-setup-slicc-attach)): over CDP with the browser that hosts seven, the first page tab on an allowed origin.
 
-**What the link offers:** `net` (tcp, resolve), `http`, `ws`, `udp`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected, and this machine's other debugging ports too (see [Network policy](#network-policy)); and kernel services on `--kernel-port` (default 80, or a spare port when this user can't have 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)); and `ssh` only with `--runner` (see [SSH server](#ssh-server)); and `fs` with each `--mount` folder (see [Host folders](#host-folders)). seven gets full control of every listed browser, the one it runs in too. The `cdp` list (HELLO `browsers`) has only the browser that hosts seven and the extras picked with `--browser` or in the picker; the other browsers discovery found are never offered.
+**What the link offers:** `net` (tcp, resolve), `http`, `ws`, `udp`, and `cdp` with the browser that hosts seven (`seven: true`) and every extra, under the local policy with all of their debugging ports protected, and this machine's other debugging ports too (see [Network policy](#network-policy)); and kernel services on `--kernel-port` (default 80, or a spare port when this user can't have 80; `--no-kernel` turns them off) when seven offers `kernel-in` (see [Kernel services](#kernel-services)); and `ssh` only with `--runner` (see [SSH server](#ssh-server)); and `fs` with each `--mount` folder (see [Host folders](#host-folders)); and `clipboard`, so seven can set this machine's clipboard, plus `clipboard-read` with `--clipboard` (see [`clipboard`](#clipboard-the-host-clipboard-over-the-link)). seven gets full control of every listed browser, the one it runs in too. The `cdp` list (HELLO `browsers`) has only the browser that hosts seven and the extras picked with `--browser` or in the picker; the other browsers discovery found are never offered.
 
 The cdp list follows the browsers: an extra that stops answering is taken off the list (`browser-gone`), and listed again with the same id when it answers on the same endpoint again (`browser-back`).
 
@@ -361,7 +361,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `--browser <id>`: an id from `slicc browsers` (an installed id such as `chrome`, or `cdp:<host>:<port>`), or a name, case-insensitively. Repeatable: the first hosts seven, the others are extras. Without it, the best match that can host seven. An endpoint in SLICC six's profile is refused (`<id> is SLICC six's Chrome; only --profile six uses it`).
 - `--cdp <url>`: also consider this CDP endpoint, as `slicc browsers --cdp`.
 - `--page <url>`: the seven page, default `https://seven.sliccy.ai/`. It must be `http` or `https`, and its origin is accepted as a seven origin.
-- `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
+- `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--clipboard`, `--no-clipboard`, `--mount`, and the compute flags `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: as for `slicc attach`. Without `--runner` there is no `ssh`.
 - `--profile <name>`: the SLICC profile for a launched browser that hosts seven. `--profile six` and `--profile six:<port>` use SLICC six's own Chrome profile instead, without the picker (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)).
 - `--headless`: launch browsers without a window.
 - `--yes`, `--plain`: no picker. `--json`: NDJSON events, below.
@@ -381,11 +381,11 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 | Esc | back, in the profile chooser |
 | `q`, Ctrl-C | quit; in the dashboard, close down as described above |
 
-**The dashboard** follows, in sections: BROWSERS (launched or attached, their CDP port, hosts seven or extra, and `gone` while one doesn't answer); SEVEN (the tab, the link state (`waiting for seven`, `connecting`, `linked` with its uptime, `reconnecting` after a link is lost, while slicc waits for seven to offer again, or `relinking` while new capabilities are applied), the policy summary, and stream counts per kind, open and total, never contents); CAPABILITIES (the network capabilities always offered, then `jerk`, `shell` with `ssh via <runner>`, `kernel` with its URL, or why it is off, and the shared folders); RECENT (the last status lines, links in green, losses in yellow, errors in red); and the update notice, which then isn't printed on stderr. Keys: `c` capabilities, `m` share a folder, `q` quit. `NO_COLOR` turns colors off.
+**The dashboard** follows, in sections: BROWSERS (launched or attached, their CDP port, hosts seven or extra, and `gone` while one doesn't answer); SEVEN (the tab, the link state (`waiting for seven`, `connecting`, `linked` with its uptime, `reconnecting` after a link is lost, while slicc waits for seven to offer again, or `relinking` while new capabilities are applied), the policy summary, and stream counts per kind, open and total, never contents); CAPABILITIES (the network capabilities always offered, then `jerk`, `clipboard` (`write via <tool>`, `read, write via <tool>`, or why there is none), `shell` with `ssh via <runner>`, `kernel` with its URL, or why it is off, and the shared folders); RECENT (the last status lines, links in green, losses in yellow, errors in red); and the update notice, which then isn't printed on stderr. Keys: `c` capabilities, `m` share a folder, `q` quit. `NO_COLOR` turns colors off.
 
 **The dashboard after `Default browser`** links seven over loopback, as `slicc open` does, and opens the pairing URL in the default browser. In place of BROWSERS it shows `Default browser  paired over loopback · no cdp  hosts seven`; SEVEN starts with the pairing URL (a link where the terminal supports it, wrapped to the terminal's width, good once, for 10 minutes) until seven links, then `↵ for a URL to pair another seven`. The other sections are as above. Its capabilities are those of the command line: the capabilities screen and `m` aren't offered, so changing them means restarting slicc. Keys: `↵` a new pairing URL, `y` copies the URL to the clipboard (OSC 52), `q` quit.
 
-**Capabilities at runtime.** `c` opens the capabilities screen: `jerk` (when slicc-jerk is installed), `shell` (the `--runner`; turning it on uses `$SHELL -c`, or `pwsh -Command` / `powershell -Command` on Windows), `kernel` (the `--kernel-port`, or off) and the shared folders, each `path[:name][:ro]` as for `--mount`, with tab completing folders. `space` turns a row on or off, `↵` edits it, `a` adds a folder, `r` makes a folder read-only, `x` removes it. Changes collect as pending until `s` applies them (`u` undoes them; leaving with `esc` asks first). Folder changes go live as a mount update (see [Host folders](#host-folders)) when folders are already shared and seven takes `mounts` updates. Every other change relinks: the node says `bye` with the reason `slicc is relinking`, the browsers and the CDP connection stay, and a new node with the new capabilities sends seven's tab a fresh `hello` with the same `node` id, so seven offers again and replaces the link. Streams open on the old link close. A runner changed in the TUI drops `--shell`, `--eval`, `--eval-quiet` and `--sftp` / `--no-sftp`, which belong to the runner given on the command line.
+**Capabilities at runtime.** `c` opens the capabilities screen: `jerk` (when slicc-jerk is installed), `clipboard` (`off`, `write` or `read, write`, which `space` steps through; `none here` with the reason when this machine has no clipboard tool), `shell` (the `--runner`; turning it on uses `$SHELL -c`, or `pwsh -Command` / `powershell -Command` on Windows), `kernel` (the `--kernel-port`, or off) and the shared folders, each `path[:name][:ro]` as for `--mount`, with tab completing folders. `space` turns a row on or off, `↵` edits it, `a` adds a folder, `r` makes a folder read-only, `x` removes it. Changes collect as pending until `s` applies them (`u` undoes them; leaving with `esc` asks first). Folder changes go live as a mount update (see [Host folders](#host-folders)) when folders are already shared and seven takes `mounts` updates. Every other change relinks: the node says `bye` with the reason `slicc is relinking`, the browsers and the CDP connection stay, and a new node with the new capabilities sends seven's tab a fresh `hello` with the same `node` id, so seven offers again and replaces the link. Streams open on the old link close. A runner changed in the TUI drops `--shell`, `--eval`, `--eval-quiet` and `--sftp` / `--no-sftp`, which belong to the runner given on the command line.
 
 **Plain mode** (no terminal, `--yes`, `--browser` or `--plain`): no picker and no dashboard, just the default, with status lines on stderr (`slicc: <name> is still starting (slow disk?), <n> s so far`, `slicc: launched …`, `slicc: attached to …`, `slicc: offering …; policy: …; compute: ssh via <runner>`, `slicc: linked with "<name>" in <tab>`, `slicc: link lost: …`, `slicc: <name> quit …`, `slicc: <name> is back …`, `slicc: closed <ids>`). It never writes ANSI escapes or cursor codes. `SLICC_DEBUG=1` adds diagnostics.
 
@@ -528,7 +528,7 @@ Plain output: the CDP HTTP URL on stdout, status lines on stderr. With `--json`,
 ```
 slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp] [--kernel-port <n>] [--no-kernel]
-             [--mount <path>[:<name>][:ro]]...
+             [--mount <path>[:<name>][:ro]]... [--no-jerk] [--clipboard | --no-clipboard]
 ```
 
 `attach` links a seven that is open in a running CDP browser and serves the link until it is interrupted (`SIGINT`, `SIGTERM`), or until stdin closes with `--signal stdio`. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics, pion's included. pion never writes to stderr itself.
@@ -549,6 +549,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - `--kernel-port`: the local port for [kernel services](#kernel-services) (1–65535, default `80`; with `80`, a spare port in 17180–17189 when `80` can't be bound).
 - `--no-kernel`: no kernel services; nothing listens.
 - `--no-jerk`: don't offer this machine's slicc-jerk (caps `jerk` and `jerk-seal`, see [`jerk`](#jerk-slicc-jerk-over-the-link)).
+- `--clipboard`: also let seven read this machine's clipboard (cap `clipboard-read`). Setting it (cap `clipboard`) is on by default. `--no-clipboard` offers neither, and can't go with `--clipboard` (exit 2). See [`clipboard`](#clipboard-the-host-clipboard-over-the-link).
 
 **Setup over CDP.**
 1. slicc picks the first page tab whose URL has an allowed origin. Until there is one it says `waiting for a seven tab` and watches for new tabs.
@@ -583,7 +584,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 
 ```
 slicc open [--page <url>] [--origin <origin>]... [--name <name>] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]...
-           [--kernel-port <n>] [--no-kernel] [--no-jerk] [--mount <path>[:<name>][:ro]]...
+           [--kernel-port <n>] [--no-kernel] [--no-jerk] [--clipboard | --no-clipboard] [--mount <path>[:<name>][:ro]]...
            [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
 slicc pair [the same flags]
 slicc --default-browser [the same flags]
@@ -596,7 +597,7 @@ Link spec §1.3. These commands link a seven that runs in the browser you use ev
 - **`slicc pair`** only prints the pairing URL, for a seven that's already open. Paste it into seven's address bar, or into its *Link this computer* field.
 - **Plain `slicc`** falls back to this mode by itself when it finds no SLICC profile and no CDP endpoint (see [The default](#the-default-slicc)).
 - Both serve links until `SIGINT` or `SIGTERM`, then exit 0. A listener that can't bind, or a missing config directory, exits 1, and bad flags exit 2. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics.
-- **Flags** are as for `slicc attach`: `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and the compute flags. `--page <url>` is the seven page to pair (default `https://seven.sliccy.ai/`), and its origin is accepted as a seven origin. `--default-browser` takes these flags too. The flags of `slicc` that pick or launch browsers (`--browser`, `--cdp`, `--profile`, `--headless`, `--yes`, `--plain`, `--json`) are errors here. A flag of SLICC six's points back to six, as for `slicc`.
+- **Flags** are as for `slicc attach`: `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--clipboard`, `--no-clipboard`, `--mount` and the compute flags. `--page <url>` is the seven page to pair (default `https://seven.sliccy.ai/`), and its origin is accepted as a seven origin. `--default-browser` takes these flags too. The flags of `slicc` that pick or launch browsers (`--browser`, `--cdp`, `--profile`, `--headless`, `--yes`, `--plain`, `--json`) are errors here. A flag of SLICC six's points back to six, as for `slicc`.
 
 **Identity.** The node's DTLS certificate (ECDSA P-256, valid for 20 years) lives in `<config>/slicc/loopback-identity.json` (mode `0600`, directory `0700`). The same file holds the port the node last listened on. It is minted on first use, and slicc says `new loopback identity for this computer: <name> (ab12…ef), fingerprint sha-256 AB:12:…`, or `this computer: …` on later runs. It is separate from the tray hub's certificates and survives restarts and updates. A file that exists but can't be read as an identity (another version, broken JSON or PEM) is left alone: slicc says ``<path> is not a loopback identity slicc can read; …`` and exits 1. Only a certificate within a day of expiring is replaced. Whenever slicc mints a new identity (none yet, or a replacement), it forgets every pin in `loopback-peers.json` right after writing it, since every seven has to pair with the new certificate anyway. A `loopback-peers.json` that can't be read is left alone the same way: pairings and `slicc unpair` fail with ``<path> is not a list of paired sevens slicc can read; …``, and signals are refused. `<name>` is `--name`, or this machine's short host name in lower case.
 
@@ -633,7 +634,7 @@ The URL is the secret, and it carries the node's fingerprint, so a process that 
 - **The answer:** non-trickled. The node answers through its link stack, waits until ICE gathering is complete (10 s at most, after which it refuses), and returns its SDP with every host candidate and `a=end-of-candidates`. The page checks that the answer's fingerprint is the one it pinned before it uses the answer.
 
 **The link in this mode** is local (HELLO `mode: "local"`), with the node's loopback certificate:
-- **Caps:** `net`, `http`, `credentialed`, `ws`, `udp`, `unlink-loopback`, `fs` with `--mount`, `ssh` with `--runner`, `jerk` and `jerk-seal` unless `--no-jerk`, and kernel services on `--kernel-port` for a page that offers `kernel-in` (see [Kernel services](#kernel-services)). There is no `cdp`, since the node controls no browser, so a `cdp` OPEN gets `EOPNOTSUPP`. `jerk`'s `--seven-origin` is the pinned origin.
+- **Caps:** `net`, `http`, `credentialed`, `ws`, `udp`, `unlink-loopback`, `fs` with `--mount`, `ssh` with `--runner`, `jerk` and `jerk-seal` unless `--no-jerk`, `clipboard` unless `--no-clipboard` and `clipboard-read` with `--clipboard`, and kernel services on `--kernel-port` for a page that offers `kernel-in` (see [Kernel services](#kernel-services)). There is no `cdp`, since the node controls no browser, so a `cdp` OPEN gets `EOPNOTSUPP`. `jerk`'s `--seven-origin` is the pinned origin.
 - **Policy:** the local default (see [Network policy](#network-policy)), with this machine's [debugging ports](#network-policy) (`--allow` never reopens them, only `--expose-debug-port`), the listener's port and the kernel port denied. So a kernel program can't reach a debugging port the user turned on.
 - **ICE:** host candidates, loopback included, as for `slicc attach`.
 - **Several sevens:** the node keeps one link per paired page fingerprint. A new offer for a fingerprint replaces that fingerprint's link only. Each link is an exit of its own, and kernel connections go to the page that linked last, as for `slicc attach`.
@@ -665,7 +666,7 @@ One WebRTC peer connection. seven offers and the node answers. The node:
 - **Resets with `EOPNOTSUPP`:** an OPEN for a kind it doesn't serve.
 - **Closes the link:** an unknown frame type, a short or malformed frame (END with a payload, CREDIT that isn't 4 bytes), stream id 0, a reused id, an id with the wrong parity (page streams are odd, node streams even), or a second OPEN on a stream channel.
 
-HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "node", "caps": ["net", "http", "credentialed", "ws", "udp", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`. With `--mount`, `caps` adds `"fs"` and HELLO adds `"mounts"` (see [Host folders](#host-folders)). With host jerk, `caps` adds `"jerk"` and `"jerk-seal"` and HELLO adds `"jerk": { "version" }` (see [`jerk`](#jerk-slicc-jerk-over-the-link)). Unless `--no-kernel`, HELLO adds `"kernel": { "port" }`, the port the kernel listener uses (see [Kernel services](#kernel-services)).
+HELLO from `attach`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "local", "node", "caps": ["net", "http", "credentialed", "ws", "udp", "cdp"], "routes": { "prefixes": [], "exit": true }, "policy": { "allow", "deny", "summary" }, "browsers": [ … ] }`. `cdp` and `browsers` are there when at least one browser is listed (see [`cdp`](#cdp-browser-control)). With `--runner`, `caps` adds `"ssh"` and HELLO adds `"sshHostKey": "ssh-ed25519 AAAA…"`, the host key in `authorized_keys` form, so the page can write `<host>.slicc.internal <key>` into the kernel's `known_hosts`. With `--mount`, `caps` adds `"fs"` and HELLO adds `"mounts"` (see [Host folders](#host-folders)). With host jerk, `caps` adds `"jerk"` and `"jerk-seal"` and HELLO adds `"jerk": { "version" }` (see [`jerk`](#jerk-slicc-jerk-over-the-link)). With a clipboard tool, `caps` adds `"clipboard"` (and `"clipboard-read"` with `--clipboard`) and HELLO adds `"clipboard": { "backend" }` (see [`clipboard`](#clipboard-the-host-clipboard-over-the-link)). Unless `--no-kernel`, HELLO adds `"kernel": { "port" }`, the port the kernel listener uses (see [Kernel services](#kernel-services)).
 
 **`ssh`** (cap `ssh`), page → node, with `--runner` only:
 - OPEN `{ "kind": "ssh" }`, OPENED `{}` at once. The stream's bytes are one SSH connection to the node's SSH server.
@@ -768,6 +769,46 @@ Link spec §5.14 (J1). slicc-jerk (`jerk`, [Companion tools](#companion-tools)) 
 - `ECONNRESET`: jerk couldn't start, died of a signal, or exited with a code above 5.
 
 A page RESET or a closed link kills the jerk it started.
+
+### `clipboard`: the host clipboard over the link
+
+Link spec [§5.18](#518-clipboard-caps-clipboard-and-clipboard-read-page--node). seven's kernel answers `/dev/clipboard` (`pbcopy`, `pbpaste`, `xclip`, `xsel`, `wl-copy` and `wl-paste` in its shell) through this link when one offers `clipboard`, and through the browser's `navigator.clipboard` otherwise, which needs seven's tab in front.
+
+**Offered** as two caps: `clipboard` lets seven set the clipboard, and `clipboard-read` also lets it read it. A clipboard holds passwords, so reading is off until asked for.
+- `slicc`, `slicc attach`, `slicc open`, `slicc pair` and `--default-browser`: `clipboard` by default, and `clipboard-read` too with `--clipboard`. The browser that runs seven is on this desktop already, so seven setting its clipboard gives it nothing new.
+- `follow`: only with `--clipboard-write` (`clipboard`) or `--clipboard` (both). The seven on the other machine is another user's desktop.
+- `--no-clipboard` offers neither, in every mode, and can't go with `--clipboard` or `--clipboard-write` (exit 2).
+- The capabilities screen turns them on and off at runtime (`off`, `write`, `read, write`), which relinks.
+- `prompt`, `watch`, `wait` and `abort`: never.
+
+**Backends,** text only, found when slicc starts. Each tool runs with a fixed argv, no shell and no terminal:
+
+| system | when | sets with | reads with |
+| --- | --- | --- | --- |
+| macOS | `pbcopy` and `pbpaste` on `PATH` | `pbcopy` | `pbpaste -Prefer txt` |
+| Linux and the BSDs | `WAYLAND_DISPLAY` is set, and `wl-copy` and `wl-paste` are on `PATH` | `wl-copy --type text/plain;charset=utf-8` | `wl-paste --no-newline --type text` |
+| | otherwise `DISPLAY` is set and `xclip` is on `PATH` | `xclip -selection clipboard -in` | `xclip -selection clipboard -out -target UTF8_STRING` |
+| | otherwise `DISPLAY` is set and `xsel` is on `PATH` | `xsel --clipboard --input` | `xsel --clipboard --output` |
+| Windows | always | the Win32 clipboard API, `CF_UNICODETEXT`, in-process, so no console window flashes | the same |
+
+- On macOS the tools run with `LANG` and `LC_ALL` set to `en_US.UTF-8` and `LC_CTYPE` to `UTF-8`, so non-ASCII text arrives unchanged.
+- Text goes both ways byte for byte: no newline added or removed, `\r\n` kept.
+- Each call has 5 s. Writers that stay in the background to serve the X11 or Wayland selection (`xclip`, `xsel`, `wl-copy`) do so without slicc's pipes.
+- Without a backend there is no cap, and slicc says why: `clipboard: no pbcopy and pbpaste on PATH; not offering it`, `clipboard: no display (neither WAYLAND_DISPLAY nor DISPLAY is set); not offering it`, `clipboard: no wl-copy, xclip or xsel on PATH; not offering it`. With one, it says `clipboard: offering <backend> (clipboard)`, or `(clipboard, clipboard-read)`, and HELLO adds `"clipboard": { "backend" }`, with `pbcopy`, `wl-copy`, `xclip`, `xsel` or `the Windows clipboard`.
+
+**OPEN** `{ "kind": "clipboard", "op": "read" }` or `{ "kind": "clipboard", "op": "write" }`:
+- `read` (cap `clipboard-read`): the page sends END right after the OPEN. slicc reads the clipboard, then answers OPENED `{}`, the text as DATA (none for an empty clipboard or one without text), and END.
+- `write` (cap `clipboard`): OPENED `{}` at once. The page sends the text as DATA, then END. slicc sets the clipboard and answers END.
+
+**RESETs,** with a short message:
+- `EACCES`: a `read` without `clipboard-read`, or the system refused (`another program holds the clipboard`, a tool that says permission denied, or one that can't be run).
+- `ENOTSUP`: the clipboard tool went away after slicc started.
+- `EIO`: anything else (`xclip exited 1`, `pbpaste timed out`).
+- `EFBIG`: text over 1 MiB (1 048 576 bytes), either way.
+- `EILSEQ`: text that isn't UTF-8 (or, on Windows, a clipboard that isn't valid UTF-16).
+- `EPROTO`: an op other than `read` or `write`, or a malformed OPEN. `ETIMEDOUT`: the page took more than 30 s to send the text or take it.
+
+**Logs:** each read is a status line, `clipboard: "<seven's name>" read this machine's clipboard`, so a read never goes unseen. Writes are only debug lines with their size. slicc never logs the text, `SLICC_DEBUG` included.
 
 ### `cdp` (browser control)
 
@@ -1096,7 +1137,7 @@ A command that can't start exits 127 with the reason on stderr.
 ```
 slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]... [--name <name>] [--cdp <url>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
-             [--mount <path>[:<name>][:ro]]... [--jerk] [--jerk-seal]
+             [--mount <path>[:<name>][:ro]]... [--jerk] [--jerk-seal] [--clipboard-write] [--clipboard] [--no-clipboard]
 slicc - follow [flags]
 slicc @<file> follow [flags]
 ```
@@ -1114,8 +1155,9 @@ slicc @<file> follow [flags]
 - `--cdp <url>`: let seven drive this browser over the link (repeatable, in any form `slicc browsers --cdp` takes; each must answer when `follow` starts). See [`cdp`](#cdp-browser-control), and its warning: the seven on the other machine gets full control of every browser listed. No browser is `seven: true`. Without `--cdp`, `follow` doesn't offer `cdp`, and a `cdp` OPEN is refused with `EOPNOTSUPP`. Each browser's debugging port and its own endpoint addresses are [denied](#network-policy) to `tcp`, `http`, `ws`, `udp` and `ssh` forwarding.
 - `--mount <path>[:<name>][:ro]`: share this folder with the seven on the other machine (cap `fs`, repeatable); see [Host folders](#host-folders). It can read the folder, and change it unless `:ro`.
 - `--jerk`: offer this machine's slicc-jerk for status and sign-ins (cap `jerk`). `--jerk-seal` also lets the seven on the other machine seal this machine's tokens into its vault (cap `jerk-seal`) and implies `--jerk`. Without host jerk, `follow` says `jerk: no slicc-jerk 0.6.0 or later on PATH or in slicc's data folder; not offering it` (or, for an older jerk, `jerk: host jerk <version> is older than 0.6.0; run slicc install jerk`) and runs on without it. See [`jerk`](#jerk-slicc-jerk-over-the-link).
+- `--clipboard-write`: let the seven on the other machine set this machine's clipboard (cap `clipboard`). `--clipboard` also lets it read it (cap `clipboard-read`) and implies `--clipboard-write`. Without a clipboard tool, `follow` says why and runs on without it. See [`clipboard`](#clipboard-the-host-clipboard-over-the-link).
 
-HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "node", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net`, `http`, `credentialed`, `ws` and `udp` with `--exit`, `ssh` with `--runner` (plus `sshHostKey`), `cdp` (and HELLO `browsers`) with `--cdp`, `fs` (and HELLO `mounts`) with `--mount`, `jerk` (and HELLO `jerk`) with `--jerk`, `jerk-seal` with `--jerk-seal`, and always `join`.
+HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode": "remote", "node", "caps", "routes": { "prefixes": [], "exit" }, "policy" }`. `caps` holds `net`, `http`, `credentialed`, `ws` and `udp` with `--exit`, `ssh` with `--runner` (plus `sshHostKey`), `cdp` (and HELLO `browsers`) with `--cdp`, `fs` (and HELLO `mounts`) with `--mount`, `jerk` (and HELLO `jerk`) with `--jerk`, `jerk-seal` with `--jerk-seal`, `clipboard` (and HELLO `clipboard`) with `--clipboard-write` or `--clipboard`, `clipboard-read` with `--clipboard`, and always `join`.
 
 **Identity.** The device is its DTLS certificate. `follow` keeps one ECDSA P-256 certificate per hub origin (`scheme://host:port`), valid for 20 years, in `<config>/slicc/tray-certs.json` (mode `0600`). Every link to that hub uses it, so the fingerprint stays the same across reconnects, restarts and updates. The first run on a hub mints it and says `new device, fingerprint sha-256 …`; later runs say `device, fingerprint …`. Every dial attaches with a fresh `controllerId`, which is only a routing handle.
 
@@ -1274,7 +1316,7 @@ PID   MODE    SEVEN           DEVICE     STATE                   OFFERS
 - **`SEVEN`:** the name from seven's HELLO, else its origin's host, else the hub's host in parentheses. Never the join URL.
 - **`DEVICE`:** this machine's device, as `follow` and seven's tray see it: for `follow`, the DTLS certificate for that hub, and for `open` and `pair`, the loopback identity. It is the SHA-256 fingerprint, shown as its first and last four hex digits, so a row here matches a row in the leader's `slicc tray`. Over CDP there is none (`-`).
 - **`STATE`:** `waiting` (a local mode, until seven links), `dialing`, `waiting for offer`, `connecting`, `connected` with how long, `reconnecting (#<attempt>, <next wait>)`, or `stopped (<code>)` with the hub's or seven's code (`TRAY_EXPIRED`, `UNLINKED`, …) as the process exits.
-- **`OFFERS`:** `exit` (the network, `--exit` for `follow`), `ssh`, `cdp`, `jerk`, `fs:<name>` per folder, and `kernel:<port>`.
+- **`OFFERS`:** `exit` (the network, `--exit` for `follow`), `ssh`, `cdp`, `jerk`, `clipboard`, `clipboard-read`, `fs:<name>` per folder, and `kernel:<port>`.
 - **`--json`:** a JSON array, one object per process: `{ "v": 1, "pid", "mode", "version", "started", "seven"?, "origin"?, "hub"?, "device"?, "state", "since", "attempt"?, "retryAt"?, "code"?, "error"?, "offers", "dials", "links", "lastLinked"? }`. `hub` is the hub's origin, `error` the last failure with secrets redacted, `dials` the dials so far and `links` the links that came up. These are SLICC six's follower counters.
 - **`-q`:** only the PIDs, one per line, for `slicc tray -q | xargs kill`. There's no `stop`.
 - **`-a`:** also the trays this machine knows but isn't following now, from `tray-certs.json` and `tray-join.json`, as `docker ps -a` does: PID `-`, state `not running`, the leader's name from the last link and the device for that hub. Neither file's join URL is shown.
@@ -1570,11 +1612,12 @@ Page-opened streams are odd and node-opened streams even, never 0, and never reu
 - **`name`:** for display. **`host`** (node only): the machine's short hostname, lower-cased, as a hint for the DNS label. The page makes it DNS-safe and unique per link (`laptop-2`) and serves it as `<host>.slicc.internal` on a synthetic address in `198.18.57.0/24`. `--name` overrides both.
 - **`mode`:** `local` (CDP setup) or `remote` (hub).
 - **`caps`:** what this side accepts OPENs for.
-  - node: `net` (`tcp` and `resolve`), `http`, `ws` ([§5.15](#515-ws-cap-ws-page--node-websockets-for-kernel-programs)), `udp` ([§5.12](#512-udp-cap-udp-page--node)), `ssh`, `cdp`, `fs`, `join`, `jerk` and `jerk-seal` ([§5.14](#514-jerk-caps-jerk-and-jerk-seal-page--node-j1)).
+  - node: `net` (`tcp` and `resolve`), `http`, `ws` ([§5.15](#515-ws-cap-ws-page--node-websockets-for-kernel-programs)), `udp` ([§5.12](#512-udp-cap-udp-page--node)), `ssh`, `cdp`, `fs`, `join`, `jerk` and `jerk-seal` ([§5.14](#514-jerk-caps-jerk-and-jerk-seal-page--node-j1)), `clipboard` and `clipboard-read` ([§5.18](#518-clipboard-caps-clipboard-and-clipboard-read-page--node)).
   - node, without a kind: `credentialed` ([§5.13](#513-credentialed-node-cap-http-streams-that-carry-a-value)), a promise about how the node handles `http` streams.
   - page: `kernel-in` ([§5.4](#54-kernel-page-cap-kernel-in-node--page)).
 - **`routes`** (node only): the prefixes it offers as specific routes, plus `exit: true` when it's willing to be a default exit.
 - **`policy`:** for display only; the node enforces it ([§6](#6-policy-node)).
+- **`clipboard`** (node, with cap `clipboard`): `{ "backend" }`, the tool or API that holds the host clipboard, for display.
 - **`kernel`** (local node only, with kernel services): the port of the node's kernel listener ([§5.9](#59-kernel-listener-on-the-node-local-only)).
 - **Versions:** each side ignores fields it doesn't know. If `v` differs, the side with the lower `v` decides, or closes the link when it can't.
 - **Before HELLO:** neither side sends OPEN until it has received the peer's HELLO.
@@ -2046,6 +2089,23 @@ How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-
 #### 5.17 Reserved
 `exec` is reserved (six's leader `exec`, parked in [slicc-cli#102](https://github.com/ai-ecoverse/slicc-cli/issues/102)).
 
+#### 5.18 `clipboard` (caps `clipboard` and `clipboard-read`), page → node
+The host's clipboard, as text, for the kernel's `/dev/clipboard`.
+
+| node command | `clipboard` (write) | `clipboard-read` (read) |
+| --- | --- | --- |
+| `slicc`, `attach`, `open`, `pair` (local) | yes, when the host has a clipboard tool. `--no-clipboard` turns both off. | only with `--clipboard` |
+| `slicc <join> follow` (remote) | only with `--clipboard-write` or `--clipboard` | only with `--clipboard` |
+| `prompt`, `watch`, `wait`, `abort` | no | no |
+
+- **OPEN:** `{ "kind": "clipboard", "op": "read" | "write" }`.
+- **`read`:** the page sends END after OPEN. The node answers OPENED `{}`, the clipboard's text as DATA, then END. An empty clipboard, or one holding no text, is OPENED and END with no DATA.
+- **`write`:** OPENED `{}` at once. The page sends the text as DATA, then END. The node answers END once the clipboard holds it.
+- **Text:** UTF-8, byte for byte, at most 1 MiB (1 048 576 bytes) either way.
+- **RESET:** `EACCES` (a read without `clipboard-read`, or the system refused), `ENOTSUP` (no clipboard tool any more), `EIO` (anything else), `EFBIG` (over 1 MiB), `EILSEQ` (not UTF-8), `EPROTO` (another op), `ETIMEDOUT` (the text took over 30 s), each with a short message. Without the cap, `EOPNOTSUPP`.
+- **Page side:** seven's clipboard hook uses a link whose HELLO lists `clipboard` (and `clipboard-read` for reads), preferring a local link over a `follow` link, then the newest, and `navigator.clipboard` otherwise. A refusal stays a refusal, so the kernel gives `EACCES`.
+- **Visibility:** the node logs every read as a status line naming the peer, never the text.
+
 ### 6. Policy (node)
 
 #### 6.1 Where it's checked
@@ -2121,7 +2181,7 @@ Front ends and capabilities follow a node's links with `node.Node.Subscribe(func
 - `installed`: installed browsers too;
 - `home`: installed browsers, and the `DevToolsActivePort` files under the home and config dirs from the environment (`HOME`, `APPDATA`, `LOCALAPPDATA`, `XDG_CONFIG_HOME`), SLICC six's profiles included (`XDG_STATE_HOME`, `SLICC_USER_DATA_DIR`).
 
-In the same process, probe ports, dirs and a process list passed in explicitly (`Options.ProbePorts`, `Options.Home`, `Options.ProfilesDir`, and `Options.Processes`, which returns the output of the process-list command) are still used. `Options.Transport` and `Options.Dial` replace discovery's HTTP transport and TCP dial; the corpus test fakes every server with them, and its process list is fake too. `test/integration`'s `TestMain` sets `SLICC_DISCOVERY=isolated` and unsets `SLICC_USER_DATA_DIR`, and points `HOME`, `APPDATA` and the XDG dirs, `XDG_STATE_HOME` included (and `LOCALAPPDATA`, and `USERPROFILE` except on Windows, where a Chrome started with a temporary one never writes `DevToolsActivePort`; the tests that have `slicc` launch a real Chrome give it the real `LOCALAPPDATA` on Windows, which they only do on CI) at a temporary directory for itself and every `slicc` it starts, so no test can reach the browsers of the machine it runs on. It also puts a stand-in `jerk` first on `PATH` that fails `--version` (on Windows one for every `PATHEXT` extension), so slicc never finds the machine's own slicc-jerk there, while every other tool keeps its own path. The tests that want a jerk put the fake jerk's dir before it. Tests opt in to more with a fake home or fake endpoints. The Chrome the harness starts itself gets the real environment.
+In the same process, probe ports, dirs and a process list passed in explicitly (`Options.ProbePorts`, `Options.Home`, `Options.ProfilesDir`, and `Options.Processes`, which returns the output of the process-list command) are still used. `Options.Transport` and `Options.Dial` replace discovery's HTTP transport and TCP dial; the corpus test fakes every server with them, and its process list is fake too. `test/integration`'s `TestMain` sets `SLICC_DISCOVERY=isolated` and unsets `SLICC_USER_DATA_DIR`, and points `HOME`, `APPDATA` and the XDG dirs, `XDG_STATE_HOME` included (and `LOCALAPPDATA`, and `USERPROFILE` except on Windows, where a Chrome started with a temporary one never writes `DevToolsActivePort`; the tests that have `slicc` launch a real Chrome give it the real `LOCALAPPDATA` on Windows, which they only do on CI) at a temporary directory for itself and every `slicc` it starts, so no test can reach the browsers of the machine it runs on. It also puts a stand-in `jerk` first on `PATH` that fails `--version` (on Windows one for every `PATHEXT` extension), so slicc never finds the machine's own slicc-jerk there, while every other tool keeps its own path. Outside Windows the same dir holds failing stand-ins for `pbcopy`, `pbpaste`, `wl-copy`, `wl-paste`, `xclip` and `xsel`, and `DISPLAY` and `WAYLAND_DISPLAY` are unset, so no test reaches the clipboard of the machine it runs on. The clipboard tests put a fake tool before them; only on GitHub Actions do they use the runner's real clipboard (Xvfb and xclip on Linux, which CI installs, and skips without). The tests that want a jerk put the fake jerk's dir before it. Tests opt in to more with a fake home or fake endpoints. The Chrome the harness starts itself gets the real environment.
 
 **Debugging ports in tests: `SLICC_PROTECTED_PORTS`** (test-only). `<first>-<last>` (or one port) adds to 9222–9229 the range every mode denies (see [Network policy](#network-policy)); 9222–9229 stay denied. The debugging-port tests (`test/integration/debugports_test.go`) set it to two free ports where fakes listen, write fake `DevToolsActivePort` files for two more under `SLICC_DISCOVERY=home`, give a fake CDP endpoint as `--cdp-extra` or `--cdp`, and after link-up write another `DevToolsActivePort` file and start two fake browsers with `--remote-debugging-port` (one with a port, one with 0 and a `--user-data-dir`). They prove, in every mode, that a link `net` or `http` request to each of them is refused, an exact `--allow` included, that a browser that starts later is refused on the first connection after more than 1 s without one, and that `--expose-debug-port` opens only what it names, without ever touching 9222–9229 on the machine they run on. Tests of `browser.Guard` with a fake process table prove that a connect to this machine with a stale list waits for a gated, slow scan and is decided by it while connects to other hosts don't wait, that the list is rescanned about every second after a connect and connects then don't wait, that a scan that fails or times out refuses the connect, that failure and recovery are each reported once, that an idle node scans at most twice in 5 s, and that shutdown reports no failure; every connect in them has a deadline. **`SLICC_PROC_ROOT`** (test-only) replaces `/proc` for the Linux fallback. With a failing `ps` first on `PATH`, the tests prove that `slicc attach` reads a fake `/proc` on Linux (its browser's port refused, a browser added later refused on its first connection, other loopback ports open, no failure line) and that with no `/proc` either it prints the startup line once and refuses connects to this machine.
 

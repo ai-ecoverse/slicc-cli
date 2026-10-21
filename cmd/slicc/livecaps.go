@@ -23,6 +23,7 @@ type liveCaps struct {
 	compute computeFlags
 	mounts  []hostfs.Mount
 	jerk    bool
+	clip    tui.Clip
 	kernel  int
 	fs      *hostfs.Server
 	relink  chan flow.Relink
@@ -32,17 +33,18 @@ type capsSnapshot struct {
 	compute computeFlags
 	mounts  []hostfs.Mount
 	jerk    bool
+	clip    tui.Clip
 	kernel  int
 }
 
-func newLiveCaps(cf computeFlags, mounts []hostfs.Mount, jerk bool, kernel int) *liveCaps {
-	return &liveCaps{given: cf, compute: cf, mounts: mounts, jerk: jerk, kernel: kernel, relink: make(chan flow.Relink, 1)}
+func newLiveCaps(cf computeFlags, mounts []hostfs.Mount, jerk bool, clip tui.Clip, kernel int) *liveCaps {
+	return &liveCaps{given: cf, compute: cf, mounts: mounts, jerk: jerk, clip: clip, kernel: kernel, relink: make(chan flow.Relink, 1)}
 }
 
 func (lc *liveCaps) snapshot() capsSnapshot {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
-	return capsSnapshot{compute: lc.compute, mounts: slices.Clone(lc.mounts), jerk: lc.jerk, kernel: lc.kernel}
+	return capsSnapshot{compute: lc.compute, mounts: slices.Clone(lc.mounts), jerk: lc.jerk, clip: lc.clip, kernel: lc.kernel}
 }
 
 func (lc *liveCaps) setFS(old, srv *hostfs.Server) {
@@ -59,10 +61,13 @@ func (lc *liveCaps) liveMounts() bool {
 	return lc.fs.Live()
 }
 
-func (lc *liveCaps) settings(jerk bool) tui.Settings {
+func (lc *liveCaps) settings(jerk, clip bool) tui.Settings {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 	s := tui.Settings{Jerk: lc.jerk && jerk, Shell: slices.Clone(lc.compute.runner), Kernel: lc.kernel}
+	if clip {
+		s.Clipboard = lc.clip
+	}
 	for _, m := range lc.mounts {
 		s.Folders = append(s.Folders, tui.Folder{Path: m.Root, Name: m.Name, ReadOnly: m.ReadOnly})
 	}
@@ -79,7 +84,7 @@ func (lc *liveCaps) apply(s tui.Settings, relink bool, status func(string, ...an
 		status("fs: sharing %s", mountNames(mounts))
 		return
 	}
-	lc.jerk, lc.kernel, lc.mounts = s.Jerk, s.Kernel, mounts
+	lc.jerk, lc.clip, lc.kernel, lc.mounts = s.Jerk, s.Clipboard, s.Kernel, mounts
 	lc.compute = computeFor(lc.given, s.Shell)
 	rl := flow.Relink{Kernel: lc.kernel, Compute: lc.compute.dashboard()}
 	lc.mu.Unlock()

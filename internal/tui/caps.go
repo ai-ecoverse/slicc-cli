@@ -24,11 +24,30 @@ type Folder struct {
 	Off      bool
 }
 
+type Clip int
+
+const (
+	ClipOff Clip = iota
+	ClipWrite
+	ClipRead
+)
+
+func (c Clip) String() string {
+	switch c {
+	case ClipWrite:
+		return "write"
+	case ClipRead:
+		return "read, write"
+	}
+	return "off"
+}
+
 type Settings struct {
-	Jerk    bool
-	Shell   []string
-	Kernel  int
-	Folders []Folder
+	Jerk      bool
+	Clipboard Clip
+	Shell     []string
+	Kernel    int
+	Folders   []Folder
 }
 
 func (s Settings) clone() Settings {
@@ -56,6 +75,9 @@ func changes(from, to Settings, live bool) []change {
 	var out []change
 	if from.Jerk != to.Jerk {
 		out = append(out, change{sign(to.Jerk) + " jerk", true})
+	}
+	if from.Clipboard != to.Clipboard {
+		out = append(out, change{"clipboard " + to.Clipboard.String(), true})
 	}
 	switch a, b := quoteArgv(from.Shell), quoteArgv(to.Shell); {
 	case slices.Equal(from.Shell, to.Shell):
@@ -124,6 +146,7 @@ type rowKind int
 
 const (
 	rowJerk rowKind = iota
+	rowClipboard
 	rowShell
 	rowKernel
 	rowFolder
@@ -157,7 +180,7 @@ type capsEditor struct {
 }
 
 func (e capsEditor) rows() []capRow {
-	rows := []capRow{{kind: rowJerk}, {kind: rowShell}, {kind: rowKernel}}
+	rows := []capRow{{kind: rowJerk}, {kind: rowShell}, {kind: rowKernel}, {kind: rowClipboard}}
 	for i := range e.draft.Folders {
 		rows = append(rows, capRow{kind: rowFolder, folder: i})
 	}
@@ -278,6 +301,12 @@ func (m Model) toggleCap(r capRow) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		d.Jerk = !d.Jerk
+	case rowClipboard:
+		if m.cfg.ClipboardTool == "" && d.Clipboard == ClipOff {
+			m.message = "no clipboard here: " + m.cfg.ClipboardWhy
+			return m, nil
+		}
+		d.Clipboard = (d.Clipboard + 1) % 3
 	case rowShell:
 		if len(d.Shell) > 0 {
 			m.caps.runner = d.Shell
@@ -307,7 +336,7 @@ func (m Model) toggleCap(r capRow) (tea.Model, tea.Cmd) {
 func (m Model) editCap(r capRow) (tea.Model, tea.Cmd) {
 	d := m.caps.draft
 	switch r.kind {
-	case rowJerk:
+	case rowJerk, rowClipboard:
 		return m.toggleCap(r)
 	case rowShell:
 		runner := d.Shell
@@ -553,7 +582,7 @@ func dirSuggestions(value string) []string {
 	return out
 }
 
-var mutableCaps = map[string]bool{"jerk": true, "jerk-seal": true, "ssh": true, "fs": true}
+var mutableCaps = map[string]bool{"jerk": true, "jerk-seal": true, "clipboard": true, "clipboard-read": true, "ssh": true, "fs": true}
 
 type span struct {
 	st   lipgloss.Style
@@ -668,6 +697,10 @@ func (m Model) changed(r capRow) string {
 		if a.Jerk != d.Jerk {
 			return "changed"
 		}
+	case rowClipboard:
+		if a.Clipboard != d.Clipboard {
+			return "changed"
+		}
 	case rowShell:
 		if !slices.Equal(a.Shell, d.Shell) {
 			return "changed"
@@ -710,7 +743,7 @@ func (m Model) capLine(i int, r capRow) string {
 		if !on {
 			vs = st.faint
 		}
-		return m.rowOf(cur, tail([]span{mark(on), {st.title, fmt.Sprintf("%-8s", name)}, {vs, fmt.Sprintf("%-14s", value)}, {st.faint, desc}})...)
+		return m.rowOf(cur, tail([]span{mark(on), {st.title, fmt.Sprintf("%-10s", name)}, {vs, fmt.Sprintf("%-14s", value)}, {st.faint, desc}})...)
 	}
 	switch r.kind {
 	case rowJerk:
@@ -721,6 +754,16 @@ func (m Model) capLine(i int, r capRow) string {
 			return cell(true, "jerk", m.cfg.JerkVersion, "sign-ins and tokens for seven's vault")
 		}
 		return cell(false, "jerk", "off", "seven can't ask slicc-jerk for tokens")
+	case rowClipboard:
+		switch {
+		case m.cfg.ClipboardTool == "":
+			return cell(false, "clipboard", "none here", m.cfg.ClipboardWhy)
+		case d.Clipboard == ClipRead:
+			return cell(true, "clipboard", "read, write", "seven may read and set the clipboard ("+m.cfg.ClipboardTool+")")
+		case d.Clipboard == ClipWrite:
+			return cell(true, "clipboard", "write", "seven may set the clipboard ("+m.cfg.ClipboardTool+")")
+		}
+		return cell(false, "clipboard", "off", "seven can't reach this machine's clipboard")
 	case rowShell:
 		if len(d.Shell) > 0 {
 			return cell(true, "shell", quoteArgv(d.Shell), "seven can ssh into this machine")
@@ -730,7 +773,7 @@ func (m Model) capLine(i int, r capRow) string {
 		if d.Kernel > 0 {
 			desc := "<port>.kernel.localhost reaches seven's servers"
 			if d.Kernel == m.settings.Kernel && m.dash.kernOff != "" {
-				return m.rowOf(cur, tail([]span{{st.bad, "● "}, {st.title, fmt.Sprintf("%-8s", "kernel")}, {plain, fmt.Sprintf("%-14s", fmt.Sprintf(":%d", d.Kernel))}, {st.bad, "off: " + m.dash.kernOff}})...)
+				return m.rowOf(cur, tail([]span{{st.bad, "● "}, {st.title, fmt.Sprintf("%-10s", "kernel")}, {plain, fmt.Sprintf("%-14s", fmt.Sprintf(":%d", d.Kernel))}, {st.bad, "off: " + m.dash.kernOff}})...)
 			}
 			return cell(true, "kernel", fmt.Sprintf(":%d", d.Kernel), desc)
 		}
@@ -748,7 +791,7 @@ func (m Model) capLine(i int, r capRow) string {
 		if f.Off {
 			ns = st.faint
 		}
-		return m.rowOf(cur, tail([]span{mark(!f.Off), {ns, fmt.Sprintf("%-8s", f.Name) + " "}, how, {st.faint, tilde(f.Path)}})...)
+		return m.rowOf(cur, tail([]span{mark(!f.Off), {ns, fmt.Sprintf("%-10s", f.Name) + " "}, how, {st.faint, tilde(f.Path)}})...)
 	}
 	return m.rowOf(cur, span{st.accent, "+ "}, span{st.accent, "add a folder…"})
 }
@@ -762,6 +805,11 @@ func (m Model) capDetail() (string, string) {
 			return "slicc-jerk isn't installed", "run slicc install jerk, then restart slicc"
 		}
 		return "turn slicc-jerk " + onOffWord(!d.Jerk) + " for seven", "jerk signs in on this machine and seals tokens into seven's vault"
+	case rowClipboard:
+		if m.cfg.ClipboardTool == "" {
+			return "no clipboard here", m.cfg.ClipboardWhy
+		}
+		return "clipboard: " + ((d.Clipboard + 1) % 3).String() + " next", "space goes off → write → read, write; every read shows in RECENT, never its text"
 	case rowShell:
 		runner := firstOf(quoteArgv(d.Shell), quoteArgv(m.caps.runner), "bash -c")
 		return "change the runner: each command seven runs becomes " + st.title.Render(runner) + " <command>", "space turns the shell on or off; seven reaches it over ssh"

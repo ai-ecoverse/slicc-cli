@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -101,6 +102,11 @@ func (n *Node) Resolver() *policy.Resolver {
 }
 
 func (n *Node) Logf(format string, args ...any) { n.cfg.Logf(format, args...) }
+
+func (n *Node) Notice(format string, args ...any) {
+	n.cfg.Status(format, args...)
+	n.emit(Event{Kind: EventNotice, Reason: fmt.Sprintf(format, args...)})
+}
 
 func (n *Node) Local() bool { return n.cfg.Mode == "local" }
 

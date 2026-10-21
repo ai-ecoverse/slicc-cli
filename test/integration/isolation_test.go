@@ -48,6 +48,8 @@ func isolateProcess(root string) {
 		_ = os.Setenv(k, v)
 	}
 	_ = os.Unsetenv("SLICC_USER_DATA_DIR")
+	_ = os.Unsetenv("DISPLAY")
+	_ = os.Unsetenv("WAYLAND_DISPLAY")
 	_ = os.Setenv("PATH", shadowJerk(filepath.Join(filepath.Dir(root), "no-jerk")))
 	_ = os.Setenv("NoDefaultCurrentDirectoryInExePath", "1")
 	_ = os.Setenv(browser.DiscoveryEnv, "isolated")
@@ -61,8 +63,10 @@ func shadowJerk(dir string) string {
 	}
 	path := dir + string(os.PathListSeparator) + os.Getenv("PATH")
 	if runtime.GOOS != "windows" {
-		if err := os.WriteFile(filepath.Join(dir, "jerk"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-			panic(err)
+		for _, name := range append([]string{"jerk"}, clipboardTools...) {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+				panic(err)
+			}
 		}
 		return path
 	}

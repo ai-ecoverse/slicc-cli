@@ -59,7 +59,7 @@ func nodeOffers(h link.Hello, kernelPort int) []string {
 	if h.Routes != nil && h.Routes.Exit && h.HasCap("net") {
 		out = append(out, "exit")
 	}
-	for _, c := range []string{"ssh", "cdp", "jerk"} {
+	for _, c := range []string{"ssh", "cdp", "jerk", "clipboard", "clipboard-read"} {
 		if h.HasCap(c) {
 			out = append(out, c)
 		}

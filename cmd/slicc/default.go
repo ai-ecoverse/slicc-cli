@@ -70,6 +70,9 @@ flags for slicc with no command:
   --open              when falling back without a terminal, open the
                       pairing URL in the default browser too
   --no-jerk           don't offer this machine's slicc-jerk to seven
+  --clipboard         also let seven read this machine's clipboard; setting
+                      it is on by default
+  --no-clipboard      don't offer this machine's clipboard to seven
   --mount <path>[:<name>][:ro]
                       share this folder with seven's kernel (repeatable)
   --allow <rule>      allow CIDR or CIDR:port (repeatable, comma-separated)
@@ -102,6 +105,7 @@ type defaultFlags struct {
 	compute    computeFlags
 	mounts     stringList
 	noJerk     bool
+	clip       clipFlags
 	open       bool
 	noFallback bool
 }
@@ -139,6 +143,7 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	fs.BoolVar(&f.json, "json", false, "")
 	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
+	f.clip.register(fs, false)
 	fs.BoolVar(&f.open, "open", false, "")
 	fs.BoolVar(&f.noFallback, "no-fallback", false, "")
 	fs.Bool("default-browser", false, "")
@@ -157,6 +162,10 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 		return f, 2
 	}
 	if err := f.compute.validate(); err != nil {
+		fmt.Fprintf(stderr, "slicc: %v\n\n%s", err, defaultUsage)
+		return f, 2
+	}
+	if err := f.clip.check(); err != nil {
 		fmt.Fprintf(stderr, "slicc: %v\n\n%s", err, defaultUsage)
 		return f, 2
 	}
@@ -207,6 +216,7 @@ func registerCaps(lc *liveCaps, origins []string, logf func(string, ...any)) fun
 		httpcap.Register(n)
 		wscap.Register(n)
 		udpcap.Register(n)
+		serveClipboard(n, c.clip, logf)
 		if c.jerk {
 			serveJerk(n, true, false, logf)
 		}
@@ -286,7 +296,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
 	mounts := hostfs.Load(f.mounts, func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) })
-	lc := newLiveCaps(f.compute, mounts, !f.noJerk, f.kernel)
+	lc := newLiveCaps(f.compute, mounts, !f.noJerk, f.clip.local(), f.kernel)
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
 		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(lc, pageOrigins(f.page, f.origins), logf), Compute: f.compute.dashboard(), Logf: logf,
@@ -321,6 +331,9 @@ func runPlain(cfg flow.Config, f defaultFlags, mounts []hostfs.Mount, stdout, st
 	if f.fallbackAllowed() && flow.Fallback(cfg.Browser, r.Entries) {
 		stop()
 		return runFallback(f, mounts, stdout, stderr)
+	}
+	if _, why := clipboardName(); why != "" && f.clip.local() != tui.ClipOff {
+		out.event(flow.Event{Schema: flow.Schema, Event: flow.Status, Message: "clipboard: " + why + "; not offering it"})
 	}
 	var sel []browser.Entry
 	var err error
@@ -480,7 +493,8 @@ func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, stdout, stderr io.Writ
 	if j, _ := jerk.Find(jerkDirs()...); j != nil {
 		tcfg.JerkVersion = j.Version
 	}
-	tcfg.Settings = lc.settings(tcfg.JerkVersion != "")
+	tcfg.ClipboardTool, tcfg.ClipboardWhy = clipboardName()
+	tcfg.Settings = lc.settings(tcfg.JerkVersion != "", tcfg.ClipboardTool != "")
 	tcfg.LiveMounts = lc.liveMounts
 	tcfg.Apply = func(s tui.Settings, relink bool) {
 		status := statusTo(func(e flow.Event) { go p.Send(tui.EventMsg(e)) })

@@ -68,7 +68,7 @@ flags:
 ` + exposeUsage + `  --kernel-port <n>    serve http://<port>.kernel.localhost on this local
                        port instead of 80
   --no-kernel          don't serve <port>.kernel.localhost at all
-` + jerkLocalUsage + mountUsage + computeUsage + `
+` + jerkLocalUsage + clipboardLocalUsage + mountUsage + computeUsage + `
 The link offers net (tcp and resolve), http and ws under the local policy:
 public addresses, this machine and the local network, but not link-local
 addresses, the debugging ports (below), or slicc's own listeners. There is
@@ -86,6 +86,7 @@ type openFlags struct {
 	noKernel   bool
 	mounts     stringList
 	noJerk     bool
+	clip       clipFlags
 	compute    computeFlags
 	hosts      hostsFlag
 	loaded     []hostfs.Mount
@@ -123,6 +124,7 @@ func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags,
 	fs.BoolVar(&f.noKernel, "no-kernel", false, "")
 	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
+	f.clip.register(fs, false)
 	fs.Var(&f.hosts, "hosts", "")
 	f.compute.register(fs)
 	var six string
@@ -145,6 +147,10 @@ func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags,
 		return f, 2
 	}
 	if err := f.compute.validate(); err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n\n%s", prog, err, openUsage)
+		return f, 2
+	}
+	if err := f.clip.check(); err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n\n%s", prog, err, openUsage)
 		return f, 2
 	}
@@ -411,6 +417,7 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	httpcap.Register(n)
 	wscap.Register(n)
 	udpcap.Register(n)
+	serveClipboard(n, r.f.clip.local(), r.status)
 	if !r.f.noJerk {
 		serveJerk(n, true, false, r.status)
 	}
