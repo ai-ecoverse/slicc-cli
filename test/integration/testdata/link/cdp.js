@@ -49,6 +49,7 @@ export class CdpClient {
   #listeners = new Set();
   #writing = Promise.resolve();
   #paused = null;
+  callTimeout = 0;
 
   constructor(stream) {
     this.stream = stream;
@@ -80,7 +81,10 @@ export class CdpClient {
     } catch (error) {
       outcome = error instanceof ResetError ? { reset: error.code, detail: error.detail } : { error: String(error?.message ?? error) };
     }
-    for (const { reject } of this.#pending.values()) reject(new Error('cdp stream closed'));
+    for (const { reject, timer } of this.#pending.values()) {
+      clearTimeout(timer);
+      reject(new Error('cdp stream closed'));
+    }
     this.#pending.clear();
     return outcome;
   }
@@ -108,6 +112,7 @@ export class CdpClient {
       const call = this.#pending.get(msg.id);
       this.#pending.delete(msg.id);
       if (!call) return;
+      clearTimeout(call.timer);
       if (msg.error) {
         const error = new Error(msg.error.message);
         error.cdp = msg.error;
@@ -130,19 +135,28 @@ export class CdpClient {
     this.#nextId += 1;
     const msg = { id, method, params };
     if (sessionId) msg.sessionId = sessionId;
-    const reply = new Promise((resolve, reject) => this.#pending.set(id, { resolve, reject }));
-    this.write(frameMessage(JSON.stringify(msg))).catch((error) => {
-      this.#pending.get(id)?.reject(error);
-      this.#pending.delete(id);
-    });
-    return reply;
+    return this.#call(id, method, JSON.stringify(msg));
   }
 
   sendRaw(id, text) {
-    const reply = new Promise((resolve, reject) => this.#pending.set(id, { resolve, reject }));
+    return this.#call(id, 'a raw message', text);
+  }
+
+  #call(id, method, text) {
+    const reply = new Promise((resolve, reject) => {
+      const timer = this.callTimeout > 0
+        ? setTimeout(() => {
+            this.#pending.delete(id);
+            reject(new Error(`CDP timed out: ${method}`));
+          }, this.callTimeout)
+        : undefined;
+      this.#pending.set(id, { resolve, reject, timer });
+    });
     this.write(frameMessage(text)).catch((error) => {
-      this.#pending.get(id)?.reject(error);
+      const call = this.#pending.get(id);
       this.#pending.delete(id);
+      clearTimeout(call?.timer);
+      call?.reject(error);
     });
     return reply;
   }
