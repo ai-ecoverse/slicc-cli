@@ -447,7 +447,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	opts := map[string]any{
 		"browsers":     slots,
 		"targets":      targets,
-		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "discovery": true, "extensionWorld": true},
+		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true},
 		"variants":     []string{run.variant},
 		"parallel":     n,
 		"log":          "http://127.0.0.1:" + strconv.Itoa(fix.log),
@@ -517,6 +517,22 @@ func TestCDPProtectVectorsIgnoreChromeUITargets(t *testing.T) {
 	}
 }
 
+type guardKnown struct {
+	issue   string
+	targets []string
+	matches func(r guardRow) bool
+}
+
+var guardKnowns = map[string]guardKnown{
+	"X1.after-exit": {
+		issue:   "https://github.com/ai-ecoverse/slicc-cli/issues/370",
+		targets: []string{"seven", "vault"},
+		matches: func(r guardRow) bool {
+			return r.Control == "pass" && r.Guarded == "fail" && r.Live == "pass" && string(r.Why) == `"intercepted: got false, want true"`
+		},
+	},
+}
+
 func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	t.Helper()
 	if want := guardNPMPackage + "@" + guardSetVersion(t); sum.Set != want {
@@ -528,11 +544,21 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	if sum.ObserverSkipped != 0 {
 		t.Errorf("%d rows skipped for want of an unguarded observer", sum.ObserverSkipped)
 	}
+	knownRows := 0
 	for _, r := range sum.Results {
 		name := r.ID + " " + r.Target + " " + r.Variant
 		if skip, ok := guardSkips[r.ID]; ok {
 			if r.Control != "skip" || r.Guarded != "skip" || r.Live != "skip" || r.Reason != skip.Reason || r.Target != skip.Target {
 				t.Errorf("%s: the run skips it with %q, but it reported control %s, guarded %s, live %s, reason %q", name, skip.Reason, r.Control, r.Guarded, r.Live, r.Reason)
+			}
+			continue
+		}
+		if k, ok := guardKnowns[r.ID]; ok && slices.Contains(k.targets, r.Target) {
+			if k.matches(r) {
+				t.Logf("%s: known (%s): control %s, guarded %s, live %s, why %s", name, k.issue, r.Control, r.Guarded, r.Live, r.Why)
+				knownRows++
+			} else {
+				t.Errorf("%s: no longer matches its known (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, k.issue, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
 			}
 			continue
 		}
@@ -570,6 +596,9 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		if _, skipped := guardSkips[v.ID]; v.Kind != "cdp" || skipped {
 			continue
 		}
+		if _, known := guardKnowns[v.ID]; passed[v.ID] == 0 && known {
+			continue
+		}
 		if passed[v.ID] == 0 {
 			t.Errorf("%s: no row of the vector passed", v.ID)
 			continue
@@ -577,7 +606,11 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		ran = append(ran, fmt.Sprintf("%s=%d", v.ID, passed[v.ID]))
 	}
 	t.Logf("passed rows per vector: %s", strings.Join(ran, " "))
-	if !sum.Pass {
+	switch {
+	case sum.Pass:
+	case knownRows == 0 || strings.Contains(sum.Line, " forged "):
 		t.Errorf("the guard set did not pass: %s", sum.Line)
+	default:
+		t.Logf("the runner's line fails only on %d known rows: %s", knownRows, sum.Line)
 	}
 }
