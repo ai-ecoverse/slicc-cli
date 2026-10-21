@@ -523,7 +523,21 @@ type guardKnown struct {
 	matches func(r guardRow) bool
 }
 
+var historyQuarantineKnown = guardKnown{
+	issue:   "https://github.com/ai-ecoverse/slicc-cli/issues/388",
+	targets: []string{"seven"},
+	matches: func(r guardRow) bool {
+		return r.Control == "pass" && r.Guarded == "fail" && r.Live == "fail" && strings.Contains(string(r.Why), "not live") && strings.Contains(strings.Join(r.Errors, " "), "the target's history may restore a protected document")
+	},
+}
+
 var guardKnowns = map[string]guardKnown{
+	"C8.protected-error-page":                 historyQuarantineKnown,
+	"C8.protected-error-page.query":           historyQuarantineKnown,
+	"C8.protected-error-page.fragment":        historyQuarantineKnown,
+	"C8.protected-error-page-sticky":          historyQuarantineKnown,
+	"C8.protected-error-page-sticky.query":    historyQuarantineKnown,
+	"C8.protected-error-page-sticky.fragment": historyQuarantineKnown,
 	"X1.after-exit": {
 		issue:   "https://github.com/ai-ecoverse/slicc-cli/issues/370",
 		targets: []string{"seven", "vault"},

@@ -47,26 +47,27 @@ func (g *guard) startsUnheld(c *command) bool {
 }
 
 type navTarget struct {
-	target      string
-	session     string
-	start       time.Time
-	progress    time.Time
-	awayAt      time.Duration
-	reason      string
-	ready       chan struct{}
-	pending     int
-	done        bool
-	failed      bool
-	loading     map[string]int
-	started     int
-	unsure      bool
-	errorURL    string
-	documentURL string
-	failedURLs  []string
-	commits     int
-	failCommit  int
-	worker      bool
-	shared      bool
+	target        string
+	session       string
+	start         time.Time
+	progress      time.Time
+	awayAt        time.Duration
+	reason        string
+	ready         chan struct{}
+	pending       int
+	done          bool
+	failed        bool
+	loading       map[string]int
+	started       int
+	unsure        bool
+	errorURL      string
+	documentURL   string
+	failedURLs    []string
+	commits       int
+	failCommit    int
+	worker        bool
+	shared        bool
+	historyLocked bool
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -162,7 +163,17 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 		return nil
 	}
 	if nt.pending--; nt.pending == 0 {
-		nt.settle(false)
+		if nt.worker {
+			nt.settle(false)
+			return nil
+		}
+		return [][]byte{g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(res message) [][]byte {
+			if res.Error != nil || g.historyEvidence(res) != "" {
+				nt.historyLocked = true
+			}
+			nt.settle(false)
+			return nil
+		})}
 	}
 	return nil
 }
@@ -174,6 +185,9 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
+	if nt.commits != before && (g.o.Loaded(nt.documentURL) || g.o.Loaded(nt.errorURL)) {
+		nt.historyLocked = true
+	}
 	if nt.commits != before && g.o.Loaded(nt.errorURL) {
 		nt.failCommit = nt.commits
 	}

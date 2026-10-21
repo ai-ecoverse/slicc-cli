@@ -402,6 +402,43 @@ export function protectTest(getLink, describe) {
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
         return { before, probes: seen.length, stuck, attaches, leaked, detached, after, reattach, close };
       }),
+    historyWorkflow: (browser, start, authorize, finish) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(start);
+        await c.send('Page.enable', {}, sessionId);
+        const failed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 10000);
+        await c.send('Runtime.evaluate', { expression: later(authorize) }, sessionId);
+        await failed;
+        const loaded = c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 10000);
+        const navigate = await outcome(c.send('Page.navigate', { url: finish }, sessionId));
+        await loaded;
+        const locked = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
+        const reset = await outcome(c.send('Page.resetNavigationHistory', {}, sessionId));
+        const afterReset = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
+        const fresh = await c.attachTo(finish);
+        const newTab = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, fresh.sessionId));
+        await c.send('Target.closeTarget', { targetId });
+        await c.send('Target.closeTarget', { targetId: fresh.targetId });
+        return { navigate, locked, reset, afterReset, newTab };
+      }),
+    historyConformance: (browser, targetId) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.getNavigationHistory', {}, sessionId);
+        window.historyConformanceReady = true;
+        await new Promise((resolve) => { window.historyConformanceFire = resolve; });
+        const methods = {
+          'Runtime.evaluate': { expression: "(window.__guardRan = (window.__guardRan || 0) + 1, location.origin + '|' + window.sevenSecret)", returnByValue: true },
+          'Runtime.callFunctionOn': { functionDeclaration: 'function() { window.__guardRan = (window.__guardRan || 0) + 1; }', executionContextId: 1 },
+          'DOM.getDocument': {},
+          'Input.insertText': { text: 'guard-probe' },
+          'Page.captureScreenshot': {},
+          'Accessibility.getFullAXTree': {},
+          'IO.read': { handle: 'guard-probe' },
+        };
+        window.historyConformanceResult = Object.fromEntries(await Promise.all(Object.entries(methods).map(async ([method, params]) => [method, await outcome(c.send(method, params, sessionId))])));
+        return { ...window.historyConformanceResult };
+      }),
     popup: (browser, openerId) =>
       run(browser, async (c) => {
         const { targetInfos } = await c.send('Target.getTargets');

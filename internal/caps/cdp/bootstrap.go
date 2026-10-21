@@ -77,6 +77,15 @@ func (rl *relay) checkPage(data []byte) ([]byte, bool) {
 }
 
 func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
+	if ok {
+		if reason := rl.conform(c); reason != "" {
+			if rl.writePage(refusal(c.id, c.session, reason)) != nil {
+				_ = rl.conn.CloseNow()
+				return nil, false
+			}
+			return nil, true
+		}
+	}
 	v := rl.g.fromCommand(c, id, ok)
 	if v.history != nil {
 		v = rl.resolveHistory(v.history)
