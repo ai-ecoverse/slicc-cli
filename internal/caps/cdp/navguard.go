@@ -2,16 +2,28 @@ package cdp
 
 import (
 	"encoding/json"
+	"net/url"
+	"slices"
+	"strings"
 	"time"
 )
 
 const (
-	refusedGuard = "slicc can't keep seven's origin out of this target"
+	refusedGuard     = "slicc can't keep seven's origin out of this target"
+	refusedErrorPage = "the target shows Chrome's error page for a protected URL, which names it; slicc only lets a page navigate, reload or close it"
+	refusedOutlived  = "the target committed Chrome's error page for a protected URL while this command ran, so slicc dropped its answer"
 )
 
 var slowGuard = 2 * time.Second
 
 var navTypes = map[string]bool{"page": true, "iframe": true, "background_page": true, "webview": true}
+
+var sameDocument = map[string]bool{"sameDocument": true, "historySameDocument": true}
+
+const (
+	maxLoading = 64
+	maxFailed  = 16
+)
 
 var workerTypes = map[string]bool{"worker": true, "shared_worker": true, "service_worker": true}
 
@@ -33,16 +45,23 @@ func (g *guard) startsUnheld(c *command) bool {
 }
 
 type navTarget struct {
-	target   string
-	session  string
-	start    time.Time
-	progress time.Time
-	reason   string
-	ready    chan struct{}
-	pending  int
-	done     bool
-	failed   bool
-	worker   bool
+	target     string
+	session    string
+	start      time.Time
+	progress   time.Time
+	reason     string
+	ready      chan struct{}
+	pending    int
+	done       bool
+	failed     bool
+	loading    map[string]int
+	started    int
+	unsure     bool
+	errorURL   string
+	failedURLs []string
+	commits    int
+	failCommit int
+	worker     bool
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -117,6 +136,7 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 		network,
 		{"Network.setBypassServiceWorker", map[string]any{"bypass": true}},
 		{"Runtime.enable", nil},
+		{"Page.enable", nil},
 	}
 	if nt.worker {
 		calls = []call{network}
@@ -143,6 +163,17 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	g.navWorldLocked(nt, m)
+	before := nt.commits
+	nt.commitLocked(m)
+	if nt.commits != before && g.o.Loaded(nt.errorURL) {
+		nt.failCommit = nt.commits
+	}
+	if g.o.Loaded(nt.errorURL) && !slices.Contains(nt.failedURLs, nt.errorURL) {
+		nt.failedURLs = append(nt.failedURLs, nt.errorURL)
+		if len(nt.failedURLs) > maxFailed {
+			nt.failedURLs = nt.failedURLs[1:]
+		}
+	}
 	if m.Method != "Fetch.requestPaused" {
 		return nil
 	}
@@ -222,4 +253,184 @@ func (g *guard) navCheckLocked(sessionID string) string {
 		return refusedGuard + ": " + nt.reason
 	}
 	return refusedGuard
+}
+
+func (nt *navTarget) commitLocked(m *message) {
+	var p struct {
+		FrameID        string `json:"frameId"`
+		LoaderID       string `json:"loaderId"`
+		RequestID      string `json:"requestId"`
+		NavigationType string `json:"navigationType"`
+		Type           string `json:"type"`
+		Frame          struct {
+			ID             string `json:"id"`
+			ParentID       string `json:"parentId"`
+			LoaderID       string `json:"loaderId"`
+			UnreachableURL string `json:"unreachableUrl"`
+		} `json:"frame"`
+	}
+	switch m.Method {
+	case "Page.frameStartedNavigating", "Page.frameNavigated", "Page.frameStoppedLoading", "Network.loadingFailed":
+	default:
+		return
+	}
+	if json.Unmarshal(m.Params, &p) != nil {
+		nt.unsure = true
+		return
+	}
+	switch m.Method {
+	case "Page.frameStartedNavigating":
+		if p.FrameID != nt.target || sameDocument[p.NavigationType] {
+			return
+		}
+		if nt.loading == nil {
+			nt.loading = map[string]int{}
+		}
+		if p.LoaderID == "" || len(nt.loading) >= maxLoading {
+			nt.unsure = true
+			return
+		}
+		nt.started++
+		nt.loading[p.LoaderID] = nt.started
+	case "Network.loadingFailed":
+		delete(nt.loading, p.RequestID)
+	case "Page.frameStoppedLoading":
+		if p.FrameID == nt.target {
+			clear(nt.loading)
+			nt.unsure = false
+		}
+	case "Page.frameNavigated":
+		if p.Frame.ID != nt.target || p.Frame.ParentID != "" {
+			return
+		}
+		if p.Type == "BackForwardCacheRestore" {
+			clear(nt.loading)
+		}
+		if n, ok := nt.loading[p.Frame.LoaderID]; ok {
+			for l, m := range nt.loading {
+				if m <= n {
+					delete(nt.loading, l)
+				}
+			}
+		}
+		nt.errorURL = p.Frame.UnreachableURL
+		nt.commits++
+	}
+}
+
+func (g *guard) errorPageLocked(t *target) bool {
+	nt, ok := g.navTargets[t.id]
+	return ok && nt.done && !nt.failed && !nt.unsure && len(nt.loading) == 0 && nt.errorURL != "" && nt.errorURL == t.url
+}
+
+var errorPageMethods = map[string]bool{
+	"Page.navigate": true, "Page.reload": true, "Page.stopLoading": true, "Page.close": true, "Page.bringToFront": true,
+	"Page.navigateToHistoryEntry": true, "Page.getNavigationHistory": true, "Page.resetNavigationHistory": true,
+	"Page.getFrameTree": true, "Page.setLifecycleEventsEnabled": true, "Page.removeScriptToEvaluateOnNewDocument": true,
+	"Runtime.runIfWaitingForDebugger": true,
+	"Target.setAutoAttach":            true, "Target.detachFromTarget": true, "Target.closeTarget": true,
+	"Target.getTargetInfo": true, "Target.activateTarget": true,
+}
+
+var errorPageDomains = map[string]bool{"Page": true, "Runtime": true, "Target": true, "Inspector": true, "Network": true, "Log": true, "Fetch": true}
+
+var errorPageEvents = map[string]bool{
+	"Runtime.executionContextCreated": true, "Runtime.executionContextDestroyed": true, "Runtime.executionContextsCleared": true,
+	"Page.frameNavigated": true, "Page.frameStartedNavigating": true, "Page.frameRequestedNavigation": true,
+	"Page.frameScheduledNavigation": true, "Page.frameClearedScheduledNavigation": true, "Page.navigatedWithinDocument": true,
+	"Page.frameStartedLoading": true, "Page.frameStoppedLoading": true, "Page.frameAttached": true, "Page.frameDetached": true,
+	"Page.frameSubtreeWillBeDetached": true, "Page.frameResized": true, "Page.lifecycleEvent": true, "Page.loadEventFired": true,
+	"Page.domContentEventFired": true, "Page.documentOpened": true, "Page.backForwardCacheNotUsed": true, "Page.windowOpen": true,
+	"Page.downloadWillBegin": true, "Page.downloadProgress": true, "Page.interstitialShown": true, "Page.interstitialHidden": true,
+	"Page.screencastVisibilityChanged": true,
+}
+
+func (g *guard) errorPageSessionLocked(sessionID string) bool {
+	s, ok := g.sessions[sessionID]
+	if !ok {
+		return false
+	}
+	nt, ok := g.navTargets[s.target]
+	return ok && nt.errorURL != "" && g.o.Loaded(nt.errorURL)
+}
+
+func (g *guard) errorPageCheckLocked(c *command) string {
+	if !g.errorPageSessionLocked(c.session) {
+		return ""
+	}
+	if c.method == "Page.reload" && c.params["scriptToEvaluateOnLoad"] != nil {
+		return refusedErrorPage
+	}
+	if errorPageMethods[c.method] || continueOK[c.method] {
+		return ""
+	}
+	domain, verb, _ := strings.Cut(c.method, ".")
+	if errorPageDomains[domain] && (verb == "enable" || verb == "disable") {
+		return ""
+	}
+	return refusedErrorPage
+}
+
+func errorPageEvent(method string) bool {
+	domain, _, _ := strings.Cut(method, ".")
+	switch domain {
+	case "Target", "Inspector", "Network", "Fetch":
+		return true
+	}
+	return errorPageEvents[method]
+}
+
+type commitMark struct {
+	nt      *navTarget
+	commits int
+}
+
+type failedForm struct {
+	form     string
+	redacted string
+}
+
+func (g *guard) failedFormsLocked(sessionID string) []failedForm {
+	s, ok := g.sessions[sessionID]
+	if !ok {
+		return nil
+	}
+	nt, ok := g.navTargets[s.target]
+	if !ok {
+		return nil
+	}
+	var forms []failedForm
+	for _, u := range nt.failedURLs {
+		r := redactURL(u)
+		for _, f := range []string{u, url.QueryEscape(u), url.PathEscape(u)} {
+			forms = append(forms, failedForm{f, r})
+		}
+		if d, err := url.QueryUnescape(u); err == nil {
+			forms = append(forms, failedForm{d, r})
+		}
+		if d, err := url.PathUnescape(u); err == nil {
+			forms = append(forms, failedForm{d, r})
+		}
+	}
+	slices.SortStableFunc(forms, func(a, b failedForm) int { return len(b.form) - len(a.form) })
+	return forms
+}
+
+func (g *guard) noteCommitLocked(k callKey, c *command) {
+	if errorPageMethods[c.method] || continueOK[c.method] {
+		return
+	}
+	s, ok := g.sessions[c.session]
+	if !ok {
+		return
+	}
+	if nt, ok := g.navTargets[s.target]; ok {
+		g.commitMarks[k] = commitMark{nt: nt, commits: nt.commits}
+	}
+}
+
+func (g *guard) outlivedLocked(k callKey) bool {
+	mk, ok := g.commitMarks[k]
+	delete(g.commitMarks, k)
+	return ok && mk.nt.failCommit > mk.commits
 }

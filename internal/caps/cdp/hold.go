@@ -39,6 +39,10 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 		}
 		g.sessions[sid] = &session{id: sid, target: targetID, parent: h.parent, typ: h.typ}
 		v.send = append(v.send, g.touchLocked(targetID, h.typ)...)
+		if obj, _ := info.(map[string]any); obj != nil {
+			ti, _ := toInfo(obj)
+			g.redactInfoLocked(obj, ti)
+		}
 		h.params["targetInfo"] = info
 		h.params["waitingForDebugger"] = false
 		ev := map[string]any{"method": "Target.attachedToTarget", "params": h.params}

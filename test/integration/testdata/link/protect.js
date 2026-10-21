@@ -28,12 +28,20 @@ async function load(c, sessionId, url) {
 }
 
 async function leave(c, sessionId, url) {
-  const gone = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
-    () => true,
-    () => false,
-  );
+  const gone = (e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId;
+  const failed = (e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl;
+  let off;
+  const settled = Promise.race([
+    new Promise((resolve) => {
+      off = c.on((e) => (gone(e) || failed(e)) && resolve());
+    }),
+    sleep(20000),
+  ]);
   await c.send('Runtime.evaluate', { expression: later(url) }, sessionId);
-  return gone;
+  await settled;
+  off();
+  await sleep(500);
+  return c.events.some(gone);
 }
 
 async function instrument(c, sessionId, base, tag) {
@@ -102,6 +110,15 @@ export function protectTest(getLink, describe) {
         const start = Date.now();
         const enable = await outcome(c.send('Page.enable', {}, sessionId));
         return { enable: { ...enable, ms: Date.now() - start } };
+      }),
+    outlivedCapture: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const shot = outcome(c.send('Page.captureScreenshot', {}, sessionId));
+        await sleep(200);
+        const trigger = await outcome(c.send('Runtime.evaluate', { expression: '1' }, sessionId));
+        return { shot: await shot, trigger };
       }),
     lateSession: (browser, sessionId, targetId) =>
       run(browser, async (c) => {
@@ -213,19 +230,93 @@ export function protectTest(getLink, describe) {
         await c.send('Target.closeTarget', { targetId });
         return { attached, discovered, plain: targetId };
       }),
-    scriptNavigate: (browser, plainURL, sevenURL) =>
+    errorPage: (browser, targetId, sevenURL) =>
       run(browser, async (c) => {
-        const { targetId, sessionId } = await c.attachTo(plainURL);
-        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
         const before = await c.evaluate('location.href', sessionId);
-        const detached = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000);
-        await c.send('Runtime.evaluate', { expression: `setTimeout(() => { location.href = ${JSON.stringify(sevenURL)}; }, 50); true` }, sessionId);
-        await detached;
-        const after = await outcome(c.send('Runtime.evaluate', { expression: 'document.cookie' }, sessionId));
-        const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const failed = (e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl;
+        const committed = c.waitEvent(failed, 20000);
+        await c.send('Runtime.evaluate', { expression: later(sevenURL) }, sessionId);
+        const { params } = await committed;
+        await sleep(500);
+        const gone = () => c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
+        const detached = gone();
+        const { targetInfos } = await c.send('Target.getTargets');
+        const listed = targetInfos.find((t) => t.targetId === targetId) ?? null;
         const { targetInfo } = await c.send('Target.getTargetInfo', { targetId });
-        const leaked = c.events.filter((e) => e.sessionId === sessionId && e.method === 'Runtime.executionContextCreated' && e.params.context.origin === new URL(sevenURL).origin).length;
-        return { targetId, before, after, reattach, url: targetInfo.url, title: targetInfo.title, leaked };
+        const reload = await outcome(c.send('Page.reload', {}, sessionId));
+        await sleep(500);
+        const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === 'about:blank', 20000);
+        const blank = await outcome(c.send('Page.navigate', { url: 'about:blank' }, sessionId));
+        await left;
+        const href = await c.evaluate('location.href', sessionId);
+        const leaked = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
+        const restore = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
+          () => true,
+          () => false,
+        );
+        await outcome(c.send('Runtime.evaluate', { expression: 'setTimeout(() => history.go(-3), 50); true' }, sessionId));
+        const locked = await restore;
+        const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+        const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        const other = await c.attachTo('about:blank');
+        await c.send('Page.enable', {}, other.sessionId);
+        const second = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === other.sessionId && e.params.frame.unreachableUrl, 20000);
+        await c.send('Runtime.evaluate', { expression: later(sevenURL) }, other.sessionId);
+        await second;
+        const listedFailed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === other.targetId) ?? null;
+        await sleep(300);
+        const wiped = await outcome(c.send('Page.navigate', { url: 'about:blank#blocked' }, other.sessionId));
+        await sleep(300);
+        const listedError = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === other.targetId) ?? null;
+        const closeError = await outcome(c.send('Target.closeTarget', { targetId: other.targetId }));
+        const shown = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
+        return { before, unreachable: params.frame.unreachableUrl, detached, listed, info: { url: targetInfo.url, title: targetInfo.title }, reload, blank, href, leaked: leaked || shown, locked, after, reattach, close, wiped, listedFailed, listedError, closeError };
+      }),
+    restoreRace: (browser, targetId, sevenOrigin) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const before = await c.evaluate('location.href', sessionId);
+        const seen = [];
+        let stuck = 0;
+        const probe = (sid) => {
+          const r = outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sid)).then((o) => {
+            if (o.ok) seen.push(o.result.result?.value ?? '');
+          });
+          return Promise.race([r, sleep(1000).then(() => (stuck += 1))]);
+        };
+        const gone = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
+          () => true,
+          () => false,
+        );
+        let done = false;
+        gone.then(() => {
+          done = true;
+        });
+        await c.send('Runtime.evaluate', { expression: 'setTimeout(() => history.back(), 50); true' }, sessionId);
+        const deadline = Date.now() + 5000;
+        let attaches = 0;
+        while (Date.now() < deadline) {
+          const burst = [probe(sessionId), probe(sessionId), probe(sessionId)];
+          const a = await Promise.race([outcome(c.send('Target.attachToTarget', { targetId, flatten: true })), sleep(1000).then(() => ({ ok: false }))]);
+          if (a.ok) {
+            attaches += 1;
+            burst.push(probe(a.result.sessionId));
+          }
+          await Promise.all(burst);
+          if (done) break;
+        }
+        const detached = await gone;
+        for (let i = 0; i < 5; i += 1) await Promise.all([probe(sessionId), probe(sessionId)]);
+        const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+        const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        await sleep(2000);
+        const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
+        return { before, probes: seen.length, stuck, attaches, leaked, detached, after, reattach, close };
       }),
     popup: (browser, openerId) =>
       run(browser, async (c) => {
@@ -316,6 +407,104 @@ export function protectTest(getLink, describe) {
         const before = await load(c, sessionId, next);
         const detached = await leave(c, sessionId, away);
         return { targetId, before, detached };
+      }),
+    leaveFor: (browser, start, away) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(start);
+        await c.send('Page.enable', {}, sessionId);
+        const detached = await leave(c, sessionId, away);
+        const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        return { targetId, detached, after, close };
+      }),
+    redirectSettles: (browser, start, away, next, direct) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(start);
+        for (const domain of ['Page', 'Network', 'Runtime']) await c.send(`${domain}.enable`, {}, sessionId);
+        await c.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }, { urlPattern: '*', requestStage: 'Response' }] }, sessionId);
+        const refused = [];
+        let paused = 0;
+        c.on((e) => {
+          if (e.method !== 'Fetch.requestPaused' || e.sessionId !== sessionId) return;
+          paused += 1;
+          c.send('Fetch.continueRequest', { requestId: e.params.requestId }, sessionId).catch((error) => refused.push(error?.cdp?.message ?? String(error)));
+        });
+        const failed = await Promise.race([
+          c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 15000).then(() => true, () => false),
+          c.send('Page.navigate', { url: away }, sessionId).then(() => sleep(15000)).then(() => false),
+        ]);
+        await sleep(300);
+        const start2 = Date.now();
+        const guarded = await Promise.race([outcome(c.send('Page.navigate', { url: next }, sessionId)), sleep(12000).then(() => ({ ok: false, error: { message: 'no answer in 12 s' } }))]);
+        const guardedMs = Date.now() - start2;
+        const committed = await c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === next, 10000).then(() => true, () => false);
+        const directSeen = await c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === direct, 25000).then(() => true, () => false);
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        return { targetId, failed, guarded, guardedMs, committed, direct: directSeen, paused, refused, seen: JSON.stringify(c.events) };
+      }),
+    redirectSecret: (browser, start, away) =>
+      run(browser, async (c) => {
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        const { targetId, sessionId } = await c.attachTo(start);
+        for (const domain of ['Page', 'Network', 'Runtime', 'DOM', 'Log']) await c.send(`${domain}.enable`, {}, sessionId);
+        c.on((e) => {
+          if (e.method === 'Page.screencastFrame' && e.sessionId === sessionId) c.send('Page.screencastFrameAck', { sessionId: e.params.sessionId }, sessionId).catch(() => {});
+        });
+        await c.send('Page.startScreencast', { format: 'jpeg', quality: 10, everyNthFrame: 1 }, sessionId);
+        await c.send('Runtime.evaluate', { expression: 'setInterval(() => { document.body.style.background = `hsl(${Date.now() % 360} 50% 50%)`; }, 30); true' }, sessionId);
+        await c.waitEvent((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId, 10000).catch(() => null);
+        const shots = [];
+        const first = await Promise.race([outcome(c.send('Page.captureScreenshot', { format: 'jpeg', quality: 10 }, sessionId)), sleep(15000).then(() => ({ ok: false, error: { message: 'no answer in 15 s' } }))]);
+        shots.push({ ok: first.ok, at: c.events.length, message: first.error?.message ?? '' });
+        let capturing = true;
+        const capture = (async () => {
+          while (capturing) {
+            const r = outcome(c.send('Page.captureScreenshot', { format: 'jpeg', quality: 10 }, sessionId)).then((o) => shots.push({ ok: o.ok, at: c.events.length, message: o.error?.message ?? '' }));
+            await Promise.race([r, sleep(1500)]);
+          }
+        })();
+        const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 20000);
+        await c.send('Runtime.evaluate', { expression: later(away) }, sessionId);
+        const { params } = await committed;
+        const framesBefore = c.events.filter((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId).length;
+        const committedAt = c.events.findIndex((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl);
+        await sleep(1500);
+        capturing = false;
+        await capture;
+        await sleep(1000);
+        const shotsAfter = shots.filter((x) => x.ok && x.at > committedAt).length;
+        const shotsBefore = shots.filter((x) => x.ok && x.at <= committedAt).length;
+        const framesOnError = c.events.slice(committedAt + 1).filter((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId).length;
+        const ask = (method, params = {}) => outcome(c.send(method, params, sessionId));
+        const answers = {
+          'Runtime.evaluate': await ask('Runtime.evaluate', { expression: 'JSON.stringify(globalThis.loadTimeData?.data_ ?? null) + document.documentElement.outerHTML + location.href', returnByValue: true }),
+          'DOM.getDocument': await ask('DOM.getDocument', { depth: -1, pierce: true }),
+          'Page.captureSnapshot': await ask('Page.captureSnapshot'),
+          'Page.getNavigationHistory': await ask('Page.getNavigationHistory'),
+          'Page.getFrameTree': await ask('Page.getFrameTree'),
+          'Page.getResourceTree': await ask('Page.getResourceTree'),
+          'Target.getTargetInfo': await outcome(c.send('Target.getTargetInfo', { targetId })),
+          'Target.getTargets': await outcome(c.send('Target.getTargets')),
+        };
+        answers['Page.addScriptToEvaluateOnNewDocument'] = await ask('Page.addScriptToEvaluateOnNewDocument', { source: 'console.log(document.documentElement.outerHTML, JSON.stringify(globalThis.loadTimeData?.data_ ?? null))' });
+        answers['DOM.enable'] = await ask('DOM.enable');
+        answers['javascript:'] = await ask('Page.navigate', { url: 'javascript:console.log(document.documentElement.outerHTML)' });
+        answers['Page.reload with a script'] = await ask('Page.reload', { scriptToEvaluateOnLoad: 'console.log(document.documentElement.outerHTML, JSON.stringify(globalThis.loadTimeData?.data_ ?? null))' });
+        const reloaded = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 20000);
+        answers['Page.reload'] = await ask('Page.reload');
+        await reloaded;
+        await sleep(800);
+        answers.evaluateReloaded = await ask('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true });
+        const detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
+        const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === 'about:blank', 20000);
+        const blank = await ask('Page.navigate', { url: 'about:blank#blocked' });
+        await left;
+        answers.historyAfter = await ask('Page.getNavigationHistory');
+        answers.evaluateAfter = await ask('Runtime.evaluate', { expression: 'location.href', returnByValue: true });
+        const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === targetId) ?? null;
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        await sleep(300);
+        return { unreachable: params.frame.unreachableUrl, detached, answers, blank, listed, close, framesBefore, framesOnError, shotsBefore, shotsAfter, shotMessages: [...new Set(shots.map((x) => x.message))], seen: JSON.stringify([answers, c.events.filter((e) => e.method !== 'Page.screencastFrame')]) };
       }),
     navPopup: (browser, base, tag, opener, popup, away, direct) =>
       run(browser, async (c) => {
