@@ -156,6 +156,7 @@ function sessionBound(c, name, { inject } = {}) {
     events,
     messages: c.messages,
     transport: c.transport,
+    close: () => c.close(),
     waitEvent: (match, timeout) => c.waitEvent(match, timeout),
     send(method, params, sessionId) {
       if (fake.has(sessionId)) return new Promise(() => {});
