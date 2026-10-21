@@ -524,13 +524,6 @@ type guardKnown struct {
 }
 
 var guardKnowns = map[string]guardKnown{
-	"E4.instrumentation": {
-		issue:   "https://github.com/ai-ecoverse/slicc-cli/issues/369",
-		targets: []string{"seven", "vault", "vault-x", "apex"},
-		matches: func(r guardRow) bool {
-			return r.Control == "fail" && strings.Contains(string(r.Why), "row timed out after")
-		},
-	},
 	"X1.after-exit": {
 		issue:   "https://github.com/ai-ecoverse/slicc-cli/issues/370",
 		targets: []string{"seven", "vault"},
