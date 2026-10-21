@@ -42,6 +42,9 @@ jobs:
       - name: Workflow recovery
         shell: bash
         run: go test -parallel=1 -run '^TestCDPHistoryQuarantineWorkflow$' -count=1 -timeout=90s -v ./test/integration > workflow.log 2>&1
+      - name: Clean tab workflows
+        shell: bash
+        run: go test -parallel=1 -run '^Test(CDPAnswersAroundAPageItsOwnInstrumentationBreakpointPaused|CDPCutsProtectedRedirects|CDPProtectsAcrossNavigation|CDPProtectsSevensOrigin|CDPDropsAnAnswerThatOutlivesAProtectedErrorPageCommit|HistoryKnownsMatchOnlyRecordedIncompleteRows)$' -count=1 -timeout=4m -v ./test/integration > clean.log 2>&1
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
