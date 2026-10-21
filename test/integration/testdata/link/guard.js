@@ -212,7 +212,7 @@ export function guardStart(getLink, opts) {
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
     if (opts.only) set.vectors = set.vectors.filter((v) => v.id === opts.only);
-    if (opts.skip?.length) set.vectors = set.vectors.filter((v) => !opts.skip.some((prefix) => v.id.startsWith(prefix)));
+    for (const v of set.vectors) if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
     const running = run(set, {
       clientFactory: async ({ slot }) => {
         const b = browsers[slot % browsers.length];

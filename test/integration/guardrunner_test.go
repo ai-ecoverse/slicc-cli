@@ -289,46 +289,66 @@ func guardSHA() string {
 	return "unknown"
 }
 
-func guardSkippedOn(goos string) ([]string, string) {
-	if goos == "darwin" {
-		return []string{"C9."}, "on macOS the C9 vectors' unguarded control hangs inside Chrome (https://github.com/ai-ecoverse/slicc-cli/issues/344)"
+type guardVector struct {
+	ID      string     `json:"id"`
+	Kind    string     `json:"kind"`
+	Targets []string   `json:"targets"`
+	Skip    *guardSkip `json:"skip"`
+}
+
+type guardSkip struct {
+	Target string `json:"target"`
+	Reason string `json:"reason"`
+}
+
+const guardC9MacReason = "not-applicable: on macOS the C9 controls hang inside Chrome (#344)"
+
+func guardVectorSet() []guardVector {
+	var set struct {
+		Vectors []guardVector `json:"vectors"`
 	}
-	return []string{}, ""
+	_ = json.Unmarshal(sliccbrowsers.GuardVectorsJSON(), &set)
+	return set.Vectors
 }
 
-var guardSkipped, guardSkipReason = guardSkippedOn(runtime.GOOS)
-
-func guardSkips(skipped []string, id string) bool {
-	return slices.ContainsFunc(skipped, func(prefix string) bool { return strings.HasPrefix(id, prefix) })
+func guardSkipsOn(goos string, vectors []guardVector) map[string]guardSkip {
+	skips := map[string]guardSkip{}
+	if goos != "darwin" {
+		return skips
+	}
+	for _, v := range vectors {
+		if v.Kind == "cdp" && strings.HasPrefix(v.ID, "C9.") && len(v.Targets) == 1 && v.Skip == nil {
+			skips[v.ID] = guardSkip{Target: v.Targets[0], Reason: guardC9MacReason}
+		}
+	}
+	return skips
 }
+
+var guardSkips = guardSkipsOn(runtime.GOOS, guardVectorSet())
 
 func TestCDPGuardVectorsSkipC9OnlyOnMacOS(t *testing.T) {
-	var set struct {
-		Vectors []struct {
-			ID   string `json:"id"`
-			Kind string `json:"kind"`
-		} `json:"vectors"`
-	}
-	if err := json.Unmarshal(sliccbrowsers.GuardVectorsJSON(), &set); err != nil {
-		t.Fatal(err)
-	}
+	vectors := guardVectorSet()
 	c9 := 0
 	for _, goos := range []string{"darwin", "linux", "windows"} {
-		skipped, why := guardSkippedOn(goos)
+		skips := guardSkipsOn(goos, vectors)
 		mac := goos == "darwin"
-		if (why != "") != mac {
-			t.Errorf("%s: skip reason %q", goos, why)
-		}
-		for _, v := range set.Vectors {
+		for _, v := range vectors {
 			if v.Kind != "cdp" {
 				continue
 			}
 			want := mac && strings.HasPrefix(v.ID, "C9.")
-			if mac && want {
+			if want {
 				c9++
+				if len(v.Targets) != 1 || v.Skip != nil {
+					t.Errorf("%s: targets %v and skip %+v can't take a per-vector skip", v.ID, v.Targets, v.Skip)
+				}
 			}
-			if got := guardSkips(skipped, v.ID); got != want {
+			skip, got := skips[v.ID]
+			if got != want {
 				t.Errorf("%s: %s skipped %v, want %v", goos, v.ID, got, want)
+			}
+			if got && (skip.Target != v.Targets[0] || skip.Reason != guardC9MacReason) {
+				t.Errorf("%s: %s skip %+v", goos, v.ID, skip)
 			}
 		}
 	}
@@ -365,8 +385,8 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	if os.Getenv("SLICC_GUARD_VECTORS") == "0" {
 		t.Skip("the guard vectors run on Linux for pull requests and on every OS on main")
 	}
-	if len(guardSkipped) > 0 {
-		t.Logf("skipping %s: %s", strings.Join(guardSkipped, " "), guardSkipReason)
+	if len(guardSkips) > 0 {
+		t.Logf("skipping %d C9 vectors: %s", len(guardSkips), guardC9MacReason)
 	}
 	pkg := guardPackage(t)
 	ext := filepath.Join("..", "..", "node_modules", "@ai-ecoverse", "slicc-shared-web", "harness", "extension")
@@ -427,14 +447,14 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	opts := map[string]any{
 		"browsers":     slots,
 		"targets":      targets,
-		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "extensionWorld": true},
+		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "discovery": true, "extensionWorld": true},
 		"variants":     []string{run.variant},
 		"parallel":     n,
 		"log":          "http://127.0.0.1:" + strconv.Itoa(fix.log),
 		"sha":          sha,
 		"rowTimeoutMs": run.rowTimeout.Milliseconds(),
 		"only":         run.only,
-		"skip":         guardSkipped,
+		"skips":        guardSkips,
 		"inject":       run.inject,
 		"settleScale":  guardSettleScale(),
 	}
@@ -509,10 +529,13 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		t.Errorf("%d rows skipped for want of an unguarded observer", sum.ObserverSkipped)
 	}
 	for _, r := range sum.Results {
-		if guardSkips(guardSkipped, r.ID) {
-			t.Errorf("%s ran, but the run skips it", r.ID)
-		}
 		name := r.ID + " " + r.Target + " " + r.Variant
+		if skip, ok := guardSkips[r.ID]; ok {
+			if r.Control != "skip" || r.Guarded != "skip" || r.Live != "skip" || r.Reason != skip.Reason || r.Target != skip.Target {
+				t.Errorf("%s: the run skips it with %q, but it reported control %s, guarded %s, live %s, reason %q", name, skip.Reason, r.Control, r.Guarded, r.Live, r.Reason)
+			}
+			continue
+		}
 		switch {
 		case r.Control == "not-run":
 			if r.Guarded != "not-run" || r.Live != "not-run" {
@@ -544,7 +567,7 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	_ = json.Unmarshal(sliccbrowsers.GuardVectorsJSON(), &set)
 	var ran []string
 	for _, v := range set.Vectors {
-		if v.Kind != "cdp" || guardSkips(guardSkipped, v.ID) {
+		if _, skipped := guardSkips[v.ID]; v.Kind != "cdp" || skipped {
 			continue
 		}
 		if passed[v.ID] == 0 {
