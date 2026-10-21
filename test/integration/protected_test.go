@@ -15,17 +15,6 @@ var openers = map[string]protect.Opener{
 	sliccbrowsers.OpenerUnknown:     protect.OpenerUnknown,
 }
 
-type typedTargets interface {
-	TargetOf(raw, typ string, previous bool, opener protect.Opener) bool
-}
-
-func targetProtected(o *protect.Origins, url, typ string, previous bool, opener protect.Opener) bool {
-	if tt, ok := any(o).(typedTargets); ok {
-		return tt.TargetOf(url, typ, previous, opener)
-	}
-	return o.Target(url, previous, opener)
-}
-
 func TestProtectedVectors(t *testing.T) {
 	v, err := sliccbrowsers.Protected()
 	if err != nil {
@@ -54,7 +43,8 @@ func TestProtectedVectors(t *testing.T) {
 			t.Fatalf("target vector %+v: unknown opener", c)
 		}
 		typ := typed.Targets[i].Type
-		if got := targetProtected(o, c.URL, typ, c.Previous, op); got != c.Protected {
+		ev := protect.Evidence{DocumentURL: c.DocumentURL, UnreachableURL: c.UnreachableURL, Navigating: c.Navigating}
+		if got := o.TargetWith(c.URL, typ, c.Previous, op, ev); got != c.Protected {
 			t.Errorf("Target(%+v, type %q) = %v", c, typ, got)
 		}
 	}
