@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +97,43 @@ func (e *protectEnv) evalJSONWithin(t *testing.T, expr string, out any, timeout 
 	if err := json.Unmarshal(b, out); err != nil {
 		t.Fatalf("%s: %v (%s)", expr, err, b)
 	}
+}
+
+func (e *protectEnv) evalJSONWithObserver(t *testing.T, expr string, out any) {
+	t.Helper()
+	var value any
+	e.p.eval("delete window.protectObserverRequest; window.protectObserverDone = false; window.protectObserverPromise = ("+expr+").then((r) => { window.protectObserverDone = true; return r; }); true", &value)
+	for {
+		e.p.waitFor("window.protectObserverDone || window.protectObserverRequest !== undefined", 30*time.Second)
+		var state struct {
+			Done    bool `json:"done"`
+			Request struct {
+				TargetID string `json:"targetId"`
+				URL      string `json:"url"`
+				Delta    int    `json:"delta"`
+			} `json:"request"`
+		}
+		e.p.eval("({ done: window.protectObserverDone, request: window.protectObserverRequest })", &state)
+		if state.Done {
+			break
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		s, err := e.b.client.Attach(ctx, state.Request.TargetID)
+		if err == nil {
+			if state.Request.URL != "" {
+				err = s.Call(ctx, "Page.navigate", map[string]any{"url": state.Request.URL}, nil)
+			} else {
+				err = s.Evaluate(ctx, "setTimeout(() => history.go("+strconv.Itoa(state.Request.Delta)+"), 0); true", cdp.EvaluateOptions{ReturnByValue: true}, &value)
+			}
+			_ = s.Detach(ctx)
+		}
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.p.eval("delete window.protectObserverRequest; window.protectObserverNext(); true", &value)
+	}
+	e.evalJSON(t, "window.protectObserverPromise", out)
 }
 
 func (e *protectEnv) targets(t *testing.T) []protectTarget {
@@ -264,7 +302,7 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 		ListedError  *protectTarget `json:"listedError"`
 		CloseError   cdpOutcome     `json:"closeError"`
 	}
-	e.evalJSON(t, "linkTest.protect.errorPage("+jsArgs("chrome", res.TargetID, failed)+")", &r)
+	e.evalJSONWithObserver(t, "linkTest.protect.errorPage("+jsArgs("chrome", res.TargetID, failed)+")", &r)
 	switch {
 	case !strings.HasPrefix(r.Before, e.allowed) || r.Unreachable == "":
 		t.Fatalf("the script navigation onto seven didn't commit an error page: %+v", r)
@@ -351,7 +389,7 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 		Reattach cdpOutcome `json:"reattach"`
 		Close    cdpOutcome `json:"close"`
 	}
-	e.evalJSON(t, "linkTest.protect.restoreRace("+jsArgs("chrome", id, e.seven)+")", &r)
+	e.evalJSONWithObserver(t, "linkTest.protect.restoreRace("+jsArgs("chrome", id, e.seven)+")", &r)
 	switch {
 	case !strings.HasPrefix(r.Before, e.allowed) || r.Probes+r.Stuck == 0:
 		t.Fatalf("the race never ran: %+v", r)
@@ -363,7 +401,7 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 	if href := (&navEnv{linkEnv: e.linkEnv}).directHref(t, id); href != doc {
 		t.Fatalf("history.back left the tab at %q, not seven's document restored from the back/forward cache", href)
 	}
-	t.Logf("%d probes answered, %d unanswered after 1s, and %d attaches raced the restore", r.Probes, r.Stuck, r.Attaches)
+	t.Logf("%d probes attempted, %d unanswered after 1s, and %d attaches raced the restore", r.Probes, r.Stuck, r.Attaches)
 }
 
 func (e *protectEnv) testPopup(t *testing.T) {

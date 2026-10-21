@@ -192,6 +192,9 @@ func (g *guard) checkLocked(c *command) string {
 	if reason := g.errorPageCheckLocked(c); reason != "" {
 		return reason
 	}
+	if reason := g.conformanceLocked(c); reason != "" {
+		return reason
+	}
 	k := callKey{c.session, c.id}
 	if _, busy := g.pending[k]; busy {
 		return "id " + itoa(c.id) + " is in use"

@@ -523,21 +523,58 @@ type guardKnown struct {
 	matches func(r guardRow) bool
 }
 
-var historyQuarantineKnown = guardKnown{
-	issue:   "https://github.com/ai-ecoverse/slicc-cli/issues/388",
-	targets: []string{"seven"},
-	matches: func(r guardRow) bool {
-		return r.Control == "pass" && r.Guarded == "fail" && r.Live == "fail" && strings.Contains(string(r.Why), "not live") && strings.Contains(strings.Join(r.Errors, " "), "the target's history may restore a protected document")
-	},
+const historyQuarantineIssue = "https://github.com/ai-ecoverse/slicc-cli/issues/388"
+
+func historyQuarantineKnown(mode string) guardKnown {
+	fields := []string{"live", "attached", "infoRedacted", "listRedacted", "eventsRedacted", "reload", "blank"}
+	if mode == "recover" {
+		fields = append(fields, "close")
+	} else {
+		fields = append(fields, "restored", "evaluateRefused", "attachRefused", "closeRefused")
+		if mode == "sticky" {
+			fields = append(fields, "stickyError")
+		}
+	}
+	fields = append(fields, "attachRedacted")
+	var mismatches []string
+	for _, field := range fields {
+		mismatches = append(mismatches, field+": got false, want true")
+	}
+	why := strings.Join(append(mismatches, "not live"), "; ")
+	fields = append(fields, "fullURL")
+	controlTrue := map[string]bool{"live": true, "attached": true, "reload": true, "blank": true, "close": true, "restored": true, "stickyError": true, "fullURL": true}
+	return guardKnown{
+		issue:   historyQuarantineIssue,
+		targets: []string{"seven"},
+		matches: func(r guardRow) bool {
+			var gotWhy string
+			var observed struct {
+				Control map[string]bool `json:"control"`
+				Guarded map[string]bool `json:"guarded"`
+			}
+			if r.Control != "fail" || r.Guarded != "fail" || r.Live != "fail" || json.Unmarshal(r.Why, &gotWhy) != nil || gotWhy != why || len(r.Errors) != 1 || r.Errors[0] != "errorPage: slicc: refused: the target's history may restore a protected document" || json.Unmarshal(r.Observed, &observed) != nil || len(observed.Control) != len(fields) || len(observed.Guarded) != len(fields) {
+				return false
+			}
+			for _, field := range fields {
+				control, controlOK := observed.Control[field]
+				guarded, guardedOK := observed.Guarded[field]
+				if !controlOK || !guardedOK || control != controlTrue[field] || guarded {
+					return false
+				}
+			}
+			return true
+		},
+	}
 }
 
 var guardKnowns = map[string]guardKnown{
-	"C8.protected-error-page":                 historyQuarantineKnown,
-	"C8.protected-error-page.query":           historyQuarantineKnown,
-	"C8.protected-error-page.fragment":        historyQuarantineKnown,
-	"C8.protected-error-page-sticky":          historyQuarantineKnown,
-	"C8.protected-error-page-sticky.query":    historyQuarantineKnown,
-	"C8.protected-error-page-sticky.fragment": historyQuarantineKnown,
+	"C8.protected-document-restore":           historyQuarantineKnown("restore"),
+	"C8.protected-error-page":                 historyQuarantineKnown("recover"),
+	"C8.protected-error-page.query":           historyQuarantineKnown("recover"),
+	"C8.protected-error-page.fragment":        historyQuarantineKnown("recover"),
+	"C8.protected-error-page-sticky":          historyQuarantineKnown("sticky"),
+	"C8.protected-error-page-sticky.query":    historyQuarantineKnown("sticky"),
+	"C8.protected-error-page-sticky.fragment": historyQuarantineKnown("sticky"),
 	"X1.after-exit": {
 		issue:   "https://github.com/ai-ecoverse/slicc-cli/issues/370",
 		targets: []string{"seven", "vault"},
@@ -569,7 +606,11 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		}
 		if k, ok := guardKnowns[r.ID]; ok && slices.Contains(k.targets, r.Target) {
 			if k.matches(r) {
-				t.Logf("%s: known (%s): control %s, guarded %s, live %s, why %s", name, k.issue, r.Control, r.Guarded, r.Live, r.Why)
+				state := "known"
+				if k.issue == historyQuarantineIssue {
+					state = "known incomplete"
+				}
+				t.Logf("%s: %s (%s): control %s, guarded %s, live %s, why %s", name, state, k.issue, r.Control, r.Guarded, r.Live, r.Why)
 				knownRows++
 			} else {
 				t.Errorf("%s: no longer matches its known (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, k.issue, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)

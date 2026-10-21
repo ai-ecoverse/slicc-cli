@@ -366,8 +366,8 @@ func (e *navEnv) testRedirectSecret(t *testing.T) {
 				t.Errorf("%s on the error page for %s: %+v", m, base, answers[m])
 			}
 		}
-		if !answers["Page.reload"].OK || !answers["evaluateAfter"].OK {
-			t.Errorf("reloading the error page for %s, or evaluating once it left: %+v %+v", base, answers["Page.reload"], answers["evaluateAfter"])
+		if !answers["Page.reload"].OK || !answers["evaluateAfter"].refused() {
+			t.Errorf("reloading the error page for %s, or content quarantine once it left: %+v %+v", base, answers["Page.reload"], answers["evaluateAfter"])
 		}
 	}
 }

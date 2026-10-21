@@ -163,7 +163,7 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 		return nil
 	}
 	if nt.pending--; nt.pending == 0 {
-		if nt.worker {
+		if nt.worker || (g.targets[nt.target] != nil && g.targets[nt.target].typ == "iframe") {
 			nt.settle(false)
 			return nil
 		}
@@ -171,8 +171,16 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 			if res.Error != nil || g.historyEvidence(res) != "" {
 				nt.historyLocked = true
 			}
-			nt.settle(false)
-			return nil
+			return [][]byte{g.callbackLocked(g.relaySession, "Target.getTargetInfo", map[string]any{"targetId": nt.target}, func(info message) [][]byte {
+				var result struct {
+					TargetInfo targetInfo `json:"targetInfo"`
+				}
+				if info.Error != nil || json.Unmarshal(info.Result, &result) != nil || result.TargetInfo.TargetID != nt.target || result.TargetInfo.URL == "" || g.o.Loaded(result.TargetInfo.URL) {
+					nt.historyLocked = true
+				}
+				nt.settle(false)
+				return nil
+			})}
 		})}
 	}
 	return nil
@@ -202,6 +210,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	}
 	var p struct {
 		RequestID    string `json:"requestId"`
+		FrameID      string `json:"frameId"`
 		ResourceType string `json:"resourceType"`
 		Request      struct {
 			URL string `json:"url"`
@@ -211,6 +220,9 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		return nil
 	}
 	if p.ResourceType == "Document" && g.o.Loaded(p.Request.URL) {
+		if p.FrameID == nt.target || p.FrameID == "" {
+			nt.historyLocked = true
+		}
 		g.logf("cdp: failed a document request into a protected origin in a target this stream touched")
 		msg, _ := g.newCallLocked(nt.session, "Fetch.failRequest", map[string]any{"requestId": p.RequestID, "errorReason": "BlockedByClient"}, false)
 		return [][]byte{msg}
