@@ -48,6 +48,7 @@ export class CdpClient {
   #waiters = new Set();
   #listeners = new Set();
   #writing = Promise.resolve();
+  #paused = null;
 
   constructor(stream) {
     this.stream = stream;
@@ -62,7 +63,7 @@ export class CdpClient {
     let want = -1;
     let outcome = { end: true };
     try {
-      for (let chunk = await this.stream.read(); chunk; chunk = await this.stream.read()) {
+      for (let chunk = await this.#nextChunk(); chunk; chunk = await this.#nextChunk()) {
         reader.push(chunk);
         for (;;) {
           if (want < 0 && reader.available >= 4) want = new DataView(reader.take(4).buffer).getUint32(0);
@@ -79,6 +80,24 @@ export class CdpClient {
     for (const { reject } of this.#pending.values()) reject(new Error('cdp stream closed'));
     this.#pending.clear();
     return outcome;
+  }
+
+  async #nextChunk() {
+    while (this.#paused) await this.#paused.promise;
+    return this.stream.read();
+  }
+
+  pause() {
+    if (this.#paused) return;
+    let resolve;
+    const promise = new Promise((r) => (resolve = r));
+    this.#paused = { promise, resolve };
+  }
+
+  resume() {
+    const paused = this.#paused;
+    this.#paused = null;
+    paused?.resolve();
   }
 
   #dispatch(msg) {

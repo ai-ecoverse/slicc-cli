@@ -20,6 +20,7 @@ func (g *guard) sessionWait(sessionID string) <-chan struct{} {
 	u := g.unknown[sessionID]
 	if u == nil {
 		u = &navTarget{ready: make(chan struct{}), start: time.Now()}
+		u.awayAt = g.reads.away(u.start)
 		g.unknown[sessionID] = u
 		g.logf("cdp: holding commands on a session slicc doesn't know yet")
 	}

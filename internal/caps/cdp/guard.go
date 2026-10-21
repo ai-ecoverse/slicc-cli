@@ -114,6 +114,7 @@ type guard struct {
 	streams           map[string]bool
 	streamOrder       []string
 	bounds            guardBounds
+	reads             readClock
 	worlds            map[string]*worldSet
 	worldUniques      map[string]string
 	shown             map[string]*shownSet
