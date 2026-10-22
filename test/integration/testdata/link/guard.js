@@ -19,6 +19,7 @@ class SocketClient {
     this.ws = ws;
     this.events = [];
     this.messages = [];
+    this.sent = [];
     this.transport = 'direct';
     this.listeners = new Set();
     ws.onmessage = (m) => {
@@ -61,6 +62,7 @@ class SocketClient {
     const id = this.#nextId++;
     const msg = { id, method, params };
     if (sessionId) msg.sessionId = sessionId;
+    this.sent.push(msg);
     return new Promise((resolve, reject) => {
       const timer = this.callTimeout > 0
         ? setTimeout(() => {
@@ -169,6 +171,7 @@ function sessionBound(c, name, { inject } = {}) {
   return {
     events,
     messages: c.messages,
+    sent: c.sent,
     transport: c.transport,
     close: () => c.close(),
     waitEvent: (match, timeout) => c.waitEvent(match, timeout),
@@ -216,6 +219,32 @@ async function retried(open) {
   }
 }
 
+function delayedInbound(gateURL, opts) {
+  const methods = new Set(['Runtime.evaluate', 'Runtime.callFunctionOn', 'DOM.getDocument', 'Accessibility.getFullAXTree', 'Input.dispatchKeyEvent', 'Page.captureScreenshot', 'IO.read']);
+  const control = async (data) => {
+    const r = await fetch(gateURL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+    if (!r.ok) throw new Error(`inbound gate ${data.action}: ${r.status}`);
+    return r.json();
+  };
+  return async ({ targetId, sessionId, ms, side, client, gate }) => {
+    if (!gate) throw new Error('explicit inbound gate required');
+    const start = client.sent.length;
+    const ack = await control({ action: 'arm', targetId, sessionId, ms, side, protectedOrigins: [opts.targets.seven, opts.targets.vault], ordinaryOrigin: opts.targets.ordinary });
+    return {
+      ...ack,
+      release: () => control({ action: 'release', sessionId }),
+      audit: async ({ probes }) => {
+        const sent = client.sent.slice(start).filter((m) => m.sessionId === sessionId && methods.has(m.method));
+        const matched = probes.length === sent.length && probes.every((p, i) => p.method === sent[i].method && JSON.stringify(p.params) === JSON.stringify(sent[i].params));
+        if (!matched) return { complete: false, probes: [] };
+        const ledger = await control({ action: 'audit', sessionId, probes: probes.map((p, i) => ({ id: p.id, wireId: sent[i].id })) });
+        const complete = ledger.probes.length === probes.length && ledger.probes.every((entry, i) => entry.id === probes[i].id && typeof entry.forwarded === 'boolean' && (entry.forwarded || probes[i].outcome === 'refused' || probes[i].outcome === 'answered'));
+        return { ...ledger, complete };
+      },
+    };
+  };
+}
+
 const state = { launched: false, rows: [], started: new Map(), running: null, done: false, error: null, summary: null };
 
 const rowKey = (row) => `${row.id} ${row.target} ${row.variant}`;
@@ -237,8 +266,11 @@ export function guardStart(getLink, opts) {
         client.callTimeout = callTimeout;
         const unguarded = await retried(() => SocketClient.open(b.ws));
         unguarded.callTimeout = callTimeout;
+        await unguarded.send('Target.setDiscoverTargets', { discover: true });
+        const guarded = sessionBound(client, 'client', { inject: opts.inject });
+        guarded.inboundDelay = delayedInbound(b.gate, opts);
         return {
-          client: sessionBound(client, 'client', { inject: opts.inject }),
+          client: guarded,
           unguarded: sessionBound(unguarded, 'unguarded'),
           close: async () => {
             unguarded.close();

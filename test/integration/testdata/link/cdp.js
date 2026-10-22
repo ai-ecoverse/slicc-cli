@@ -56,6 +56,7 @@ export class CdpClient {
     this.opened = stream.opened;
     this.events = [];
     this.messages = [];
+    this.sent = [];
     this.maxMessage = 0;
     this.closed = this.#readLoop();
   }
@@ -135,6 +136,7 @@ export class CdpClient {
     this.#nextId += 1;
     const msg = { id, method, params };
     if (sessionId) msg.sessionId = sessionId;
+    this.sent.push(msg);
     return this.#call(id, method, JSON.stringify(msg));
   }
 

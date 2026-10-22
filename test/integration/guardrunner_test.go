@@ -414,9 +414,13 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	for i := range chromes {
 		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL)
 	}
-	args := []string{"--cdp", chromes[0].endpoint}
-	for _, b := range chromes[1:] {
-		args = append(args, "--cdp-extra", b.endpoint)
+	gates := make([]*guardGate, n)
+	for i, b := range chromes {
+		gates[i] = newGuardGate(t, b.endpoint, srv.URL)
+	}
+	args := []string{"--cdp", gates[0].srv.URL}
+	for _, g := range gates[1:] {
+		args = append(args, "--cdp-extra", g.srv.URL)
 	}
 	args = append(args, "--origin", srv.URL, "--origin", seven, "--name", "it-node")
 	env := &linkEnv{t: t, b: chromes[0], origin: srv.URL}
@@ -431,23 +435,19 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		t.Fatalf("the link lists %d browsers, want %d: %+v", len(hello.Browsers), n, hello.Browsers)
 	}
 	type slot struct {
-		ID string `json:"id"`
-		WS string `json:"ws"`
+		ID   string `json:"id"`
+		WS   string `json:"ws"`
+		Gate string `json:"gate"`
 	}
 	slots := make([]slot, n)
-	for i, b := range chromes {
-		v, err := getVersion(b.endpoint)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ws, _ := v["webSocketDebuggerUrl"].(string)
-		slots[i] = slot{ID: hello.Browsers[i].ID, WS: ws}
+	for i := range chromes {
+		slots[i] = slot{ID: hello.Browsers[i].ID, WS: strings.Replace(gates[i].srv.URL, "http", "ws", 1) + "/browser", Gate: gates[i].srv.URL + "/gate"}
 	}
 	sha := guardSHA()
 	opts := map[string]any{
 		"browsers":     slots,
 		"targets":      targets,
-		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true},
+		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "inboundDelay": true, "forwardAudit": true},
 		"variants":     []string{run.variant},
 		"parallel":     n,
 		"log":          "http://127.0.0.1:" + strconv.Itoa(fix.log),
@@ -517,117 +517,6 @@ func TestCDPProtectVectorsIgnoreChromeUITargets(t *testing.T) {
 	}
 }
 
-type guardKnown struct {
-	issue   string
-	targets []string
-	matches func(r guardRow) bool
-}
-
-const historyQuarantineIssue = "https://github.com/ai-ecoverse/slicc-cli/issues/388"
-
-func historyQuarantineKnown(mode string) guardKnown {
-	fields := []string{"live", "attached", "infoRedacted", "listRedacted", "eventsRedacted", "reload", "blank"}
-	if mode == "recover" {
-		fields = append(fields, "close")
-	} else {
-		fields = append(fields, "restored", "evaluateRefused", "attachRefused", "closeRefused")
-		if mode == "sticky" {
-			fields = append(fields, "stickyError")
-		}
-	}
-	fields = append(fields, "attachRedacted")
-	var mismatches []string
-	for _, field := range fields {
-		mismatches = append(mismatches, field+": got false, want true")
-	}
-	why := strings.Join(append(mismatches, "not live"), "; ")
-	fields = append(fields, "fullURL")
-	controlTrue := map[string]bool{"live": true, "attached": true, "reload": true, "blank": true, "close": true, "restored": true, "stickyError": true, "fullURL": true}
-	return guardKnown{
-		issue:   historyQuarantineIssue,
-		targets: []string{"seven"},
-		matches: func(r guardRow) bool {
-			var gotWhy string
-			var observed struct {
-				Control map[string]bool `json:"control"`
-				Guarded map[string]bool `json:"guarded"`
-			}
-			if r.Control != "fail" || r.Guarded != "fail" || r.Live != "fail" || json.Unmarshal(r.Why, &gotWhy) != nil || gotWhy != why || len(r.Errors) != 1 || r.Errors[0] != "errorPage: slicc: refused: the target's history may restore a protected document" || json.Unmarshal(r.Observed, &observed) != nil || len(observed.Control) != len(fields) || len(observed.Guarded) != len(fields) {
-				return false
-			}
-			for _, field := range fields {
-				control, controlOK := observed.Control[field]
-				guarded, guardedOK := observed.Guarded[field]
-				if !controlOK || !guardedOK || control != controlTrue[field] || guarded {
-					return false
-				}
-			}
-			return true
-		},
-	}
-}
-
-func redirectQuarantineKnown(id string) guardKnown {
-	return guardKnown{
-		issue:   historyQuarantineIssue,
-		targets: []string{"ordinary"},
-		matches: func(r guardRow) bool {
-			data, err := os.ReadFile("testdata/redirect-incompletes.json")
-			if err != nil {
-				return false
-			}
-			var rows []guardRow
-			if json.Unmarshal(data, &rows) != nil {
-				return false
-			}
-			for _, recorded := range rows {
-				if recorded.ID == id {
-					return recordedIncomplete(r, recorded)
-				}
-			}
-			return false
-		},
-	}
-}
-
-func recordedIncomplete(r, recorded guardRow) bool {
-	if r.Control != recorded.Control || r.Guarded != recorded.Guarded || r.Live != recorded.Live || !slices.Equal(r.Errors, recorded.Errors) {
-		return false
-	}
-	var why, recordedWhy string
-	if json.Unmarshal(r.Why, &why) != nil || json.Unmarshal(recorded.Why, &recordedWhy) != nil || why != recordedWhy {
-		return false
-	}
-	var observed, recordedObserved map[string]map[string]bool
-	if json.Unmarshal(r.Observed, &observed) != nil || json.Unmarshal(recorded.Observed, &recordedObserved) != nil || len(observed) != len(recordedObserved) {
-		return false
-	}
-	for section, fields := range recordedObserved {
-		if len(observed[section]) != len(fields) {
-			return false
-		}
-		for field := range fields {
-			if _, present := observed[section][field]; !present {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-var guardKnowns = map[string]guardKnown{
-	"C2.redirect-body":                        redirectQuarantineKnown("C2.redirect-body"),
-	"C2.redirect-secret":                      redirectQuarantineKnown("C2.redirect-secret"),
-	"C2.redirect-secret-mix":                  redirectQuarantineKnown("C2.redirect-secret-mix"),
-	"C8.protected-document-restore":           historyQuarantineKnown("restore"),
-	"C8.protected-error-page":                 historyQuarantineKnown("recover"),
-	"C8.protected-error-page.query":           historyQuarantineKnown("recover"),
-	"C8.protected-error-page.fragment":        historyQuarantineKnown("recover"),
-	"C8.protected-error-page-sticky":          historyQuarantineKnown("sticky"),
-	"C8.protected-error-page-sticky.query":    historyQuarantineKnown("sticky"),
-	"C8.protected-error-page-sticky.fragment": historyQuarantineKnown("sticky"),
-}
-
 func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	t.Helper()
 	if want := guardNPMPackage + "@" + guardSetVersion(t); sum.Set != want {
@@ -639,25 +528,11 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	if sum.ObserverSkipped != 0 {
 		t.Errorf("%d rows skipped for want of an unguarded observer", sum.ObserverSkipped)
 	}
-	knownRows := 0
 	for _, r := range sum.Results {
 		name := r.ID + " " + r.Target + " " + r.Variant
 		if skip, ok := guardSkips[r.ID]; ok {
 			if r.Control != "skip" || r.Guarded != "skip" || r.Live != "skip" || r.Reason != skip.Reason || r.Target != skip.Target {
 				t.Errorf("%s: the run skips it with %q, but it reported control %s, guarded %s, live %s, reason %q", name, skip.Reason, r.Control, r.Guarded, r.Live, r.Reason)
-			}
-			continue
-		}
-		if k, ok := guardKnowns[r.ID]; ok && slices.Contains(k.targets, r.Target) {
-			if k.matches(r) {
-				state := "known"
-				if k.issue == historyQuarantineIssue {
-					state = "known incomplete"
-				}
-				t.Logf("%s: %s (%s): control %s, guarded %s, live %s, why %s", name, state, k.issue, r.Control, r.Guarded, r.Live, r.Why)
-				knownRows++
-			} else {
-				t.Errorf("%s: no longer matches its known (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, k.issue, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
 			}
 			continue
 		}
@@ -695,9 +570,6 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		if _, skipped := guardSkips[v.ID]; v.Kind != "cdp" || skipped {
 			continue
 		}
-		if _, known := guardKnowns[v.ID]; passed[v.ID] == 0 && known {
-			continue
-		}
 		if passed[v.ID] == 0 {
 			t.Errorf("%s: no row of the vector passed", v.ID)
 			continue
@@ -705,11 +577,7 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		ran = append(ran, fmt.Sprintf("%s=%d", v.ID, passed[v.ID]))
 	}
 	t.Logf("passed rows per vector: %s", strings.Join(ran, " "))
-	switch {
-	case sum.Pass:
-	case knownRows == 0 || strings.Contains(sum.Line, " forged "):
+	if !sum.Pass {
 		t.Errorf("the guard set did not pass: %s", sum.Line)
-	default:
-		t.Logf("the runner's line fails only on %d known rows: %s", knownRows, sum.Line)
 	}
 }
