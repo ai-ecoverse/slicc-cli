@@ -634,9 +634,12 @@ export function protectTest(getLink, describe) {
         await sleep(800);
         answers.evaluateReloaded = await ask('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true });
         const detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
-        const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === 'about:blank', 20000);
+        const leavingAt = c.events.length;
+        const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === 'about:blank' && c.events.indexOf(e) >= leavingAt, 20000);
         const blank = await ask('Page.navigate', { url: 'about:blank#blocked' });
-        await left;
+        const committedBlank = await left;
+        const blankAt = c.events.indexOf(committedBlank);
+        await c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId && c.events.indexOf(e) > blankAt, 20000);
         answers.historyAfter = await ask('Page.getNavigationHistory');
         answers.evaluateAfter = await ask('Runtime.evaluate', { expression: 'location.href', returnByValue: true });
         const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === targetId) ?? null;
