@@ -546,6 +546,7 @@ globalThis.linkTest = {
   agent: agentTest,
   loopback: loopbackTest,
   cdp: cdpTest(() => state.link, describe),
+  persistent: (opts) => import('./persistent.js').then((m) => m.measurePersistent(() => state.link, opts)),
   protect: protectTest(() => state.link, describe),
   guard: {
     start: (opts) => import('./guard.js').then((m) => m.guardStart(() => state.link, opts)),

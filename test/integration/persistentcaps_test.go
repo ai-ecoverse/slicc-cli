@@ -1,0 +1,215 @@
+package integration
+
+import (
+	"encoding/json"
+	"fmt"
+	"html"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+type persistentMeasurement struct {
+	Method    string      `json:"method"`
+	Mode      string      `json:"mode"`
+	Leg       string      `json:"leg"`
+	Supported bool        `json:"supported"`
+	Setup     *cdpOutcome `json:"setup"`
+	Audit     struct {
+		Complete bool `json:"complete"`
+		Probes   []struct {
+			Forwarded bool `json:"forwarded"`
+		} `json:"probes"`
+	} `json:"audit"`
+	OrdinaryProbe struct {
+		Origin string `json:"origin"`
+		Effect *bool  `json:"effect"`
+	} `json:"ordinaryProbe"`
+	ProtectedProbe struct {
+		Origin string `json:"origin"`
+		Effect *bool  `json:"effect"`
+	} `json:"protectedProbe"`
+	Commit json.RawMessage `json:"commit"`
+}
+
+func persistentFixture(t *testing.T) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	counts := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.URL.Path == "/fail" {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("error fixture: %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		if r.URL.Path == "/503-data" {
+			mu.Lock()
+			counts[r.URL.RawQuery]++
+			count := counts[r.URL.RawQuery]
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			_ = json.NewEncoder(w).Encode(map[string]any{"count": count, "header": r.Header.Get("X-Slicc-503"), "ua": r.UserAgent()})
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Content-Security-Policy", "script-src 'none'")
+		marker := html.EscapeString(r.URL.Query().Get("marker"))
+		_, _ = fmt.Fprintf(w, "<!doctype html><title>measurement %s</title><body data-marker=\"%s\"><p>measurement %s</p>", marker, marker, marker)
+		if r.URL.Path == "/parent" {
+			if r.URL.Query().Get("kind") == "srcdoc" {
+				_, _ = fmt.Fprintf(w, "<iframe name=\"inherited503\" srcdoc=\"%s\"></iframe>", html.EscapeString("<body data-marker=\""+marker+"\"><p>inherited</p>"))
+			} else {
+				_, _ = fmt.Fprint(w, "<iframe name=\"inherited503\"></iframe>")
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestPersistentFixtureCSPAndNetworkEvidence(t *testing.T) {
+	srv := persistentFixture(t)
+	res, err := http.Get(srv.URL + "/doc?marker=fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Header.Get("Content-Security-Policy") != "script-src 'none'" {
+		t.Error("fixture did not enforce script CSP")
+	}
+	_ = res.Body.Close()
+	for want := 1; want <= 2; want++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/503-data?key=fixture", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Slicc-503", "fixture")
+		req.Header.Set("User-Agent", "slicc503-fixture")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var data struct {
+			Count  int    `json:"count"`
+			Header string `json:"header"`
+			UA     string `json:"ua"`
+		}
+		err = json.NewDecoder(res.Body).Decode(&data)
+		_ = res.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data.Count != want || data.Header != "fixture" || data.UA != "slicc503-fixture" || res.Header.Get("Cache-Control") != "public, max-age=3600" {
+			t.Fatalf("fixture evidence missing: %+v", data)
+		}
+	}
+}
+
+func TestCDPDocumentPersistentCapabilityMeasurements(t *testing.T) {
+	methods := []string{"Page.addScriptToEvaluateOnNewDocument", "Page.addScriptToEvaluateOnLoad", "Runtime.addBinding", "Page.setBypassCSP"}
+	modes := []string{"plain", "history", "bfcache", "inherited-blank", "inherited-srcdoc", "error"}
+	measured := 0
+	for _, mode := range modes {
+		t.Run(mode, func(t *testing.T) {
+			fixture := persistentFixture(t)
+			port := fixture.URL[strings.LastIndexByte(fixture.URL, ':')+1:]
+			ordinary := "http://ordinary.guard.test:" + port
+			protected := "http://seven.guard.test:" + port
+			srv := pageServer(t)
+			extra := []string{"--host-resolver-rules=MAP *.guard.test 127.0.0.1"}
+			if mode == "history" {
+				extra = append(extra, "--disable-features=BackForwardCache")
+			}
+			b := launchBrowserOn(t, 0, extra...)
+			gate := newGuardGate(t, b.endpoint, srv.URL)
+			env := &linkEnv{t: t, b: b, origin: srv.URL}
+			env.a = startAttach(t, "--cdp", gate.srv.URL, "--origin", srv.URL, "--origin", protected, "--name", "measurement-node")
+			env.p = b.openPage(t, srv.URL+"/index.html")
+			env.waitUp("")
+			var hello struct {
+				Browsers []helloBrowser `json:"browsers"`
+			}
+			env.p.eval("linkTest.ready()", &hello)
+			if len(hello.Browsers) != 1 {
+				t.Fatalf("measurement browser missing: %+v", hello)
+			}
+			for _, method := range methods {
+				t.Run(method, func(t *testing.T) {
+					rows := map[string]persistentMeasurement{}
+					for _, leg := range []string{"control", "baseline", "guarded"} {
+						marker := strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + leg
+						opts := map[string]any{"method": method, "mode": mode, "leg": leg, "marker": marker, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "gate": gate.srv.URL + "/gate", "ordinary": ordinary, "protected": protected}
+						var raw json.RawMessage
+						env.p.evalWithin("linkTest.persistent("+jsArgs(opts)+")", &raw, 90*time.Second)
+						var row persistentMeasurement
+						if err := json.Unmarshal(raw, &row); err != nil {
+							t.Fatal(err)
+						}
+						if row.Method != method || row.Mode != mode || row.Leg != leg {
+							t.Fatalf("measurement identity unavailable: %s", raw)
+						}
+						if row.Setup != nil && !row.Setup.OK && row.Setup.Error.Code == -32601 {
+							if leg != "control" {
+								t.Fatalf("support changed between legs: %s", raw)
+							}
+							t.Skipf("native Chrome reports unsupported method with structured -32601: %s", raw)
+						}
+						if !row.Supported || row.OrdinaryProbe.Effect == nil || row.ProtectedProbe.Effect == nil || len(row.Commit) == 0 || row.OrdinaryProbe.Origin != ordinary {
+							t.Fatalf("incomplete measurement: %s", raw)
+						}
+						if mode != "error" && row.ProtectedProbe.Origin != protected {
+							t.Fatalf("protected origin not confirmed: %s", raw)
+						}
+						if leg != "baseline" && row.Setup == nil {
+							t.Fatalf("terminal setter evidence missing: %s", raw)
+						}
+						if leg == "guarded" && (!row.Audit.Complete || len(row.Audit.Probes) != 1) {
+							t.Fatalf("setter forwarding ledger missing: %s", raw)
+						}
+						if leg == "control" && (!row.Setup.OK || !*row.OrdinaryProbe.Effect) {
+							t.Fatalf("ordinary positive control did not exercise capability: %s", raw)
+						}
+						if leg == "guarded" {
+							if row.Setup.OK && (!row.Audit.Probes[0].Forwarded || !*row.OrdinaryProbe.Effect) {
+								t.Fatalf("admitted capability did not work on ordinary page: %s", raw)
+							}
+							if !row.Setup.OK && (!row.Setup.refused() || row.Audit.Probes[0].Forwarded) {
+								t.Fatalf("refusal not proven on wire: %s", raw)
+							}
+						}
+						rows[leg] = row
+						path := filepath.Join("..", "..", "artifacts", "persistent", mode, strings.ReplaceAll(method, ".", "-"))
+						if err := os.MkdirAll(path, 0755); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(filepath.Join(path, leg+".json"), raw, 0600); err != nil {
+							t.Fatal(err)
+						}
+						t.Logf("measured %s %s %s: %s", method, mode, leg, raw)
+					}
+					if *rows["baseline"].OrdinaryProbe.Effect || *rows["baseline"].ProtectedProbe.Effect {
+						t.Fatalf("baseline confounds capability effect: %+v", rows["baseline"])
+					}
+					if *rows["guarded"].ProtectedProbe.Effect {
+						t.Logf("SECURITY-CANDIDATE: measured protected-side effect for %s across %s", method, mode)
+					}
+					measured++
+				})
+			}
+		})
+	}
+	if measured == 0 {
+		t.Fatal("no supported persistent capability was measured")
+	}
+}
