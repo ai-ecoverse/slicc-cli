@@ -129,11 +129,17 @@ func TestCDPAllowsFreshTabsWithEmptyStartupEvidence(t *testing.T) {
 		return func(method string, params json.RawMessage) (string, []string) {
 			switch method {
 			case "Page.getNavigationHistory":
-				if histories.Add(1) == 1 {
+				switch histories.Add(1) {
+				case 1:
 					return `{"currentIndex":-1,"entries":[]}`, nil
+				case 2:
+					return `{}`, nil
 				}
 				return `{"currentIndex":0,"entries":[{"id":1,"url":"about:blank"}]}`, nil
 			case "Target.getTargetInfo":
+				if histories.Load() >= 3 {
+					return `{"targetInfo":{"targetId":"T1","type":"page","url":"about:blank"}}`, nil
+				}
 				return `{"targetInfo":{"targetId":"T1","type":"page","url":""}}`, nil
 			case "Page.getFrameTree":
 				return `{"frameTree":{"frame":{"id":"T1","url":"about:blank","securityOrigin":"://"}}}`, nil
@@ -158,7 +164,7 @@ func TestCDPAllowsFreshTabsWithEmptyStartupEvidence(t *testing.T) {
 			frames++
 		}
 	}
-	if histories.Load() != 2 || frames != 1 {
+	if histories.Load() != 3 || frames != 1 {
 		t.Fatalf("fresh evidence: %d histories, %d frame trees", histories.Load(), frames)
 	}
 }
