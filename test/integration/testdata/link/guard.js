@@ -238,7 +238,7 @@ function delayedInbound(gateURL, opts) {
         const matched = probes.length === sent.length && probes.every((p, i) => p.method === sent[i].method && JSON.stringify(p.params) === JSON.stringify(sent[i].params));
         if (!matched) return { complete: false, probes: [] };
         const ledger = await control({ action: 'audit', sessionId, probes: probes.map((p, i) => ({ id: p.id, wireId: sent[i].id })) });
-        const complete = ledger.probes.length === probes.length && ledger.probes.every((entry, i) => entry.id === probes[i].id && typeof entry.forwarded === 'boolean' && (entry.forwarded || probes[i].outcome === 'refused' || probes[i].outcome === 'answered'));
+        const complete = ledger.probes.length === probes.length && ledger.probes.every((entry, i) => entry.id === probes[i].id && typeof entry.forwarded === 'boolean' && (entry.forwarded || probes[i].reply?.ok === true || Number.isInteger(probes[i].reply?.error?.code)));
         return { ...ledger, complete };
       },
     };
