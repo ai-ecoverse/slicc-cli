@@ -225,6 +225,7 @@ func TestLaunchRealChromeAndCloseOnInterrupt(t *testing.T) {
 	}
 	cmdline := chromeCommandLine(t, ev.CDP)
 	assertSevenFlags(t, cmdline, true)
+	assertEnabledFeatures(t, cmdline, strings.Join(browser.EnabledFeatures, ","))
 	for _, s := range browser.ThrowawaySwitches {
 		if !slices.Contains(strings.Fields(cmdline), s) {
 			t.Errorf("%s missing for a profile in a temporary home:\n%s", s, cmdline)
@@ -291,6 +292,19 @@ func assertSevenFlags(t *testing.T, cmdline string, want bool) {
 	}
 }
 
+func assertEnabledFeatures(t *testing.T, cmdline, want string) {
+	t.Helper()
+	var features []string
+	for _, f := range strings.Fields(cmdline) {
+		if v, ok := strings.CutPrefix(f, "--enable-features="); ok {
+			features = append(features, v)
+		}
+	}
+	if len(features) != 1 || features[0] != want {
+		t.Errorf("want one --enable-features=%s, got %q\n%s", want, features, cmdline)
+	}
+}
+
 func TestLaunchWithoutSevenFlags(t *testing.T) {
 	env, _ := launchEnv(t)
 	env, id := testChrome(t, env)
@@ -302,7 +316,9 @@ func TestLaunchWithoutSevenFlags(t *testing.T) {
 	if v, err := getVersion(ev.CDP); err != nil || v["webSocketDebuggerUrl"] != ev.WebSocketURL {
 		t.Fatalf("/json/version: %v %v", v, err)
 	}
-	assertSevenFlags(t, chromeCommandLine(t, ev.CDP), false)
+	cmdline := chromeCommandLine(t, ev.CDP)
+	assertSevenFlags(t, cmdline, false)
+	assertEnabledFeatures(t, cmdline, strings.Join(browser.EnabledFeatures, ","))
 	assertSevenPrefs(t, readPrefs(t, ev.ProfileDir), false)
 	if err := interrupt(l.cmd); err != nil {
 		t.Fatal(err)
@@ -328,6 +344,7 @@ func TestLaunchPackageAPIClosesBrowser(t *testing.T) {
 	profiles := filepath.Join(root, "profiles")
 	b, err := browser.Launch(context.Background(), chrome, browser.LaunchOptions{
 		Options: browser.Options{ProfilesDir: profiles}, Profile: "api", Headless: true,
+		ExtraArgs: []string{"--enable-features=SliccMergeProbe,ForceForegroundPriorityForAllTabs"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -338,6 +355,7 @@ func TestLaunchPackageAPIClosesBrowser(t *testing.T) {
 	if _, err := getVersion(b.CDP); err != nil {
 		t.Fatal(err)
 	}
+	assertEnabledFeatures(t, chromeCommandLine(t, b.CDP), "ForceForegroundPriorityForAllTabs,SliccMergeProbe")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := b.Close(ctx); err != nil {

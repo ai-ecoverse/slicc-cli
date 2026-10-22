@@ -79,11 +79,16 @@ var SevenDisabledFeatures = slices.Clone(catalog.Seven.DisabledFeatures)
 
 var disableFeatures = catalog.Launch.DisableFeaturesFlag
 
+const enableFeatures = "--enable-features="
+
+var EnabledFeatures = []string{"ForceForegroundPriorityForAllTabs"}
+
 func ChromiumArgs(profileDir, startURL string, headless, sevenFlags bool, extra []string) []string {
-	args := make([]string, 0, len(catalog.Launch.ChromiumArgs)+len(ThrowawaySwitches)+len(SevenSwitches)+len(extra)+3)
+	args := make([]string, 0, len(catalog.Launch.ChromiumArgs)+len(ThrowawaySwitches)+len(SevenSwitches)+len(extra)+4)
 	for _, a := range catalog.Launch.ChromiumArgs {
 		args = append(args, strings.ReplaceAll(a, "{profile}", profileDir))
 	}
+	args = append(args, enableFeatures+strings.Join(EnabledFeatures, ","))
 	if Throwaway(profileDir) {
 		args = append(args, ThrowawaySwitches...)
 	}
@@ -94,20 +99,20 @@ func ChromiumArgs(profileDir, startURL string, headless, sevenFlags bool, extra 
 	if headless {
 		args = append(args, catalog.Launch.Headless)
 	}
-	args = mergeDisableFeatures(append(args, extra...))
+	args = mergeFeatures(mergeFeatures(append(args, extra...), enableFeatures), disableFeatures)
 	if startURL != "" {
 		args = append(args, startURL)
 	}
 	return args
 }
 
-func mergeDisableFeatures(args []string) []string {
+func mergeFeatures(args []string, flag string) []string {
 	var features []string
 	seen := map[string]bool{}
 	at := -1
 	out := make([]string, 0, len(args))
 	for _, a := range args {
-		v, ok := strings.CutPrefix(a, disableFeatures)
+		v, ok := strings.CutPrefix(a, flag)
 		if !ok {
 			out = append(out, a)
 			continue
@@ -129,7 +134,7 @@ func mergeDisableFeatures(args []string) []string {
 	if len(features) == 0 {
 		return append(out[:at], out[at+1:]...)
 	}
-	out[at] = disableFeatures + strings.Join(features, ",")
+	out[at] = flag + strings.Join(features, ",")
 	return out
 }
 
