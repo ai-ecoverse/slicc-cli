@@ -42,14 +42,14 @@ jobs:
       - name: Previous startup behavior
         shell: bash
         run: |
-          git restore --source=799d4c2026d74b4586540ac93e5b8554ef1fd08a --worktree internal/caps/cdp/conformance.go internal/caps/cdp/navguard.go
+          git restore --source=799d4c2026d74b4586540ac93e5b8554ef1fd08a --worktree internal/caps/cdp
           set +e
           go test -parallel=1 -run '^TestCDPAllowsFreshTabsWithEmptyStartupEvidence$' -count=1 -timeout=90s -v ./test/integration > startup-previous.log 2>&1
           code=$?
           set -e
           test "$code" -ne 0
           grep -q 'a fresh tab was quarantined' startup-previous.log
-          git restore --source=HEAD --worktree internal/caps/cdp/conformance.go internal/caps/cdp/navguard.go
+          git restore --source=HEAD --worktree internal/caps/cdp
       - name: Initial document evidence
         shell: bash
         run: go test -parallel=1 -run '^TestCDPAllowsFreshTabsWithEmptyStartupEvidence$' -count=20 -timeout=4m -v ./test/integration > startup-current.log 2>&1

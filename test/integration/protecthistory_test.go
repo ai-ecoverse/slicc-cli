@@ -133,7 +133,7 @@ func TestCDPAllowsFreshTabsWithEmptyStartupEvidence(t *testing.T) {
 				case 1:
 					return `{"currentIndex":-1,"entries":[]}`, nil
 				case 2:
-					return `{}`, nil
+					return "!history is not initialized", nil
 				}
 				return `{"currentIndex":0,"entries":[{"id":1,"url":"about:blank"}]}`, nil
 			case "Target.getTargetInfo":
