@@ -259,14 +259,21 @@ export function guardStart(getLink, opts) {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
     if (opts.only) set.vectors = set.vectors.filter((v) => v.id === opts.only);
     for (const v of set.vectors) if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
+    const mouseDiagnostics = new Map();
     const running = run(set, {
-      clientFactory: async ({ slot }) => {
+      clientFactory: async ({ slot, vector, target, variant }) => {
         const b = browsers[slot % browsers.length];
         const client = await retried(() => CdpClient.open(getLink(), b.id));
         client.transport = 'cli';
         client.callTimeout = callTimeout;
         const unguarded = await retried(() => SocketClient.open(b.ws));
         unguarded.callTimeout = callTimeout;
+        if (vector.id === 'C9.page-drivable') {
+          const evidence = { control: [], guarded: [] };
+          client.mouseEvidence = evidence.guarded;
+          unguarded.mouseEvidence = evidence.control;
+          mouseDiagnostics.set(rowKey({ id: vector.id, target, variant }), evidence);
+        }
         await unguarded.send('Target.setDiscoverTargets', { discover: true });
         const guarded = sessionBound(client, 'client', { inject: opts.inject });
         guarded.inboundDelay = delayedInbound(b.gate, opts);
@@ -288,6 +295,8 @@ export function guardStart(getLink, opts) {
       parallel: opts.parallel,
       fixture: fixtureLog(opts.log),
       log: (row) => {
+        const evidence = mouseDiagnostics.get(rowKey(row));
+        if (evidence) { row.diagnostics = evidence; mouseDiagnostics.delete(rowKey(row)); }
         state.started.delete(rowKey(row));
         if (row.inFlight) row.errors = [...(row.errors ?? []), ...describeSessions(row)];
         state.rows.push(row);

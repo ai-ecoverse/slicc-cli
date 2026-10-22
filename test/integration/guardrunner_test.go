@@ -197,18 +197,19 @@ func guardPageServer(t *testing.T, pkg string, fixturePort int) *httptest.Server
 }
 
 type guardRow struct {
-	ID        string          `json:"id"`
-	Target    string          `json:"target"`
-	Variant   string          `json:"variant"`
-	Transport string          `json:"transport"`
-	Via       string          `json:"via"`
-	Control   string          `json:"control"`
-	Guarded   string          `json:"guarded"`
-	Live      string          `json:"live"`
-	Reason    string          `json:"reason"`
-	Why       json.RawMessage `json:"why"`
-	Errors    []string        `json:"errors"`
-	Observed  json.RawMessage `json:"observations"`
+	ID          string          `json:"id"`
+	Target      string          `json:"target"`
+	Variant     string          `json:"variant"`
+	Transport   string          `json:"transport"`
+	Via         string          `json:"via"`
+	Control     string          `json:"control"`
+	Guarded     string          `json:"guarded"`
+	Live        string          `json:"live"`
+	Reason      string          `json:"reason"`
+	Why         json.RawMessage `json:"why"`
+	Errors      []string        `json:"errors"`
+	Observed    json.RawMessage `json:"observations"`
+	Diagnostics json.RawMessage `json:"diagnostics,omitempty"`
 }
 
 type guardSummary struct {
@@ -520,6 +521,10 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	unsupported := map[string]int{}
 	for _, r := range sum.Results {
 		name := r.ID + " " + r.Target + " " + r.Variant
+		if r.ID == "C9.page-drivable" {
+			t.Logf("%s: mouse transport evidence=%s", name, r.Diagnostics)
+			checkMouseEvidence(t, r)
+		}
 		if issue := preexistingGuardIssue(r); issue != "" {
 			if !exactPreexistingGuardRow(r, knownRows) {
 				t.Errorf("%s: changed pre-existing outcome for %s: control=%s guarded=%s live=%s why=%s errors=%v observations=%s", name, issue, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
