@@ -422,9 +422,11 @@ export function protectTest(getLink, describe) {
         const failed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 10000);
         await c.send('Runtime.evaluate', { expression: later(authorize) }, sessionId);
         await failed;
-        const loaded = c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 10000);
+        const loaded = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === finish && !e.params.frame.unreachableUrl, 10000);
         const navigate = await outcome(c.send('Page.navigate', { url: finish }, sessionId));
-        await loaded;
+        const committed = await loaded;
+        const committedAt = c.events.indexOf(committed);
+        await c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId && c.events.indexOf(e) > committedAt, 10000);
         const locked = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
         const reset = await outcome(c.send('Page.resetNavigationHistory', {}, sessionId));
         const afterReset = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
