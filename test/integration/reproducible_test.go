@@ -93,8 +93,8 @@ func untar(t *testing.T, data []byte, to string) {
 }
 
 func TestReleaseBuildIsReproducibleFromAnyCheckout(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("the release runs scripts/package.sh on macOS; the cert's rebuild checks it on Linux")
+	if runtime.GOOS == "windows" {
+		t.Skip("scripts/package.sh needs bash; the release builds on Linux")
 	}
 	for _, tool := range []string{"git", "bash"} {
 		if _, err := exec.LookPath(tool); err != nil {

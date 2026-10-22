@@ -10,7 +10,7 @@
   },
   "fledgling": {
     "provider": "github",
-    "workflow": "release.yml",
+    "workflow": "ci.yml",
     "repo": "ai-ecoverse/slicc-cli",
     "publish": true,
     "include": [
@@ -21,14 +21,16 @@
       "@ai-ecoverse/slicc-linux-amd64",
       "@ai-ecoverse/slicc-windows-arm64",
       "@ai-ecoverse/slicc-windows-amd64",
-      "@ai-ecoverse/wasi-slicc"
+      "@ai-ecoverse/wasi-slicc",
+      "sliccy"
     ]
   },
   "scripts": {
     "prepare": "slicc-install-hooks",
-    "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && golangci-lint run",
+    "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && GOOS=darwin go vet ./... && GOOS=windows go vet ./... && golangci-lint run",
+    "lint:sh": "shellcheck -s sh install.sh test/integration/testdata/install/check.sh && shellcheck scripts/*.sh",
     "format": "gofmt -w .",
-    "test": "go test -race -count=1 -timeout 15m ./test/integration/...",
+    "test": "node scripts/test-shard.mjs ci/4 -race -count=1 -timeout 15m -v ./test/integration/...",
     "test:unit": "go test -race -cover ./cmd/... ./internal/...",
     "build": "go build -trimpath -ldflags \"-s -w\" -o bin/slicc ./cmd/slicc",
     "dist": "SLICC_SIGN=0 scripts/package.sh 0.0.0-dev",
@@ -41,7 +43,7 @@
   "devDependencies": {
     "@ai-ecoverse/slicc-browsers": "1.16.2",
     "@ai-ecoverse/slicc-kernel": "1.146.2",
-    "@ai-ecoverse/slicc-shared-web": "1.30.12",
+    "@ai-ecoverse/slicc-shared-web": "2.9.0",
     "@semantic-release/exec": "7.1.0",
     "lefthook": "2.2.2",
     "semantic-release": "25.0.9"

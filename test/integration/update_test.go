@@ -105,7 +105,7 @@ func newFakeGitHub(t *testing.T, tag string, payload []byte, options ...func(*fa
 	sum := sha256.Sum256(payload)
 	f := &fakeGitHub{tag: tag, payload: payload, status: http.StatusOK, sig: newFakeSigstore(t)}
 	f.sums = fmt.Sprintf("%s  %s\n%s  slicc-other-arch\n", hex.EncodeToString(sum[:]), assetName(), strings.Repeat("0", 64))
-	f.attestations = attestationList(f.sig.bundle(t, hex.EncodeToString(sum[:]), bundleOptions{san: releaseSAN("ai-ecoverse/slicc-cli")}))
+	f.attestations = attestationList(f.sig.bundle(t, hex.EncodeToString(sum[:]), pipelineBundle("ai-ecoverse/slicc-cli")))
 	for _, option := range options {
 		option(f)
 	}
@@ -391,9 +391,12 @@ func TestUpdateRequiresTheAttestation(t *testing.T) {
 	sum := sha256.Sum256(payload)
 	sig := newFakeSigstore(t)
 	for name, list := range map[string][]byte{
-		"none":             []byte(`{"attestations":[]}`),
-		"another workflow": attestationList(sig.bundle(t, hex.EncodeToString(sum[:]), bundleOptions{san: "https://github.com/ai-ecoverse/slicc-cli/.github/workflows/ci.yml@refs/heads/main"})),
-		"another file":     attestationList(sig.bundle(t, strings.Repeat("0", 64), bundleOptions{san: releaseSAN("ai-ecoverse/slicc-cli")})),
+		"none":                []byte(`{"attestations":[]}`),
+		"release.yml":         attestationList(sig.bundle(t, hex.EncodeToString(sum[:]), bundleOptions{san: releaseSAN("ai-ecoverse/slicc-cli")})),
+		"a fork's ci.yml":     attestationList(sig.bundle(t, hex.EncodeToString(sum[:]), pipelineBundle("ai-ecoverse/slicc-cli-fork"))),
+		"no caller":           attestationList(sig.bundle(t, hex.EncodeToString(sum[:]), bundleOptions{san: pipelineSAN})),
+		"the pipeline's main": attestationList(sig.bundle(t, hex.EncodeToString(sum[:]), bundleOptions{san: "https://github.com/ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@refs/heads/main", config: callerConfig("ai-ecoverse/slicc-cli")})),
+		"another file":        attestationList(sig.bundle(t, strings.Repeat("0", 64), pipelineBundle("ai-ecoverse/slicc-cli"))),
 	} {
 		gh := newFakeGitHub(t, "v1.1.0", payload, withAttestations(list))
 		gh.sig = sig

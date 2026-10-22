@@ -138,7 +138,7 @@ func TestInstallCompanions(t *testing.T) {
 	f := newJerkReleases(t, "v1.4.2", buildJerk(t, "1.4.2"))
 	env, dest := installEnv(t, f)
 	r := runBin(t, env, binary, "install", "jerk")
-	if r.code != 0 || !strings.Contains(r.stdout, "installed jerk 1.4.2 at "+dest) || !strings.Contains(r.stdout, "the build provenance attestation by "+releaseSAN("ai-ecoverse/slicc-jerk")) {
+	if r.code != 0 || !strings.Contains(r.stdout, "installed jerk 1.4.2 at "+dest) || !strings.Contains(r.stdout, "the build provenance attestation by "+jerkIdentity) {
 		t.Fatalf("%+v", r)
 	}
 	if out, err := exec.Command(dest, "--version").Output(); err != nil || strings.TrimSpace(string(out)) != "jerk 1.4.2" {
@@ -219,7 +219,7 @@ func TestInstallRequiresTheAttestation(t *testing.T) {
 		t.Fatalf("no attestation: %+v", r)
 	}
 	f.attest(t, bundleOptions{san: releaseSAN("ai-ecoverse/slicc-jerk-fork")})
-	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "no attestation of "+f.asset+" by "+releaseSAN("ai-ecoverse/slicc-jerk")+" verifies: attestation identity") {
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "no attestation of "+f.asset+" by "+jerkIdentity+" verifies: attestation identity") {
 		t.Fatalf("another repo's identity: %+v", r)
 	}
 	if _, err := os.Stat(dest); err == nil {
@@ -228,6 +228,37 @@ func TestInstallRequiresTheAttestation(t *testing.T) {
 	r := runBin(t, env, binary, "install", "jerk", "--checksum-only")
 	if r.code != 0 || !strings.Contains(r.stderr, "warning: --checksum-only skips the attestation") || !strings.Contains(r.stdout, "SHA256SUMS only; the attestation wasn't checked") {
 		t.Fatalf("--checksum-only: %+v", r)
+	}
+}
+
+const jerkIdentity = "https://github.com/ai-ecoverse/slicc-jerk/.github/workflows/release.yml@refs/heads/main or https://github.com/ai-ecoverse/slicc-jerk/.github/workflows/ci.yml@refs/heads/main or https://github.com/ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@refs/tags/v2.* called from https://github.com/ai-ecoverse/slicc-jerk/.github/workflows/ci.yml@refs/heads/main"
+
+func TestInstallTakesJerksReleaseAndCIWorkflowsAndNoOther(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		o    bundleOptions
+		ok   bool
+	}{
+		{"release.yml at main", bundleOptions{san: releaseSAN("ai-ecoverse/slicc-jerk")}, true},
+		{"ci.yml at main", bundleOptions{san: "https://github.com/ai-ecoverse/slicc-jerk/.github/workflows/ci.yml@refs/heads/main"}, true},
+		{"the shared pipeline called from jerk's ci.yml", pipelineBundle("ai-ecoverse/slicc-jerk"), true},
+		{"another workflow", bundleOptions{san: "https://github.com/ai-ecoverse/slicc-jerk/.github/workflows/nightly.yml@refs/heads/main"}, false},
+		{"ci.yml at a branch", bundleOptions{san: "https://github.com/ai-ecoverse/slicc-jerk/.github/workflows/ci.yml@refs/heads/feature"}, false},
+		{"slicc-cli's ci.yml", bundleOptions{san: "https://github.com/ai-ecoverse/slicc-cli/.github/workflows/ci.yml@refs/heads/main"}, false},
+		{"the shared pipeline called from slicc-cli", pipelineBundle("ai-ecoverse/slicc-cli"), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newJerkReleases(t, "v0.9.0", buildJerk(t, "0.9.0"))
+			f.attest(t, c.o)
+			env, dest := installEnv(t, f)
+			r := runBin(t, env, binary, "install", "jerk")
+			if c.ok && (r.code != 0 || !strings.Contains(r.stdout, "installed jerk 0.9.0 at "+dest)) {
+				t.Fatalf("refused: %+v", r)
+			}
+			if !c.ok && (r.code != 1 || !strings.Contains(r.stderr, "attestation identity")) {
+				t.Fatalf("accepted: %+v", r)
+			}
+		})
 	}
 }
 
@@ -245,7 +276,7 @@ func TestInstallTakesAnAttestationOverSHA256SUMS(t *testing.T) {
 	if err := os.Remove(dest); err != nil {
 		t.Fatal(err)
 	}
-	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "no attestation of SHA256SUMS by "+releaseSAN("ai-ecoverse/slicc-jerk")+" verifies") {
+	if r := runBin(t, env, binary, "install", "jerk"); r.code != 1 || !strings.Contains(r.stderr, "no attestation of SHA256SUMS by "+jerkIdentity+" verifies") {
 		t.Fatalf("SHA256SUMS attested by another repo: %+v", r)
 	}
 }

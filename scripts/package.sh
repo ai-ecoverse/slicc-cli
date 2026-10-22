@@ -13,12 +13,8 @@ version="${version#v}"
 out="artifacts/release"
 targets="darwin/arm64 darwin/amd64 linux/arm64 linux/amd64 windows/arm64 windows/amd64"
 work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/slicc-package.XXXXXX")"
-keychain=""
 
 cleanup() {
-  if [ -n "$keychain" ]; then
-    security delete-keychain "$keychain" >/dev/null 2>&1 || true
-  fi
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -62,83 +58,71 @@ build() {
   printf '%s\n' "$version" > dist/VERSION
 }
 
-import_p12() {
-  local raw="$work/raw.p12" pem="$work/cert.pem" norm="$work/normalized.p12"
-  printf '%s' "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$raw"
-  if ! openssl pkcs12 -in "$raw" -nodes -out "$pem" -passin "pass:$APPLE_CERTIFICATE_PASSWORD" 2>/dev/null; then
-    openssl pkcs12 -in "$raw" -nodes -out "$pem" -passin "pass:$APPLE_CERTIFICATE_PASSWORD" -legacy
+rcodesign_version=0.29.0
+
+rcodesign() {
+  if [ -n "${RCODESIGN:-}" ]; then
+    "$RCODESIGN" "$@"
+    return
   fi
-  if ! openssl pkcs12 -export -in "$pem" -out "$norm" -password "pass:$APPLE_CERTIFICATE_PASSWORD" \
-    -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256 2>/dev/null; then
-    openssl pkcs12 -export -in "$pem" -out "$norm" -password "pass:$APPLE_CERTIFICATE_PASSWORD" \
-      -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256 -legacy
+  local tool="$work/rcodesign/rcodesign"
+  if [ ! -x "$tool" ]; then
+    local asset sum
+    case "$(uname -s)/$(uname -m)" in
+      Linux/x86_64) asset=x86_64-unknown-linux-musl sum=dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002 ;;
+      Linux/aarch64) asset=aarch64-unknown-linux-musl sum=4af92c87ddf52f5f2d1258a3b4e56c7dcb8f1b2468df744976c5f139e031961f ;;
+      Darwin/*) asset=macos-universal sum=d98372d5524226ccf9dc0eda03d4e4f5826182dabb2fc3f2bd303ed9113a748d ;;
+      *) echo "::error::no rcodesign $rcodesign_version for $(uname -s)/$(uname -m); set RCODESIGN" >&2; exit 1 ;;
+    esac
+    mkdir -p "$work/rcodesign"
+    curl -fsSL --retry 3 -o "$work/rcodesign.tar.gz" \
+      "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F$rcodesign_version/apple-codesign-$rcodesign_version-$asset.tar.gz"
+    echo "$sum  $work/rcodesign.tar.gz" > "$work/rcodesign.sum"
+    (cd "$work" && sha256 -c rcodesign.sum)
+    tar -xzf "$work/rcodesign.tar.gz" -C "$work/rcodesign" --strip-components=1
   fi
-  rm -f "$raw" "$pem"
-  local password
-  password="$(openssl rand -base64 32)"
-  keychain="$work/signing.keychain-db"
-  security create-keychain -p "$password" "$keychain"
-  security set-keychain-settings -lut 3600 "$keychain"
-  security unlock-keychain -p "$password" "$keychain"
-  security import "$norm" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
-  security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$password" "$keychain" >/dev/null
-  local existing=() line
-  while IFS= read -r line; do
-    line="${line#"${line%%[![:space:]]*}"}"
-    existing+=("${line//\"/}")
-  done < <(security list-keychains -d user)
-  security list-keychains -d user -s "$keychain" ${existing[@]+"${existing[@]}"}
-  rm -f "$norm"
+  "$tool" "$@"
 }
 
-notarize() {
-  local key="$work/AuthKey.p8" zip="$work/notarize.zip" result="$work/notarize.json"
-  printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$key"
-  (cd "$out" && zip -q "$zip" slicc-darwin-arm64 slicc-darwin-amd64)
-  echo "notarizing the darwin binaries"
-  xcrun notarytool submit "$zip" --key "$key" --key-id "$APPLE_API_KEY_ID" \
-    --issuer "$APPLE_API_KEY_ISSUER_ID" --wait --timeout 30m --output-format json > "$result" || true
-  local status id
-  status="$(node -p "JSON.parse(require('fs').readFileSync('$result','utf8')).status" 2>/dev/null || echo unknown)"
-  id="$(node -p "JSON.parse(require('fs').readFileSync('$result','utf8')).id" 2>/dev/null || echo)"
-  if [ "$status" != "Accepted" ]; then
-    echo "::error::notarization ended with status $status"
-    cat "$result" >&2 || true
-    if [ -n "$id" ]; then
-      xcrun notarytool log "$id" --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_KEY_ISSUER_ID" >&2 || true
-    fi
-    exit 1
+signing_pem() {
+  local raw="$work/raw.p12" pem="$work/signing.pem"
+  printf '%s' "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$raw"
+  if ! openssl pkcs12 -in "$raw" -nodes -out "$pem" -passin env:APPLE_DEVELOPER_CERTIFICATE_PASSWORD 2>/dev/null; then
+    openssl pkcs12 -in "$raw" -nodes -out "$pem" -passin env:APPLE_DEVELOPER_CERTIFICATE_PASSWORD -legacy
   fi
-  echo "notarization accepted ($id)"
+  rm -f "$raw"
+  chmod 600 "$pem"
+  echo "$pem"
 }
 
 sign_macos() {
-  if [ -z "${APPLE_CERTIFICATE_BASE64:-}" ] || [ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
-    echo "::warning::no Apple signing certificate; the darwin binaries stay unsigned"
+  local missing="" name
+  for name in APPLE_CERTIFICATE_BASE64 APPLE_DEVELOPER_CERTIFICATE_PASSWORD APPLE_API_KEY_ID APPLE_API_KEY_ISSUER_ID APPLE_API_KEY_P8_BASE64; do
+    [ -n "${!name:-}" ] || missing="$missing $name"
+  done
+  if [ -n "$missing" ]; then
+    if [ "${SLICC_SIGN:-1}" = "required" ]; then
+      echo "::error::signing and notarizing the darwin binaries needs$missing"
+      exit 1
+    fi
+    echo "::warning::no$missing; the darwin binaries stay unsigned"
     return
   fi
-  if [ "$(uname -s)" != "Darwin" ]; then
-    echo "::error::signing the darwin binaries needs a macOS runner"
-    exit 1
-  fi
-  import_p12
-  local identity
-  identity="$(security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application' | head -1 | awk '{print $2}' || true)"
-  if [ -z "$identity" ]; then
-    echo "::error::no Developer ID Application identity in the certificate"
-    exit 1
-  fi
+  local pem key="$work/AuthKey.p8" api="$work/api-key.json"
+  pem="$(signing_pem)"
+  printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$key"
+  rcodesign encode-app-store-connect-api-key -o "$api" "$APPLE_API_KEY_ISSUER_ID" "$APPLE_API_KEY_ID" "$key" >/dev/null
+  rm -f "$key"
   for bin in slicc-darwin-arm64 slicc-darwin-amd64; do
     echo "signing $bin"
-    codesign --force --timestamp --options runtime --identifier ai.sliccy.slicc \
-      --keychain "$keychain" --sign "$identity" "$out/$bin"
-    codesign --verify --strict --verbose=2 "$out/$bin"
+    rcodesign sign --pem-file "$pem" --binary-identifier ai.sliccy.slicc --code-signature-flags runtime --for-notarization "$out/$bin"
+    rcodesign verify "$out/$bin"
   done
-  if [ -z "${APPLE_API_KEY_P8_BASE64:-}" ] || [ -z "${APPLE_API_KEY_ID:-}" ] || [ -z "${APPLE_API_KEY_ISSUER_ID:-}" ]; then
-    echo "::warning::no App Store Connect API key; the darwin binaries are signed but not notarized"
-    return
-  fi
-  notarize
+  local zip="$work/notarize.zip"
+  (cd "$out" && zip -q "$zip" slicc-darwin-arm64 slicc-darwin-amd64)
+  echo "notarizing slicc-darwin-arm64 and slicc-darwin-amd64"
+  rcodesign notary-submit --api-key-file "$api" --wait --max-wait-seconds 1800 "$zip"
+  rm -f "$pem" "$api" "$zip"
 }
 
 checksums() {
@@ -149,7 +133,7 @@ checksums() {
 }
 
 build
-if [ "${SLICC_SIGN:-1}" = "1" ]; then
+if [ "${SLICC_SIGN:-1}" != "0" ]; then
   sign_macos
 else
   echo "signing skipped (SLICC_SIGN=$SLICC_SIGN)"

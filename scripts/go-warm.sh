@@ -27,7 +27,7 @@ trap 'chmod -R u+w "$scratch" 2>/dev/null; rm -rf "$scratch"' EXIT
 warmed=""
 for i in $(seq 1 "$tries"); do
   if GOPROXY=https://proxy.golang.org GOFLAGS=-modcacherw GOPATH="$scratch/gopath" GOMODCACHE="$scratch/mod" \
-    GONOPROXY= GOPRIVATE= GONOSUMDB= GOENV=off go list -m "$module@$tag"; then
+    GONOPROXY='' GOPRIVATE='' GONOSUMDB='' GOENV=off go list -m "$module@$tag"; then
     warmed=1
     break
   fi

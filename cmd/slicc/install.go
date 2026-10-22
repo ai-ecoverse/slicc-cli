@@ -28,17 +28,20 @@ Installs a companion tool into slicc's own data folder, where slicc finds it:
 
 slicc downloads the release binary for this OS and CPU, checks it against
 the release's SHA256SUMS and verifies its GitHub build provenance
-attestation (signed by the repo's release.yml on main), then installs it
+attestation (signed by the repo's release.yml or ci.yml on main, or by
+slicc-shared-web's pipeline called from its ci.yml), then installs it
 once it answers --version. --checksum-only skips the attestation, with a
 warning. Run it again to update. Nothing on a link can start an install.
 `
 
 type companion struct {
 	repo, binary, since string
+	workflows           []string
+	pipeline            bool
 }
 
 var installable = map[string]companion{
-	"jerk": {repo: "ai-ecoverse/slicc-jerk", binary: "jerk", since: jerk.MinVersion},
+	"jerk": {repo: "ai-ecoverse/slicc-jerk", binary: "jerk", since: jerk.MinVersion, workflows: []string{"release.yml", "ci.yml"}, pipeline: true},
 }
 
 var versionRE = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
@@ -66,7 +69,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	checker := update.NewChecker()
-	checker.Repo, checker.Binary, checker.Verify, checker.ChecksumOnly = c.repo, c.binary, answersVersion, checksumOnly
+	checker.Repo, checker.Binary, checker.Pipeline, checker.Workflows, checker.Verify, checker.ChecksumOnly = c.repo, c.binary, c.pipeline, c.workflows, answersVersion, checksumOnly
 	if checksumOnly {
 		fmt.Fprintln(stderr, "slicc install: warning: --checksum-only skips the attestation; only SHA256SUMS is checked")
 	}

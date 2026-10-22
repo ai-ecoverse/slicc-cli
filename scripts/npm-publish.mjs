@@ -18,10 +18,8 @@ const dryRun = values['dry-run'];
 const tag = values.tag;
 
 const guarded = {
-  sliccy: { tag: 'next', version: /^7\.0\.0-next\./, gate: 'SLICCY_NEXT_PUBLISH' },
-  '@ai-ecoverse/wasi-slicc': { gate: 'WASI_SLICC_PUBLISH' },
+  sliccy: { tag: 'next', version: /^7\.0\.0-next\./ },
 };
-const defaultGate = 'SLICC_NPM_PUBLISH';
 const companions = new Set(['@ai-ecoverse/slicc-jerk']);
 
 function fail(message, code = 1) {
@@ -104,16 +102,9 @@ const packages = readdirSync(values.dir)
 if (packages.length === 0) fail(`no packages in ${values.dir}`);
 for (const { pkg } of packages) check(pkg);
 
-const enabled = packages.filter(({ pkg }) => {
-  const gate = guarded[pkg.name]?.gate || defaultGate;
-  if (dryRun || process.env[gate] === 'true') return true;
-  process.stdout.write(`::notice::skipping ${pkg.name}@${pkg.version}; set the repository variable ${gate} to true to publish it\n`);
-  return false;
-});
-
-if (!dryRun && enabled.length) minimumNpm();
+if (!dryRun) minimumNpm();
 let already = 0;
-for (const { dir, pkg } of enabled) {
+for (const { dir, pkg } of packages) {
   if (!dryRun && published(pkg.name, pkg.version)) {
     process.stdout.write(`${pkg.name}@${pkg.version} is already published\n`);
     already += 1;
@@ -126,5 +117,5 @@ for (const { dir, pkg } of enabled) {
   if (res.status !== 0) fail(`npm publish ${pkg.name}@${pkg.version} failed`);
 }
 process.stdout.write(
-  `npm-publish: PASS ${tag}: ${dryRun ? `checked ${enabled.length}` : `published ${enabled.length - already}, ${already} already published`}, ${packages.length - enabled.length} held by their gates, of ${packages.length} packages\n`,
+  `npm-publish: PASS ${tag}: ${dryRun ? `checked ${packages.length}` : `published ${packages.length - already}, ${already} already published`} of ${packages.length} packages\n`,
 );

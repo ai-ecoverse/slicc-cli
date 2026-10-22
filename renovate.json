@@ -3,20 +3,6 @@
   "extends": [
     "github>ai-ecoverse/slicc-shared-web"
   ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "The Alpine image the installer checks run in, pinned by tag and digest inside the workflows' matrix values (a JSON string in ci.yml, a matrix container in release.yml).",
-      "managerFilePatterns": [
-        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "alpine:(?<currentValue>\\d[\\w.-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
-      ],
-      "depNameTemplate": "alpine",
-      "datasourceTemplate": "docker"
-    }
-  ],
   "packageRules": [
     {
       "description": "slicc-browsers ships one release to npm and as a Go module, and the guard harness requires both pins to name the same release: move @ai-ecoverse/slicc-browsers and github.com/ai-ecoverse/slicc-browsers in one PR. A major also moves the Go pin to its /vN module path (the preset's gomodUpdateImportPaths), and the harness's module-path check then fails it until the harness names the new path, so a major never automerges.",

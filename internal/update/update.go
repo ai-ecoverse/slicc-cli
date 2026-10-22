@@ -44,6 +44,8 @@ type Checker struct {
 	Repo         string
 	Binary       string
 	Ref          string
+	Pipeline     bool
+	Workflows    []string
 	ChecksumOnly bool
 	Root         *attest.TrustedRoot
 	APIBase      string
@@ -59,14 +61,15 @@ func NewChecker() *Checker {
 		base = DefaultAPIBase
 	}
 	return &Checker{
-		Repo:    Repo,
-		Binary:  "slicc",
-		Ref:     ReleaseRef,
-		APIBase: strings.TrimRight(base, "/"),
-		HTTP:    &http.Client{Timeout: 5 * time.Minute},
-		GOOS:    runtime.GOOS,
-		GOARCH:  runtime.GOARCH,
-		Verify:  VerifyVersion,
+		Repo:     Repo,
+		Binary:   "slicc",
+		Ref:      ReleaseRef,
+		Pipeline: true,
+		APIBase:  strings.TrimRight(base, "/"),
+		HTTP:     &http.Client{Timeout: 5 * time.Minute},
+		GOOS:     runtime.GOOS,
+		GOARCH:   runtime.GOARCH,
+		Verify:   VerifyVersion,
 	}
 }
 
@@ -228,7 +231,7 @@ func (c *Checker) download(ctx context.Context, rel *Release, dest string) error
 }
 
 func (c *Checker) Identity() attest.Identity {
-	return attest.Identity{Repo: c.Repo, Ref: c.Ref}
+	return attest.Identity{Repo: c.Repo, Ref: c.Ref, Pipeline: c.Pipeline, Workflows: c.Workflows}
 }
 
 func (c *Checker) attested(ctx context.Context, asset, digest, sumsDigest string) error {
@@ -274,7 +277,7 @@ func (c *Checker) attestedBy(ctx context.Context, root *attest.TrustedRoot, name
 			return nil
 		}
 	}
-	return fmt.Errorf("no attestation of %s by %s verifies: %w", name, c.Identity().SAN(), last)
+	return fmt.Errorf("no attestation of %s by %s verifies: %w", name, c.Identity(), last)
 }
 
 var rename = os.Rename

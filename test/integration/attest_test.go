@@ -16,6 +16,8 @@ import (
 
 var sliccRelease = attest.Identity{Repo: "ai-ecoverse/slicc-cli", Ref: "refs/heads/main"}
 
+var sliccPipeline = attest.Identity{Repo: "ai-ecoverse/slicc-cli", Ref: "refs/heads/main", Pipeline: true}
+
 func realBundle(t *testing.T, version string) ([]byte, string) {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", "attest", "slicc-"+version+".bundle.json"))
@@ -99,6 +101,9 @@ func TestAttestRealReleases(t *testing.T) {
 	jd, _ := os.ReadFile(filepath.Join("testdata", "attest", "jerk-v0.3.0.sha256"))
 	if err := attest.Verify(jb, strings.TrimSpace(string(jd)), attest.Identity{Repo: "ai-ecoverse/slicc-jerk", Ref: "refs/heads/main"}, root); err != nil {
 		t.Fatalf("slicc-jerk v0.3.0: %v", err)
+	}
+	if b, digest := realBundle(t, "v1.31.0"); step(attest.Verify(b, digest, sliccPipeline, root)) != "identity" {
+		t.Fatal("a release.yml release passed for the pipeline identity")
 	}
 	if got := step(attest.Verify(jb, strings.TrimSpace(string(jd)), sliccRelease, root)); got != "identity" {
 		t.Fatalf("slicc-jerk's attestation as slicc-cli's: %s", got)
@@ -224,6 +229,31 @@ func TestAttestGeneratedBundles(t *testing.T) {
 		if got := step(attest.Verify(f.bundle(t, digest, c.o), digest, sliccRelease, root)); got != c.want {
 			t.Fatalf("%s: got %s, want %s", c.name, got, c.want)
 		}
+	}
+	pipeline := pipelineBundle("ai-ecoverse/slicc-cli")
+	if err := attest.Verify(f.bundle(t, digest, pipeline), digest, sliccPipeline, root); err != nil {
+		t.Fatalf("a pipeline bundle: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		o    bundleOptions
+	}{
+		{"release.yml", bundleOptions{san: san}},
+		{"no build config", bundleOptions{san: pipelineSAN}},
+		{"a fork's ci.yml", pipelineBundle("ai-ecoverse/slicc-cli-fork")},
+		{"another caller workflow", bundleOptions{san: pipelineSAN, config: "https://github.com/ai-ecoverse/slicc-cli/.github/workflows/release.yml@refs/heads/main"}},
+		{"a caller branch", bundleOptions{san: pipelineSAN, config: "https://github.com/ai-ecoverse/slicc-cli/.github/workflows/ci.yml@refs/heads/feature"}},
+		{"the pipeline at a branch", bundleOptions{san: "https://github.com/ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@refs/heads/main", config: pipeline.config}},
+		{"the pipeline at v1", bundleOptions{san: "https://github.com/ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@refs/tags/v1.30.8", config: pipeline.config}},
+		{"the pipeline at v3", bundleOptions{san: "https://github.com/ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@refs/tags/v3.0.0", config: pipeline.config}},
+		{"a pipeline in a fork", bundleOptions{san: "https://github.com/someone/slicc-shared-web/.github/workflows/pipeline.yml@refs/tags/v2.8.0", config: pipeline.config}},
+	} {
+		if got := step(attest.Verify(f.bundle(t, digest, c.o), digest, sliccPipeline, root)); got != "identity" {
+			t.Fatalf("%s for the pipeline identity: got %s, want identity", c.name, got)
+		}
+	}
+	if got := step(attest.Verify(f.bundle(t, digest, pipeline), digest, sliccRelease, root)); got != "identity" {
+		t.Fatalf("a pipeline bundle for release.yml's identity: got %s, want identity", got)
 	}
 	real, d := realBundle(t, "v1.31.0")
 	if got := step(attest.Verify(real, d, sliccRelease, root)); got != "certificate" {
