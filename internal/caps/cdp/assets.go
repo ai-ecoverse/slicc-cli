@@ -52,14 +52,19 @@ func (g *guard) chainLocked(k requestKey, p map[string]any) {
 	}
 	g.navChains[k] = chain
 	into := g.clean
+	protected := false
 	for _, c := range chain {
 		if g.o.Loaded(c) {
 			into = g.tainted
+			protected = true
 		}
 	}
 	for _, t := range chain {
 		if canon, ok := protect.Canonical(t); ok {
 			addAsset(into, k.session, canon)
+			if protected {
+				addAsset(g.knownRedirects, "", canon)
+			}
 		}
 	}
 }
@@ -67,6 +72,14 @@ func (g *guard) chainLocked(k requestKey, p map[string]any) {
 func (g *guard) taintedLocked(session, u string) bool {
 	canon, ok := protect.Canonical(u)
 	return !ok || g.tainted[g.worldTargetLocked(session)].has(canon)
+}
+
+func (g *guard) knownRedirectLocked(u string) bool {
+	canon, ok := protect.Canonical(u)
+	if !ok {
+		return true
+	}
+	return g.knownRedirects[""].has(canon)
 }
 
 func (g *guard) assetURLLocked(session, u string) bool {

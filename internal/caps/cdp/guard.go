@@ -126,6 +126,7 @@ type guard struct {
 	navSeen           map[requestKey]bool
 	navSeenOrder      []requestKey
 	navChains         map[requestKey][]string
+	knownRedirects    map[string]*assetSet
 	tainted           map[string]*assetSet
 	clean             map[string]*assetSet
 	assets            map[string]*assetSet
@@ -142,6 +143,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 	g := &guard{
 		o:                 o,
 		logf:              logf,
+		knownRedirects:    map[string]*assetSet{},
 		targets:           map[string]*target{},
 		sessions:          map[string]*session{},
 		hidden:            map[string]bool{},
