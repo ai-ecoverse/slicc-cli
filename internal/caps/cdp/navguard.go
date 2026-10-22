@@ -68,7 +68,7 @@ type navTarget struct {
 	worker           bool
 	shared           bool
 	historyLocked    bool
-	protectedHistory map[string]bool
+	protectedHistory map[string]string
 }
 
 func (nt *navTarget) settle(failed bool) {

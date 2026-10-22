@@ -89,9 +89,9 @@ func (g *guard) rememberHistoryRefusals(nt *navTarget, m message) {
 			continue
 		}
 		if nt.protectedHistory == nil {
-			nt.protectedHistory = map[string]bool{}
+			nt.protectedHistory = map[string]string{}
 		}
-		nt.protectedHistory[entry.ID.String()] = true
+		nt.protectedHistory[entry.ID.String()] = g.destinationReason(entry.URL, entry.UserTypedURL)
 		nt.historyLocked = true
 	}
 }
@@ -103,8 +103,8 @@ func (g *guard) historyRefusalLocked(c *command) string {
 	}
 	nt := g.navTargets[s.target]
 	entry, ok := c.params["entryId"].(json.Number)
-	if nt != nil && nt.historyLocked && ok && nt.protectedHistory[entry.String()] {
-		return refusedTarget
+	if nt != nil && nt.historyLocked && ok {
+		return nt.protectedHistory[entry.String()]
 	}
 	return ""
 }
