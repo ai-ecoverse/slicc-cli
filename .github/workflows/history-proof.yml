@@ -10,7 +10,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       GOMAXPROCS: 4
       GOFLAGS: -p=4 -race
@@ -39,9 +39,23 @@ jobs:
       - name: Current behavior
         shell: bash
         run: go test -parallel=1 -run '^TestCDPHistoryConformanceUnderInboundLag$' -count=20 -timeout=4m -v ./test/integration > current.log 2>&1
+      - name: Previous startup behavior
+        shell: bash
+        run: |
+          git restore --source=799d4c2026d74b4586540ac93e5b8554ef1fd08a --worktree internal/caps/cdp/conformance.go internal/caps/cdp/navguard.go
+          set +e
+          go test -parallel=1 -run '^TestCDPAllowsFreshTabsWithEmptyStartupEvidence$' -count=1 -timeout=90s -v ./test/integration > startup-previous.log 2>&1
+          code=$?
+          set -e
+          test "$code" -ne 0
+          grep -q 'a fresh tab was quarantined' startup-previous.log
+          git restore --source=HEAD --worktree internal/caps/cdp/conformance.go internal/caps/cdp/navguard.go
+      - name: Initial document evidence
+        shell: bash
+        run: go test -parallel=1 -run '^TestCDPAllowsFreshTabsWithEmptyStartupEvidence$' -count=20 -timeout=4m -v ./test/integration > startup-current.log 2>&1
       - name: Workflow recovery
         shell: bash
-        run: go test -parallel=1 -run '^TestCDPHistoryQuarantineWorkflow$' -count=1 -timeout=90s -v ./test/integration > workflow.log 2>&1
+        run: go test -parallel=1 -run '^TestCDPHistoryQuarantineWorkflow$' -count=20 -timeout=4m -v ./test/integration > workflow.log 2>&1
       - name: Clean tab workflows
         shell: bash
         run: go test -parallel=1 -run '^Test(CDPAnswersAroundAPageItsOwnInstrumentationBreakpointPaused|CDPCutsProtectedRedirects|CDPProtectsAcrossNavigation|CDPProtectsSevensOrigin|CDPDropsAnAnswerThatOutlivesAProtectedErrorPageCommit|HistoryKnownsMatchOnlyRecordedIncompleteRows|RedirectKnownsAreRecordedIncompletesNotProtectionVerdicts)$' -count=1 -timeout=4m -v ./test/integration > clean.log 2>&1

@@ -168,19 +168,7 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 			return nil
 		}
 		return [][]byte{g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(res message) [][]byte {
-			if res.Error != nil || g.historyEvidence(res) != "" {
-				nt.historyLocked = true
-			}
-			return [][]byte{g.callbackLocked(g.relaySession, "Target.getTargetInfo", map[string]any{"targetId": nt.target}, func(info message) [][]byte {
-				var result struct {
-					TargetInfo targetInfo `json:"targetInfo"`
-				}
-				if info.Error != nil || json.Unmarshal(info.Result, &result) != nil || result.TargetInfo.TargetID != nt.target || result.TargetInfo.URL == "" || g.o.Loaded(result.TargetInfo.URL) {
-					nt.historyLocked = true
-				}
-				nt.settle(false)
-				return nil
-			})}
+			return g.initialHistoryLocked(nt, res)
 		})}
 	}
 	return nil

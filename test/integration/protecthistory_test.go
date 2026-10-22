@@ -122,6 +122,47 @@ func historyLagProxy(t *testing.T, endpoint string) (*httptest.Server, *historyL
 	return srv, lag
 }
 
+func TestCDPAllowsFreshTabsWithEmptyStartupEvidence(t *testing.T) {
+	var histories atomic.Int32
+	env, fake := setupFakeProtect(t, func(_, _ string) fakeScript {
+		base := guardWaitScript("{}")
+		return func(method string, params json.RawMessage) (string, []string) {
+			switch method {
+			case "Page.getNavigationHistory":
+				if histories.Add(1) == 1 {
+					return `{"currentIndex":-1,"entries":[]}`, nil
+				}
+				return `{"currentIndex":0,"entries":[{"id":1,"url":"about:blank"}]}`, nil
+			case "Target.getTargetInfo":
+				return `{"targetInfo":{"targetId":"T1","type":"page","url":""}}`, nil
+			case "Page.getFrameTree":
+				return `{"frameTree":{"frame":{"id":"T1","url":"about:blank","securityOrigin":"://"}}}`, nil
+			case "Runtime.evaluate":
+				return `{"result":{"type":"boolean","value":true}}`, nil
+			}
+			return base(method, params)
+		}
+	})
+	var result cdpOutcome
+	env.evalJSON(t, "linkTest.protect.initialHistory('chrome-2')", &result)
+	if !result.OK {
+		t.Fatalf("a fresh tab was quarantined before its initial document: %+v", result)
+	}
+	frames := 0
+	for _, raw := range fake.received() {
+		var m struct {
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal([]byte(raw), &m)
+		if m.Method == "Page.getFrameTree" {
+			frames++
+		}
+	}
+	if histories.Load() != 2 || frames != 1 {
+		t.Fatalf("fresh evidence: %d histories, %d frame trees", histories.Load(), frames)
+	}
+}
+
 func TestCDPHistoryQuarantineWorkflow(t *testing.T) {
 	b := launchBrowser(t)
 	srv := pageServer(t)
