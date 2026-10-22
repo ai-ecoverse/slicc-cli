@@ -214,7 +214,6 @@ type guardRow struct {
 type guardSummary struct {
 	Set             string          `json:"set"`
 	Pass            bool            `json:"pass"`
-	Line            string          `json:"line"`
 	Results         []guardRow      `json:"results"`
 	Missing         json.RawMessage `json:"missing"`
 	NotRun          []string        `json:"notRun"`
@@ -368,8 +367,7 @@ type guardRun struct {
 func runGuardVectors(t *testing.T, variant string) {
 	sum := runGuard(t, guardRun{variant: variant, slots: guardSlots(), rowTimeout: guardRowTimeout})
 	checkGuardSummary(t, sum)
-	fmt.Println(sum.Line)
-	t.Log(sum.Line)
+	t.Logf("%s %s: counts=%s", sum.Set, variant, sum.Counts)
 }
 
 func runGuard(t *testing.T, run guardRun) *guardSummary {
@@ -597,8 +595,8 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		}
 	}
 	if !sum.Pass && len(known) == 3 && !t.Failed() {
-		t.Logf("the runner's line fails only on3 recorded known rows: %s; known: #402 (security), #404", sum.Line)
+		t.Log("three exact independently recorded pre-existing outcomes retained: #402, #404")
 	} else {
-		t.Errorf("the guard set did not retain the exact recorded known failures: %s", sum.Line)
+		t.Errorf("the guard set did not retain the exact recorded known failures: counts=%s", sum.Counts)
 	}
 }
