@@ -409,6 +409,15 @@ export function protectTest(getLink, describe) {
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
         return { before, probes, stuck, attaches, leaked, detached, after, reattach, close };
       }),
+    historyTrees: (browser, targetId) =>
+      run(browser, async (c) => {
+        if (!targetId) ({ targetId } = await c.send('Target.createTarget', { url: 'about:blank' }));
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const frame = await outcome(c.send('Page.getFrameTree', {}, sessionId));
+        const resource = await outcome(c.send('Page.getResourceTree', {}, sessionId));
+        const script = await outcome(c.send('Runtime.evaluate', { expression: 'true' }, sessionId));
+        return { frame, resource, script };
+      }),
     initialHistory: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
