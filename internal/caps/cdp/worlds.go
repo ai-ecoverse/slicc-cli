@@ -17,10 +17,11 @@ const (
 var heapOK = map[string]bool{"HeapProfiler.enable": true, "HeapProfiler.disable": true, "HeapProfiler.collectGarbage": true, "HeapProfiler.getHeapObjectId": true}
 
 type worldCtx struct {
-	unique  string
-	name    string
-	seen    map[string]bool
-	scripts []string
+	protectedFrame string
+	unique         string
+	name           string
+	seen           map[string]bool
+	scripts        []string
 }
 
 type worldSet struct {
@@ -108,8 +109,18 @@ func (g *guard) shownGoneLocked(target string, id int64, unique string) {
 func (g *guard) hideContextLocked(target, session string, c execContext) {
 	g.unshowLocked(target, c.ID)
 	w := g.worldsLocked(target)
+	frame := ""
+	if c.AuxData.IsDefault && c.AuxData.FrameID != target {
+		frame = c.AuxData.FrameID
+		if frame == "" {
+			w.full = true
+		}
+	}
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true
+		if frame != "" {
+			wc.protectedFrame = frame
+		}
 		return
 	}
 	if len(w.contexts) >= g.maxWorlds {
@@ -119,7 +130,7 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 		w.full = true
 		return
 	}
-	w.contexts[c.ID] = &worldCtx{unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}}
+	w.contexts[c.ID] = &worldCtx{unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: frame}
 	if c.UniqueID != "" {
 		g.worldUniques[c.UniqueID] = target
 	}
@@ -251,8 +262,41 @@ func remoteContext(id string) (int64, bool) {
 	return n, err == nil
 }
 
+func (g *guard) frameContentCheckLocked(c *command, target string) string {
+	w := g.worlds[target]
+	if w == nil {
+		return ""
+	}
+	protected := w.full
+	for _, context := range w.contexts {
+		protected = protected || context.protectedFrame != ""
+	}
+	if !protected {
+		return ""
+	}
+	for _, context := range w.contexts {
+		if c.str("frameId") != "" && c.str("frameId") == context.protectedFrame {
+			return refusedTarget
+		}
+	}
+	domain, verb, _ := strings.Cut(c.method, ".")
+	if (domain == "DOM" || domain == "DOMSnapshot" || domain == "Accessibility" || domain == "Input") && verb != "enable" && verb != "disable" {
+		return refusedTarget
+	}
+	switch c.method {
+	case "Page.getFrameTree", "Page.getResourceTree", "Page.getResourceContent", "Page.captureSnapshot", "Page.captureScreenshot", "Page.printToPDF":
+		return refusedTarget
+	}
+	return ""
+}
+
 func (g *guard) worldCheckLocked(c *command) string {
 	t := g.sessionTargetLocked(c.session)
+	if t != nil {
+		if reason := g.frameContentCheckLocked(c, t.id); reason != "" {
+			return reason
+		}
+	}
 	if t != nil && navTypes[t.typ] && strings.HasPrefix(c.method, "HeapProfiler.") && !heapOK[c.method] {
 		return refusedHeap
 	}
