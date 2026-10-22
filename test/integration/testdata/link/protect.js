@@ -409,6 +409,12 @@ export function protectTest(getLink, describe) {
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
         return { before, probes, stuck, attaches, leaked, detached, after, reattach, close };
       }),
+    initialHistory: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        return outcome(c.send('Runtime.evaluate', { expression: 'true', returnByValue: true }, sessionId));
+      }),
     historyWorkflow: (browser, start, authorize, finish) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(start);
