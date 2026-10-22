@@ -93,9 +93,6 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
 	}
 	if c.method == "Page.navigateToHistoryEntry" {
-		if reason := g.historyRefusalLocked(c); reason != "" {
-			return pageVerdict{reply: refusal(c.id, c.session, reason)}
-		}
 		return pageVerdict{history: c}
 	}
 	return g.admitLocked(c)
@@ -128,25 +125,15 @@ func (g *guard) afterHistory(c *command, res message, ok bool) pageVerdict {
 			UserTypedURL string      `json:"userTypedURL"`
 		} `json:"entries"`
 	}
-	if json.Unmarshal(res.Result, &h) != nil {
-		return pageVerdict{reply: refusal(c.id, c.session, "can't tell where the history entry leads")}
-	}
-	if s := g.sessions[c.session]; s != nil {
-		g.rememberHistoryRefusals(g.navTargets[s.target], res)
-	}
+	_ = json.Unmarshal(res.Result, &h)
 	want, _ := c.params["entryId"].(json.Number)
-	found := false
 	for _, e := range h.Entries {
 		if e.ID.String() != want.String() {
 			continue
 		}
-		found = true
 		if reason := g.destinationReason(e.URL, e.UserTypedURL); reason != "" {
 			return pageVerdict{reply: refusal(c.id, c.session, reason)}
 		}
-	}
-	if !found {
-		return pageVerdict{reply: refusal(c.id, c.session, "can't tell where the history entry leads")}
 	}
 	if g.sessionRefusedLocked(c.session) {
 		return pageVerdict{reply: refusal(c.id, c.session, refusedTarget)}

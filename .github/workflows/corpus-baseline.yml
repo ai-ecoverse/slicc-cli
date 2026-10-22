@@ -1,0 +1,38 @@
+name: Browser corpus baseline
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOMAXPROCS: 4
+      GOFLAGS: -p=4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26
+      - run: npm ci
+      - name: Main source identity
+        run: |
+          git diff --exit-code e419ba8 -- internal/caps/cdp
+          git rev-parse HEAD
+      - name: Prompt
+        shell: bash
+        run: go test -parallel=1 -run '^TestCDPProtectVectorsPrompt$' -count=1 -timeout=8m -v ./test/integration > prompt.log 2>&1
+      - name: Lagging
+        if: always()
+        shell: bash
+        run: go test -parallel=1 -run '^TestCDPProtectVectorsLagging$' -count=1 -timeout=8m -v ./test/integration > lagging.log 2>&1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: main-corpus-baseline
+          path: '*.log'

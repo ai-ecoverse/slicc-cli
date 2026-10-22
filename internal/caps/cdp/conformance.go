@@ -69,48 +69,7 @@ func (g *guard) historyStatus(m message) historyState {
 	return state
 }
 
-func (g *guard) rememberHistoryRefusals(nt *navTarget, m message) {
-	if nt == nil || m.Error != nil {
-		return
-	}
-	var h struct {
-		Entries []struct {
-			ID           json.Number `json:"id"`
-			URL          string      `json:"url"`
-			UserTypedURL string      `json:"userTypedURL"`
-		} `json:"entries"`
-	}
-	if json.Unmarshal(m.Result, &h) != nil {
-		return
-	}
-	for _, entry := range h.Entries {
-		id, err := entry.ID.Int64()
-		if err != nil || id < 0 || (!g.o.Loaded(entry.URL) && !g.o.Loaded(entry.UserTypedURL)) {
-			continue
-		}
-		if nt.protectedHistory == nil {
-			nt.protectedHistory = map[string]string{}
-		}
-		nt.protectedHistory[entry.ID.String()] = g.destinationReason(entry.URL, entry.UserTypedURL)
-		nt.historyLocked = true
-	}
-}
-
-func (g *guard) historyRefusalLocked(c *command) string {
-	s := g.sessions[c.session]
-	if s == nil {
-		return ""
-	}
-	nt := g.navTargets[s.target]
-	entry, ok := c.params["entryId"].(json.Number)
-	if nt != nil && nt.historyLocked && ok {
-		return nt.protectedHistory[entry.String()]
-	}
-	return ""
-}
-
 func (g *guard) initialHistoryLocked(nt *navTarget, res message) [][]byte {
-	g.rememberHistoryRefusals(nt, res)
 	state := g.historyStatus(res)
 	if state == historyProtected {
 		nt.historyLocked = true
@@ -137,7 +96,6 @@ func (g *guard) initialHistoryLocked(nt *navTarget, res message) [][]byte {
 				return g.deferInitialLocked(nt)
 			}
 			return [][]byte{g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(fresh message) [][]byte {
-				g.rememberHistoryRefusals(nt, fresh)
 				switch g.historyStatus(fresh) {
 				case historyProtected:
 					nt.historyLocked = true

@@ -47,28 +47,27 @@ func (g *guard) startsUnheld(c *command) bool {
 }
 
 type navTarget struct {
-	target           string
-	session          string
-	start            time.Time
-	progress         time.Time
-	awayAt           time.Duration
-	reason           string
-	ready            chan struct{}
-	pending          int
-	done             bool
-	failed           bool
-	loading          map[string]int
-	started          int
-	unsure           bool
-	errorURL         string
-	documentURL      string
-	failedURLs       []string
-	commits          int
-	failCommit       int
-	worker           bool
-	shared           bool
-	historyLocked    bool
-	protectedHistory map[string]string
+	target        string
+	session       string
+	start         time.Time
+	progress      time.Time
+	awayAt        time.Duration
+	reason        string
+	ready         chan struct{}
+	pending       int
+	done          bool
+	failed        bool
+	loading       map[string]int
+	started       int
+	unsure        bool
+	errorURL      string
+	documentURL   string
+	failedURLs    []string
+	commits       int
+	failCommit    int
+	worker        bool
+	shared        bool
+	historyLocked bool
 }
 
 func (nt *navTarget) settle(failed bool) {
