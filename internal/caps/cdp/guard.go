@@ -71,9 +71,10 @@ type session struct {
 }
 
 type guard struct {
-	mu   sync.Mutex
-	o    *protect.Origins
-	logf func(format string, args ...any)
+	mu              sync.Mutex
+	o               *protect.Origins
+	logf            func(format string, args ...any)
+	scheduleInitial func(*navTarget)
 
 	relaySession      string
 	lost              bool

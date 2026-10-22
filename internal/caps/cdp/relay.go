@@ -68,6 +68,7 @@ func (r *Registry) serve(s *link.Stream) {
 		return
 	}
 	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), parked: map[string][][]byte{}}
+	rl.g.scheduleInitial = rl.scheduleInitial
 	err = rl.bootstrap(ctx)
 	cancel()
 	if err != nil {
@@ -250,6 +251,25 @@ func (rl *relay) toPage() {
 			}
 		}
 	}
+}
+
+func (rl *relay) scheduleInitial(nt *navTarget) {
+	time.AfterFunc(50*time.Millisecond, func() {
+		if rl.browserDone.Load() || rl.pageEnded.Load() {
+			return
+		}
+		msg := rl.g.retryInitial(nt)
+		if msg == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), HistoryTimeout)
+		defer cancel()
+		if rl.conn.Write(ctx, websocket.MessageText, msg) != nil {
+			rl.g.mu.Lock()
+			nt.settle(true)
+			rl.g.mu.Unlock()
+		}
+	})
 }
 
 func (rl *relay) readBrowser(ctx context.Context) (websocket.MessageType, []byte, error) {

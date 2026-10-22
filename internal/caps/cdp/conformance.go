@@ -69,13 +69,6 @@ func (g *guard) historyStatus(m message) historyState {
 	return state
 }
 
-func (g *guard) historyEvidence(m message) string {
-	if g.historyStatus(m) != historyClean {
-		return refusedHistory
-	}
-	return ""
-}
-
 func (g *guard) initialHistoryLocked(nt *navTarget, res message) [][]byte {
 	state := g.historyStatus(res)
 	if state == historyProtected {
@@ -94,14 +87,22 @@ func (g *guard) initialHistoryLocked(nt *navTarget, res message) [][]byte {
 		}
 		g.logf("cdp: confirming a target's initial frame while its setup evidence is incomplete")
 		return [][]byte{g.callbackLocked(nt.session, "Page.getFrameTree", nil, func(frame message) [][]byte {
-			if !g.initialFrameSafe(frame, nt.target) {
+			switch g.initialFrameStatus(frame, nt.target) {
+			case historyProtected:
 				nt.historyLocked = true
 				nt.settle(false)
 				return nil
+			case historyUnknown:
+				return g.deferInitialLocked(nt)
 			}
 			return [][]byte{g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(fresh message) [][]byte {
-				if g.historyEvidence(fresh) != "" {
+				switch g.historyStatus(fresh) {
+				case historyProtected:
 					nt.historyLocked = true
+				case historyUnknown:
+					if !nt.historyLocked {
+						return g.deferInitialLocked(nt)
+					}
 				}
 				nt.settle(false)
 				return nil
@@ -110,7 +111,7 @@ func (g *guard) initialHistoryLocked(nt *navTarget, res message) [][]byte {
 	})}
 }
 
-func (g *guard) initialFrameSafe(m message, target string) bool {
+func (g *guard) initialFrameStatus(m message, target string) historyState {
 	var tree struct {
 		FrameTree struct {
 			Frame struct {
@@ -122,8 +123,37 @@ func (g *guard) initialFrameSafe(m message, target string) bool {
 		} `json:"frameTree"`
 	}
 	if m.Error != nil || json.Unmarshal(m.Result, &tree) != nil {
-		return false
+		return historyUnknown
 	}
 	f := tree.FrameTree.Frame
-	return f.ID == target && f.URL != nil && *f.URL != "" && f.SecurityOrigin != nil && *f.SecurityOrigin != "" && !g.o.Loaded(*f.URL) && !g.o.Loaded(*f.SecurityOrigin) && !g.o.Loaded(f.UnreachableURL)
+	if (f.URL != nil && g.o.Loaded(*f.URL)) || (f.SecurityOrigin != nil && g.o.Loaded(*f.SecurityOrigin)) || g.o.Loaded(f.UnreachableURL) {
+		return historyProtected
+	}
+	if f.ID != target || f.URL == nil || *f.URL == "" || f.SecurityOrigin == nil || *f.SecurityOrigin == "" {
+		return historyUnknown
+	}
+	return historyClean
+}
+
+func (g *guard) deferInitialLocked(nt *navTarget) [][]byte {
+	if nt.done {
+		return nil
+	}
+	if g.scheduleInitial != nil {
+		g.scheduleInitial(nt)
+		return nil
+	}
+	nt.historyLocked = true
+	nt.settle(false)
+	return nil
+}
+
+func (g *guard) retryInitial(nt *navTarget) []byte {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if nt.done || g.lost || g.navTargets[nt.target] != nt {
+		return nil
+	}
+	msg := g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(res message) [][]byte { return g.initialHistoryLocked(nt, res) })
+	return msg
 }
