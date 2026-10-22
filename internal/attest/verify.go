@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math/bits"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -33,17 +34,46 @@ const (
 )
 
 var (
-	oidIssuerV1 = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 1}
-	oidIssuerV2 = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}
+	oidIssuerV1      = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 1}
+	oidIssuerV2      = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}
+	oidBuildConfigV2 = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 18}
+	pipelineRef      = regexp.MustCompile(`^refs/tags/v2\.[0-9]+\.[0-9]+$`)
 )
 
+const PipelineWorkflow = "https://github.com/ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml"
+
 type Identity struct {
-	Repo string
-	Ref  string
+	Repo      string
+	Ref       string
+	Pipeline  bool
+	Workflows []string
 }
 
-func (id Identity) SAN() string {
-	return "https://github.com/" + id.Repo + "/.github/workflows/release.yml@" + id.Ref
+func (id Identity) workflows() []string {
+	if len(id.Workflows) == 0 && !id.Pipeline {
+		return []string{"release.yml"}
+	}
+	return id.Workflows
+}
+
+func (id Identity) SANs() []string {
+	var sans []string
+	for _, w := range id.workflows() {
+		sans = append(sans, "https://github.com/"+id.Repo+"/.github/workflows/"+w+"@"+id.Ref)
+	}
+	return sans
+}
+
+func (id Identity) BuildConfig() string {
+	return "https://github.com/" + id.Repo + "/.github/workflows/ci.yml@" + id.Ref
+}
+
+func (id Identity) String() string {
+	names := id.SANs()
+	if id.Pipeline {
+		names = append(names, PipelineWorkflow+"@refs/tags/v2.* called from "+id.BuildConfig())
+	}
+	return strings.Join(names, " or ")
 }
 
 type Error struct {
@@ -233,9 +263,14 @@ func checkChain(leaf *x509.Certificate, at time.Time, root *TrustedRoot) (*x509.
 }
 
 func checkIdentity(leaf *x509.Certificate, id Identity) error {
-	issuer := ""
+	issuer, config := "", ""
 	for _, ext := range leaf.Extensions {
 		switch {
+		case ext.Id.Equal(oidBuildConfigV2):
+			var s string
+			if rest, err := asn1.Unmarshal(ext.Value, &s); err == nil && len(rest) == 0 {
+				config = s
+			}
 		case ext.Id.Equal(oidIssuerV2):
 			var s string
 			if rest, err := asn1.Unmarshal(ext.Value, &s); err == nil && len(rest) == 0 {
@@ -251,8 +286,18 @@ func checkIdentity(leaf *x509.Certificate, id Identity) error {
 	if len(leaf.URIs) != 1 || len(leaf.EmailAddresses) != 0 || len(leaf.DNSNames) != 0 || len(leaf.IPAddresses) != 0 {
 		return fail("identity", "the certificate needs exactly one URI subject alternative name")
 	}
-	if got := leaf.URIs[0].String(); got != id.SAN() {
-		return fail("identity", "signed by %s, want %s", got, id.SAN())
+	got := leaf.URIs[0].String()
+	for _, san := range id.SANs() {
+		if got == san {
+			return nil
+		}
+	}
+	workflow, ref, ok := strings.Cut(got, "@")
+	if !id.Pipeline || !ok || workflow != PipelineWorkflow || !pipelineRef.MatchString(ref) {
+		return fail("identity", "signed by %s, want %s", got, id)
+	}
+	if config != id.BuildConfig() {
+		return fail("identity", "built by %q, want %s", config, id.BuildConfig())
 	}
 	return nil
 }

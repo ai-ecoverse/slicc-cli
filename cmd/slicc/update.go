@@ -18,7 +18,8 @@ const updateUsage = `usage: slicc update [--check] [--checksum-only]
 
 Replaces this binary with the latest release of ai-ecoverse/slicc-cli,
 once it matches the release's SHA256SUMS and its GitHub build provenance
-attestation verifies (signed by the repo's release.yml on main).
+attestation verifies (signed by slicc-shared-web's pipeline.yml at a v2
+tag, called from the repo's ci.yml on main).
 --check only reports whether a newer release exists. --checksum-only skips
 the attestation, with a warning. A copy installed with go install, npm or
 an app bundle is not replaced; slicc update prints how to update it instead.
@@ -111,5 +112,5 @@ func verified(c *update.Checker) string {
 	if c.ChecksumOnly {
 		return "SHA256SUMS only; the attestation wasn't checked"
 	}
-	return "SHA256SUMS and the build provenance attestation by " + c.Identity().SAN()
+	return "SHA256SUMS and the build provenance attestation by " + c.Identity().String()
 }

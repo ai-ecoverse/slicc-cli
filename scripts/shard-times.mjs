@@ -21,8 +21,7 @@ export function parseLog(text) {
 }
 
 export function platformOf(jobName) {
-  const m = String(jobName).match(/^test \((ubuntu|macos|windows)-[^,]*, /);
-  return m ? { ubuntu: 'linux', macos: 'darwin', windows: 'win32' }[m[1]] : '';
+  return /^(ci \/ )?test \([0-9]+\)$/.test(String(jobName)) ? 'linux' : '';
 }
 
 export function merge(existing, logs) {

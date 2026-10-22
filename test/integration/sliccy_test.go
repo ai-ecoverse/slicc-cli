@@ -23,7 +23,7 @@ func publishEnv(t *testing.T, extra ...string) []string {
 	env := []string{}
 	for _, kv := range isolatedEnv(t) {
 		key := strings.ToUpper(strings.SplitN(kv, "=", 2)[0])
-		if key == "SLICCY_NEXT_PUBLISH" || key == "NODE_AUTH_TOKEN" || key == "NPM_TOKEN" || strings.HasPrefix(key, "NPM_CONFIG_") {
+		if key == "NODE_AUTH_TOKEN" || key == "NPM_TOKEN" || strings.HasPrefix(key, "NPM_CONFIG_") {
 			continue
 		}
 		env = append(env, kv)
@@ -99,16 +99,12 @@ func TestSliccyOnlyPublishesToNext(t *testing.T) {
 		{bad, []string{"--tag", "next"}, "its version must match"},
 	}
 	for _, c := range refusals {
-		r := publish(t, node, c.dir, publishEnv(t, "SLICCY_NEXT_PUBLISH=true"), c.args...)
+		r := publish(t, node, c.dir, publishEnv(t), c.args...)
 		if r.code == 0 || !strings.Contains(r.stderr, c.want) || strings.Contains(r.stdout+r.stderr, "Publishing to") {
 			t.Fatalf("%v: %+v", c.args, r)
 		}
 	}
-	r := publish(t, node, good, publishEnv(t), "--tag", "next")
-	if r.code != 0 || !strings.Contains(r.stdout, "skipping sliccy@7.0.0-next.1.2.3; set the repository variable SLICCY_NEXT_PUBLISH") {
-		t.Fatalf("gated off: %+v", r)
-	}
-	r = publish(t, node, good, publishEnv(t), "--tag", "next", "--dry-run")
+	r := publish(t, node, good, publishEnv(t), "--tag", "next", "--dry-run")
 	if r.code != 0 || !strings.Contains(r.stderr, "with tag next") || !strings.Contains(r.stderr, "(dry-run)") {
 		t.Fatalf("dry run: %+v", r)
 	}
@@ -175,7 +171,7 @@ func registryEnv(t *testing.T, reg *fakeRegistry) []string {
 func registryEnvWaiting(t *testing.T, reg *fakeRegistry, seconds int) []string {
 	t.Helper()
 	env := []string{}
-	for _, kv := range publishEnv(t, "SLICCY_NEXT_PUBLISH=true", "SLICC_REGISTRY_WAIT_SECONDS="+strconv.Itoa(seconds)) {
+	for _, kv := range publishEnv(t, "SLICC_REGISTRY_WAIT_SECONDS="+strconv.Itoa(seconds)) {
 		if !strings.HasPrefix(kv, "npm_config_registry=") {
 			env = append(env, kv)
 		}
@@ -194,6 +190,17 @@ func TestSliccyNeedsItsPlatformPackagesOnTheRegistry(t *testing.T) {
 	r = publish(t, node, staged, registryEnvWaiting(t, newFakeRegistry(t, dep), 120), "--tag", "next")
 	if !strings.Contains(r.stdout, "every optional dependency of sliccy@7.0.0-next.1.2.3-test is on the registry") || strings.Contains(r.stderr, "not on the registry") {
 		t.Fatalf("dependency present: %+v", r)
+	}
+	for _, wait := range []int{0, 3} {
+		reg := newFakeRegistry(t)
+		reg.late(dep, 1)
+		r := publish(t, node, staged, registryEnvWaiting(t, reg, wait), "--tag", "next", "--dry-run", "--require-registry")
+		if wait == 0 && (r.code != 3 || !strings.Contains(r.stderr, "not on the registry: "+dep+" (HTTP 404)")) {
+			t.Fatalf("a platform package npm serves late, without a wait: %+v", r)
+		}
+		if wait > 0 && (r.code != 0 || !reg.wasAsked(dep) || !strings.Contains(r.stdout, "waiting for "+dep+" (HTTP 404) to appear on the registry") || !strings.Contains(r.stdout, "every optional dependency of sliccy@7.0.0-next.1.2.3-test is on the registry")) {
+			t.Fatalf("a platform package npm serves late, with a wait: %+v", r)
+		}
 	}
 }
 

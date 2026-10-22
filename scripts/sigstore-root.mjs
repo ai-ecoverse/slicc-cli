@@ -14,13 +14,19 @@ const { values } = parseArgs({
   },
 });
 
-function fail(message) {
+function fail(message, code = 2) {
   process.stderr.write(`sigstore-root: ${message}\n`);
-  process.exit(2);
+  process.exit(code);
 }
 
 async function get(path, json = true) {
-  const res = await fetch(`${values.repo.replace(/\/+$/, '')}/${path}`, { signal: AbortSignal.timeout(30000) });
+  let res;
+  try {
+    res = await fetch(`${values.repo.replace(/\/+$/, '')}/${path}`, { signal: AbortSignal.timeout(30000) });
+  } catch (error) {
+    fail(`GET ${path}: ${error.cause?.code ?? error.message}`, 3);
+  }
+  if (res.status >= 500) fail(`GET ${path}: HTTP ${res.status}`, 3);
   if (!res.ok) fail(`GET ${path}: HTTP ${res.status}`);
   return json ? res.json() : Buffer.from(await res.arrayBuffer());
 }

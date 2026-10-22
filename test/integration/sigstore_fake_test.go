@@ -36,6 +36,7 @@ type bundleOptions struct {
 	predicate string
 	notAfter  time.Duration
 	sct       string
+	config    string
 }
 
 func newFakeSigstore(t *testing.T) *fakeSigstore {
@@ -113,6 +114,16 @@ func releaseSAN(repo string) string {
 	return "https://github.com/" + repo + "/.github/workflows/release.yml@refs/heads/main"
 }
 
+const pipelineSAN = "https://github.com/ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@refs/tags/v2.8.0"
+
+func callerConfig(repo string) string {
+	return "https://github.com/" + repo + "/.github/workflows/ci.yml@refs/heads/main"
+}
+
+func pipelineBundle(repo string) bundleOptions {
+	return bundleOptions{san: pipelineSAN, config: callerConfig(repo)}
+}
+
 func leafHash(b []byte) []byte {
 	h := sha256.Sum256(append([]byte{0}, b...))
 	return h[:]
@@ -142,6 +153,10 @@ func (f *fakeSigstore) bundle(t *testing.T, digest string, o bundleOptions) []by
 		SerialNumber: big.NewInt(now.UnixNano()), NotBefore: now.Add(-time.Minute), NotAfter: now.Add(o.notAfter),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}, URIs: []*url.URL{san},
 		ExtraExtensions: []pkix.Extension{{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}, Value: issuer}},
+	}
+	if o.config != "" {
+		config, _ := asn1.MarshalWithParams(o.config, "utf8")
+		tmpl.ExtraExtensions = append(tmpl.ExtraExtensions, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 18}, Value: config})
 	}
 	der := f.withSCT(t, tmpl, &key.PublicKey, o.sct)
 	payload, _ := json.Marshal(map[string]any{

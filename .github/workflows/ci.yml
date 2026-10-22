@@ -2,269 +2,56 @@ name: CI
 
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main]
-  merge_group:
-  workflow_call:
-    inputs:
-      full:
-        description: Run the full matrix, all shards on every OS with -race and the guard vectors
-        type: boolean
-        default: false
 
 permissions:
-  contents: read
+  contents: write
+  actions: read
+  issues: write
+  pull-requests: write
+  statuses: write
+  id-token: write
+  attestations: write
 
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  runner:
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CERT_LIGHT_RUNNER || vars.CERT_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      runner: ${{ steps.pick.outputs.runner }}
-      light: ${{ steps.pick.outputs.light }}
-      os: ${{ steps.pick.outputs.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.event.merge_group.base_ref || github.event.pull_request.base.sha || github.sha }}
-          sparse-checkout: .github/runner.mjs
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - id: pick
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
-        env:
-          FORCED: ${{ vars.CI_RUNNER }}
-          POOL: ${{ vars.CERT_RUNNER || 'ubuntu-latest' }}
-          LIGHT: ${{ vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
-        with:
-          script: |
-            const { runner, light, why } = await import(`${process.env.GITHUB_WORKSPACE}/.github/runner.mjs`)
-              .then(({ decide }) => decide({ context, github, env: process.env }))
-              .catch((error) => ({ runner: 'ubuntu-latest', light: 'ubuntu-latest', why: `the decider failed: ${error.message}` }));
-            core.setOutput('runner', runner);
-            core.setOutput('light', light);
-            const pr = context.eventName === 'pull_request' ? context.payload.pull_request : null;
-            const labels = !pr ? [] : await github.paginate(github.rest.issues.listLabelsOnIssue, { ...context.repo, issue_number: pr.number })
-              .catch(() => pr.labels ?? []);
-            const os = !pr || labels.some((label) => label.name === 'all-os') ? 'all' : 'linux';
-            core.setOutput('os', os);
-            core.notice(`os=${os}`, { title: 'test matrix' });
-            await core.summary.addRaw(`runner: ${runner}, light: ${light} (${why}), os: ${os}\n`).write();
-
-  lint:
-    needs: runner
-    runs-on: ${{ needs.runner.outputs.light || 'ubuntu-latest' }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Keep npm's cache to this job's own packages
-        shell: bash
-        run: echo "npm_config_cache=$RUNNER_TEMP/npm-cache" >> "$GITHUB_ENV"
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24
-          cache: npm
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: go.mod
-
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
-        with:
-          install-only: true
-          # renovate: datasource=github-releases depName=golangci/golangci-lint
-          version: v2.15.0
-
-      - run: npm ci
-
-      - run: npm run lint
-
-      - name: Install shellcheck
-        if: ${{ !cancelled() }}
-        env:
-          # renovate: datasource=github-releases depName=koalaman/shellcheck
-          VERSION: v0.11.0
-          SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-        run: |
-          tarball="$RUNNER_TEMP/shellcheck.tar.xz"
-          curl -fsSL -o "$tarball" "https://github.com/koalaman/shellcheck/releases/download/$VERSION/shellcheck-$VERSION.linux.x86_64.tar.xz"
-          echo "$SHA256  $tarball" | sha256sum -c -
-          tar -xJf "$tarball" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/shellcheck-$VERSION" >> "$GITHUB_PATH"
-
-      - if: ${{ !cancelled() }}
-        run: shellcheck -s sh install.sh test/integration/testdata/install/check.sh
-
-  test:
-    needs: runner
-    strategy:
-      fail-fast: ${{ inputs.full == true }}
-      matrix:
-        include: >-
-          ${{ fromJSON(inputs.full
-          && '[{"os":"ubuntu-latest","shard":"1/3"},{"os":"ubuntu-latest","shard":"2/3"},{"os":"ubuntu-latest","shard":"3/3"},{"os":"macos-latest","shard":"1/5"},{"os":"macos-latest","shard":"2/5"},{"os":"macos-latest","shard":"3/5"},{"os":"macos-latest","shard":"4/5"},{"os":"macos-latest","shard":"5/5"},{"os":"windows-latest","shard":"1/4"},{"os":"windows-latest","shard":"2/4"},{"os":"windows-latest","shard":"3/4"},{"os":"windows-latest","shard":"4/4"}]'
-          || needs.runner.outputs.os == 'linux'
-          && '[{"os":"ubuntu-latest","shard":"1/3"},{"os":"ubuntu-latest","shard":"2/3"},{"os":"ubuntu-latest","shard":"3/3"}]'
-          || '[{"os":"ubuntu-latest","shard":"1/3"},{"os":"ubuntu-latest","shard":"2/3"},{"os":"ubuntu-latest","shard":"3/3"},{"os":"macos-latest","shard":"1/3"},{"os":"macos-latest","shard":"2/3"},{"os":"macos-latest","shard":"3/3"},{"os":"windows-latest","shard":"1/2"},{"os":"windows-latest","shard":"2/2"}]') }}
-    name: test (${{ matrix.os }}, ${{ matrix.shard }})
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && (needs.runner.outputs.runner || 'ubuntu-latest') || matrix.os }}
-    timeout-minutes: ${{ inputs.full && 45 || endsWith(matrix.shard, '/2') && 30 || 25 }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: go.mod
-
-      - name: Keep npm's cache to this job's own packages
-        shell: bash
-        run: echo "npm_config_cache=$RUNNER_TEMP/npm-cache" >> "$GITHUB_ENV"
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 26
-          cache: npm
-
-      - run: npm ci
-
-      - if: runner.os == 'Windows'
-        name: Read Chrome in from the runner's cold disk
-        run: |
-          $dir = Join-Path $env:ProgramFiles 'Google\Chrome\Application'
-          (Get-Item (Join-Path $dir 'chrome.exe')).VersionInfo.ProductVersion
-          $files = Get-ChildItem $dir -Recurse -File -ErrorAction Stop
-          $took = Measure-Command { foreach ($f in $files) { $null = [IO.File]::ReadAllBytes($f.FullName) } }
-          '{0:N0} MB of {1} read in {2:N1} s' -f (($files | Measure-Object Length -Sum).Sum / 1MB), $dir, $took.TotalSeconds
-
-      - shell: bash
-        run: sh scripts/verdict.sh test-shard node scripts/test-shard.mjs ${{ matrix.shard }} ${{ inputs.full && '--retry 1' || '' }} ${{ (inputs.full || matrix.os == 'ubuntu-latest') && '-race' || '' }} -count=1 -timeout ${{ endsWith(matrix.shard, '/2') && '20m' || '15m' }} -v ./test/integration/...
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-          SLICC_GUARD_VECTORS: ${{ (inputs.full || matrix.os == 'ubuntu-latest') && '1' || '0' }}
-
-      - if: startsWith(matrix.shard, '1/')
-        run: go build -trimpath -o bin/ ./cmd/slicc
-        env:
-          CGO_ENABLED: '0'
-
-  installer-assets:
-    needs: runner
-    runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: go.mod
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24
-
-      - run: scripts/package.sh "0.0.0-ci.$GITHUB_RUN_NUMBER"
-        env:
-          SLICC_SIGN: '0'
-
-      - name: Stage and check the npm packages
-        env:
-          VERSION: 0.0.0-ci.${{ github.run_number }}
-        run: |
-          node scripts/npm-stage.mjs --version "$VERSION" --companions --wasi
-          node scripts/npm-stage.mjs --name sliccy --launcher-only --out dist/npm-next \
-            --version "7.0.0-next.$VERSION" --deps-version "$VERSION" --companions
-          sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dry-run
-          sh scripts/verdict.sh npm-publish node scripts/npm-publish.mjs --dir dist/npm-next --tag next --dry-run
-          sh scripts/verdict.sh sliccy-next node scripts/sliccy-next.mjs --dry-run
-
-      - name: Run the npm launcher tests on Node 24
-        run: |
-          node --version
-          sh scripts/verdict.sh test-shard node scripts/test-shard.mjs 1/1 -count=1 -timeout 10m -run '^(TestNPM|TestSliccy)' -v ./test/integration/...
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: installer-assets
-          path: artifacts/release/
-          retention-days: 1
-
-  installer:
-    needs: [runner, installer-assets]
-    strategy:
-      fail-fast: false
-      matrix:
-        include: >-
-          ${{ fromJSON(inputs.full
-          && '[{"name":"ubuntu-curl","runner":"light","container":""},{"name":"macos-curl","runner":"macos-latest","container":""},{"name":"alpine-wget","runner":"ubuntu-latest","container":"alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"}]'
-          || '[{"name":"ubuntu-curl","runner":"light","container":""},{"name":"alpine-wget","runner":"ubuntu-latest","container":"alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"}]') }}
-    name: installer (${{ matrix.name }})
-    runs-on: ${{ matrix.runner == 'light' && (needs.runner.outputs.light || 'ubuntu-latest') || matrix.runner }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: installer-assets
-          path: ${{ runner.temp }}/installer/release
-
-      - name: Serve the assets
-        env:
-          ROOT: ${{ runner.temp }}/installer
-        run: |
-          nohup python3 -m http.server --bind 127.0.0.1 8765 --directory "$ROOT" > "$RUNNER_TEMP/http.log" 2>&1 &
-          for _ in $(seq 1 50); do
-            curl -fsS -o /dev/null http://127.0.0.1:8765/release/SHA256SUMS && exit 0
-            sleep 0.2
-          done
-          cat "$RUNNER_TEMP/http.log"
-          exit 1
-
-      - name: Run the installer checks
-        env:
-          ROOT: ${{ runner.temp }}/installer
-          IMAGE: ${{ matrix.container }}
-          CI_VERSION: 0.0.0-ci.${{ github.run_number }}
-        run: |
-          if [ -z "$IMAGE" ]; then
-            sh scripts/verdict.sh install-check sh test/integration/testdata/install/check.sh "$ROOT" http://127.0.0.1:8765 "$CI_VERSION"
-          else
-            sh scripts/verdict.sh install-check docker run --rm --network host -e SLICC_CHECK_WGET=1 \
-              -v "$PWD:/src:ro" -v "$ROOT:$ROOT" "$IMAGE" \
-              sh /src/test/integration/testdata/install/check.sh "$ROOT" http://127.0.0.1:8765 "$CI_VERSION"
-          fi
-
   ci:
-    if: always()
-    needs: [runner, lint, test, installer-assets, installer]
-    runs-on: ${{ needs.runner.outputs.light || 'ubuntu-latest' }}
-    timeout-minutes: 5
-    steps:
-      - name: Require every job to pass
-        env:
-          OS: ${{ needs.runner.outputs.os == 'linux' && 'Linux only (pull request without the all-os label)' || 'every OS' }}
-          RESULTS: runner=${{ needs.runner.result }} lint=${{ needs.lint.result }} test=${{ needs.test.result }} installer-assets=${{ needs.installer-assets.result }} installer=${{ needs.installer.result }}
-        run: |
-          echo "test matrix: $OS"
-          failed=
-          for pair in $RESULTS; do
-            echo "$pair"
-            [ "${pair#*=}" = success ] || failed="$failed ${pair%%=*}"
-          done
-          if [ -n "$failed" ]; then
-            echo "::error::these jobs did not succeed:$failed"
-            exit 1
-          fi
+    uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@v2.9.0
+    secrets: inherit
+    with:
+      node-version: '26'
+      lint: |
+        # renovate: datasource=github-releases depName=golangci/golangci-lint
+        GOLANGCI_LINT=v2.15.0
+        curl -fsSL "https://raw.githubusercontent.com/golangci/golangci-lint/$GOLANGCI_LINT/install.sh" | sh -s -- -b "$RUNNER_TEMP/golangci-lint" "$GOLANGCI_LINT"
+        PATH="$RUNNER_TEMP/golangci-lint:$PATH" npm run lint
+        npm run lint:sh
+      shards: 4
+      timeout-minutes: 45
+      review-timeout-minutes: 90
+      release-secrets: APPLE_CERTIFICATE_BASE64 APPLE_DEVELOPER_CERTIFICATE_PASSWORD APPLE_API_KEY_ID APPLE_API_KEY_ISSUER_ID APPLE_API_KEY_P8_BASE64
+      attest: artifacts/release/SHA256SUMS
+      after-release: scripts/go-warm.sh "$RELEASE_VERSION"
+      review-prompt: |
+        SLICC-CLI
+
+        This repository is slicc-cli: `slicc`, one Go binary (macOS, Windows, Linux, and a WASI build that runs inside seven) that links a machine to seven over WebRTC and shares its network, HTTP, SSH, CDP, kernel and host folders with it. README.md is the contract: its link protocol (§1 to §6) must stay in step with seven's link exit in ai-ecoverse/slicc-bios. `git diff origin/main...HEAD`, or `$RUNNER_TEMP/review/context/pr.diff`, is the change.
+
+        There is no certification after you: once this pull request passes the merge queue, semantic-release builds, signs and publishes it from `main` (the GitHub release that `install.sh` and `slicc update` take, and the npm packages that seven pins). Review it as the last check before it ships.
+
+        Look for real defects, in this order:
+        1. Security: the network policy (`--allow`, protected debugging ports 9222 to 9229, loopback, DNS names from `--hosts`), the protected-origin guard on the CDP relay (seven and the vault never reach the page's own CDP session), credentialed streams, host folders (the fence: nothing outside a shared folder, symlinks included), the SSH server, join URLs and tray hub tokens, update and install (SHA256SUMS, then the build provenance attestation), and secrets that must never reach a log, an error or telemetry.
+        2. Correctness of the link: frames, stream ids, flow control, HELLO and caps, link-down and relink, against README.md. A change on the wire without its README section, or one seven's exit can't speak, is a defect.
+        3. Platforms: the build is `CGO_ENABLED=0` for darwin, linux and windows on amd64 and arm64, plus wasip1. CI runs the tests on Linux only and vets darwin and windows, so read platform-specific files (`*_windows.go`, `*_other.go`, named pipes, process groups, signals, file locks) with care.
+        4. Tests: every behaviour change has an integration test in `test/integration/` that drives the binary, and a fix's test fails without the fix. Confirm that for a fix: copy the changed test files into `$RUNNER_TEMP/base` and run them there with `go test -count=1 -run '^TestName$' ./test/integration/`.
+        5. Releases: `scripts/package.sh`, `scripts/release-build.sh`, `scripts/npm-*.mjs`, `.releaserc.json` and `install.sh` decide what ships. A pushed Go tag is permanent, so a breaking change needs a `/vN` module path first.
+        6. Repo rules: no comments in any file except Go directives and `# renovate:` annotations, no unit tests in git, AGENTS.md under 1000 characters, and a conventional-commit title (`fix`, `feat` and `perf` release, the rest don't).
+
+        Run `npm run lint` and the integration tests a change touches. Don't report style preferences, or anything you haven't confirmed in the code or by a run.
+
+        Severity: deny for a confirmed P1 or P2: a security or secret exposure, a policy or guard bypass, a broken link or a protocol change seven can't follow, a crash, a release that can't install or update, a behaviour change without its test, or a fix whose test passes without it. A narrow problem with a workaround is P3: comment with a repro and approve. A problem on seven's side belongs to ai-ecoverse/slicc-bios, one in the shared pipeline to ai-ecoverse/slicc-shared-web: open it there as an issue.

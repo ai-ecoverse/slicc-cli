@@ -117,7 +117,7 @@ func TestNPMPublishDoesNotWaitForCompanions(t *testing.T) {
 	if deps := optionalDeps(t, out); deps["@ai-ecoverse/slicc-jerk"] != "^1.4.0" || len(deps) != 2 {
 		t.Fatalf("deps %v", deps)
 	}
-	r := publish(t, node, out, publishEnv(t, "npm_config_registry="+reg.URL+"/", "SLICCY_NEXT_PUBLISH=true", "SLICC_REGISTRY_WAIT_SECONDS=0"), "--tag", "next", "--dry-run", "--require-registry")
+	r := publish(t, node, out, publishEnv(t, "npm_config_registry="+reg.URL+"/", "SLICC_REGISTRY_WAIT_SECONDS=0"), "--tag", "next", "--dry-run", "--require-registry")
 	if r.code != 0 || !strings.Contains(r.stdout, "every optional dependency of sliccy@7.0.0-next.1.2.3 is on the registry") || strings.Contains(r.stdout+r.stderr, "waiting for") {
 		t.Fatalf("the registry check waited for a companion: %+v", r)
 	}

@@ -83,7 +83,7 @@ func TestShardTimesCoverEachCIPlatform(t *testing.T) {
 	for _, name := range declaredTests(t) {
 		declared[name] = true
 	}
-	for _, platform := range []string{"darwin", "linux", "win32"} {
+	for _, platform := range []string{"linux"} {
 		known := 0
 		for name := range times[platform] {
 			if declared[name] {
@@ -104,7 +104,7 @@ func TestTestShardsPartitionTheSuite(t *testing.T) {
 		t.Fatalf("found only %d tests", len(names))
 	}
 	times := shardTimes(t)
-	for _, platform := range []string{"darwin", "linux", "win32", "nowhere"} {
+	for _, platform := range []string{"linux", "nowhere"} {
 		weight := map[string]float64{}
 		var known []float64
 		for _, name := range declared {
@@ -156,11 +156,32 @@ func TestTestShardsPartitionTheSuite(t *testing.T) {
 			}
 		}
 	}
-	for _, bad := range []string{"0/2", "3/2", "1/0", "two", ""} {
+	for _, bad := range []string{"0/2", "3/2", "1/0", "two", "", "ci/x"} {
 		err := exec.Command(node, "../../scripts/test-shard.mjs", bad, "--print").Run()
 		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 {
 			t.Fatalf("shard %q: %v", bad, err)
 		}
+	}
+	for shard, want := range map[string]string{"0": "1/3", "2": "3/3"} {
+		ci := shardSelector(t, node, "ci/3", "SLICC_TEST_SHARD="+shard, "SLICC_TEST_SHARD_PLATFORM=linux")
+		plain := shardSelector(t, node, want, "SLICC_TEST_SHARD_PLATFORM=linux")
+		for _, name := range names {
+			if ci(name) != plain(name) {
+				t.Fatalf("ci/3 on the pipeline's shard %s picks %s differently from %s", shard, name, want)
+			}
+		}
+	}
+	for _, bad := range []string{"3", "-1", "x"} {
+		cmd := exec.Command(node, "../../scripts/test-shard.mjs", "ci/3", "--print")
+		cmd.Env = append(os.Environ(), "SLICC_TEST_SHARD="+bad)
+		if exit, ok := cmd.Run().(*exec.ExitError); !ok || exit.ExitCode() != 2 {
+			t.Fatalf("ci/3 on the pipeline's shard %q: want exit 2", bad)
+		}
+	}
+	cmd := exec.Command(node, "../../scripts/test-shard.mjs", "ci/3", "--print")
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "SLICC_TEST_SHARD=") })
+	if out, err := cmd.Output(); err != nil || strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("ci/3 off the pipeline runs every test: %q, %v", out, err)
 	}
 }
 
@@ -214,24 +235,38 @@ func TestTestShardRunsGoTestOnItsShard(t *testing.T) {
 	if code != 1 || !strings.Contains(failed, "bravo failed") {
 		t.Fatalf("a failing shard: exit %d\n%s", code, failed)
 	}
-	marker := filepath.Join(t.TempDir(), "flaked")
-	flaky, code := runArgs([]string{"1/1", "--retry", "1", "-count=1", "-v", "."}, "FIXTURE_FLAKY="+marker, "SLICC_TEST_SHARD_PLATFORM=fixture")
-	if got := strings.Join(ran(flaky), " "); code != 0 || got != "TestAlpha TestBravo TestCharlie TestCharlie/sub TestBravo" || !strings.Contains(flaky, "test-shard 1/1: retrying TestBravo (retry 1 of 1)") || !strings.Contains(flaky, "test-shard: PASS fixture 1/1 ran 3 tests; TestBravo passed on retry") || !strings.Contains(flaky, "::warning title=flaky tests::fixture 1/1: TestBravo failed, then passed on retry") {
-		t.Fatalf("a test that fails once and passes on its retry: exit %d, ran %q\n%s", code, got, flaky)
+	report := filepath.Join(t.TempDir(), "0.xml")
+	preload := filepath.Join(t.TempDir(), "shard.cjs")
+	if err := os.WriteFile(preload, []byte("process.env.SLICC_PRELOADED = '1';\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	still, code := runArgs([]string{"2/2", "--retry", "1", "-count=1", "-v", "."}, "FIXTURE_FAIL=1", "SLICC_TEST_SHARD_PLATFORM=fixture")
-	if got := strings.Join(ran(still), " "); code != 1 || got != "TestBravo TestBravo" || !strings.Contains(still, "TestBravo failed again on retry 1") || !strings.Contains(still, "test-shard: FAIL fixture 2/2") {
-		t.Fatalf("a test that fails on its retry too: exit %d, ran %q\n%s", code, got, still)
+	pipeline := []string{"SLICC_TEST_SHARD=1", "SLICC_TEST_JUNIT=" + report, "SLICC_TEST_FILES=", "SLICC_TEST_NODE_OPTIONS= --max-old-space-size=64 ", "NODE_OPTIONS=--require " + preload, "FIXTURE_FAIL=1"}
+	piped, code := runArgs([]string{"ci/2", "-count=1", "-v", "."}, pipeline...)
+	if got := strings.Join(ran(piped), " "); code != 1 || got != "TestBravo" {
+		t.Fatalf("ci/2 on the pipeline's shard 1: exit %d, ran %q\n%s", code, got, piped)
 	}
-	if _, code := run("2/2", "FIXTURE_FLAKY="+filepath.Join(t.TempDir(), "once")); code != 1 {
-		t.Fatalf("without --retry a flaky test fails the shard: exit %d", code)
+	xml, err := os.ReadFile(report)
+	if err != nil {
+		t.Fatalf("no JUnit report: %v\n%s", err, piped)
 	}
-	retimed, code := runArgs([]string{"1/1", "--retry", "1", "-count=1", "-timeout", "2s", "-v", "."}, "FIXTURE_STALL=1", "SLICC_TEST_SHARD_PLATFORM=fixture")
-	if code == 0 || strings.Contains(retimed, "retrying") {
-		t.Fatalf("a shard that hit its -timeout is not retried: exit %d\n%s", code, retimed)
+	if !strings.Contains(string(xml), `<testcase name="TestBravo" classname="test/integration" file="test/integration" time="0"><failure message="TestBravo failed"/></testcase>`) || strings.Count(string(xml), "<testcase ") != 1 {
+		t.Fatalf("the JUnit report of a failed shard:\n%s", xml)
 	}
-	if _, code := runArgs([]string{"1/1", "--retry", "x", "-v", "."}); code != 2 {
-		t.Fatalf("--retry x: exit %d, want 2", code)
+	envSrc := "package fixture\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestEnv(t *testing.T) {\n\tif os.Getenv(\"NODE_OPTIONS\") != \"--max-old-space-size=64\" || os.Getenv(\"SLICC_TEST_SHARD\") != \"\" || os.Getenv(\"SLICC_TEST_JUNIT\") != \"\" {\n\t\tt.Fatalf(\"NODE_OPTIONS=%q\", os.Getenv(\"NODE_OPTIONS\"))\n\t}\n}\n\nfunc TestSkipped(t *testing.T) { t.Skip(\"skipped\") }\n"
+	envDir := t.TempDir()
+	for name, body := range map[string]string{"go.mod": "module fixture\n\ngo 1.26\n", "env_test.go": envSrc} {
+		if err := os.WriteFile(filepath.Join(envDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(node, script, "ci/1", "-count=1", "-v", ".")
+	cmd.Dir = envDir
+	cmd.Env = append(os.Environ(), "SLICC_TEST_SHARD_SUITE="+envDir, "SLICC_TEST_SHARD=0", "SLICC_TEST_JUNIT="+report, "SLICC_TEST_NODE_OPTIONS= --max-old-space-size=64 ", "NODE_OPTIONS=--require "+preload)
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "test-shard: PASS") {
+		t.Fatalf("go test gets the pipeline's own NODE_OPTIONS back and no SLICC_TEST_ variables: %v\n%s", err, out)
+	}
+	if xml, _ := os.ReadFile(report); !strings.Contains(string(xml), `tests="2" failures="0" skipped="1"`) || !strings.Contains(string(xml), `<testcase name="TestSkipped" classname="test/integration" file="test/integration" time="0"><skipped/></testcase>`) {
+		t.Fatalf("the JUnit report of a passing shard:\n%s", xml)
 	}
 	stalled, code := runArgs([]string{"1/1", "-count=1", "-timeout", "2s", "-v", "."}, "FIXTURE_STALL=1", "SLICC_TEST_SHARD_PLATFORM=fixture")
 	if want := "test-shard: fixture 1/1 hit its -timeout 2s with TestBravo for "; code == 0 || !strings.Contains(stalled, want) || !strings.Contains(stalled, "the 1 finished tests took 0 s") || !strings.Contains(stalled, "the slowest finished: TestAlpha 0 s") {
@@ -286,85 +321,51 @@ func TestShardTimesReadsGoTestLogs(t *testing.T) {
 	}
 }
 
-var guardVectorTests = map[string]bool{"TestCDPProtectVectorsPrompt": true, "TestCDPProtectVectorsLagging": true, "TestCDPProtectVectorsIgnoreChromeUITargets": true}
-
-func TestOnlyTheFullMatrixRetriesAFailedTest(t *testing.T) {
-	job := workflowJobs(t, readWorkflow(t, "ci.yml"))["test"].body
-	run := strings.TrimPrefix(lineWith(t, job, "sh scripts/verdict.sh test-shard"), "run: ")
-	limit := strings.TrimPrefix(lineWith(t, job, "timeout-minutes:"), "timeout-minutes: ")
-	for _, full := range []any{nil, true} {
-		ctx := ghCtx{"github.event_name": "push", "inputs.full": full, "needs.runner.outputs.os": "all"}
-		legs, _ := ciMatrix(t, ctx)
-		for _, leg := range legs {
-			ctx["matrix.os"], ctx["matrix.shard"] = leg.os, leg.shard
-			cmd := " " + ghString(ghTemplate(t, run, ctx)) + " "
-			if got := strings.Contains(cmd, " --retry 1 "); got != (full == true) {
-				t.Errorf("%s %s with full %v retries failed tests: %v; only the release's full matrix retries", leg.os, leg.shard, full, got)
-			}
-			if full != true {
-				continue
-			}
-			m := regexp.MustCompile(` -timeout ([0-9]+)m `).FindStringSubmatch(cmd)
-			job, err := strconv.Atoi(ghString(ghTemplate(t, limit, ctx)))
-			if m == nil || err != nil {
-				t.Fatalf("%s %s: no -timeout or timeout-minutes", leg.os, leg.shard)
-			}
-			if minutes, _ := strconv.Atoi(m[1]); job < 2*minutes+5 {
-				t.Errorf("%s %s: timeout-minutes %d has no room for a retry of its -timeout %dm", leg.os, leg.shard, job, minutes)
-			}
-		}
-	}
-}
-
 func TestEachCIShardFitsItsTimeout(t *testing.T) {
 	node := requireNode(t)
 	declared := declaredTests(t)
-	times := shardTimes(t)
-	platforms := map[string]string{"ubuntu-latest": "linux", "macos-latest": "darwin", "windows-latest": "win32"}
-	job := workflowJobs(t, readWorkflow(t, "ci.yml"))["test"].body
-	run := strings.TrimPrefix(lineWith(t, job, "sh scripts/verdict.sh test-shard"), "run: ")
-	limit := strings.TrimPrefix(lineWith(t, job, "timeout-minutes:"), "timeout-minutes: ")
-	for _, full := range []any{nil, true} {
-		ctx := ghCtx{"github.event_name": "push", "inputs.full": full, "needs.runner.outputs.os": "all"}
-		legs, _ := ciMatrix(t, ctx)
-		for _, leg := range legs {
-			ctx["matrix.os"], ctx["matrix.shard"] = leg.os, leg.shard
-			m := regexp.MustCompile(` -timeout ([0-9]+)m `).FindStringSubmatch(ghString(ghTemplate(t, run, ctx)))
-			if m == nil {
-				t.Fatalf("%s %s has no -timeout in minutes", leg.os, leg.shard)
+	times := shardTimes(t)["linux"]
+	shards, err := strconv.Atoi(ciInput(t, "shards"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := strconv.Atoi(ciInput(t, "timeout-minutes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	test := npmScript(t, "test")
+	m := regexp.MustCompile(`^node scripts/test-shard\.mjs ci/([0-9]+) .* -timeout ([0-9]+)m `).FindStringSubmatch(test)
+	if m == nil || m[1] != strconv.Itoa(shards) {
+		t.Fatalf("npm test is %q; it splits the suite into ci.yml's %d shards with a -timeout in minutes", test, shards)
+	}
+	minutes, _ := strconv.Atoi(m[2])
+	if job < minutes+5 {
+		t.Errorf("timeout-minutes %d leaves less than 5 minutes past the -timeout %dm for setup", job, minutes)
+	}
+	var known []float64
+	for _, name := range declared {
+		if s, ok := times[name]; ok {
+			known = append(known, s)
+		}
+	}
+	sort.Float64s(known)
+	for i := 1; i <= shards; i++ {
+		spec := strconv.Itoa(i) + "/" + strconv.Itoa(shards)
+		picks := shardSelector(t, node, spec, "SLICC_TEST_SHARD_PLATFORM=linux")
+		load := 0.0
+		for _, name := range declared {
+			if !picks(name) {
+				continue
 			}
-			minutes, _ := strconv.Atoi(m[1])
-			if job, err := strconv.Atoi(ghString(ghTemplate(t, limit, ctx))); err != nil || job < minutes+5 {
-				t.Errorf("%s %s: its job's timeout-minutes %s leaves less than 5 minutes past its -timeout %dm for setup", leg.os, leg.shard, ghString(ghTemplate(t, limit, ctx)), minutes)
+			if s, ok := times[name]; ok {
+				load += s
+			} else if len(known) > 0 {
+				load += known[len(known)/2]
 			}
-			platform := platforms[leg.os]
-			var known []float64
-			for _, name := range declared {
-				if s, ok := times[platform][name]; ok {
-					known = append(known, s)
-				}
-			}
-			sort.Float64s(known)
-			guards := "SLICC_GUARD_VECTORS=1"
-			if !leg.guards {
-				guards = "SLICC_GUARD_VECTORS=0"
-			}
-			picks := shardSelector(t, node, leg.shard, "SLICC_TEST_SHARD_PLATFORM="+platform, guards)
-			load := 0.0
-			for _, name := range declared {
-				if !picks(name) || (!leg.guards && guardVectorTests[name]) {
-					continue
-				}
-				if s, ok := times[platform][name]; ok {
-					load += s
-				} else if len(known) > 0 {
-					load += known[len(known)/2]
-				}
-			}
-			t.Logf("%s %s: %.0f s of its -timeout %dm", leg.os, leg.shard, load, minutes)
-			if budget := float64(minutes*60) * 3 / 4; load > budget {
-				t.Errorf("%s %s: its tests took %.0f s by shard-times.json, more than three quarters of its -timeout %dm (%.0f s); add a shard", leg.os, leg.shard, load, minutes, budget)
-			}
+		}
+		t.Logf("shard %s: %.0f s of its -timeout %dm", spec, load, minutes)
+		if budget := float64(minutes*60) * 3 / 4; load > budget {
+			t.Errorf("shard %s: its tests took %.0f s by shard-times.json, more than three quarters of its -timeout %dm (%.0f s); add a shard", spec, load, minutes, budget)
 		}
 	}
 }
