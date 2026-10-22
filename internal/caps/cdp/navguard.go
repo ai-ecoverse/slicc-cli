@@ -47,26 +47,27 @@ func (g *guard) startsUnheld(c *command) bool {
 }
 
 type navTarget struct {
-	target      string
-	session     string
-	start       time.Time
-	progress    time.Time
-	awayAt      time.Duration
-	reason      string
-	ready       chan struct{}
-	pending     int
-	done        bool
-	failed      bool
-	loading     map[string]int
-	started     int
-	unsure      bool
-	errorURL    string
-	documentURL string
-	failedURLs  []string
-	commits     int
-	failCommit  int
-	worker      bool
-	shared      bool
+	target        string
+	session       string
+	start         time.Time
+	progress      time.Time
+	awayAt        time.Duration
+	reason        string
+	ready         chan struct{}
+	pending       int
+	done          bool
+	failed        bool
+	loading       map[string]int
+	started       int
+	unsure        bool
+	errorURL      string
+	documentURL   string
+	failedURLs    []string
+	commits       int
+	failCommit    int
+	worker        bool
+	shared        bool
+	historyLocked bool
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -162,7 +163,13 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 		return nil
 	}
 	if nt.pending--; nt.pending == 0 {
-		nt.settle(false)
+		if nt.worker || (g.targets[nt.target] != nil && g.targets[nt.target].typ == "iframe") {
+			nt.settle(false)
+			return nil
+		}
+		return [][]byte{g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(res message) [][]byte {
+			return g.initialHistoryLocked(nt, res)
+		})}
 	}
 	return nil
 }
@@ -174,6 +181,9 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
+	if nt.commits != before && (g.o.Loaded(nt.documentURL) || g.o.Loaded(nt.errorURL)) {
+		nt.historyLocked = true
+	}
 	if nt.commits != before && g.o.Loaded(nt.errorURL) {
 		nt.failCommit = nt.commits
 	}
@@ -188,6 +198,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	}
 	var p struct {
 		RequestID    string `json:"requestId"`
+		FrameID      string `json:"frameId"`
 		ResourceType string `json:"resourceType"`
 		Request      struct {
 			URL string `json:"url"`
@@ -197,6 +208,9 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		return nil
 	}
 	if p.ResourceType == "Document" && g.o.Loaded(p.Request.URL) {
+		if p.FrameID == nt.target || p.FrameID == "" {
+			nt.historyLocked = true
+		}
 		g.logf("cdp: failed a document request into a protected origin in a target this stream touched")
 		msg, _ := g.newCallLocked(nt.session, "Fetch.failRequest", map[string]any{"requestId": p.RequestID, "errorReason": "BlockedByClient"}, false)
 		return [][]byte{msg}
