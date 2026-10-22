@@ -1,5 +1,6 @@
 import { run } from '/vendor/slicc-browsers/guard-runner.mjs';
 import { CdpClient } from './cdp.js';
+import { foregroundMouseCall } from './foreground.js';
 
 class SocketClient {
   #nextId = 1;
@@ -186,7 +187,7 @@ function sessionBound(c, name, { inject } = {}) {
         const set = calls.get(sessionId) ?? new Set();
         calls.set(sessionId, set);
         set.add(reject);
-        c.send(method, params, sessionId)
+        foregroundMouseCall(c, method, params, sessionId)
           .then(resolve, reject)
           .finally(() => set.delete(reject));
       });
