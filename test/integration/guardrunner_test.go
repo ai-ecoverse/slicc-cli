@@ -591,16 +591,16 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		ran = append(ran, fmt.Sprintf("%s=%d", v.ID, passed[v.ID]))
 	}
 	t.Logf("passed rows per vector: %s", strings.Join(ran, " "))
-	if len(known) != 3 {
-		t.Errorf("matched %d pre-existing known rows, want exactly3", len(known))
+	if len(known) != 1 {
+		t.Errorf("matched %d pre-existing known rows, want exactly one #404 row", len(known))
 	}
 	for id, count := range known {
 		if count != 1 {
 			t.Errorf("%s: matched %d known rows, want exactly1", id, count)
 		}
 	}
-	if !sum.Pass && len(known) == 3 && !t.Failed() {
-		t.Log("three exact independently recorded pre-existing outcomes retained: #402, #404")
+	if !sum.Pass && len(known) == 1 && !t.Failed() {
+		t.Log("one exact independently recorded pre-existing outcome retained: #404")
 	} else {
 		t.Errorf("the guard set did not retain the exact recorded known failures: counts=%s", sum.Counts)
 	}

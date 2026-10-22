@@ -32,9 +32,6 @@ func preexistingGuardRows(t *testing.T) []preexistingGuardRow {
 }
 
 func preexistingGuardIssue(r guardRow) string {
-	if r.Target == "seven" && (r.ID == "C4.iframe-preattach.blank" || r.ID == "C4.iframe-preattach.srcdoc") {
-		return "#402 (security)"
-	}
 	if r.ID == "C2.redirect-body" && r.Target == "ordinary" {
 		return "#404"
 	}
@@ -61,10 +58,15 @@ func exactPreexistingGuardRow(r guardRow, rows []preexistingGuardRow) bool {
 
 func TestGuardPreexistingRowsRequireExactBaselineEvidence(t *testing.T) {
 	rows := preexistingGuardRows(t)
-	if len(rows) != 6 {
-		t.Fatalf("%d fixture rows, want3 in each variant", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("%d fixture rows, want one #404 row in each variant", len(rows))
 	}
+	seen := map[string]bool{}
 	for _, known := range rows {
+		if known.ID != "C2.redirect-body" || known.Target != "ordinary" || known.Issue != "#404" || (known.Variant != "prompt" && known.Variant != "lagging") || seen[known.Variant] {
+			t.Fatalf("unexpected retained known: %+v", known)
+		}
+		seen[known.Variant] = true
 		why, _ := json.Marshal(known.Why)
 		observed, _ := json.Marshal(known.Observed)
 		r := guardRow{ID: known.ID, Target: known.Target, Variant: known.Variant, Control: "pass", Guarded: "fail", Live: "pass", Why: why, Observed: observed}

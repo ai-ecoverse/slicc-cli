@@ -59,64 +59,6 @@
     }
   },
   {
-    "id": "C4.iframe-preattach.blank",
-    "target": "seven",
-    "variant": "prompt",
-    "issue": "#402 (security)",
-    "why": "frameTreeShown: got true, want false; axFullShown: got true, want false; axPartialShown: got true, want false; documentShown: got true, want false; nodeShown: got true, want false; snapshotShown: got true, want false",
-    "observations": {
-      "control": {
-        "live": true,
-        "frameTreeShown": true,
-        "axFullShown": true,
-        "axPartialShown": true,
-        "documentShown": true,
-        "nodeShown": true,
-        "snapshotShown": true,
-        "eventsShown": false
-      },
-      "guarded": {
-        "live": true,
-        "frameTreeShown": true,
-        "axFullShown": true,
-        "axPartialShown": true,
-        "documentShown": true,
-        "nodeShown": true,
-        "snapshotShown": true,
-        "eventsShown": false
-      }
-    }
-  },
-  {
-    "id": "C4.iframe-preattach.srcdoc",
-    "target": "seven",
-    "variant": "prompt",
-    "issue": "#402 (security)",
-    "why": "frameTreeShown: got true, want false; axFullShown: got true, want false; axPartialShown: got true, want false; documentShown: got true, want false; nodeShown: got true, want false; snapshotShown: got true, want false",
-    "observations": {
-      "control": {
-        "live": true,
-        "frameTreeShown": true,
-        "axFullShown": true,
-        "axPartialShown": true,
-        "documentShown": true,
-        "nodeShown": true,
-        "snapshotShown": true,
-        "eventsShown": false
-      },
-      "guarded": {
-        "live": true,
-        "frameTreeShown": true,
-        "axFullShown": true,
-        "axPartialShown": true,
-        "documentShown": true,
-        "nodeShown": true,
-        "snapshotShown": true,
-        "eventsShown": false
-      }
-    }
-  },
-  {
     "id": "C2.redirect-body",
     "target": "ordinary",
     "variant": "lagging",
@@ -172,64 +114,6 @@
         "hopsRedacted": true,
         "networkBodyAttempted": true,
         "networkBodyRefused": true
-      }
-    }
-  },
-  {
-    "id": "C4.iframe-preattach.blank",
-    "target": "seven",
-    "variant": "lagging",
-    "issue": "#402 (security)",
-    "why": "frameTreeShown: got true, want false; axFullShown: got true, want false; axPartialShown: got true, want false; documentShown: got true, want false; nodeShown: got true, want false; snapshotShown: got true, want false",
-    "observations": {
-      "control": {
-        "live": true,
-        "frameTreeShown": true,
-        "axFullShown": true,
-        "axPartialShown": true,
-        "documentShown": true,
-        "nodeShown": true,
-        "snapshotShown": true,
-        "eventsShown": false
-      },
-      "guarded": {
-        "live": true,
-        "frameTreeShown": true,
-        "axFullShown": true,
-        "axPartialShown": true,
-        "documentShown": true,
-        "nodeShown": true,
-        "snapshotShown": true,
-        "eventsShown": false
-      }
-    }
-  },
-  {
-    "id": "C4.iframe-preattach.srcdoc",
-    "target": "seven",
-    "variant": "lagging",
-    "issue": "#402 (security)",
-    "why": "frameTreeShown: got true, want false; axFullShown: got true, want false; axPartialShown: got true, want false; documentShown: got true, want false; nodeShown: got true, want false; snapshotShown: got true, want false",
-    "observations": {
-      "control": {
-        "live": true,
-        "frameTreeShown": true,
-        "axFullShown": true,
-        "axPartialShown": true,
-        "documentShown": true,
-        "nodeShown": true,
-        "snapshotShown": true,
-        "eventsShown": false
-      },
-      "guarded": {
-        "live": true,
-        "frameTreeShown": true,
-        "axFullShown": true,
-        "axPartialShown": true,
-        "documentShown": true,
-        "nodeShown": true,
-        "snapshotShown": true,
-        "eventsShown": false
       }
     }
   }
