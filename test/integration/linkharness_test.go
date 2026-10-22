@@ -92,18 +92,20 @@ func launchBrowserWith(t *testing.T, debugPort int, prep func(cmd *exec.Cmd) fun
 	if err != nil {
 		t.Fatal(err)
 	}
+	mode, chromeEnv := chromeScreen(t)
 	args := []string{
-		"--headless=new", "--remote-debugging-port=" + strconv.Itoa(debugPort), "--user-data-dir=" + dir,
+		"--remote-debugging-port=" + strconv.Itoa(debugPort), "--user-data-dir=" + dir,
 		"--no-first-run", "--no-default-browser-check", "--disable-background-networking",
 		"--disable-component-update", "--disable-sync", "--enable-features=ForceForegroundPriorityForAllTabs",
 	}
+	args = append(mode, args...)
 	args = append(args, browser.ThrowawaySwitches...)
 	args = append(append(args, extra...), "about:blank")
 	if runtime.GOOS == "linux" {
 		args = append([]string{"--no-sandbox"}, args...)
 	}
 	cmd := exec.Command(chrome, args...)
-	cmd.Env = realEnv
+	cmd.Env = chromeEnv
 	stderr := filepath.Join(dir, "slicc-it-chrome.log")
 	logFile, err := os.Create(stderr)
 	if err != nil {
@@ -217,6 +219,9 @@ func (b *chromeProc) tryOpenPage(t *testing.T, url string) (*page, error) {
 	}
 	t.Cleanup(func() { b.closeTarget(res.TargetID) })
 	p := &page{t: t, b: b, target: res.TargetID, session: s}
+	if err := s.Call(ctx, "Page.bringToFront", nil, nil); err != nil {
+		return p, fmt.Errorf("foreground %s: %w", url, err)
+	}
 	err = p.loaded(url, 15*time.Second)
 	if err == nil || !p.droppedModule() {
 		return p, err

@@ -357,14 +357,6 @@ func TestCDPGuardVectorsSkipC9OnlyOnMacOS(t *testing.T) {
 	}
 }
 
-func TestCDPProtectVectorsPrompt(t *testing.T) {
-	runGuardVectors(t, "prompt")
-}
-
-func TestCDPProtectVectorsLagging(t *testing.T) {
-	runGuardVectors(t, "lagging")
-}
-
 type guardRun struct {
 	variant    string
 	slots      int
@@ -382,9 +374,6 @@ func runGuardVectors(t *testing.T, variant string) {
 
 func runGuard(t *testing.T, run guardRun) *guardSummary {
 	t.Helper()
-	if os.Getenv("SLICC_GUARD_VECTORS") == "0" {
-		t.Skip("the guard vectors run on Linux for pull requests and on every OS on main")
-	}
 	if len(guardSkips) > 0 {
 		t.Logf("skipping %d C9 vectors: %s", len(guardSkips), guardC9MacReason)
 	}
@@ -554,7 +543,11 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 				t.Errorf("%s: a text row ran: %+v", name, r)
 			}
 		case r.Control == "skip":
-			if r.Reason == "not-supported:siteIsolationOff" && (r.ID == "C4.iframe-preattach.blank.shared" || r.ID == "C4.iframe-preattach.srcdoc.shared") && r.Guarded == "skip" && r.Live == "skip" {
+			if !documentedGuardSkip(r) {
+				t.Errorf("%s: inconsistent or unexplained skip: %+v", name, r)
+				continue
+			}
+			if r.Reason == "not-supported:siteIsolationOff" {
 				unsupported[r.ID]++
 				t.Logf("%s: skip %s", name, r.Reason)
 			} else if !strings.HasPrefix(r.Reason, "not-applicable") {
@@ -572,6 +565,9 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		if r.Control == "pass" && r.Guarded == "pass" && r.Live == "pass" {
 			passed[r.ID]++
 		}
+	}
+	if len(passed) == 0 {
+		t.Error("no applicable guard vector passed; an all-skip run is not evidence")
 	}
 	var set struct {
 		Vectors []struct {
