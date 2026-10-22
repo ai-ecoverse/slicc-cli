@@ -48,11 +48,6 @@ export function weights(names, times) {
   return new Map(names.map((n) => [n, typeof times[n] === 'number' && times[n] >= 0 ? times[n] : fallback]));
 }
 
-export function guardFree(times, env) {
-  if (env.SLICC_GUARD_VECTORS !== '0') return times;
-  return Object.fromEntries(Object.entries(times).map(([n, sec]) => [n, /^TestCDPProtectVectors/.test(n) ? 0 : sec]));
-}
-
 export function split(names, times, count) {
   const w = weights(names, times);
   const order = [...names].sort((a, b) => w.get(b) - w.get(a) || (a < b ? -1 : a > b ? 1 : 0));
@@ -138,7 +133,7 @@ if (isMain(import.meta.url)) {
   try {
     const parsed = parseShard(spec, process.env);
     label = `${parsed.index}/${parsed.count}`;
-    const shards = split(testNames(suite), guardFree(loadTimes(timesFile, platform), process.env), parsed.count);
+    const shards = split(testNames(suite), loadTimes(timesFile, platform), parsed.count);
     shard = shards[parsed.index - 1];
     flag = shardFlag(shards, parsed);
   } catch (err) {

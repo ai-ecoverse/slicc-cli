@@ -1,0 +1,236 @@
+[
+  {
+    "id": "C2.redirect-body",
+    "target": "ordinary",
+    "variant": "prompt",
+    "issue": "#404",
+    "why": "overridesRefused: got false, want true",
+    "observations": {
+      "control": {
+        "live": true,
+        "rawRecorded": true,
+        "secretHidden": false,
+        "sessionSurvives": true,
+        "protectedBodyHidden": true,
+        "cookieHidden": true,
+        "replayAttempted": true,
+        "resourceContentAttempted": true,
+        "snapshotAttempted": true,
+        "domSnapshotAttempted": true,
+        "overridesRefused": false,
+        "ordinaryBody": true,
+        "ordinaryResource": true,
+        "ordinarySnapshot": true,
+        "ordinaryDOM": true,
+        "iframeSnapshotAttempted": true,
+        "ordinaryIframeSnapshot": true,
+        "ordinaryIframeDOM": true,
+        "overridesWorked": true,
+        "requestsTerminated": true,
+        "hopsRedacted": false,
+        "networkBodyAttempted": true,
+        "networkBodyRefused": false
+      },
+      "guarded": {
+        "live": true,
+        "rawRecorded": true,
+        "secretHidden": true,
+        "sessionSurvives": true,
+        "protectedBodyHidden": true,
+        "cookieHidden": true,
+        "replayAttempted": true,
+        "resourceContentAttempted": true,
+        "snapshotAttempted": true,
+        "domSnapshotAttempted": true,
+        "overridesRefused": false,
+        "ordinaryBody": false,
+        "ordinaryResource": false,
+        "ordinarySnapshot": false,
+        "ordinaryDOM": false,
+        "iframeSnapshotAttempted": true,
+        "ordinaryIframeSnapshot": false,
+        "ordinaryIframeDOM": false,
+        "overridesWorked": true,
+        "requestsTerminated": true,
+        "hopsRedacted": true,
+        "networkBodyAttempted": true,
+        "networkBodyRefused": true
+      }
+    }
+  },
+  {
+    "id": "C4.iframe-preattach.blank",
+    "target": "seven",
+    "variant": "prompt",
+    "issue": "#402 (security)",
+    "why": "frameTreeShown: got true, want false; axFullShown: got true, want false; axPartialShown: got true, want false; documentShown: got true, want false; nodeShown: got true, want false; snapshotShown: got true, want false",
+    "observations": {
+      "control": {
+        "live": true,
+        "frameTreeShown": true,
+        "axFullShown": true,
+        "axPartialShown": true,
+        "documentShown": true,
+        "nodeShown": true,
+        "snapshotShown": true,
+        "eventsShown": false
+      },
+      "guarded": {
+        "live": true,
+        "frameTreeShown": true,
+        "axFullShown": true,
+        "axPartialShown": true,
+        "documentShown": true,
+        "nodeShown": true,
+        "snapshotShown": true,
+        "eventsShown": false
+      }
+    }
+  },
+  {
+    "id": "C4.iframe-preattach.srcdoc",
+    "target": "seven",
+    "variant": "prompt",
+    "issue": "#402 (security)",
+    "why": "frameTreeShown: got true, want false; axFullShown: got true, want false; axPartialShown: got true, want false; documentShown: got true, want false; nodeShown: got true, want false; snapshotShown: got true, want false",
+    "observations": {
+      "control": {
+        "live": true,
+        "frameTreeShown": true,
+        "axFullShown": true,
+        "axPartialShown": true,
+        "documentShown": true,
+        "nodeShown": true,
+        "snapshotShown": true,
+        "eventsShown": false
+      },
+      "guarded": {
+        "live": true,
+        "frameTreeShown": true,
+        "axFullShown": true,
+        "axPartialShown": true,
+        "documentShown": true,
+        "nodeShown": true,
+        "snapshotShown": true,
+        "eventsShown": false
+      }
+    }
+  },
+  {
+    "id": "C2.redirect-body",
+    "target": "ordinary",
+    "variant": "lagging",
+    "issue": "#404",
+    "why": "overridesRefused: got false, want true",
+    "observations": {
+      "control": {
+        "live": true,
+        "rawRecorded": true,
+        "secretHidden": false,
+        "sessionSurvives": true,
+        "protectedBodyHidden": true,
+        "cookieHidden": true,
+        "replayAttempted": true,
+        "resourceContentAttempted": true,
+        "snapshotAttempted": true,
+        "domSnapshotAttempted": true,
+        "overridesRefused": false,
+        "ordinaryBody": true,
+        "ordinaryResource": true,
+        "ordinarySnapshot": true,
+        "ordinaryDOM": true,
+        "iframeSnapshotAttempted": true,
+        "ordinaryIframeSnapshot": true,
+        "ordinaryIframeDOM": true,
+        "overridesWorked": true,
+        "requestsTerminated": true,
+        "hopsRedacted": false,
+        "networkBodyAttempted": true,
+        "networkBodyRefused": false
+      },
+      "guarded": {
+        "live": true,
+        "rawRecorded": true,
+        "secretHidden": true,
+        "sessionSurvives": true,
+        "protectedBodyHidden": true,
+        "cookieHidden": true,
+        "replayAttempted": true,
+        "resourceContentAttempted": true,
+        "snapshotAttempted": true,
+        "domSnapshotAttempted": true,
+        "overridesRefused": false,
+        "ordinaryBody": false,
+        "ordinaryResource": false,
+        "ordinarySnapshot": false,
+        "ordinaryDOM": false,
+        "iframeSnapshotAttempted": true,
+        "ordinaryIframeSnapshot": false,
+        "ordinaryIframeDOM": false,
+        "overridesWorked": true,
+        "requestsTerminated": true,
+        "hopsRedacted": true,
+        "networkBodyAttempted": true,
+        "networkBodyRefused": true
+      }
+    }
+  },
+  {
+    "id": "C4.iframe-preattach.blank",
+    "target": "seven",
+    "variant": "lagging",
+    "issue": "#402 (security)",
+    "why": "frameTreeShown: got true, want false; axFullShown: got true, want false; axPartialShown: got true, want false; documentShown: got true, want false; nodeShown: got true, want false; snapshotShown: got true, want false",
+    "observations": {
+      "control": {
+        "live": true,
+        "frameTreeShown": true,
+        "axFullShown": true,
+        "axPartialShown": true,
+        "documentShown": true,
+        "nodeShown": true,
+        "snapshotShown": true,
+        "eventsShown": false
+      },
+      "guarded": {
+        "live": true,
+        "frameTreeShown": true,
+        "axFullShown": true,
+        "axPartialShown": true,
+        "documentShown": true,
+        "nodeShown": true,
+        "snapshotShown": true,
+        "eventsShown": false
+      }
+    }
+  },
+  {
+    "id": "C4.iframe-preattach.srcdoc",
+    "target": "seven",
+    "variant": "lagging",
+    "issue": "#402 (security)",
+    "why": "frameTreeShown: got true, want false; axFullShown: got true, want false; axPartialShown: got true, want false; documentShown: got true, want false; nodeShown: got true, want false; snapshotShown: got true, want false",
+    "observations": {
+      "control": {
+        "live": true,
+        "frameTreeShown": true,
+        "axFullShown": true,
+        "axPartialShown": true,
+        "documentShown": true,
+        "nodeShown": true,
+        "snapshotShown": true,
+        "eventsShown": false
+      },
+      "guarded": {
+        "live": true,
+        "frameTreeShown": true,
+        "axFullShown": true,
+        "axPartialShown": true,
+        "documentShown": true,
+        "nodeShown": true,
+        "snapshotShown": true,
+        "eventsShown": false
+      }
+    }
+  }
+]

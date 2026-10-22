@@ -409,6 +409,26 @@ export function protectTest(getLink, describe) {
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
         return { before, probes, stuck, attaches, leaked, detached, after, reattach, close };
       }),
+    historyCacheProof: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        window.historyCacheLocal = await outcome(c.send('Page.navigateToHistoryEntry', { entryId: 7 }, sessionId));
+        window.historyCacheReady = true;
+        await new Promise((resolve) => { window.historyCacheContinue = resolve; });
+        window.historyCacheFresh = await outcome(c.send('Page.navigateToHistoryEntry', { entryId: 8 }, sessionId));
+        return { local: window.historyCacheLocal, fresh: window.historyCacheFresh };
+      }),
+    historyTrees: (browser, targetId) =>
+      run(browser, async (c) => {
+        if (!targetId) ({ targetId } = await c.send('Target.createTarget', { url: 'about:blank' }));
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const frame = await outcome(c.send('Page.getFrameTree', {}, sessionId));
+        const resource = await outcome(c.send('Page.getResourceTree', {}, sessionId));
+        const script = await outcome(c.send('Runtime.evaluate', { expression: 'true' }, sessionId));
+        return { frame, resource, script };
+      }),
     initialHistory: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
