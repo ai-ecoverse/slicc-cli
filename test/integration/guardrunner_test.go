@@ -516,8 +516,6 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	if sum.ObserverSkipped != 0 {
 		t.Errorf("%d rows skipped for want of an unguarded observer", sum.ObserverSkipped)
 	}
-	knownRows := preexistingGuardRows(t)
-	known := map[string]int{}
 	unsupported := map[string]int{}
 	for _, r := range sum.Results {
 		name := r.ID + " " + r.Target + " " + r.Variant
@@ -525,20 +523,14 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 			t.Logf("%s: mouse transport evidence=%s", name, r.Diagnostics)
 			checkMouseEvidence(t, r)
 		}
-		if issue := preexistingGuardIssue(r); issue != "" {
-			if !exactPreexistingGuardRow(r, knownRows) {
-				t.Errorf("%s: changed pre-existing outcome for %s: control=%s guarded=%s live=%s why=%s errors=%v observations=%s", name, issue, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
-			} else {
-				known[r.ID]++
-				t.Logf("%s: known %s (recorded protection failure, not a pass)", name, issue)
-			}
-			continue
-		}
 		if skip, ok := guardSkips[r.ID]; ok {
 			if r.Control != "skip" || r.Guarded != "skip" || r.Live != "skip" || r.Reason != skip.Reason || r.Target != skip.Target {
 				t.Errorf("%s: the run skips it with %q, but it reported control %s, guarded %s, live %s, reason %q", name, skip.Reason, r.Control, r.Guarded, r.Live, r.Reason)
 			}
 			continue
+		}
+		if len(r.Errors) != 0 {
+			t.Errorf("%s: unexpected errors: %v", name, r.Errors)
 		}
 		switch {
 		case r.Control == "not-run":
@@ -584,24 +576,14 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 		if _, skipped := guardSkips[v.ID]; v.Kind != "cdp" || skipped {
 			continue
 		}
-		if passed[v.ID] == 0 && known[v.ID] == 0 && unsupported[v.ID] == 0 {
+		if passed[v.ID] == 0 && unsupported[v.ID] == 0 {
 			t.Errorf("%s: no row of the vector passed", v.ID)
 			continue
 		}
 		ran = append(ran, fmt.Sprintf("%s=%d", v.ID, passed[v.ID]))
 	}
 	t.Logf("passed rows per vector: %s", strings.Join(ran, " "))
-	if len(known) != 1 {
-		t.Errorf("matched %d pre-existing known rows, want exactly one #404 row", len(known))
-	}
-	for id, count := range known {
-		if count != 1 {
-			t.Errorf("%s: matched %d known rows, want exactly1", id, count)
-		}
-	}
-	if !sum.Pass && len(known) == 1 && !t.Failed() {
-		t.Log("one exact independently recorded pre-existing outcome retained: #404")
-	} else {
-		t.Errorf("the guard set did not retain the exact recorded known failures: counts=%s", sum.Counts)
+	if !sum.Pass {
+		t.Errorf("the guard set did not pass: counts=%s", sum.Counts)
 	}
 }

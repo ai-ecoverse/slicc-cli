@@ -249,7 +249,7 @@ func (g *guard) destinationRule(c *command) string {
 	if reason := g.destinationReason(c.str(key)); reason != "" {
 		return reason
 	}
-	if u := c.str(key); overrideKeys[c.method] && u != "" && g.taintedLocked(c.session, u) {
+	if u := c.str(key); overrideKeys[c.method] && u != "" && (g.taintedLocked(c.session, u) || g.knownRedirectLocked(u)) {
 		return refusedRedirect
 	}
 	return ""
