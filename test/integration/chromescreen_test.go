@@ -41,8 +41,8 @@ func chromeScreen(t *testing.T) ([]string, []string) {
 			_ = cmd.Process.Kill()
 		}
 		select {
-		case <-done:
-			t.Error("Chrome screen did not close gracefully")
+		case err := <-done:
+			t.Errorf("Chrome screen did not close gracefully: %v", err)
 		case <-time.After(reapTimeout):
 			t.Error("Chrome screen was not reaped after SIGKILL")
 		}
