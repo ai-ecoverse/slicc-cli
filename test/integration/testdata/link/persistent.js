@@ -94,6 +94,23 @@ export async function auditSetter(gate, sessionId, wireId, setup) {
   return audit;
 }
 
+export async function laterAdmissionProof(getLink, opts) {
+  const client = await CdpClient.open(getLink(), opts.browser);
+  client.callTimeout = 15000;
+  const { targetId, sessionId } = await client.attachTo(opts.ordinary+'/doc');
+  try {
+    await client.send('Page.enable', {}, sessionId);
+    const rows = [];
+    for (const method of persistentMethods.slice(0, 4)) {
+      const before = client.sent.length;
+      const setup = await outcome(client.send(method, configuration(method, 'refusal-proof'), sessionId));
+      const audit = await auditSetter(opts.gate, sessionId, client.sent[before].id, setup);
+      rows.push({ method, setup, audit });
+    }
+    return rows;
+  } finally { await outcome(client.send('Target.closeTarget', { targetId })); await client.close(); }
+}
+
 export async function measurePersistent(getLink, opts) {
   const reader = await SocketClient.open(opts.ws);
   reader.callTimeout = 15000;
@@ -114,6 +131,8 @@ export async function measurePersistent(getLink, opts) {
       const start = reader.events.length;
       const reply = await outcome(reader.send('Page.navigate', { url }, observer));
       const event = await until(() => reader.events.slice(start).find((e) => e.sessionId === observer && e.method === 'Page.frameNavigated' && e.params.frame.id === targetId), `commit of ${url}`);
+      const blocked = event.params.frame.unreachableUrl === url && reply.result?.errorText === 'net::ERR_BLOCKED_BY_CLIENT';
+      if (blocked && !url.includes('/fail')) return { reply, frame: event.params.frame, type: event.params.type, blocked: true };
       if (url.includes('/fail')) {
         if (event.params.frame.unreachableUrl !== url || event.params.frame.url !== 'chrome-error://chromewebdata/') throw new Error('protected error commit not independently observed');
       } else {
@@ -132,6 +151,7 @@ export async function measurePersistent(getLink, opts) {
       audit = await auditSetter(opts.gate, sessionId, call.id, setup);
     }
     if (setup && !setup.ok && setup.error.code === -32601) return { method: opts.method, mode: opts.mode, leg: opts.leg, supported: false, setup, audit };
+    if (opts.mode === 'admission') return { method: opts.method, mode: opts.mode, leg: opts.leg, supported: true, setup, audit };
     const ordinaryCommit = await navigate(`${ordinary}&reload=1`);
     const ordinaryProbe = await probe(reader, observer, opts.method, opts.marker, `${opts.ordinary}/503-data?key=${opts.marker}-ordinary`);
     let commit, contextId;
@@ -140,11 +160,15 @@ export async function measurePersistent(getLink, opts) {
       const parent = `${opts.protected}/parent?marker=${opts.marker}&kind=${kind}`;
       await evaluate(reader, observer, `(() => { const f = document.createElement('iframe'); f.src = ${JSON.stringify(parent)}; document.body.append(f); return true; })()`);
       const layout = await until(async () => {
+        const failure = reader.events.findLast((e) => e.sessionId === observer && e.method === 'Page.frameNavigated' && e.params.frame.unreachableUrl === parent && e.params.frame.url === 'chrome-error://chromewebdata/');
+        if (failure) return { blocked: true, frame: failure.params.frame };
         const { frameTree } = await reader.send('Page.getFrameTree', {}, observer);
-        const top = frameTree.childFrames?.find((f) => f.frame.url === parent);
+        const top = frameTree.childFrames?.find((f) => f.frame.url === parent || f.frame.unreachableUrl === parent);
+        if (top?.frame.unreachableUrl === parent) return { blocked: true, frame: top.frame };
         const child = top?.childFrames?.find((f) => f.frame.name === 'inherited503');
         return child && { parent: top.frame, child: child.frame };
       }, 'protected inherited child frame');
+      if (layout.blocked) return { method: opts.method, mode: opts.mode, leg: opts.leg, supported: true, setup, audit, ordinaryCommit, ordinaryProbe, boundaryBlocked: true, commit: layout };
       const expected = kind === 'blank' ? 'about:blank' : 'about:srcdoc';
       if (layout.child.url !== expected) throw new Error('inherited frame URL not observed');
       const context = await until(() => reader.events.findLast((e) => e.sessionId === observer && e.method === 'Runtime.executionContextCreated' && e.params.context.auxData?.isDefault && e.params.context.auxData.frameId === layout.child.id)?.params.context, 'inherited default execution context');
@@ -156,6 +180,7 @@ export async function measurePersistent(getLink, opts) {
       commit = await navigate(`${opts.protected}/fail?marker=${opts.marker}`);
     } else {
       const seed = await navigate(protectedURL);
+      if (seed.blocked) return { method: opts.method, mode: opts.mode, leg: opts.leg, supported: true, setup, audit, ordinaryCommit, ordinaryProbe, boundaryBlocked: true, commit: seed };
       if (opts.mode === 'plain') commit = seed;
       else {
         await evaluate(reader, observer, opts.mode === 'bfcache' ? `addEventListener('pageshow', (e) => { globalThis.__slicc503ObserverRestore = e.persisted; }); true` : `addEventListener('unload', () => {}); true`);

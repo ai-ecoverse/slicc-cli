@@ -180,8 +180,8 @@ func (e *protectEnv) testExtensionWorld(t *testing.T) {
 	if err := s.Evaluate(wctx, "typeof globalThis.sliccSevenBinding", cdp.EvaluateOptions{ContextID: int(world.ID), ReturnByValue: true}, &inWorld); err != nil {
 		t.Fatal(err)
 	}
-	if !r.Binding.OK || r.Bound != "function" || inWorld != "undefined" {
-		t.Errorf("an untargeted Runtime.addBinding gave %+v; the page's world sees a %s, the extension's world a %s", r.Binding, r.Bound, inWorld)
+	if !r.Binding.refused() || r.Binding.Error.Message != refusedLaterText || r.Bound != "undefined" || inWorld != "undefined" {
+		t.Errorf("a retired Runtime.addBinding gave %+v; the page's world sees a %s, the extension's world a %s", r.Binding, r.Bound, inWorld)
 	}
 	if r.Detached || !r.After.OK {
 		t.Errorf("the page with an extension's world was cut: detached %v, evaluate after %+v", r.Detached, r.After)

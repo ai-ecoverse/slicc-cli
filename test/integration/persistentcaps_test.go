@@ -16,13 +16,16 @@ import (
 	"time"
 )
 
+const refusedLaterText = "slicc: refused: scripts and bindings for later documents could run in seven’s pages or the vault, so the guard doesn’t allow them; run a script in the page you see with Runtime.evaluate instead"
+
 type persistentMeasurement struct {
-	Method    string      `json:"method"`
-	Mode      string      `json:"mode"`
-	Leg       string      `json:"leg"`
-	Supported bool        `json:"supported"`
-	Setup     *cdpOutcome `json:"setup"`
-	Audit     struct {
+	BoundaryBlocked bool        `json:"boundaryBlocked"`
+	Method          string      `json:"method"`
+	Mode            string      `json:"mode"`
+	Leg             string      `json:"leg"`
+	Supported       bool        `json:"supported"`
+	Setup           *cdpOutcome `json:"setup"`
+	Audit           struct {
 		Complete bool `json:"complete"`
 		Probes   []struct {
 			Forwarded bool `json:"forwarded"`
@@ -197,10 +200,24 @@ func TestCDPDocumentPersistentCapabilityMeasurements(t *testing.T) {
 							}
 							t.Skipf("native Chrome reports unsupported method with structured -32601: %s", raw)
 						}
-						if !row.Supported || row.OrdinaryProbe.Effect == nil || row.ProtectedProbe.Effect == nil || len(row.Commit) == 0 || row.OrdinaryProbe.Origin != ordinary {
+						if !row.Supported || row.OrdinaryProbe.Effect == nil || (!row.BoundaryBlocked && row.ProtectedProbe.Effect == nil) || len(row.Commit) == 0 || row.OrdinaryProbe.Origin != ordinary {
 							t.Fatalf("incomplete measurement: %s", raw)
 						}
-						if mode != "error" && row.ProtectedProbe.Origin != protected {
+						if row.BoundaryBlocked {
+							var blocked struct {
+								Frame struct {
+									URL         string `json:"url"`
+									Unreachable string `json:"unreachableUrl"`
+								} `json:"frame"`
+							}
+							if err := json.Unmarshal(row.Commit, &blocked); err != nil {
+								t.Fatal(err)
+							}
+							if leg != "guarded" || blocked.Frame.URL != "chrome-error://chromewebdata/" || !strings.HasPrefix(blocked.Frame.Unreachable, protected+"/") {
+								t.Fatalf("blocked boundary not independently verified: %s", raw)
+							}
+						}
+						if !row.BoundaryBlocked && mode != "error" && row.ProtectedProbe.Origin != protected {
 							t.Fatalf("protected origin not confirmed: %s", raw)
 						}
 						if leg != "baseline" && row.Setup == nil {
@@ -216,8 +233,8 @@ func TestCDPDocumentPersistentCapabilityMeasurements(t *testing.T) {
 							if row.Setup.OK && (!row.Audit.Probes[0].Forwarded || !*row.OrdinaryProbe.Effect) {
 								t.Fatalf("admitted capability did not work on ordinary page: %s", raw)
 							}
-							if !row.Setup.OK && (!row.Setup.refused() || row.Audit.Probes[0].Forwarded) {
-								t.Fatalf("refusal not proven on wire: %s", raw)
+							if row.Setup.OK || !row.Setup.refused() || row.Setup.Error.Message != refusedLaterText || row.Audit.Probes[0].Forwarded {
+								t.Fatalf("exact bios refusal and non-forwarding not proven: %s", raw)
 							}
 						}
 						rows[leg] = row
@@ -230,11 +247,15 @@ func TestCDPDocumentPersistentCapabilityMeasurements(t *testing.T) {
 						}
 						t.Logf("measured %s %s %s: %s", method, mode, leg, raw)
 					}
-					if *rows["baseline"].OrdinaryProbe.Effect || *rows["baseline"].ProtectedProbe.Effect {
-						t.Fatalf("baseline confounds capability effect: %+v", rows["baseline"])
+					if *rows["baseline"].OrdinaryProbe.Effect {
+						t.Fatal("ordinary baseline confounds positive control")
 					}
-					if *rows["guarded"].ProtectedProbe.Effect {
-						t.Logf("SECURITY-CANDIDATE: measured protected-side effect for %s across %s", method, mode)
+					if rows["guarded"].BoundaryBlocked {
+						t.Log("BOUNDARY-BLOCKED: protected document/restore not measured; setter refusal and blocking independently verified")
+					} else if *rows["baseline"].ProtectedProbe.Effect {
+						t.Log("CONFOUNDED-PROBE: protected probe also succeeds without setter; no capability attribution or no-effect claim")
+					} else if *rows["guarded"].ProtectedProbe.Effect {
+						t.Errorf("protected-side effect remains after exact refusal for %s across %s", method, mode)
 					}
 					measured++
 				})
