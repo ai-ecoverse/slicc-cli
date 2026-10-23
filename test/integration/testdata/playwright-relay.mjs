@@ -7,7 +7,7 @@ const kernel = await createNodeKernel({ cdp: async () => {
   const socket = new WebSocket(endpoint);
   const connection = { onmessage: null, onclose: null, send: (message) => socket.send(message), close: () => socket.close() };
   socket.onmessage = (event) => connection.onmessage?.(event.data);
-  socket.onclose = () => connection.onclose?.();
+  socket.onclose = (event) => { console.error(`cdp socket closed ${event.code} ${event.reason}`); connection.onclose?.(); };
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
   return connection;
 } });
