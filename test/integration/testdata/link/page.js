@@ -549,6 +549,7 @@ globalThis.linkTest = {
   playwrightRelay: (url, browser) => import('./playwright.js').then((m) => m.playwrightRelay(() => state.link, url, browser)),
   laterAdmission: (opts) => import('./persistent.js').then((m) => m.laterAdmissionProof(() => state.link, opts)),
   stickyAdmission: (opts) => import('./sticky.js').then((m) => m.stickyAdmissionProof(() => state.link, opts)),
+  resourceBlock: (opts) => import('./resource-block.js').then((m) => m.resourceBlockRow(() => state.link, opts)),
   sticky: (opts) => import('./sticky.js').then((m) => m.measureSticky(() => state.link, opts)),
   persistent: (opts) => import('./persistent.js').then((m) => m.measurePersistent(() => state.link, opts)),
   protect: protectTest(() => state.link, describe),
