@@ -3,12 +3,12 @@ import { SocketClient } from './observer.js';
 
 export const persistentMethods = ['Page.addScriptToEvaluateOnNewDocument', 'Page.addScriptToEvaluateOnLoad', 'Runtime.addBinding', 'Page.setBypassCSP'];
 
-async function outcome(promise) {
+export async function outcome(promise) {
   try { return { ok: true, result: await promise }; }
   catch (error) { return { ok: false, error: error.cdp ?? { message: error.message } }; }
 }
 
-async function until(read, description, ms = 15000) {
+export async function until(read, description, ms = 15000) {
   const deadline = Date.now() + ms;
   do {
     let value;
@@ -29,7 +29,7 @@ function configuration(method, marker) {
   }
 }
 
-async function evaluate(reader, session, expression, contextId) {
+export async function evaluate(reader, session, expression, contextId) {
   const reply = await reader.send('Runtime.evaluate', { expression, contextId, awaitPromise: true, returnByValue: true }, session);
   if (reply.exceptionDetails) throw new Error(`observer evaluation: ${JSON.stringify(reply.exceptionDetails)}`);
   return reply.result.value;
