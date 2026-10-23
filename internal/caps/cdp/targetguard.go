@@ -55,7 +55,7 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		check.settle(false)
 		return g.markLocked(t)
 	}
-	if frame.SecurityOrigin == "" || nt.unsure || len(nt.loading) > 0 {
+	if frame.SecurityOrigin == "" {
 		return nil
 	}
 	ev := protect.Evidence{DocumentURL: frame.URL, UnreachableURL: frame.UnreachableURL}

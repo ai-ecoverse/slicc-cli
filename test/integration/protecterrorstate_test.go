@@ -76,6 +76,8 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 		held    bool
 		changes bool
 		hint    bool
+		loading bool
+		unsure  bool
 	}{
 		{name: "target before error commit", order: "target-first", state: "error"},
 		{name: "error commit before target", order: "frame-first", state: "error"},
@@ -87,6 +89,11 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 		{name: "delayed error snapshot", order: "target-only", state: "error", held: true},
 		{name: "snapshot invalidated by a protected commit", order: "target-only", state: "error", held: true, changes: true},
 		{name: "ordinary snapshot invalidated by a new target hint", order: "target-only", state: "ordinary", held: true, changes: true, hint: true},
+		{name: "loading flags without error commit or stop events", order: "target-only", state: "error", loading: true},
+		{name: "unsure loading flags with held error snapshot and missing events", order: "target-only", state: "error", held: true, loading: true, unsure: true},
+		{name: "loading flags with ordinary snapshot", order: "target-only", state: "ordinary", loading: true, unsure: true},
+		{name: "loading flags with held protected snapshot", order: "target-only", state: "protected", held: true, loading: true, unsure: true},
+		{name: "loading flags with unknown snapshot", order: "target-only", state: "unknown", loading: true, unsure: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var reads atomic.Int32
@@ -106,13 +113,22 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 						if triggered.Swap(true) {
 							return "{}", nil
 						}
+						var events []string
+						if tc.loading {
+							events = append(events, `{"method":"Page.frameStartedNavigating","sessionId":"S1","params":{"frameId":"T1","loaderId":"missing-stop","navigationType":"differentDocument"}}`)
+						}
+						if tc.unsure {
+							events = append(events, `{"method":"Page.frameStartedNavigating","sessionId":"S1","params":{"frameId":"T1","navigationType":"differentDocument"}}`)
+						}
 						switch tc.order {
 						case "target-first":
-							return "{}", []string{targetEvent, event(errorFrame)}
+							events = append(events, targetEvent, event(errorFrame))
 						case "frame-first":
-							return "{}", []string{event(errorFrame), targetEvent}
+							events = append(events, event(errorFrame), targetEvent)
+						default:
+							events = append(events, targetEvent)
 						}
-						return "{}", []string{targetEvent}
+						return "{}", events
 					case "Browser.getWindowBounds":
 						if tc.changes {
 							changed.Store(true)
