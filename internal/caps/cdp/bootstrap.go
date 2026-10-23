@@ -114,18 +114,24 @@ const (
 
 func (rl *relay) park(data []byte) bool {
 	c, _, ok := parseCommand(data)
-	if !ok || c.session == "" || rl.g.startsUnheld(c) {
+	if !ok || rl.g.startsUnheld(c) {
 		return false
+	}
+	key := parkKey{session: c.session}
+	if rl.g.browserScope(c.session) {
+		key.target = c.str("targetId")
+		if key.target == "" {
+			return false
+		}
 	}
 	rl.parkMu.Lock()
 	defer rl.parkMu.Unlock()
-	q, waiting := rl.parked[c.session]
+	q, waiting := rl.parked[key]
 	if !waiting {
-		ready := rl.g.sessionWait(c.session)
-		if ready == nil {
+		if rl.g.commandWait(c) == nil {
 			return false
 		}
-		go rl.release(c.session, ready)
+		go rl.release(key)
 	}
 	if rl.parkedCount >= maxParked || rl.parkedBytes+len(data) > maxParkedBytes {
 		rl.kill("ENOBUFS: too many commands wait for a target's guard")
@@ -133,26 +139,31 @@ func (rl *relay) park(data []byte) bool {
 	}
 	rl.parkedCount++
 	rl.parkedBytes += len(data)
-	rl.parked[c.session] = append(q, bytes.Clone(data))
+	rl.parked[key] = append(q, bytes.Clone(data))
 	return true
 }
 
-func (rl *relay) release(session string, ready <-chan struct{}) {
-	rl.g.awaitSession(session, ready, rl.s.Done())
+func (rl *relay) release(key parkKey) {
 	for {
 		rl.parkMu.Lock()
-		q := rl.parked[session]
+		q := rl.parked[key]
 		if len(q) == 0 {
-			delete(rl.parked, session)
-			rl.g.forgetUnknown(session)
+			delete(rl.parked, key)
+			rl.g.forgetUnknown(key.session)
 			rl.parkMu.Unlock()
 			return
 		}
-		rl.parked[session] = q[1:]
-		rl.parkedCount--
-		rl.parkedBytes -= len(q[0])
+		data := q[0]
 		rl.parkMu.Unlock()
-		out, ok := rl.checkPage(q[0])
+		if c, _, ok := parseCommand(data); ok {
+			rl.g.awaitCommand(c, rl.g.commandWait(c), rl.s.Done())
+		}
+		rl.parkMu.Lock()
+		rl.parked[key] = rl.parked[key][1:]
+		rl.parkedCount--
+		rl.parkedBytes -= len(data)
+		rl.parkMu.Unlock()
+		out, ok := rl.checkPage(data)
 		if !ok {
 			return
 		}

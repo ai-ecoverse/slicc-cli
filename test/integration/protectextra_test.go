@@ -138,6 +138,9 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		switch m.Method {
 		case "Target.attachToBrowserTarget":
 			result = `{"sessionId":"RELAY"}`
+			if m.ID < 1<<30 {
+				result = `{"sessionId":"CLIENT_BROWSER"}`
+			}
 		case "Target.getTargets":
 			result = `{"targetInfos":[]}`
 		default:
@@ -233,7 +236,11 @@ func setupFakeProtect(t *testing.T, script func(seven, allowed string) fakeScrip
 
 func setupFakeProtectEnv(t *testing.T, attachEnv []string, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
 	t.Helper()
-	b := launchBrowser(t)
+	return setupFakeProtectEnvOn(t, launchBrowser(t), attachEnv, script)
+}
+
+func setupFakeProtectEnvOn(t *testing.T, b *chromeProc, attachEnv []string, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
+	t.Helper()
 	srv := pageServer(t)
 	plain := plainServer(t)
 	allowed := strings.Replace(plain.URL, "127.0.0.1", "localhost", 1)

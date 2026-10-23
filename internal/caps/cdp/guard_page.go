@@ -500,8 +500,8 @@ func (g *guard) scanString(k, s string, c *command) string {
 		return refusedTarget
 	case k == "cacheId" && g.o.StorageKey(strings.SplitN(s, "|", 2)[0]):
 		return refusedTarget
-	case idKeys[k] && g.targetProtectedLocked(s):
-		return refusedTarget
+	case idKeys[k]:
+		return g.targetReasonLocked(s)
 	case k == "sessionId" && s != "" && (s == g.relaySession || g.navSessions[s] != nil):
 		return refusedTarget
 	case k == "sessionId" && g.sessionRefusedLocked(s) && c.method != "Target.detachFromTarget":

@@ -30,11 +30,34 @@ func (g *guard) sessionWait(sessionID string) <-chan struct{} {
 	return u.ready
 }
 
-func (g *guard) awaitSession(sessionID string, ready, done <-chan struct{}) {
+func (g *guard) browserScope(sessionID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return sessionID == "" || g.browserSessions[sessionID]
+}
+
+func (g *guard) commandWait(c *command) <-chan struct{} {
+	if !g.browserScope(c.session) {
+		return g.sessionWait(c.session)
+	}
+	if exemptKeys[c.method]["targetId"] {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	id := c.str("targetId")
+	nt := g.navTargets[id]
+	if nt == nil || g.targetProtectedLocked(id) || nt.confirm == nil || nt.confirm.done {
+		return nil
+	}
+	return nt.confirm.ready
+}
+
+func (g *guard) awaitCommand(c *command, ready, done <-chan struct{}) {
 	for ready != nil {
 		select {
 		case <-ready:
-			ready = g.sessionWait(sessionID)
+			ready = g.commandWait(c)
 		case <-done:
 			return
 		}

@@ -67,7 +67,7 @@ func (r *Registry) serve(s *link.Stream) {
 		_ = s.Reset("ECONNREFUSED: " + err.Error())
 		return
 	}
-	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), parked: map[string][][]byte{}}
+	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), parked: map[parkKey][][]byte{}}
 	rl.g.scheduleInitial = rl.scheduleInitial
 	err = rl.bootstrap(ctx)
 	cancel()
@@ -169,6 +169,11 @@ func getVersion(ctx context.Context, conn *websocket.Conn) (Opened, error) {
 	}
 }
 
+type parkKey struct {
+	session string
+	target  string
+}
+
 type relay struct {
 	s      *link.Stream
 	conn   *websocket.Conn
@@ -177,7 +182,7 @@ type relay struct {
 	g      *guard
 	pageMu sync.Mutex
 	parkMu sync.Mutex
-	parked map[string][][]byte
+	parked map[parkKey][][]byte
 
 	parkedCount int
 	parkedBytes int
