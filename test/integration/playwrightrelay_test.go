@@ -154,6 +154,7 @@ func TestPlaywrightCLIBasicStepsThroughRelayWithLaterRefusals(t *testing.T) {
 					continue
 				}
 				if e.Error != "" {
+					t.Logf("relay stream %d error: %s", e.ID, e.Error)
 					_ = client.Close(websocket.StatusInternalError, e.Error)
 					continue
 				}
@@ -161,7 +162,12 @@ func TestPlaywrightCLIBasicStepsThroughRelayWithLaterRefusals(t *testing.T) {
 				err = client.Write(ctx, websocket.MessageText, []byte(e.Message))
 				writer.Unlock()
 				if err != nil {
-					return
+					t.Logf("relay stream %d dropped: %v", e.ID, err)
+					mu.Lock()
+					delete(clients, e.ID)
+					delete(writers, e.ID)
+					mu.Unlock()
+					continue
 				}
 			}
 		}
