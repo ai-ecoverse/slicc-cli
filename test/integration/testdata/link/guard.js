@@ -1,6 +1,7 @@
 import { run } from '/vendor/slicc-browsers/guard-runner.mjs';
 import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
+import { adaptLaterExitVector } from './later-exit.js';
 import { foregroundMouseCall } from './foreground.js';
 
 const CALL_TIMEOUT_MS = 10000;
@@ -157,6 +158,7 @@ export function guardStart(getLink, opts) {
   const callTimeout = CALL_TIMEOUT_MS * (opts.settleScale ?? 1);
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
+    adaptLaterExitVector(set);
     if (opts.only) set.vectors = set.vectors.filter((v) => v.id === opts.only);
     for (const v of set.vectors) if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
     const mouseDiagnostics = new Map();

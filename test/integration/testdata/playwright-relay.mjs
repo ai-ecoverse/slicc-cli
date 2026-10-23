@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createNodeKernel } from '@ai-ecoverse/slicc-kernel/node';
 
-const [endpoint, page] = process.argv.slice(2);
+const [endpoint, page, foreground] = process.argv.slice(2);
 const kernel = await createNodeKernel({ cdp: async () => {
   const socket = new WebSocket(endpoint);
   const connection = { onmessage: null, onclose: null, send: (message) => socket.send(message), close: () => socket.close() };
@@ -31,6 +31,10 @@ try {
     assert.ok(found, snapshot);
     return found;
   };
+  const painted = await fetch(foreground);
+  assert.equal(painted.ok, true, await painted.clone().text());
+  const focus = await painted.json();
+  assert.deepEqual(focus, { visible: true, focused: true, frames: 2 });
   await run('click', ref('Click me'));
   snapshot = await run('snapshot');
   await run('fill', ref('Name'), 'Ada');
@@ -42,5 +46,5 @@ try {
   const png = await kernel.readFile('/tmp/relay.png');
   assert.deepEqual([...png.slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   await run('close');
-  process.stdout.write(JSON.stringify({ steps, screenshotBytes: png.length })+'\n');
+  process.stdout.write(JSON.stringify({ steps, focus, screenshotBytes: png.length })+'\n');
 } finally { kernel.terminate(); }

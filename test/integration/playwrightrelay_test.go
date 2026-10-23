@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/coder/websocket"
 )
 
@@ -24,6 +25,12 @@ type playwrightEnvelope struct {
 
 func TestPlaywrightCLIBasicStepsThroughRelayWithLaterRefusals(t *testing.T) {
 	env := setupProtect(t)
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><title>Relay smoke</title><h1>Ordinary page</h1><button onclick="document.body.dataset.clicked='yes'">Click me</button><input aria-label="Name">`))
+	}))
+	t.Cleanup(plain.Close)
+	url := strings.Replace(plain.URL, "127.0.0.1", "localhost", 1)
 	var mu sync.Mutex
 	var host *websocket.Conn
 	clients := map[int]*websocket.Conn{}
@@ -41,6 +48,43 @@ func TestPlaywrightCLIBasicStepsThroughRelayWithLaterRefusals(t *testing.T) {
 		return host.Write(ctx, websocket.MessageText, body)
 	}
 	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/foreground" {
+			infos, err := env.b.client.Targets(ctx)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			for _, info := range infos {
+				if info.URL != url || info.Type != "page" {
+					continue
+				}
+				s, err := env.b.client.Attach(ctx, info.TargetID)
+				if err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+				defer func() { _ = s.Detach(ctx) }()
+				if err := s.Call(ctx, "Page.bringToFront", nil, nil); err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+				var visible struct {
+					Visible bool `json:"visible"`
+					Focused bool `json:"focused"`
+					Frames  int  `json:"frames"`
+				}
+				err = s.Evaluate(ctx, `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve({visible:document.visibilityState==='visible', focused:document.hasFocus(),frames:2}))))`, cdp.EvaluateOptions{AwaitPromise: true, ReturnByValue: true}, &visible)
+				if err != nil || !visible.Visible || !visible.Focused || visible.Frames != 2 {
+					http.Error(w, "ordinary fixture did not become focused and rendered", 500)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(visible)
+				return
+			}
+			http.Error(w, "exact ordinary fixture target missing", 404)
+			return
+		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
 		if err != nil {
 			return
@@ -110,13 +154,7 @@ func TestPlaywrightCLIBasicStepsThroughRelayWithLaterRefusals(t *testing.T) {
 	if !ready {
 		t.Fatal("raw relay adapter did not open")
 	}
-	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<!doctype html><title>Relay smoke</title><h1>Ordinary page</h1><button onclick="document.body.dataset.clicked='yes'">Click me</button><input aria-label="Name">`))
-	}))
-	t.Cleanup(plain.Close)
-	url := strings.Replace(plain.URL, "127.0.0.1", "localhost", 1)
-	cmd := exec.CommandContext(ctx, requireNode(t), "testdata/playwright-relay.mjs", strings.Replace(bridge.URL, "http", "ws", 1)+"/cdp", url)
+	cmd := exec.CommandContext(ctx, requireNode(t), "testdata/playwright-relay.mjs", strings.Replace(bridge.URL, "http", "ws", 1)+"/cdp", url, bridge.URL+"/foreground")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("playwright-cli basic relay steps: %v\n%s", err, out)

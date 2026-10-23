@@ -124,19 +124,22 @@ export async function measurePersistent(getLink, opts) {
       const kind = opts.mode.endsWith('blank') ? 'blank' : 'srcdoc';
       const parent = `${opts.protected}/parent?marker=${opts.marker}&kind=${kind}`;
       await evaluate(reader, observer, `(() => { const f = document.createElement('iframe'); f.src = ${JSON.stringify(parent)}; document.body.append(f); return true; })()`);
+      const expected = kind === 'blank' ? 'about:blank' : 'about:srcdoc';
       const layout = await until(async () => {
         const failure = reader.events.findLast((e) => e.sessionId === observer && e.method === 'Page.frameNavigated' && e.params.frame.unreachableUrl === parent && e.params.frame.url === 'chrome-error://chromewebdata/');
         if (failure) return { blocked: true, frame: failure.params.frame };
         const { frameTree } = await reader.send('Page.getFrameTree', {}, observer);
         const top = frameTree.childFrames?.find((f) => f.frame.url === parent || f.frame.unreachableUrl === parent);
         if (top?.frame.unreachableUrl === parent) return { blocked: true, frame: top.frame };
-        const child = top?.childFrames?.find((f) => f.frame.name === 'inherited503');
+        const child = top?.childFrames?.find((f) => f.frame.name === 'inherited503' && f.frame.url === expected);
         return child && { parent: top.frame, child: child.frame };
       }, 'protected inherited child frame');
       if (layout.blocked) return { method: opts.method, mode: opts.mode, leg: opts.leg, supported: true, setup, audit, ordinaryCommit, ordinaryProbe, boundaryBlocked: true, commit: layout };
-      const expected = kind === 'blank' ? 'about:blank' : 'about:srcdoc';
       if (layout.child.url !== expected) throw new Error('inherited frame URL not observed');
-      const context = await until(() => reader.events.findLast((e) => e.sessionId === observer && e.method === 'Runtime.executionContextCreated' && e.params.context.auxData?.isDefault && e.params.context.auxData.frameId === layout.child.id)?.params.context, 'inherited default execution context');
+      const context = await until(async () => {
+        const candidate = reader.events.findLast((e) => e.sessionId === observer && e.method === 'Runtime.executionContextCreated' && e.params.context.auxData?.isDefault && e.params.context.auxData.frameId === layout.child.id)?.params.context;
+        return candidate && (await evaluate(reader, observer, 'location.href', candidate.id)) === expected && candidate;
+      }, 'committed inherited default execution context');
       contextId = context.id;
       const origin = await evaluate(reader, observer, 'self.origin', contextId);
       if (origin !== opts.protected) throw new Error(`inherited child did not have protected origin: ${origin}`);
