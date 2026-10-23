@@ -70,7 +70,11 @@ func (e *unparsedEnv) testDestinations(t *testing.T) {
 	}
 	e.evalJSON(t, "linkTest.protect.privileged("+jsArgs("chrome", urls)+")", &r)
 	for _, u := range urls {
-		if nav := r.Navigate[u]; !nav.refused() || nav.Error.Message != refusedInheritedText || nav.Href != "about:blank" {
+		want := refusedInheritedText
+		if strings.HasPrefix(u, "blob:") {
+			want = refusedParseText
+		}
+		if nav := r.Navigate[u]; !nav.refused() || nav.Error.Message != want || nav.Href != "about:blank" {
 			t.Errorf("Page.navigate %q: %+v", u, nav)
 		}
 		if c := r.Create[u]; c.Error.Message != refusedParseText {
