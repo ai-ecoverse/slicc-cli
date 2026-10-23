@@ -60,7 +60,11 @@ func (e *protectEnv) testPrivilegedRefused(t *testing.T) {
 	e.evalJSON(t, "linkTest.protect.privileged("+jsArgs("chrome", privilegedURLs)+")", &r)
 	for _, u := range privilegedURLs {
 		nav, ok := r.Navigate[u]
-		if !ok || !nav.refused() || nav.Error.Message != refusedText || nav.Href != "about:blank" {
+		want := refusedText
+		if strings.HasPrefix(u, "about:") {
+			want = refusedInheritedText
+		}
+		if !ok || !nav.refused() || nav.Error.Message != want || nav.Href != "about:blank" {
 			t.Errorf("Page.navigate %s: %+v", u, nav)
 		}
 		if c := r.Create[u]; !c.refused() || c.Error.Message != refusedText {
@@ -82,6 +86,12 @@ func (e *protectEnv) testPrivilegedRefused(t *testing.T) {
 	allowed := []string{"about:blank#ok", "chrome://new-tab-page/", e.allowed + "/?n=privileged"}
 	e.evalJSON(t, "linkTest.protect.privileged("+jsArgs("chrome", allowed)+")", &ok)
 	for _, u := range allowed {
+		if strings.HasPrefix(u, "about:") {
+			if !ok.Navigate[u].refused() || ok.Navigate[u].Error.Message != refusedInheritedText || !ok.Create[u].OK {
+				t.Errorf("inheriting navigation was not refused or a fresh opaque tab was unavailable: %s %+v %+v", u, ok.Navigate[u], ok.Create[u])
+			}
+			continue
+		}
 		if !ok.Navigate[u].OK || !ok.Create[u].OK {
 			t.Errorf("%s is not privileged, but navigate gave %+v and createTarget %+v", u, ok.Navigate[u], ok.Create[u])
 		}

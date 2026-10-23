@@ -1142,7 +1142,9 @@ export function protectTest(getLink, describe) {
         c.on((e) => {
           if (e.method !== 'Fetch.requestPaused' || !sessions.has(e.sessionId)) return;
           const { requestId, responseStatusCode } = e.params;
-          const go = () => c.send('Fetch.continueRequest', { requestId }, e.sessionId).catch(() => {});
+          const perRequest = responseStatusCode === undefined && e.params.request.url.startsWith(new URL(start).origin+'/redirect?')
+            ? { headers: [...Object.entries(e.params.request.headers ?? {}).filter(([name]) => name.toLowerCase() !== 'authorization').map(([name,value]) => ({name,value:String(value)})), {name:'Authorization',value:'Basic fake-value-0042'}] } : {};
+          const go = () => c.send('Fetch.continueRequest', { requestId, ...perRequest }, e.sessionId).catch(() => {});
           if (responseStatusCode >= 300 && responseStatusCode < 400) {
             outcome(c.send('Fetch.getResponseBody', { requestId }, e.sessionId)).then((r) => {
               results.push({ call: `Fetch.getResponseBody ${e.params.request.url}`, ...r });
