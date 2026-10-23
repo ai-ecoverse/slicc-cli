@@ -83,7 +83,11 @@ func (nt *navTarget) settle(failed bool) {
 }
 
 func (g *guard) protectedRequestPatterns() []any {
-	return []any{map[string]any{"urlPattern": "*", "requestStage": "Request"}}
+	var out []any
+	for _, pattern := range g.o.DocumentPatterns() {
+		out = append(out, map[string]any{"urlPattern": pattern, "requestStage": "Request"})
+	}
+	return out
 }
 
 func (g *guard) callbackLocked(sessionID, method string, params any, fn func(m message) [][]byte) []byte {
