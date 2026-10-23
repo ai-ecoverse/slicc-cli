@@ -8,7 +8,7 @@ function action(kind, url, key) {
   const u=JSON.stringify(url), k=JSON.stringify(key);
   switch(kind) {
     case 'document': return `new Promise(resolve=>{const f=document.createElement('iframe');f.src=${u};f.onload=f.onerror=()=>resolve({attempted:true});document.body.append(f);setTimeout(()=>resolve({attempted:true}),4000);})`;
-    case 'fetch': return `fetch(${u},{mode:'no-cors'}).then(()=>({attempted:true}),()=>({attempted:true}))`;
+    case 'fetch': return `fetch(${u},{mode:'cors'}).then(r=>r.arrayBuffer()).then(()=>({attempted:true}),()=>({attempted:true}))`;
     case 'preflight': return `fetch(${u},{headers:{'X-Guard-Probe':${k}}}).then(()=>({attempted:true}),()=>({attempted:true}))`;
     case 'xhr': return `new Promise(resolve=>{const x=new XMLHttpRequest();x.open('GET',${u});x.timeout=4000;x.onload=x.onerror=x.ontimeout=()=>resolve({attempted:true});x.send();})`;
     case 'beacon': return `({attempted:navigator.sendBeacon(${u},${k})})`;
@@ -16,7 +16,7 @@ function action(kind, url, key) {
     case 'websocket': return `new Promise(resolve=>{const s=new WebSocket(${JSON.stringify(url.replace(/^http/,'ws'))});s.onopen=()=>{s.close();resolve({attempted:true})};s.onerror=()=>resolve({attempted:true});setTimeout(()=>{s.close();resolve({attempted:true})},4000);})`;
     case 'eventsource': return `new Promise(resolve=>{const s=new EventSource(${u});s.onmessage=s.onerror=()=>{s.close();resolve({attempted:true})};setTimeout(()=>{s.close();resolve({attempted:true})},4000);})`;
     case 'media': return `new Promise(resolve=>{const a=document.createElement('audio');a.preload='auto';a.src=${u};a.onloadedmetadata=a.onerror=()=>{a.remove();resolve({attempted:true})};document.body.append(a);a.load();setTimeout(()=>{a.remove();resolve({attempted:true})},4000);})`;
-    case 'track': return `new Promise(resolve=>{const v=document.createElement('video');const t=document.createElement('track');t.src=${u};t.kind='captions';t.default=true;t.onload=t.onerror=()=>{v.remove();resolve({attempted:true})};v.append(t);document.body.append(v);t.track.mode='hidden';setTimeout(()=>{v.remove();resolve({attempted:true})},4000);})`;
+    case 'track': return `new Promise(resolve=>{const v=document.createElement('video');v.crossOrigin='anonymous';const t=document.createElement('track');t.src=${u};t.kind='captions';t.default=true;t.onload=t.onerror=()=>{v.remove();resolve({attempted:true})};v.append(t);document.body.append(v);t.track.mode='hidden';setTimeout(()=>{v.remove();resolve({attempted:true})},4000);})`;
     case 'manifest': return `(()=>{const e=document.createElement('link');e.rel='manifest';e.href=${u};document.head.append(e);return{attempted:true};})()`;
     case 'prefetch': return `(()=>{const e=document.createElement('link');e.rel='prefetch';e.href=${u};document.head.append(e);return{attempted:true};})()`;
     default: {
@@ -46,7 +46,7 @@ export async function resourceBlockRow(getLink,opts) {
     await reader.send('Page.bringToFront',{},observer);
     await evaluate(reader,observer,`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))`);
     const path=`/resource?kind=${opts.kind}&key=${opts.key}`;
-    const url=opts.redirect?`${opts.ordinary}/redirect?kind=${opts.kind}&key=${opts.key}`:opts.protected+path;
+    const url=opts.redirect?`${opts.ordinary}/redirect?kind=${opts.kind}&key=${opts.key}&protected=${encodeURIComponent(opts.protected)}`:opts.protected+path;
     const start=reader.events.length;
     const trigger=await outcome(client.send('Runtime.evaluate',{expression:action(opts.kind,url,opts.key),awaitPromise:true,returnByValue:true},sessionId));
     if(!trigger.ok||trigger.result.exceptionDetails||!trigger.result.result.value?.attempted)throw new Error(`resource action did not run: ${JSON.stringify(trigger)}`);

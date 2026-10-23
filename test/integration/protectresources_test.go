@@ -136,7 +136,7 @@ func TestCDPPageResourceTrafficIsExplicitlyAllowedByC5(t *testing.T) {
 	ordinary := "http://ordinary.guard.test:" + port
 	protected := "http://seven.guard.test:" + port
 	srv := pageServer(t)
-	b := launchBrowserOn(t, 0, "--host-resolver-rules=MAP *.guard.test 127.0.0.1")
+	b := launchBrowserOn(t, 0, "--host-resolver-rules=MAP *.guard.test 127.0.0.1,MAP vault.sliccy.ai 127.0.0.1")
 	gate := newGuardGate(t, b.endpoint, srv.URL)
 	env := &linkEnv{t: t, b: b, origin: srv.URL}
 	env.a = startAttach(t, "--cdp", gate.srv.URL, "--origin", srv.URL, "--origin", protected, "--name", "resource-probe-node")
@@ -149,73 +149,76 @@ func TestCDPPageResourceTrafficIsExplicitlyAllowedByC5(t *testing.T) {
 	if len(hello.Browsers) != 1 {
 		t.Fatal("resource probe browser missing")
 	}
-	for _, kind := range resourceKinds {
-		for _, redirect := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/redirect=%t", kind, redirect), func(t *testing.T) {
-				p := *env.p
-				p.t = t
-				for _, leg := range []string{"control", "guarded", "guarded-intercept"} {
-					key := strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + leg
-					actor := leg
-					if leg == "guarded-intercept" {
-						actor = "guarded"
-					}
-					opts := map[string]any{"kind": kind, "key": key, "leg": actor, "redirect": redirect, "intercept": leg == "guarded-intercept", "browser": hello.Browsers[0].ID, "ordinary": ordinary, "protected": protected, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "counts": fixture.URL + "/counts"}
-					var raw json.RawMessage
-					p.evalWithin("linkTest.resourceBlock("+jsArgs(opts)+")", &raw, 30*time.Second)
-					var row struct {
-						Kind            string         `json:"kind"`
-						Key             string         `json:"key"`
-						Counts          map[string]int `json:"counts"`
-						ProtectedPauses int            `json:"protectedPausesShown"`
-					}
-					if err := json.Unmarshal(raw, &row); err != nil {
-						t.Fatal(err)
-					}
-					path := filepath.Join("..", "..", "artifacts", "protected-resources", kind, fmt.Sprintf("redirect-%t", redirect))
-					if err := os.MkdirAll(path, 0755); err != nil {
-						t.Fatal(err)
-					}
-					if err := os.WriteFile(filepath.Join(path, leg+".json"), raw, 0600); err != nil {
-						t.Fatal(err)
-					}
-					t.Logf("resource %s redirect=%t %s: protected server hits=%d, redirects=%d, ordinary=%d", kind, redirect, leg, row.Counts["protected"], row.Counts["redirect"], row.Counts["ordinary"])
-					if row.Kind != kind || row.Key != key {
-						t.Fatal("resource observation identity missing")
-					}
-					if kind == "websocket" && redirect {
-						if row.Counts["protected"] != 0 || row.Counts["redirect"] != 1 || !strings.Contains(string(raw), "Unexpected response code: 302") {
-							t.Fatalf("native WebSocket redirect outcome not independently proven: %s", raw)
+	for _, host := range []string{"seven.guard.test", "vault.sliccy.ai"} {
+		protected := "http://" + host + ":" + port
+		for _, kind := range resourceKinds {
+			for _, redirect := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/redirect=%t", host, kind, redirect), func(t *testing.T) {
+					p := *env.p
+					p.t = t
+					for _, leg := range []string{"control", "guarded", "guarded-intercept"} {
+						key := strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + leg
+						actor := leg
+						if leg == "guarded-intercept" {
+							actor = "guarded"
 						}
-						t.Log("ALLOWED-BY-C5: WebSocket initial request allowed; Chrome itself rejects 302, no protected follow-up")
-						continue
-					}
-					if leg == "control" {
-						if row.Counts["protected"] == 0 {
-							t.Fatalf("native positive control did not reach protected fixture: %s", raw)
+						opts := map[string]any{"kind": kind, "key": key, "leg": actor, "redirect": redirect, "intercept": leg == "guarded-intercept", "browser": hello.Browsers[0].ID, "ordinary": ordinary, "protected": protected, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "counts": fixture.URL + "/counts"}
+						var raw json.RawMessage
+						p.evalWithin("linkTest.resourceBlock("+jsArgs(opts)+")", &raw, 30*time.Second)
+						var row struct {
+							Kind            string         `json:"kind"`
+							Key             string         `json:"key"`
+							Counts          map[string]int `json:"counts"`
+							ProtectedPauses int            `json:"protectedPausesShown"`
+						}
+						if err := json.Unmarshal(raw, &row); err != nil {
+							t.Fatal(err)
+						}
+						path := filepath.Join("..", "..", "artifacts", "protected-resources", host, kind, fmt.Sprintf("redirect-%t", redirect))
+						if err := os.MkdirAll(path, 0755); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(filepath.Join(path, leg+".json"), raw, 0600); err != nil {
+							t.Fatal(err)
+						}
+						t.Logf("resource %s redirect=%t %s: protected server hits=%d, redirects=%d, ordinary=%d", kind, redirect, leg, row.Counts["protected"], row.Counts["redirect"], row.Counts["ordinary"])
+						if row.Kind != kind || row.Key != key {
+							t.Fatal("resource observation identity missing")
+						}
+						if kind == "websocket" && redirect {
+							if row.Counts["protected"] != 0 || row.Counts["redirect"] != 1 || !strings.Contains(string(raw), "Unexpected response code: 302") {
+								t.Fatalf("native WebSocket redirect outcome not independently proven: %s", raw)
+							}
+							t.Log("ALLOWED-BY-C5: WebSocket initial request allowed; Chrome itself rejects 302, no protected follow-up")
+							continue
+						}
+						if leg == "control" {
+							if row.Counts["protected"] == 0 {
+								t.Fatalf("native positive control did not reach protected fixture: %s", raw)
+							}
+							if redirect && row.Counts["redirect"] == 0 {
+								t.Fatal("redirect control did not exercise ordinary hop")
+							}
+							continue
+						}
+						if kind == "document" {
+							if row.Counts["protected"] != 0 {
+								t.Errorf("existing document navigation protection failed: %s", raw)
+							}
+						} else if row.Counts["protected"] == 0 {
+							t.Errorf("allowed-by-C5 page request did not reach protected fixture: %s redirect=%t %s", kind, redirect, leg)
+						} else {
+							t.Log("ALLOWED-BY-C5: page-initiated resource request, not a client fetch path")
+						}
+						if row.ProtectedPauses != 0 {
+							t.Errorf("protected pause handed to client: %s", raw)
 						}
 						if redirect && row.Counts["redirect"] == 0 {
-							t.Fatal("redirect control did not exercise ordinary hop")
+							t.Error("ordinary redirect request was not allowed")
 						}
-						continue
 					}
-					if kind == "document" {
-						if row.Counts["protected"] != 0 {
-							t.Errorf("existing document navigation protection failed: %s", raw)
-						}
-					} else if row.Counts["protected"] == 0 {
-						t.Errorf("allowed-by-C5 page request did not reach protected fixture: %s redirect=%t %s", kind, redirect, leg)
-					} else {
-						t.Log("ALLOWED-BY-C5: page-initiated resource request, not a client fetch path")
-					}
-					if row.ProtectedPauses != 0 {
-						t.Errorf("protected pause handed to client: %s", raw)
-					}
-					if redirect && row.Counts["redirect"] == 0 {
-						t.Error("ordinary redirect request was not allowed")
-					}
-				}
-			})
+				})
+			}
 		}
 	}
 }
