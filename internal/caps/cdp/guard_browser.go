@@ -29,7 +29,7 @@ func (g *guard) fromBrowser(data []byte) browserVerdict {
 	defer g.resolveUnknownLocked()
 	g.progressLocked(&m)
 	if m.ID != nil {
-		return g.responseLocked(&m, data)
+		return g.answerLocked(&m, data)
 	}
 	if m.SessionID != "" && m.SessionID == g.relaySession {
 		return g.relayEventLocked(&m)
@@ -200,6 +200,7 @@ var eventHandlers = map[string]eventHandler{
 	"Target.detachedFromTarget":                  (*guard).detachedEvent,
 	"Target.receivedMessageFromTarget":           (*guard).innerMessageEvent,
 	"Page.frameNavigated":                        (*guard).frameNavigatedEvent,
+	"Page.screencastFrame":                       (*guard).screencastFrameEvent,
 	"Runtime.executionContextCreated":            (*guard).contextCreatedEvent,
 	"Runtime.executionContextDestroyed":          (*guard).contextGoneEvent,
 	"Runtime.executionContextsCleared":           (*guard).contextsClearedEvent,
@@ -398,7 +399,7 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.Loaded(p.Context.Origin):
 		return browserVerdict{send: g.markLocked(t)}
 	case g.worldContextLocked(t.id, m.SessionID, p.Context):
-		return browserVerdict{}
+		return browserVerdict{send: g.cutCastsLocked(t.id)}
 	}
 	return browserVerdict{forward: data}
 }

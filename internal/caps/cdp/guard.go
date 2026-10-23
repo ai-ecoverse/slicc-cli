@@ -45,6 +45,7 @@ const (
 	kindCreate
 	kindAttach
 	kindStreams
+	kindPaint
 )
 
 type relayCall struct {
@@ -138,6 +139,8 @@ type guard struct {
 	heldPauseCount    int
 	commitMarks       map[callKey]commitMark
 	maxWorlds         int
+	casting           map[string]bool
+	castCut           map[string]bool
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -191,6 +194,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		assets:            map[string]*assetSet{},
 		heldPauses:        map[requestKey][]heldPause{},
 		commitMarks:       map[callKey]commitMark{},
+		casting:           map[string]bool{},
+		castCut:           map[string]bool{},
 		maxWorlds:         maxWorlds,
 		bounds:            boundsFromEnv(),
 	}
@@ -427,6 +432,7 @@ func (g *guard) destroyedLocked(id string) {
 func (g *guard) forgetSessionLocked(id string) {
 	g.goneLocked(id)
 	g.forgetWorldSessionLocked(id)
+	g.forgetCastLocked(id)
 	delete(g.sessions, id)
 	delete(g.browserSessions, id)
 	g.markedCount -= len(g.marked[id])

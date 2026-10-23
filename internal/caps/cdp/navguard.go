@@ -185,15 +185,14 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if nt.shared && m.Method == "Inspector.targetCrashed" {
 		return g.navReleaseLocked(nt)
 	}
-	g.navWorldLocked(nt, m)
+	send := g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
 	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {
 		nt.revision++
 	}
-	var send [][]byte
 	if nt.confirm != nil && !nt.confirm.done {
-		send = g.confirmTargetLocked(nt)
+		send = append(send, g.confirmTargetLocked(nt)...)
 	}
 	if nt.commits != before && (g.o.Loaded(nt.documentURL) || g.o.Loaded(nt.errorURL)) {
 		nt.historyLocked = true
