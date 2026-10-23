@@ -2,6 +2,30 @@ import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
 import { auditSetter, evaluate, outcome, until } from './persistent.js';
 
+export const headersRefusal = 'slicc: refused: settings for a whole session (headers, user agent, locale, time zone, cache, network conditions, blocked URLs, emulation) could reach seven’s pages or the vault, so the guard doesn’t allow them; change a request through Fetch instead';
+export const inheritedRefusal = 'slicc: refused: a browser-side navigation to about: gives the page the origin of whatever drives the browser, so the guard doesn’t send it; open a new tab on about:blank instead';
+
+export async function stickyAdmissionProof(getLink, opts) {
+  const client = await CdpClient.open(getLink(), opts.browser);
+  client.callTimeout = 20000;
+  const {targetId,sessionId} = await client.attachTo(opts.ordinary+'/doc');
+  try {
+    await client.send('Page.enable',{},sessionId);
+    const cases = stickyMethods.map((method)=>({method,params:stickyConfiguration(method,'refusal-proof'),expected:headersRefusal}));
+    cases.push(...['Emulation.setFocusEmulationEnabled','Emulation.setDeviceMetricsOverride','Emulation.addVirtualSensor','Emulation.updateVirtualSensor','Emulation.removeVirtualSensor'].map((method)=>({method,params:{},expected:headersRefusal})));
+    cases.push(...['about:blank','about:blank#blocked','about:srcdoc','ABOUT:BLANK','about:version','invalid-relative'].map((url)=>({method:'Page.navigate',params:{url},expected:inheritedRefusal})));
+    cases.push(...['Emulation.set','Emulation.setx','Emulation.addx','Emulation.updatex','Emulation.removex'].map((method)=>({method,params:{},expected:null})));
+    const rows=[];
+    for(const c of cases) {
+      const before=client.sent.length;
+      const setup=await outcome(client.send(c.method,c.params,sessionId));
+      const audit=await auditSetter(opts.gate,sessionId,client.sent[before].id,setup);
+      rows.push({...c,setup,audit});
+    }
+    return rows;
+  } finally { await outcome(client.send('Target.closeTarget',{targetId}));await client.close(); }
+}
+
 export const stickyMethods = ['Network.setExtraHTTPHeaders', 'Network.setUserAgentOverride', 'Emulation.setUserAgentOverride', 'Emulation.setLocaleOverride', 'Emulation.setTimezoneOverride', 'Network.setCacheDisabled', 'Network.emulateNetworkConditions', 'Network.emulateNetworkConditionsByRule', 'Network.overrideNetworkState', 'Network.setBlockedURLs'];
 
 export function stickyConfiguration(method, marker) {

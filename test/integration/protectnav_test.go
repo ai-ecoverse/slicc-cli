@@ -356,7 +356,7 @@ func (e *navEnv) testRedirectSecret(t *testing.T) {
 			t.Fatalf("screenshots: %d before the error page for %s and %d answered after it committed (%v)", r.ShotsBefore, base, r.ShotsAfter, r.ShotErrors)
 		case r.Before == 0 || r.OnError != 0:
 			t.Fatalf("screencast frames: %d before the error page for %s and %d on it", r.Before, base, r.OnError)
-		case r.Detached || !r.Blank.OK || !r.Close.OK || r.Listed == nil || r.Listed.URL != "about:blank#blocked":
+		case r.Detached || !r.Blank.refused() || r.Blank.Error.Message != refusedInheritedText || !r.Close.OK || r.Listed == nil || r.Listed.URL != base:
 			t.Fatalf("the error page for %s isn't drivable: %+v", base, r)
 		}
 		var answers map[string]cdpOutcome

@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+const refusedHeadersText = "slicc: refused: settings for a whole session (headers, user agent, locale, time zone, cache, network conditions, blocked URLs, emulation) could reach seven’s pages or the vault, so the guard doesn’t allow them; change a request through Fetch instead"
+const refusedInheritedText = "slicc: refused: a browser-side navigation to about: gives the page the origin of whatever drives the browser, so the guard doesn’t send it; open a new tab on about:blank instead"
+
 var stickyMethods = []string{"Network.setExtraHTTPHeaders", "Network.setUserAgentOverride", "Emulation.setUserAgentOverride", "Emulation.setLocaleOverride", "Emulation.setTimezoneOverride", "Network.setCacheDisabled", "Network.emulateNetworkConditions", "Network.emulateNetworkConditionsByRule", "Network.overrideNetworkState", "Network.setBlockedURLs"}
 
 type stickyProbe struct {
@@ -186,11 +189,8 @@ func runStickyBoundaryMeasurements(t *testing.T, mode string) {
 					if !row.Audit.Complete || len(row.Audit.Probes) != 1 {
 						t.Fatal("setter wire audit missing")
 					}
-					if row.Setup.OK && (!row.Audit.Probes[0].Forwarded || !*row.Ordinary.Effect) {
-						t.Fatalf("admitted setter ordinary effect not proven: %s", raw)
-					}
-					if !row.Setup.OK && (!row.Setup.refused() || row.Audit.Probes[0].Forwarded) {
-						t.Fatalf("guard refusal not proven on wire: %s", raw)
+					if row.Setup.OK || !row.Setup.refused() || row.Setup.Error.Message != refusedHeadersText || row.Audit.Probes[0].Forwarded {
+						t.Fatalf("unconditional exact bios refusal not proven on wire: %s", raw)
 					}
 				}
 				if row.BoundaryBlocked {
@@ -225,7 +225,7 @@ func runStickyBoundaryMeasurements(t *testing.T, mode string) {
 			case *baseline.Protected.Effect:
 				t.Log("BASELINE-CONFOUNDED: no setter effect attribution or safety claim")
 			case *guarded.Protected.Effect:
-				t.Logf("SECURITY-CANDIDATE: sticky protected-side effect %s across %s", method, mode)
+				t.Errorf("configured sticky effect remains after refusal: %s across %s", method, mode)
 			default:
 				t.Log("MEASURED: observable protected probe did not show this configured setter value")
 			}
