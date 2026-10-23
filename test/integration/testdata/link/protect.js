@@ -361,12 +361,16 @@ export function protectTest(getLink, describe) {
         await c.send('Browser.getVersion');
         const pending = outcome(c.send('Page.reload', {}, sessionId));
         window.targetRacePending = pending.then((r) => { window.targetRaceSettled = r; return r; });
+        const earlyAttach = held ? outcome(c.send('Target.attachToTarget', { targetId, flatten: true })).then((r) => { window.targetRaceAttachSettled = r; return r; }) : null;
+        const earlyClose = held ? outcome(c.send('Target.closeTarget', { targetId })).then((r) => { window.targetRaceCloseSettled = r; return r; }) : null;
+        await c.send('Browser.getVersion');
         window.targetRaceReady = true;
         if (held) {
           await new Promise((resolve) => { window.targetRaceContinue = resolve; });
           await c.send('Browser.getWindowBounds');
         }
         const results = { before, reload: await pending, outstanding: await outstanding };
+        if (held) Object.assign(results, { earlyAttach: await earlyAttach, earlyClose: await earlyClose });
         const probes = {
           'Runtime.evaluate': { expression: 'location.href', returnByValue: true },
           'Runtime.callFunctionOn': { functionDeclaration: 'function() { return location.href; }' },

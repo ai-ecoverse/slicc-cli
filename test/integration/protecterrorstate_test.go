@@ -173,14 +173,25 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 			env.p.waitFor("window.targetRaceReady === true", 10*time.Second)
 			if tc.held {
 				var settled bool
-				env.p.eval("window.targetRaceSettled !== undefined", &settled)
+				env.p.eval("window.targetRaceSettled !== undefined || window.targetRaceAttachSettled !== undefined || window.targetRaceCloseSettled !== undefined", &settled)
 				if settled {
 					t.Error("recovery was decided before the fresh browser response")
 				}
+				attaches := 0
 				for _, raw := range fake.received() {
-					if strings.Contains(raw, `"method":"Page.reload"`) {
-						t.Error("reload reached the browser without authoritative state")
+					var m struct {
+						Method string `json:"method"`
 					}
+					_ = json.Unmarshal([]byte(raw), &m)
+					if m.Method == "Page.reload" || m.Method == "Target.closeTarget" {
+						t.Errorf("%s reached the browser without authoritative state", m.Method)
+					}
+					if m.Method == "Target.attachToTarget" {
+						attaches++
+					}
+				}
+				if attaches != 2 {
+					t.Errorf("attach reached the browser without authoritative state: %d initial attaches", attaches)
 				}
 				env.p.eval("window.targetRaceContinue(); true", &value)
 			}
@@ -200,7 +211,7 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 				if name == "before" {
 					continue
 				}
-				control := name == "reload" || name == "navigate" || name == "reset" || name == "pageClose" || name == "close"
+				control := name == "reload" || name == "navigate" || name == "reset" || name == "pageClose" || name == "close" || name == "earlyAttach" || name == "earlyClose"
 				if usable && control {
 					if !answer.OK {
 						t.Errorf("error target recovery %s: %+v", name, answer)
