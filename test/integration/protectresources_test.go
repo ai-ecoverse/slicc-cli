@@ -64,8 +64,9 @@ func resourceRequestFixture(t *testing.T) *httptest.Server {
 			counts[key][role]++
 			mu.Unlock()
 			if r.URL.Path == "/challenge" {
-				if r.Header.Get("Authorization") == "" {
-					w.Header().Set("WWW-Authenticate", `Basic realm="fixture"`)
+				user, _, ok := r.BasicAuth()
+				if !ok || user != key {
+					w.Header().Set("WWW-Authenticate", `Basic realm="`+key+`"`)
 					w.WriteHeader(http.StatusUnauthorized)
 					return
 				}

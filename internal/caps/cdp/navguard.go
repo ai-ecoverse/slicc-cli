@@ -82,12 +82,8 @@ func (nt *navTarget) settle(failed bool) {
 	close(nt.ready)
 }
 
-func (g *guard) documentPatterns() []any {
-	var out []any
-	for _, p := range g.o.DocumentPatterns() {
-		out = append(out, map[string]any{"urlPattern": p, "resourceType": "Document", "requestStage": "Request"})
-	}
-	return out
+func (g *guard) protectedRequestPatterns() []any {
+	return []any{map[string]any{"urlPattern": "*", "requestStage": "Request"}}
 }
 
 func (g *guard) callbackLocked(sessionID, method string, params any, fn func(m message) [][]byte) []byte {
@@ -211,6 +207,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		return send
 	}
 	var p struct {
+		NetworkID    string `json:"networkId"`
 		RequestID    string `json:"requestId"`
 		FrameID      string `json:"frameId"`
 		ResourceType string `json:"resourceType"`
@@ -221,11 +218,11 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if json.Unmarshal(m.Params, &p) != nil || p.RequestID == "" {
 		return send
 	}
-	if p.ResourceType == "Document" && g.o.Loaded(p.Request.URL) {
-		if p.FrameID == nt.target || p.FrameID == "" {
+	if g.o.Loaded(p.Request.URL) && (p.ResourceType == "Document" || g.clientOwnedLocked(nt.target, p.NetworkID)) {
+		if p.ResourceType == "Document" && (p.FrameID == nt.target || p.FrameID == "") {
 			nt.historyLocked = true
 		}
-		g.logf("cdp: failed a document request into a protected origin in a target this stream touched")
+		g.logf("cdp: failed a protected document or client-issued request in a target this stream touched")
 		msg, _ := g.newCallLocked(nt.session, "Fetch.failRequest", map[string]any{"requestId": p.RequestID, "errorReason": "BlockedByClient"}, false)
 		return append(send, msg)
 	}
@@ -263,6 +260,7 @@ func (g *guard) navForgetLocked(targetID string) {
 	if !ok {
 		return
 	}
+	g.forgetClientTargetLocked(targetID)
 	delete(g.navTargets, targetID)
 	delete(g.tainted, targetID)
 	delete(g.clean, targetID)

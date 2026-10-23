@@ -55,14 +55,15 @@ export async function resourceBlockRow(getLink,opts) {
     const terminal=()=>{
       const relevant=reader.events.slice(start).filter((e)=>e.sessionId===observer);
       const ids=new Set(relevant.filter((e)=>(e.method==='Network.requestWillBeSent'&&e.params.request.url.includes(opts.key))||(e.method==='Network.webSocketCreated'&&e.params.url.includes(opts.key))).map((e)=>e.params.requestId));
-      return relevant.filter((e)=>ids.has(e.params.requestId)&&['Network.loadingFinished','Network.loadingFailed','Network.webSocketHandshakeResponseReceived','Network.webSocketFrameError'].includes(e.method));
+      const frames=new Set(relevant.filter((e)=>e.method==='Network.requestWillBeSent'&&e.params.request.url.includes(opts.key)).map((e)=>e.params.frameId));
+      return relevant.filter((e)=>(ids.has(e.params.requestId)&&['Network.loadingFinished','Network.loadingFailed','Network.webSocketHandshakeResponseReceived','Network.webSocketFrameError'].includes(e.method))||(opts.kind==='document'&&e.method==='Page.frameStoppedLoading'&&frames.has(e.params.frameId)));
     };
     await until(()=>terminal().length>0,'resource terminal network outcome',5000);
     const events=reader.events.slice(start).filter((e)=>e.sessionId===observer&&e.method.startsWith('Network.'));
     const pauses=client.events.filter((e)=>e.method==='Fetch.requestPaused'&&e.params.request.url.startsWith(opts.protected));
     await outcome(reader.send('Target.closeTarget',{targetId}));targetId=undefined;
     const counts=await(await fetch(opts.counts+'?key='+encodeURIComponent(opts.key))).json();
-    return {kind:opts.kind,key:opts.key,leg:opts.leg,redirect:opts.redirect,intercept:opts.intercept,trigger,counts,events,protectedPausesShown:pauses.length};
+    return {kind:opts.kind,key:opts.key,leg:opts.leg,redirect:opts.redirect,intercept:opts.intercept,trigger,counts,events,terminal:terminal(),protectedPausesShown:pauses.length};
   } finally {
     if(targetId)await outcome(reader.send('Target.closeTarget',{targetId}));
     if(client!==reader)await client.close();reader.close();

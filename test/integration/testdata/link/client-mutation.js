@@ -26,7 +26,19 @@ export async function clientMutationRow(getLink,opts) {
       }
       if(auth&&e.method==='Fetch.authRequired'&&e.params.request.url.includes(opts.key)) { selected=e;owned=e; }
     });
-    if(legacy)await client.send('Network.setRequestInterception',{patterns:[{urlPattern:'*',interceptionStage:'Request'}]},sessionId);
+    if(legacy) {
+      const nativeSetup=await outcome(client.send('Network.setRequestInterception',{patterns:[{urlPattern:'*',interceptionStage:'Request'}]},sessionId));
+      if(!nativeSetup.ok&&nativeSetup.error.code===-32601) {
+        const params={interceptionId:'native-unavailable',url:opts.protected+'/resource?key='+opts.key};
+        const before=client.sent.length;
+        const setup=client===reader?nativeSetup:await outcome(client.send(opts.method,params,sessionId));
+        const audit=client===reader?{applicable:false}:await auditSetter(opts.gate,sessionId,client.sent[before].id,setup);
+        await reader.send('Target.closeTarget',{targetId});targetId=undefined;
+        const counts=await(await fetch(opts.counts+'?key='+encodeURIComponent(opts.key))).json();
+        return {method:opts.method,key:opts.key,setup,audit,counts,nativeControlUnavailable:client===reader};
+      }
+      if(!nativeSetup.ok)throw new Error(JSON.stringify(nativeSetup));
+    }
     else await client.send('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}],handleAuthRequests:auth},sessionId);
     const to=opts.redirect?`${opts.ordinary}/redirect?kind=fetch&key=${opts.key}&protected=${encodeURIComponent(opts.protected)}`:`${opts.protected}/resource?kind=fetch&key=${opts.key}`;
     const start=reader.events.length;
@@ -35,7 +47,7 @@ export async function clientMutationRow(getLink,opts) {
     await until(()=>selected&&(!auth||selected.method==='Fetch.authRequired'),'client-owned paused request',5000);
     let params;
     if(legacy)params={interceptionId:selected.params.interceptionId,url:to};
-    else if(auth)params={requestId:selected.params.requestId,authChallengeResponse:{response:'ProvideCredentials',username:'fixture',password:'fixture'}};
+    else if(auth)params={requestId:selected.params.requestId,authChallengeResponse:{response:'ProvideCredentials',username:opts.key,password:'fixture'}};
     else if(opts.method==='Fetch.fulfillRequest')params={requestId:selected.params.requestId,responseCode:302,responseHeaders:[{name:'Location',value:to},{name:'Access-Control-Allow-Origin',value:'*'}],body:''};
     else params={requestId:selected.params.requestId,url:to};
     const before=client.sent.length;

@@ -243,6 +243,7 @@ func pausedIDs(method string, p map[string]any) (string, string) {
 func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
 		id, other := pausedIDs(m.Method, p)
+		g.linkPauseLocked(m.SessionID, id, other)
 		req, _ := p["request"].(map[string]any)
 		u, _ := req["url"].(string)
 		if msg, ok := g.worldPauseLocked(m, p); ok {
@@ -295,6 +296,11 @@ func (g *guard) continuedLocked(k callKey, failed bool) {
 func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) []byte {
 	defaultAuth := map[string]any{"response": "Default"}
 	document := p["resourceType"] == "Document"
+	idKey := g.pauseLinks[requestKey{m.SessionID, id}]
+	owned := g.clientOwnedLocked(idKey.session, idKey.request)
+	if owned {
+		defaultAuth = map[string]any{"response": "CancelAuth"}
+	}
 	var method string
 	params := map[string]any{"requestId": id}
 	switch m.Method {
@@ -304,7 +310,7 @@ func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) []by
 		params = map[string]any{"interceptionId": id}
 		if _, ok := p["authChallenge"]; ok {
 			params["authChallengeResponse"] = defaultAuth
-		} else if document {
+		} else if document || owned {
 			params["errorReason"] = "BlockedByClient"
 		}
 	case "Fetch.authRequired":
@@ -312,7 +318,7 @@ func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) []by
 		method = "Fetch.continueWithAuth"
 		params["authChallengeResponse"] = defaultAuth
 	default:
-		if document {
+		if document || owned {
 			g.logf("cdp: failed a document request into a protected origin that a page session paused")
 			method = "Fetch.failRequest"
 			params["errorReason"] = "BlockedByClient"
