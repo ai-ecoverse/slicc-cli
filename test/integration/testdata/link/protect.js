@@ -349,21 +349,22 @@ export function protectTest(getLink, describe) {
         }
         return { trials: results };
       }),
-    errorTargetRace: (browser, away, protectedURL, held = false) =>
+    errorTargetRace: (browser, away, protectedURL, held = false, browserSession = false) =>
       run(browser, async (c) => {
         c.callTimeout = 10000;
         const { targetId } = await c.send('Target.createTarget', { url: away });
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
         await c.send('Page.enable', {}, sessionId);
         const before = await outcome(c.send('Runtime.evaluate', { expression: '1', returnByValue: true }, sessionId));
+        const browserId = browserSession ? (await c.send('Target.attachToBrowserTarget')).sessionId : undefined;
         const outstanding = outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: 'function() { return location.href; }' }, sessionId));
         await c.send('Browser.getBrowserCommandLine');
         await c.send('Browser.getVersion');
         const pending = outcome(c.send('Page.reload', {}, sessionId));
         window.targetRacePending = pending.then((r) => { window.targetRaceSettled = r; return r; });
-        const earlyAttach = held ? outcome(c.send('Target.attachToTarget', { targetId, flatten: true })).then((r) => { window.targetRaceAttachSettled = r; return r; }) : null;
-        const earlyClose = held ? outcome(c.send('Target.closeTarget', { targetId })).then((r) => { window.targetRaceCloseSettled = r; return r; }) : null;
-        await c.send('Browser.getVersion');
+        const earlyAttach = held ? outcome(c.send('Target.attachToTarget', { targetId, flatten: true }, browserId)).then((r) => { window.targetRaceAttachSettled = r; return r; }) : null;
+        const earlyClose = held ? outcome(c.send('Target.closeTarget', { targetId }, browserId)).then((r) => { window.targetRaceCloseSettled = r; return r; }) : null;
+        await c.send('Browser.getVersion', {}, browserId);
         window.targetRaceReady = true;
         if (held) {
           await new Promise((resolve) => { window.targetRaceContinue = resolve; });

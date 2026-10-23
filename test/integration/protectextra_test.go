@@ -138,6 +138,9 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		switch m.Method {
 		case "Target.attachToBrowserTarget":
 			result = `{"sessionId":"RELAY"}`
+			if m.ID < 1<<30 {
+				result = `{"sessionId":"CLIENT_BROWSER"}`
+			}
 		case "Target.getTargets":
 			result = `{"targetInfos":[]}`
 		default:

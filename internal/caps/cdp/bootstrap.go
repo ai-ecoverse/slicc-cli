@@ -118,7 +118,7 @@ func (rl *relay) park(data []byte) bool {
 		return false
 	}
 	key := parkKey{session: c.session}
-	if c.session == "" {
+	if rl.g.browserScope(c.session) {
 		key.target = c.str("targetId")
 		if key.target == "" {
 			return false

@@ -30,8 +30,14 @@ func (g *guard) sessionWait(sessionID string) <-chan struct{} {
 	return u.ready
 }
 
+func (g *guard) browserScope(sessionID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return sessionID == "" || g.browserSessions[sessionID]
+}
+
 func (g *guard) commandWait(c *command) <-chan struct{} {
-	if c.session != "" {
+	if !g.browserScope(c.session) {
 		return g.sessionWait(c.session)
 	}
 	if exemptKeys[c.method]["targetId"] {

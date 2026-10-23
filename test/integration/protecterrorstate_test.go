@@ -78,6 +78,7 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 		hint    bool
 		loading bool
 		unsure  bool
+		browser bool
 	}{
 		{name: "target before error commit", order: "target-first", state: "error"},
 		{name: "error commit before target", order: "frame-first", state: "error"},
@@ -94,6 +95,9 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 		{name: "loading flags with ordinary snapshot", order: "target-only", state: "ordinary", loading: true, unsure: true},
 		{name: "loading flags with held protected snapshot", order: "target-only", state: "protected", held: true, loading: true, unsure: true},
 		{name: "loading flags with unknown snapshot", order: "target-only", state: "unknown", loading: true, unsure: true},
+		{name: "browser session commands with held error snapshot", order: "target-only", state: "error", held: true, browser: true},
+		{name: "browser session commands with held protected snapshot", order: "target-only", state: "protected", held: true, browser: true},
+		{name: "browser session commands with held unknown snapshot", order: "target-only", state: "unknown", held: true, browser: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var reads atomic.Int32
@@ -169,7 +173,7 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 				fake.gate("Page.getFrameTree", "Browser.getWindowBounds")
 			}
 			var value any
-			env.p.eval("window.targetRaceWork = linkTest.protect.errorTargetRace("+jsArgs("chrome-2", env.allowed+"/blank", env.plain.URL+"/protected", tc.held)+"); true", &value)
+			env.p.eval("window.targetRaceWork = linkTest.protect.errorTargetRace("+jsArgs("chrome-2", env.allowed+"/blank", env.plain.URL+"/protected", tc.held, tc.browser)+"); true", &value)
 			env.p.waitFor("window.targetRaceReady === true", 10*time.Second)
 			if tc.held {
 				var settled bool
