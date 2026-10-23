@@ -41,7 +41,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-browsers": "1.18.10",
+    "@ai-ecoverse/slicc-browsers": "1.18.11",
     "@ai-ecoverse/slicc-cdp": "1.33.1",
     "@ai-ecoverse/slicc-kernel": "1.149.0",
     "@ai-ecoverse/slicc-shared-web": "2.11.1",
