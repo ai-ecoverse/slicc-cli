@@ -13,7 +13,7 @@ export function stickyConfiguration(method, marker) {
     case 'Emulation.setTimezoneOverride': return { timezoneId: 'Pacific/Kiritimati' };
     case 'Network.setCacheDisabled': return { cacheDisabled: true };
     case 'Network.emulateNetworkConditions': return { offline: false, latency: 1000, downloadThroughput: -1, uploadThroughput: -1 };
-    case 'Network.emulateNetworkConditionsByRule': return { offline: false, matchedNetworkConditions: [{ urlPattern: '*', latency: 1000, downloadThroughput: -1, uploadThroughput: -1 }] };
+    case 'Network.emulateNetworkConditionsByRule': return { offline: false, matchedNetworkConditions: [{ urlPattern: '', latency: 1000, downloadThroughput: -1, uploadThroughput: -1 }] };
     case 'Network.overrideNetworkState': return { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 };
     case 'Network.setBlockedURLs': return { urls: ['*503-data*'] };
     default: throw new Error(`unknown sticky capability ${method}`);

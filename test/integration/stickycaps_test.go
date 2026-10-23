@@ -102,6 +102,7 @@ assert.deepEqual(stickyConfiguration('Network.setExtraHTTPHeaders','tag'),{heade
 assert.equal(stickyConfiguration('Network.setUserAgentOverride','tag').userAgent,'slicc503-tag');
 assert.equal(stickyConfiguration('Emulation.setUserAgentOverride','tag').userAgent,'slicc503-tag');
 for(const method of ['Network.emulateNetworkConditions','Network.emulateNetworkConditionsByRule']) assert.equal(stickyConfiguration(method,'tag').offline,false);
+assert.deepEqual(stickyConfiguration('Network.emulateNetworkConditionsByRule','tag').matchedNetworkConditions,[{urlPattern:'',latency:1000,downloadThroughput:-1,uploadThroughput:-1}]);
 assert.deepEqual(stickyConfiguration('Network.setBlockedURLs','tag').urls,['*503-data*']);
 assert.throws(()=>stickyConfiguration('Page.setBypassCSP','tag'),/unknown sticky capability/);
 `)
