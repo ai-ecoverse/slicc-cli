@@ -23,6 +23,7 @@ func resourceRequestFixture(t *testing.T) *httptest.Server {
 	t.Helper()
 	var mu sync.Mutex
 	counts := map[string]map[string]int{}
+	armed := map[string]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "X-Guard-Probe, Content-Type")
@@ -30,6 +31,13 @@ func resourceRequestFixture(t *testing.T) *httptest.Server {
 		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 		w.Header().Set("Cache-Control", "no-store")
 		key := r.URL.Query().Get("key")
+		if r.URL.Path == "/arm" {
+			mu.Lock()
+			armed[key] = r.URL.Query().Get("protected")
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.URL.Path == "/counts" {
 			mu.Lock()
 			value := map[string]int{}
@@ -41,9 +49,9 @@ func resourceRequestFixture(t *testing.T) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(value)
 			return
 		}
-		if r.URL.Path == "/resource" || r.URL.Path == "/redirect" {
+		if r.URL.Path == "/resource" || r.URL.Path == "/redirect" || r.URL.Path == "/replay" {
 			role := "ordinary"
-			if strings.HasPrefix(r.Host, "seven.guard.test:") {
+			if strings.HasPrefix(r.Host, "seven.guard.test:") || strings.HasPrefix(r.Host, "vault.sliccy.ai:") {
 				role = "protected"
 			}
 			if r.URL.Path == "/redirect" {
@@ -55,8 +63,21 @@ func resourceRequestFixture(t *testing.T) *httptest.Server {
 			}
 			counts[key][role]++
 			mu.Unlock()
+			if r.URL.Path == "/replay" {
+				mu.Lock()
+				to := armed[key]
+				mu.Unlock()
+				if to != "" {
+					http.Redirect(w, r, to+"/resource?kind=xhr&key="+key, http.StatusFound)
+					return
+				}
+			}
 			if r.URL.Path == "/redirect" {
-				http.Redirect(w, r, "http://seven.guard.test:"+r.Host[strings.LastIndexByte(r.Host, ':')+1:]+"/resource?"+r.URL.RawQuery, http.StatusFound)
+				to := r.URL.Query().Get("protected")
+				if to == "" {
+					to = "http://seven.guard.test:" + r.Host[strings.LastIndexByte(r.Host, ':')+1:]
+				}
+				http.Redirect(w, r, to+"/resource?kind="+r.URL.Query().Get("kind")+"&key="+key, http.StatusFound)
 				return
 			}
 			if r.Method == http.MethodOptions {
@@ -109,7 +130,7 @@ func resourceRequestFixture(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func TestCDPBlocksAllProtectedResourceRequestsAndRedirectHops(t *testing.T) {
+func TestCDPPageResourceTrafficIsExplicitlyAllowedByC5(t *testing.T) {
 	fixture := resourceRequestFixture(t)
 	port := fixture.URL[strings.LastIndexByte(fixture.URL, ':')+1:]
 	ordinary := "http://ordinary.guard.test:" + port
@@ -162,6 +183,13 @@ func TestCDPBlocksAllProtectedResourceRequestsAndRedirectHops(t *testing.T) {
 					if row.Kind != kind || row.Key != key {
 						t.Fatal("resource observation identity missing")
 					}
+					if kind == "websocket" && redirect {
+						if row.Counts["protected"] != 0 || row.Counts["redirect"] != 1 || !strings.Contains(string(raw), "Unexpected response code: 302") {
+							t.Fatalf("native WebSocket redirect outcome not independently proven: %s", raw)
+						}
+						t.Log("ALLOWED-BY-C5: WebSocket initial request allowed; Chrome itself rejects 302, no protected follow-up")
+						continue
+					}
 					if leg == "control" {
 						if row.Counts["protected"] == 0 {
 							t.Fatalf("native positive control did not reach protected fixture: %s", raw)
@@ -171,8 +199,14 @@ func TestCDPBlocksAllProtectedResourceRequestsAndRedirectHops(t *testing.T) {
 						}
 						continue
 					}
-					if row.Counts["protected"] != 0 {
-						t.Errorf("protected request itself escaped: %s redirect=%t %s: hits=%d", kind, redirect, leg, row.Counts["protected"])
+					if kind == "document" {
+						if row.Counts["protected"] != 0 {
+							t.Errorf("existing document navigation protection failed: %s", raw)
+						}
+					} else if row.Counts["protected"] == 0 {
+						t.Errorf("allowed-by-C5 page request did not reach protected fixture: %s redirect=%t %s", kind, redirect, leg)
+					} else {
+						t.Log("ALLOWED-BY-C5: page-initiated resource request, not a client fetch path")
 					}
 					if row.ProtectedPauses != 0 {
 						t.Errorf("protected pause handed to client: %s", raw)
