@@ -263,18 +263,10 @@ func remoteContext(id string) (int64, bool) {
 }
 
 func (g *guard) frameContentCheckLocked(c *command, target string) string {
-	w := g.worlds[target]
-	if w == nil {
+	if !g.framesProtectedLocked(target) {
 		return ""
 	}
-	protected := w.full
-	for _, context := range w.contexts {
-		protected = protected || context.protectedFrame != ""
-	}
-	if !protected {
-		return ""
-	}
-	for _, context := range w.contexts {
+	for _, context := range g.worlds[target].contexts {
 		if c.str("frameId") != "" && c.str("frameId") == context.protectedFrame {
 			return refusedTarget
 		}
@@ -284,7 +276,10 @@ func (g *guard) frameContentCheckLocked(c *command, target string) string {
 		return refusedTarget
 	}
 	switch c.method {
-	case "Page.getFrameTree", "Page.getResourceTree", "Page.getResourceContent", "Page.captureSnapshot", "Page.captureScreenshot", "Page.printToPDF":
+	case "Page.getFrameTree", "Page.getResourceTree", "Page.getResourceContent", "Page.captureSnapshot", "Page.printToPDF":
+		return refusedTarget
+	}
+	if framePaintMethods[c.method] {
 		return refusedTarget
 	}
 	return ""
@@ -410,9 +405,9 @@ func (w *worldSet) named(name string) bool {
 	return false
 }
 
-func (g *guard) navWorldLocked(nt *navTarget, m *message) {
+func (g *guard) navWorldLocked(nt *navTarget, m *message) [][]byte {
 	if nt.target == "" {
-		return
+		return nil
 	}
 	switch m.Method {
 	case "Runtime.executionContextCreated":
@@ -422,6 +417,7 @@ func (g *guard) navWorldLocked(nt *navTarget, m *message) {
 		if json.Unmarshal(m.Params, &p) == nil {
 			g.worldContextLocked(nt.target, m.SessionID, p.Context)
 		}
+		return g.cutCastsLocked(nt.target)
 	case "Runtime.executionContextDestroyed":
 		var p struct {
 			ID       int64  `json:"executionContextId"`
@@ -432,6 +428,7 @@ func (g *guard) navWorldLocked(nt *navTarget, m *message) {
 	case "Runtime.executionContextsCleared":
 		g.contextsClearedLocked(nt.target, m.SessionID)
 	}
+	return nil
 }
 
 func (g *guard) worldTargetLocked(sessionID string) string {

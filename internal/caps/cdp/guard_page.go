@@ -110,6 +110,9 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	g.noteClientRequestLocked(k, c)
 	g.noteContinueLocked(k, c)
 	g.noteCommitLocked(k, c)
+	if c.session != "" {
+		g.noteCastLocked(c)
+	}
 	if t := c.str("targetId"); c.method == "Target.attachToTarget" && t != "" {
 		g.attachCalls[k] = t
 		g.explicit[t]++
@@ -174,6 +177,8 @@ func resultKind(method string) callKind {
 		return kindAttach
 	case "Page.printToPDF", "Network.loadNetworkResource", "IO.resolveBlob":
 		return kindStreams
+	case "Page.captureScreenshot", "HeadlessExperimental.beginFrame", "LayerTree.replaySnapshot", "LayerTree.profileSnapshot", "LayerTree.snapshotCommandLog":
+		return kindPaint
 	}
 	return kindPlain
 }
