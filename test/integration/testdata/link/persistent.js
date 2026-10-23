@@ -85,6 +85,15 @@ async function probe(reader, session, method, marker, url, contextId) {
   return { ...identity, ...observed };
 }
 
+export async function auditSetter(gate, sessionId, wireId, setup) {
+  const response = await fetch(gate, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'audit', sessionId, probes: [{ id: 1, wireId }] }) });
+  if (!response.ok) throw new Error(`setter audit HTTP ${response.status}: ${await response.text()}`);
+  const audit = await response.json();
+  audit.complete = audit.probes?.length === 1 && audit.probes[0].id === 1 && typeof audit.probes[0].forwarded === 'boolean';
+  if (!audit.complete || (setup.ok && !audit.probes[0].forwarded)) throw new Error('setter forwarding audit missing or inconsistent');
+  return audit;
+}
+
 export async function measurePersistent(getLink, opts) {
   const reader = await SocketClient.open(opts.ws);
   reader.callTimeout = 15000;
@@ -120,10 +129,7 @@ export async function measurePersistent(getLink, opts) {
     if (setup && !setup.ok && !Number.isInteger(setup.error?.code)) throw new Error(`setter has no structured terminal reply: ${JSON.stringify(setup)}`);
     let audit = { applicable: false, transport: 'direct-observer' };
     if (client !== reader) {
-      const response = await fetch(opts.gate, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'audit', sessionId, probes: [{ id: opts.method, wireId: call.id }] }) });
-      audit = await response.json();
-      audit.complete = audit.probes?.length === 1 && typeof audit.probes[0].forwarded === 'boolean';
-      if (!audit.complete || (setup.ok && !audit.probes[0].forwarded)) throw new Error('setter forwarding audit missing or inconsistent');
+      audit = await auditSetter(opts.gate, sessionId, call.id, setup);
     }
     if (setup && !setup.ok && setup.error.code === -32601) return { method: opts.method, mode: opts.mode, leg: opts.leg, supported: false, setup, audit };
     const ordinaryCommit = await navigate(`${ordinary}&reload=1`);

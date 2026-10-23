@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -116,7 +117,36 @@ func TestPersistentFixtureCSPAndNetworkEvidence(t *testing.T) {
 	}
 }
 
+func TestPersistentSetterAuditRequiresNumericIDsAndTerminalWireEvidence(t *testing.T) {
+	cmd := exec.Command(requireNode(t), "--input-type=module", "-e", `
+import assert from 'node:assert/strict';
+import { auditSetter } from './testdata/link/persistent.js';
+let request;
+globalThis.fetch = async (url, opts) => { request = JSON.parse(opts.body); return { ok: true, json: async () => ({ probes: [{ id: 1, forwarded: true }] }) }; };
+const audit = await auditSetter('gate', 'session', 37, { ok: true });
+assert.deepEqual(request, { action: 'audit', sessionId: 'session', probes: [{ id: 1, wireId: 37 }] });
+assert.equal(audit.complete, true);
+globalThis.fetch = async () => ({ ok: false, status: 400, text: async () => 'invalid control', json: () => { throw new Error('must not parse error body'); } });
+await assert.rejects(auditSetter('gate', 'session', 37, { ok: true }), /setter audit HTTP 400: invalid control/);
+for (const probes of [[], [{ id: 'wrong', forwarded: true }], [{ id: 1 }], [{ id: 1, forwarded: false }]]) {
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ probes }) });
+  await assert.rejects(auditSetter('gate', 'session', 37, { ok: true }), /missing or inconsistent/);
+}
+globalThis.fetch = async () => ({ ok: true, json: async () => ({ probes: [{ id: 1, forwarded: false }] }) });
+assert.equal((await auditSetter('gate', 'session', 37, { ok: false, error: { code: -32000 } })).complete, true);
+`)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("setter audit regression: %v\n%s", err, out)
+	}
+}
+
 func TestCDPDocumentPersistentCapabilityMeasurements(t *testing.T) {
+	if findChrome() == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("no Chrome found; set SLICC_TEST_CHROME")
+		}
+		t.Skip(harnessChromeNotice)
+	}
 	methods := []string{"Page.addScriptToEvaluateOnNewDocument", "Page.addScriptToEvaluateOnLoad", "Runtime.addBinding", "Page.setBypassCSP"}
 	modes := []string{"plain", "history", "bfcache", "inherited-blank", "inherited-srcdoc", "error"}
 	measured := 0
@@ -146,12 +176,14 @@ func TestCDPDocumentPersistentCapabilityMeasurements(t *testing.T) {
 			}
 			for _, method := range methods {
 				t.Run(method, func(t *testing.T) {
+					p := *env.p
+					p.t = t
 					rows := map[string]persistentMeasurement{}
 					for _, leg := range []string{"control", "baseline", "guarded"} {
 						marker := strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + leg
 						opts := map[string]any{"method": method, "mode": mode, "leg": leg, "marker": marker, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "gate": gate.srv.URL + "/gate", "ordinary": ordinary, "protected": protected}
 						var raw json.RawMessage
-						env.p.evalWithin("linkTest.persistent("+jsArgs(opts)+")", &raw, 90*time.Second)
+						p.evalWithin("linkTest.persistent("+jsArgs(opts)+")", &raw, 90*time.Second)
 						var row persistentMeasurement
 						if err := json.Unmarshal(raw, &row); err != nil {
 							t.Fatal(err)
