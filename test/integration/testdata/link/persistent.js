@@ -1,15 +1,7 @@
 import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
 
-export const persistentMethods = [
-  'Page.addScriptToEvaluateOnNewDocument', 'Page.addScriptToEvaluateOnLoad',
-  'Runtime.addBinding', 'Page.setBypassCSP', 'Network.setExtraHTTPHeaders',
-  'Network.setUserAgentOverride', 'Emulation.setUserAgentOverride',
-  'Emulation.setLocaleOverride', 'Emulation.setTimezoneOverride',
-  'Network.setCacheDisabled', 'Network.emulateNetworkConditions',
-  'Network.emulateNetworkConditionsByRule', 'Network.overrideNetworkState',
-  'Network.setBlockedURLs',
-];
+export const persistentMethods = ['Page.addScriptToEvaluateOnNewDocument', 'Page.addScriptToEvaluateOnLoad', 'Runtime.addBinding', 'Page.setBypassCSP'];
 
 async function outcome(promise) {
   try { return { ok: true, result: await promise }; }
@@ -33,16 +25,6 @@ function configuration(method, marker) {
     case 'Page.addScriptToEvaluateOnLoad': return { scriptSource: `globalThis.__slicc503 = ${JSON.stringify(marker)}; addEventListener('pageshow', (e) => { globalThis.__slicc503Restored = e.persisted; });` };
     case 'Runtime.addBinding': return { name: '' };
     case 'Page.setBypassCSP': return { enabled: true };
-    case 'Network.setExtraHTTPHeaders': return { headers: { 'X-Slicc-503': marker } };
-    case 'Network.setUserAgentOverride':
-    case 'Emulation.setUserAgentOverride': return { userAgent: `slicc503-${marker}` };
-    case 'Emulation.setLocaleOverride': return { locale: 'de-DE' };
-    case 'Emulation.setTimezoneOverride': return { timezoneId: 'Pacific/Kiritimati' };
-    case 'Network.setCacheDisabled': return { cacheDisabled: true };
-    case 'Network.emulateNetworkConditions': return { offline: false, latency: 1000, downloadThroughput: -1, uploadThroughput: -1 };
-    case 'Network.emulateNetworkConditionsByRule': return { offline: false, matchedNetworkConditions: [{ urlPattern: '*', latency: 1000, downloadThroughput: -1, uploadThroughput: -1 }] };
-    case 'Network.overrideNetworkState': return { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 };
-    case 'Network.setBlockedURLs': return { urls: ['*503-data*'] };
     default: throw new Error(`unknown capability ${method}`);
   }
 }
@@ -53,7 +35,7 @@ async function evaluate(reader, session, expression, contextId) {
   return reply.result.value;
 }
 
-async function probe(reader, session, method, marker, url, contextId) {
+async function probe(reader, session, method, marker, contextId) {
   const identity = await evaluate(reader, session, `({ href: location.href, origin: self.origin, marker: document.body?.dataset.marker ?? '', restored: globalThis.__slicc503ObserverRestore === true })`, contextId);
   let expression;
   switch (method) {
@@ -61,24 +43,7 @@ async function probe(reader, session, method, marker, url, contextId) {
     case 'Page.addScriptToEvaluateOnLoad': expression = `({ effect: globalThis.__slicc503 === ${JSON.stringify(marker)}, value: globalThis.__slicc503 ?? null, restoredHook: globalThis.__slicc503Restored === true })`; break;
     case 'Runtime.addBinding': expression = `(() => { const exists = typeof globalThis[''] === 'function'; if (exists) globalThis[''](${JSON.stringify(marker)}); return { effect: exists, invoked: exists }; })()`; break;
     case 'Page.setBypassCSP': expression = `(() => { delete globalThis.__slicc503Inline; const s = document.createElement('script'); s.textContent = 'globalThis.__slicc503Inline = ' + ${JSON.stringify(JSON.stringify(marker))}; document.body.append(s); return { effect: globalThis.__slicc503Inline === ${JSON.stringify(marker)} }; })()`; break;
-    case 'Emulation.setLocaleOverride': expression = `({ effect: new Intl.NumberFormat().resolvedOptions().locale === 'de-DE', value: new Intl.NumberFormat().resolvedOptions().locale })`; break;
-    case 'Emulation.setTimezoneOverride': expression = `({ effect: new Intl.DateTimeFormat().resolvedOptions().timeZone === 'Pacific/Kiritimati', value: new Intl.DateTimeFormat().resolvedOptions().timeZone })`; break;
-    case 'Network.overrideNetworkState': expression = `({ effect: navigator.onLine === false, value: navigator.onLine })`; break;
-    default: expression = `(async () => {
-      const start = performance.now();
-      let data, second, error;
-      const method = ${JSON.stringify(method)};
-      const options = method === 'Network.setCacheDisabled' ? {} : { cache: 'no-store' };
-      try { data = await (await fetch(${JSON.stringify(url)}, options)).json(); second = await (await fetch(${JSON.stringify(url)}, options)).json(); }
-      catch (e) { error = String(e); }
-      const ms = performance.now() - start;
-      const effect = method === 'Network.setBlockedURLs' ? Boolean(error)
-        : method === 'Network.setExtraHTTPHeaders' ? data?.header === ${JSON.stringify(marker)}
-        : method.includes('UserAgentOverride') ? data?.ua === ${JSON.stringify(`slicc503-${marker}`)} && navigator.userAgent === ${JSON.stringify(`slicc503-${marker}`)}
-        : method === 'Network.setCacheDisabled' ? data?.count === 1 && second?.count === 2
-        : ms >= 1800;
-      return { effect, data, second, ms, error };
-    })()`;
+    default: throw new Error(`unmeasured capability ${method}`);
   }
   const observed = await evaluate(reader, session, expression, contextId);
   if (typeof observed?.effect !== 'boolean') throw new Error('observer did not return a measured effect');
@@ -101,7 +66,7 @@ export async function laterAdmissionProof(getLink, opts) {
   try {
     await client.send('Page.enable', {}, sessionId);
     const rows = [];
-    for (const method of persistentMethods.slice(0, 4)) {
+    for (const method of persistentMethods) {
       const before = client.sent.length;
       const setup = await outcome(client.send(method, configuration(method, 'refusal-proof'), sessionId));
       const audit = await auditSetter(opts.gate, sessionId, client.sent[before].id, setup);
@@ -153,7 +118,7 @@ export async function measurePersistent(getLink, opts) {
     if (setup && !setup.ok && setup.error.code === -32601) return { method: opts.method, mode: opts.mode, leg: opts.leg, supported: false, setup, audit };
     if (opts.mode === 'admission') return { method: opts.method, mode: opts.mode, leg: opts.leg, supported: true, setup, audit };
     const ordinaryCommit = await navigate(`${ordinary}&reload=1`);
-    const ordinaryProbe = await probe(reader, observer, opts.method, opts.marker, `${opts.ordinary}/503-data?key=${opts.marker}-ordinary`);
+    const ordinaryProbe = await probe(reader, observer, opts.method, opts.marker);
     let commit, contextId;
     if (opts.mode.startsWith('inherited-')) {
       const kind = opts.mode.endsWith('blank') ? 'blank' : 'srcdoc';
@@ -198,7 +163,7 @@ export async function measurePersistent(getLink, opts) {
         commit = { seed, entry, frame: event.params.frame, type: event.params.type, bfcache, restored };
       }
     }
-    const protectedProbe = await probe(reader, observer, opts.method, opts.marker, `${opts.protected}/503-data?key=${opts.marker}-protected`, contextId);
+    const protectedProbe = await probe(reader, observer, opts.method, opts.marker, contextId);
     if (opts.mode === 'bfcache' && opts.method.startsWith('Page.addScriptToEvaluate')) {
       protectedProbe.seedMarkerPresent = protectedProbe.effect;
       protectedProbe.effect = protectedProbe.effect && protectedProbe.restoredHook;

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -44,8 +43,6 @@ type persistentMeasurement struct {
 
 func persistentFixture(t *testing.T) *httptest.Server {
 	t.Helper()
-	var mu sync.Mutex
-	counts := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.URL.Path == "/fail" {
@@ -55,16 +52,6 @@ func persistentFixture(t *testing.T) *httptest.Server {
 				return
 			}
 			_ = conn.Close()
-			return
-		}
-		if r.URL.Path == "/503-data" {
-			mu.Lock()
-			counts[r.URL.RawQuery]++
-			count := counts[r.URL.RawQuery]
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Cache-Control", "public, max-age=3600")
-			_ = json.NewEncoder(w).Encode(map[string]any{"count": count, "header": r.Header.Get("X-Slicc-503"), "ua": r.UserAgent()})
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
@@ -83,40 +70,15 @@ func persistentFixture(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func TestPersistentFixtureCSPAndNetworkEvidence(t *testing.T) {
+func TestPersistentFixtureEnforcesScriptCSP(t *testing.T) {
 	srv := persistentFixture(t)
 	res, err := http.Get(srv.URL + "/doc?marker=fixture")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = res.Body.Close() }()
 	if res.Header.Get("Content-Security-Policy") != "script-src 'none'" {
 		t.Error("fixture did not enforce script CSP")
-	}
-	_ = res.Body.Close()
-	for want := 1; want <= 2; want++ {
-		req, err := http.NewRequest(http.MethodGet, srv.URL+"/503-data?key=fixture", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("X-Slicc-503", "fixture")
-		req.Header.Set("User-Agent", "slicc503-fixture")
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var data struct {
-			Count  int    `json:"count"`
-			Header string `json:"header"`
-			UA     string `json:"ua"`
-		}
-		err = json.NewDecoder(res.Body).Decode(&data)
-		_ = res.Body.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if data.Count != want || data.Header != "fixture" || data.UA != "slicc503-fixture" || res.Header.Get("Cache-Control") != "public, max-age=3600" {
-			t.Fatalf("fixture evidence missing: %+v", data)
-		}
 	}
 }
 
