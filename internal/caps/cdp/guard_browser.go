@@ -42,7 +42,7 @@ func (g *guard) fromBrowser(data []byte) browserVerdict {
 	if g.sessionRefusedLocked(m.SessionID) {
 		return browserVerdict{}
 	}
-	if !errorPageEvent(m.Method) && g.errorPageSessionLocked(m.SessionID) {
+	if !errorPageEvent(m.Method) && (g.errorPageSessionLocked(m.SessionID) || g.sessionUnconfirmedLocked(m.SessionID)) {
 		return browserVerdict{}
 	}
 	if h, ok := eventHandlers[m.Method]; ok {

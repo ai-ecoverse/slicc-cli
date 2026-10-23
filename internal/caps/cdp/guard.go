@@ -303,6 +303,9 @@ func (g *guard) record(info targetInfo) *target {
 		t = &target{id: info.TargetID}
 		g.targets[info.TargetID] = t
 	}
+	if nt := g.navTargets[t.id]; nt != nil && (t.url != info.URL || t.typ != info.Type) {
+		nt.revision++
+	}
 	t.typ, t.url, t.opener, t.openerFrame, t.ctx = info.Type, info.URL, info.OpenerID, info.OpenerFrameID, info.BrowserContextID
 	return t
 }
@@ -314,6 +317,14 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	t := g.record(info)
 	t.gone = false
 	prev := t.protected
+	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && g.o.Loaded(t.url) {
+		nt.historyLocked = true
+		if nt.confirm == nil || nt.confirm.done {
+			nt.confirm = &navTarget{ready: make(chan struct{}), start: time.Now()}
+			nt.confirm.awayAt = g.reads.away(nt.confirm.start)
+		}
+		return g.confirmTargetLocked(nt)
+	}
 	t.protected = g.decide(t, prev)
 	if t.protected && !prev {
 		return g.protectLocked(t)

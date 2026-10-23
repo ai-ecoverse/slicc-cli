@@ -107,18 +107,20 @@ func (g *guard) navWatch(now time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	away := g.reads.away(now)
-	for _, nt := range g.navTargets {
-		if nt.done {
-			continue
-		}
-		if reason := g.bounds.expired(nt, now, away); reason != "" {
-			kind := "a target's navigation guard"
-			if nt.worker {
-				kind = "a worker's guard"
+	for _, target := range g.navTargets {
+		for _, nt := range []*navTarget{target, target.confirm} {
+			if nt == nil || nt.done {
+				continue
 			}
-			g.logf("cdp: %s failed: %s; refusing its commands", kind, reason)
-			nt.reason = reason
-			nt.settle(true)
+			if reason := g.bounds.expired(nt, now, away); reason != "" {
+				kind := "a target's navigation guard"
+				if nt.worker {
+					kind = "a worker's guard"
+				}
+				g.logf("cdp: %s failed: %s; refusing its commands", kind, reason)
+				nt.reason = reason
+				nt.settle(true)
+			}
 		}
 	}
 	g.resolveUnknownLocked()

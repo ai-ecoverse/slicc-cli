@@ -69,6 +69,9 @@ type navTarget struct {
 	shared           bool
 	historyLocked    bool
 	protectedHistory map[string]string
+	confirm          *navTarget
+	confirming       bool
+	revision         int
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -154,6 +157,9 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 	for _, c := range calls {
 		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, step(c.method)))
 	}
+	if nt.confirm != nil {
+		out = append(out, g.confirmTargetLocked(nt)...)
+	}
 	return out
 }
 
@@ -182,6 +188,13 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
+	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {
+		nt.revision++
+	}
+	var send [][]byte
+	if nt.confirm != nil && !nt.confirm.done {
+		send = g.confirmTargetLocked(nt)
+	}
 	if nt.commits != before && (g.o.Loaded(nt.documentURL) || g.o.Loaded(nt.errorURL)) {
 		nt.historyLocked = true
 	}
@@ -195,7 +208,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		}
 	}
 	if m.Method != "Fetch.requestPaused" {
-		return nil
+		return send
 	}
 	var p struct {
 		RequestID    string `json:"requestId"`
@@ -206,7 +219,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		} `json:"request"`
 	}
 	if json.Unmarshal(m.Params, &p) != nil || p.RequestID == "" {
-		return nil
+		return send
 	}
 	if p.ResourceType == "Document" && g.o.Loaded(p.Request.URL) {
 		if p.FrameID == nt.target || p.FrameID == "" {
@@ -214,10 +227,10 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		}
 		g.logf("cdp: failed a document request into a protected origin in a target this stream touched")
 		msg, _ := g.newCallLocked(nt.session, "Fetch.failRequest", map[string]any{"requestId": p.RequestID, "errorReason": "BlockedByClient"}, false)
-		return [][]byte{msg}
+		return append(send, msg)
 	}
 	msg, _ := g.newCallLocked(nt.session, "Fetch.continueRequest", map[string]any{"requestId": p.RequestID}, false)
-	return [][]byte{msg}
+	return append(send, msg)
 }
 
 func (g *guard) navDetachedLocked(sessionID string) {
@@ -232,6 +245,9 @@ func (g *guard) navDetachedLocked(sessionID string) {
 	nt.session = ""
 	nt.settle(true)
 	nt.failed = true
+	if nt.confirm != nil {
+		nt.confirm.settle(true)
+	}
 }
 
 func (g *guard) navReleaseLocked(nt *navTarget) [][]byte {
@@ -254,6 +270,9 @@ func (g *guard) navForgetLocked(targetID string) {
 		delete(g.navSessions, nt.session)
 	}
 	nt.settle(true)
+	if nt.confirm != nil {
+		nt.confirm.settle(true)
+	}
 }
 
 func (g *guard) navWaitLocked(sessionID string) <-chan struct{} {
@@ -262,10 +281,16 @@ func (g *guard) navWaitLocked(sessionID string) <-chan struct{} {
 		return nil
 	}
 	nt, ok := g.navTargets[s.target]
-	if !ok || nt.done {
+	if !ok {
 		return nil
 	}
-	return nt.ready
+	if !nt.done {
+		return nt.ready
+	}
+	if nt.confirm != nil && !nt.confirm.done {
+		return nt.confirm.ready
+	}
+	return nil
 }
 
 func (g *guard) navCheckLocked(sessionID string) string {
@@ -274,6 +299,9 @@ func (g *guard) navCheckLocked(sessionID string) string {
 		return ""
 	}
 	nt, ok := g.navTargets[s.target]
+	if ok && nt.confirm != nil && (!nt.confirm.done || nt.confirm.failed) {
+		return refusedGuard
+	}
 	switch {
 	case ok && nt.done && !nt.failed:
 		return ""
@@ -418,8 +446,9 @@ func errorPageEvent(method string) bool {
 }
 
 type commitMark struct {
-	nt      *navTarget
-	commits int
+	nt            *navTarget
+	commits       int
+	historyLocked bool
 }
 
 type failedForm struct {
@@ -462,12 +491,12 @@ func (g *guard) noteCommitLocked(k callKey, c *command) {
 		return
 	}
 	if nt, ok := g.navTargets[s.target]; ok {
-		g.commitMarks[k] = commitMark{nt: nt, commits: nt.commits}
+		g.commitMarks[k] = commitMark{nt: nt, commits: nt.commits, historyLocked: nt.historyLocked}
 	}
 }
 
 func (g *guard) outlivedLocked(k callKey) bool {
 	mk, ok := g.commitMarks[k]
 	delete(g.commitMarks, k)
-	return ok && mk.nt.failCommit > mk.commits
+	return ok && (mk.nt.failCommit > mk.commits || (mk.nt.historyLocked && !mk.historyLocked))
 }

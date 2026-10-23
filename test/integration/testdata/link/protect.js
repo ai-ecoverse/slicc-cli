@@ -321,6 +321,77 @@ export function protectTest(getLink, describe) {
         await c.send('Target.closeTarget', { targetId });
         return { attached, discovered, plain: targetId };
       }),
+    selfErrorRecovery: (browser, away, protectedURL, trials) =>
+      run(browser, async (c) => {
+        c.callTimeout = 10000;
+        const results = [];
+        for (let trial = 0; trial < trials; trial += 1) {
+          const { targetId } = await c.send('Target.createTarget', { url: away });
+          const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+          await c.send('Page.enable', {}, sessionId);
+          const failed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 20000);
+          await outcome(c.send('Runtime.evaluate', { expression: later(`${protectedURL}?trial=${trial}`) }, sessionId));
+          await failed;
+          const frame = await outcome(c.send('Page.getFrameTree', {}, sessionId));
+          const evaluate = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+          const dom = await outcome(c.send('DOM.getDocument', {}, sessionId));
+          const screenshot = await outcome(c.send('Page.captureScreenshot', {}, sessionId));
+          const reloaded = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 20000);
+          const reload = await outcome(c.send('Page.reload', {}, sessionId));
+          if (reload.ok) await reloaded;
+          const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === away, 20000);
+          const navigate = await outcome(c.send('Page.navigate', { url: away }, sessionId));
+          if (navigate.ok) await left;
+          const reset = await outcome(c.send('Page.resetNavigationHistory', {}, sessionId));
+          const afterReset = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+          const close = await outcome(c.send('Target.closeTarget', { targetId }));
+          results.push({ frame, evaluate, dom, screenshot, reload, navigate, reset, afterReset, close });
+        }
+        return { trials: results };
+      }),
+    errorTargetRace: (browser, away, protectedURL, held = false) =>
+      run(browser, async (c) => {
+        c.callTimeout = 10000;
+        const { targetId } = await c.send('Target.createTarget', { url: away });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        const before = await outcome(c.send('Runtime.evaluate', { expression: '1', returnByValue: true }, sessionId));
+        const outstanding = outcome(c.send('Runtime.callFunctionOn', { functionDeclaration: 'function() { return location.href; }' }, sessionId));
+        await c.send('Browser.getBrowserCommandLine');
+        await c.send('Browser.getVersion');
+        const pending = outcome(c.send('Page.reload', {}, sessionId));
+        window.targetRacePending = pending.then((r) => { window.targetRaceSettled = r; return r; });
+        window.targetRaceReady = true;
+        if (held) {
+          await new Promise((resolve) => { window.targetRaceContinue = resolve; });
+          await c.send('Browser.getWindowBounds');
+        }
+        const results = { before, reload: await pending, outstanding: await outstanding };
+        const probes = {
+          'Runtime.evaluate': { expression: 'location.href', returnByValue: true },
+          'Runtime.callFunctionOn': { functionDeclaration: 'function() { return location.href; }' },
+          'DOM.getDocument': {},
+          'DOMSnapshot.captureSnapshot': { computedStyles: [] },
+          'Page.captureScreenshot': {},
+          'Page.startScreencast': {},
+          'Page.printToPDF': {},
+          'Debugger.pause': {},
+          'scriptedReload': { scriptToEvaluateOnLoad: 'window.__guardRan = true' },
+          'protectedNavigate': { url: protectedURL },
+          'scriptNavigate': { url: 'javascript:window.__guardRan=true' },
+        };
+        for (const [name, params] of Object.entries(probes)) {
+          const method = name === 'scriptedReload' ? 'Page.reload' : name.endsWith('Navigate') ? 'Page.navigate' : name;
+          results[name] = await outcome(c.send(method, params, sessionId));
+        }
+        results.navigate = await outcome(c.send('Page.navigate', { url: away }, sessionId));
+        results.reset = await outcome(c.send('Page.resetNavigationHistory', {}, sessionId));
+        results.afterReset = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+        results.pageClose = await outcome(c.send('Page.close', {}, sessionId));
+        results.close = await outcome(c.send('Target.closeTarget', { targetId }));
+        const detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
+        return { answers: results, detached };
+      }),
     errorPage: (browser, targetId, sevenURL) =>
       run(browser, async (c) => {
         await c.send('Target.setDiscoverTargets', { discover: true });
