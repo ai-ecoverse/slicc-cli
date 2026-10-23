@@ -17,7 +17,7 @@ import (
 	"github.com/coder/websocket"
 )
 
-var resourceKinds = []string{"fetch", "xhr", "image", "script", "stylesheet", "font", "media", "track", "eventsource", "beacon", "websocket", "preflight", "manifest", "prefetch"}
+var resourceKinds = []string{"document", "fetch", "xhr", "image", "script", "stylesheet", "font", "media", "track", "eventsource", "beacon", "websocket", "preflight", "manifest", "prefetch"}
 
 func resourceRequestFixture(t *testing.T) *httptest.Server {
 	t.Helper()

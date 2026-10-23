@@ -2,11 +2,12 @@ import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
 import { evaluate, outcome, until } from './persistent.js';
 
-export const resourceKinds = ['fetch', 'xhr', 'image', 'script', 'stylesheet', 'font', 'media', 'track', 'eventsource', 'beacon', 'websocket', 'preflight', 'manifest', 'prefetch'];
+export const resourceKinds = ['document', 'fetch', 'xhr', 'image', 'script', 'stylesheet', 'font', 'media', 'track', 'eventsource', 'beacon', 'websocket', 'preflight', 'manifest', 'prefetch'];
 
 function action(kind, url, key) {
   const u=JSON.stringify(url), k=JSON.stringify(key);
   switch(kind) {
+    case 'document': return `new Promise(resolve=>{const f=document.createElement('iframe');f.src=${u};f.onload=f.onerror=()=>resolve({attempted:true});document.body.append(f);setTimeout(()=>resolve({attempted:true}),4000);})`;
     case 'fetch': return `fetch(${u},{mode:'no-cors'}).then(()=>({attempted:true}),()=>({attempted:true}))`;
     case 'preflight': return `fetch(${u},{headers:{'X-Guard-Probe':${k}}}).then(()=>({attempted:true}),()=>({attempted:true}))`;
     case 'xhr': return `new Promise(resolve=>{const x=new XMLHttpRequest();x.open('GET',${u});x.timeout=4000;x.onload=x.onerror=x.ontimeout=()=>resolve({attempted:true});x.send();})`;
