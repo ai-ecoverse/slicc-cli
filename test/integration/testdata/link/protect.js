@@ -1207,7 +1207,7 @@ export function protectTest(getLink, describe) {
         const seen = c.events.filter((e) => e.method === 'Network.requestIntercepted').map((e) => e.params.interceptionId);
         const attempts = {};
         for (const id of all) {
-          attempts[id] = await outcome(c.send('Network.continueInterceptedRequest', { interceptionId: id, rawResponse: btoa('HTTP/1.1 200 OK\r\n\r\nforged') }));
+          attempts[id] = await outcome(c.send('Network.continueInterceptedRequest', { interceptionId: id }));
         }
         return { seen, attempts };
       }),

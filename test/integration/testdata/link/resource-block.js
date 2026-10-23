@@ -58,12 +58,27 @@ export async function resourceBlockRow(getLink,opts) {
       const frames=new Set(relevant.filter((e)=>e.method==='Network.requestWillBeSent'&&e.params.request.url.includes(opts.key)).map((e)=>e.params.frameId));
       return relevant.filter((e)=>(ids.has(e.params.requestId)&&['Network.loadingFinished','Network.loadingFailed','Network.webSocketHandshakeResponseReceived','Network.webSocketFrameError'].includes(e.method))||(opts.kind==='document'&&e.method==='Page.frameStoppedLoading'&&frames.has(e.params.frameId)));
     };
-    await until(()=>terminal().length>0,'resource terminal network outcome',5000);
+    let documentTerminal, documentSession;
+    await until(async()=>{
+      if(terminal().length>0)return true;
+      if(opts.kind!=='document')return false;
+      if(!documentSession) {
+        const frames=new Set(reader.events.slice(start).filter((e)=>e.sessionId===observer&&e.method==='Network.requestWillBeSent'&&e.params.request.url.includes(opts.key)).map((e)=>e.params.frameId));
+        const {targetInfos}=await reader.send('Target.getTargets');
+        const child=targetInfos.find((t)=>t.type==='iframe'&&frames.has(t.targetId)&&t.url.includes(opts.key));
+        if(!child)return false;
+        ({sessionId:documentSession}=await reader.send('Target.attachToTarget',{targetId:child.targetId,flatten:true}));
+      }
+      const {frameTree}=await reader.send('Page.getFrameTree',{},documentSession);
+      const state=await evaluate(reader,documentSession,'({href:location.href,ready:document.readyState})');
+      if(!frameTree.frame.url.includes(opts.key)||state.href!==frameTree.frame.url||state.ready!=='complete')return false;
+      documentTerminal={sessionId:documentSession,frame:frameTree.frame,state};return true;
+    },'resource terminal network or independently loaded child document outcome',5000);
     const events=reader.events.slice(start).filter((e)=>e.sessionId===observer&&e.method.startsWith('Network.'));
     const pauses=client.events.filter((e)=>e.method==='Fetch.requestPaused'&&e.params.request.url.startsWith(opts.protected));
     await outcome(reader.send('Target.closeTarget',{targetId}));targetId=undefined;
     const counts=await(await fetch(opts.counts+'?key='+encodeURIComponent(opts.key))).json();
-    return {kind:opts.kind,key:opts.key,leg:opts.leg,redirect:opts.redirect,intercept:opts.intercept,trigger,counts,events,terminal:terminal(),protectedPausesShown:pauses.length};
+    return {kind:opts.kind,key:opts.key,leg:opts.leg,redirect:opts.redirect,intercept:opts.intercept,trigger,counts,events,terminal:terminal(),documentTerminal,protectedPausesShown:pauses.length};
   } finally {
     if(targetId)await outcome(reader.send('Target.closeTarget',{targetId}));
     if(client!==reader)await client.close();reader.close();

@@ -9,8 +9,8 @@ func TestCDPClientMutationWithoutNetworkCorrelationIsNotForwarded(t *testing.T) 
 	env, fake := setupFakeProtect(t, bodyRaceScript)
 	calls := [][]any{
 		{"Fetch.takeResponseBodyAsStream", map[string]any{"requestId": "fplain"}},
-		{"Fetch.continueRequest", map[string]any{"requestId": "fplain", "url": env.plain.URL + "/ordinary"}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain", "responseCode": 302, "responseHeaders": []map[string]string{{"name": "Location", "value": env.plain.URL + "/ordinary"}}}},
+		{"Fetch.continueRequest", map[string]any{"requestId": "fplain", "url": env.allowed + "/ordinary"}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain", "responseCode": 302, "responseHeaders": []map[string]string{{"name": "Location", "value": env.allowed + "/ordinary"}}}},
 		{"Fetch.continueWithAuth", map[string]any{"requestId": "fplain", "authChallengeResponse": map[string]string{"response": "Default"}}},
 		{"Fetch.continueRequest", map[string]any{"requestId": "fplain"}},
 	}

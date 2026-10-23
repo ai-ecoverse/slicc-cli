@@ -118,7 +118,7 @@ func TestCDPSettlesLegacyInterceptionsOfProtectedURLsItself(t *testing.T) {
 		"doc":   `{"errorReason":"BlockedByClient","interceptionId":"doc"}`,
 	}
 	settled := map[string]string{}
-	forged := 0
+	ordinaryForwarded := 0
 	for _, raw := range fake.received() {
 		var m struct {
 			Method string          `json:"method"`
@@ -133,10 +133,10 @@ func TestCDPSettlesLegacyInterceptionsOfProtectedURLsItself(t *testing.T) {
 		}
 		_ = json.Unmarshal(m.Params, &p)
 		if p.RawResponse != "" {
-			forged++
-			if p.InterceptionID != "ordinary" {
-				t.Errorf("the page's forged answer reached the browser for %s", p.InterceptionID)
-			}
+			t.Errorf("a rewritten legacy response reached the browser: %s", raw)
+		}
+		if p.InterceptionID == "ordinary" {
+			ordinaryForwarded++
 			continue
 		}
 		settled[p.InterceptionID] = string(m.Params)
@@ -146,7 +146,7 @@ func TestCDPSettlesLegacyInterceptionsOfProtectedURLsItself(t *testing.T) {
 			t.Errorf("slicc settled %s with %s, want %s", id, settled[id], w)
 		}
 	}
-	if forged != 1 {
-		t.Errorf("the control's answer reached the browser %d times, want once", forged)
+	if ordinaryForwarded != 1 {
+		t.Errorf("the unmodified page continuation reached the browser %d times, want once", ordinaryForwarded)
 	}
 }
