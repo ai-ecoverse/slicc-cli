@@ -41,7 +41,7 @@ export async function resourceBlockRow(getLink,opts) {
       client.on((e)=>{if(e.method==='Fetch.requestPaused'&&e.sessionId===sessionId&&!e.params.request.url.startsWith(opts.protected))client.send('Fetch.continueRequest',{requestId:e.params.requestId},sessionId).catch(()=>{});});
       await client.send('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]},sessionId);
     }
-    await until(async()=>await evaluate(reader,observer,'document.readyState')==='complete','resource probe document');
+    await until(async()=>await evaluate(reader,observer,'location.href')===opts.ordinary+'/probe'&&(await evaluate(reader,observer,'document.readyState'))==='complete','resource probe document');
     await reader.send('Page.bringToFront',{},observer);
     await evaluate(reader,observer,`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))`);
     const path=`/resource?kind=${opts.kind}&key=${opts.key}`;
