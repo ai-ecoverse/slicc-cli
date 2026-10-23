@@ -3,6 +3,7 @@ package cdp
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -198,7 +199,31 @@ var laterDocumentMethods = map[string]bool{
 	"Page.setBypassCSP":                     true,
 }
 
+const refusedSessionSettings = "settings for a whole session (headers, user agent, locale, time zone, cache, network conditions, blocked URLs, emulation) could reach seven’s pages or the vault, so the guard doesn’t allow them; change a request through Fetch instead"
+const refusedInheritedNavigation = "a browser-side navigation to about: gives the page the origin of whatever drives the browser, so the guard doesn’t send it; open a new tab on about:blank instead"
+
+var sessionSettingMethods = map[string]bool{
+	"Network.setExtraHTTPHeaders":            true,
+	"Network.setUserAgentOverride":           true,
+	"Emulation.setUserAgentOverride":         true,
+	"Emulation.setLocaleOverride":            true,
+	"Emulation.setTimezoneOverride":          true,
+	"Network.setCacheDisabled":               true,
+	"Network.emulateNetworkConditions":       true,
+	"Network.emulateNetworkConditionsByRule": true,
+	"Network.overrideNetworkState":           true,
+	"Network.setBlockedURLs":                 true,
+}
+
+var emulationMutators = regexp.MustCompile(`^Emulation\.(set|add|update|remove)[A-Z]`)
+
 func (g *guard) checkLocked(c *command) string {
+	if c.method == "Page.navigate" && (protect.Scheme(c.str("url")) == "about" || protect.Scheme(c.str("url")) == "") {
+		return refusedInheritedNavigation
+	}
+	if sessionSettingMethods[c.method] || emulationMutators.MatchString(c.method) {
+		return refusedSessionSettings
+	}
 	if laterDocumentMethods[c.method] {
 		return refusedLaterDocuments
 	}

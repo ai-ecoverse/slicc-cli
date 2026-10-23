@@ -292,6 +292,7 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 		Reload       cdpOutcome     `json:"reload"`
 		Blank        cdpOutcome     `json:"blank"`
 		Href         string         `json:"href"`
+		Unchanged    bool           `json:"unchanged"`
 		Leaked       bool           `json:"leaked"`
 		Locked       bool           `json:"locked"`
 		After        cdpOutcome     `json:"after"`
@@ -306,7 +307,7 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 	switch {
 	case !strings.HasPrefix(r.Before, e.allowed) || r.Unreachable == "":
 		t.Fatalf("the script navigation onto seven didn't commit an error page: %+v", r)
-	case r.Detached || !r.Reload.OK || !r.Blank.OK || r.Href != "about:blank":
+	case r.Detached || !r.Reload.OK || !r.Blank.refused() || r.Blank.Error.Message != refusedInheritedText || !r.Unchanged:
 		t.Fatalf("an error page for seven's URL locked the tab: %+v", r)
 	case r.Listed == nil || r.Listed.URL != e.seven || r.Listed.Title != e.seven || r.Info.URL != e.seven || r.Info.Title != e.seven || r.Leaked:
 		t.Fatalf("the error page's attempted URL was listed in full: %+v", r)
@@ -314,7 +315,7 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 		t.Fatalf("seven's document, restored into the same tab, didn't lock it: %+v", r)
 	case r.ListedFailed == nil || r.ListedFailed.URL != e.seven || r.ListedFailed.Title != e.seven:
 		t.Fatalf("a tab on an error page for seven's URL is listed as %+v", r.ListedFailed)
-	case !r.Wiped.OK || !r.CloseError.OK || r.ListedError == nil || r.ListedError.URL != "about:blank#blocked":
+	case !r.Wiped.refused() || r.Wiped.Error.Message != refusedInheritedText || !r.CloseError.OK || r.ListedError == nil || r.ListedError.URL != e.seven:
 		t.Fatalf("wiping and closing a tab on an error page for seven's URL: %+v wiped to %+v", r, r.ListedError)
 	}
 }

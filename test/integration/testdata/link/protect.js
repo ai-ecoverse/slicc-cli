@@ -415,16 +415,16 @@ export function protectTest(getLink, describe) {
         const { targetInfo } = await c.send('Target.getTargetInfo', { targetId });
         const reload = await outcome(c.send('Page.reload', {}, sessionId));
         await sleep(500);
-        const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === 'about:blank', 20000);
+        const heldURL = (await c.send('Page.getFrameTree', {}, sessionId)).frameTree.frame.url;
         const blank = await outcome(c.send('Page.navigate', { url: 'about:blank' }, sessionId));
-        await left;
         const href = (await c.send('Page.getFrameTree', {}, sessionId)).frameTree.frame.url;
+        const unchanged = href === heldURL;
         const leaked = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
         const restore = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
           () => true,
           () => false,
         );
-        await observerNavigation(targetId, { delta: -3 });
+        await observerNavigation(targetId, { delta: -2 });
         const locked = await restore;
         const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
         const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
@@ -441,7 +441,7 @@ export function protectTest(getLink, describe) {
         const listedError = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === other.targetId) ?? null;
         const closeError = await outcome(c.send('Target.closeTarget', { targetId: other.targetId }));
         const shown = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
-        return { before, unreachable: params.frame.unreachableUrl, detached, listed, info: { url: targetInfo.url, title: targetInfo.title }, reload, blank, href, leaked: leaked || shown, locked, after, reattach, close, wiped, listedFailed, listedError, closeError };
+        return { before, unreachable: params.frame.unreachableUrl, detached, listed, info: { url: targetInfo.url, title: targetInfo.title }, reload, blank, href, unchanged, leaked: leaked || shown, locked, after, reattach, close, wiped, listedFailed, listedError, closeError };
       }),
     restoreRace: (browser, targetId, sevenOrigin) =>
       run(browser, async (c) => {
@@ -733,12 +733,7 @@ export function protectTest(getLink, describe) {
         await sleep(800);
         answers.evaluateReloaded = await ask('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true });
         const detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
-        const leavingAt = c.events.length;
-        const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === 'about:blank' && c.events.indexOf(e) >= leavingAt, 20000);
         const blank = await ask('Page.navigate', { url: 'about:blank#blocked' });
-        const committedBlank = await left;
-        const blankAt = c.events.indexOf(committedBlank);
-        await c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId && c.events.indexOf(e) > blankAt, 20000);
         answers.historyAfter = await ask('Page.getNavigationHistory');
         answers.evaluateAfter = await ask('Runtime.evaluate', { expression: 'location.href', returnByValue: true });
         const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === targetId) ?? null;
@@ -1223,7 +1218,9 @@ export function protectTest(getLink, describe) {
         c.on((e) => {
           if (e.method !== 'Fetch.requestPaused' || !sessions.has(e.sessionId)) return;
           const { requestId, responseStatusCode } = e.params;
-          const go = () => c.send('Fetch.continueRequest', { requestId }, e.sessionId).catch(() => {});
+          const perRequest = responseStatusCode === undefined && e.params.request.url.startsWith(new URL(start).origin+'/redirect?')
+            ? { headers: [...Object.entries(e.params.request.headers ?? {}).filter(([name]) => name.toLowerCase() !== 'authorization').map(([name,value]) => ({name,value:String(value)})), {name:'Authorization',value:'Basic fake-value-0042'}] } : {};
+          const go = () => c.send('Fetch.continueRequest', { requestId, ...perRequest }, e.sessionId).catch(() => {});
           if (responseStatusCode >= 300 && responseStatusCode < 400) {
             outcome(c.send('Fetch.getResponseBody', { requestId }, e.sessionId)).then((r) => {
               results.push({ call: `Fetch.getResponseBody ${e.params.request.url}`, ...r });
@@ -1238,7 +1235,8 @@ export function protectTest(getLink, describe) {
           sessions.add(sessionId);
           await c.send('Page.enable', {}, sessionId);
           await c.send('Network.enable', {}, sessionId);
-          await c.send('Network.setExtraHTTPHeaders', { headers: { Authorization: 'Basic fake-value-0042' } }, sessionId);
+          const headers = await outcome(c.send('Network.setExtraHTTPHeaders', { headers: { Authorization: 'Basic fake-value-0042' } }, sessionId));
+          if (headers.ok || headers.error?.code !== -32000 || !headers.error.message?.startsWith('slicc: refused: settings for a whole session')) throw new Error('session headers were not explicitly refused');
           await outcome(c.send('Audits.enable', {}, sessionId));
           await outcome(c.send('Log.enable', {}, sessionId));
           await c.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }, { urlPattern: '*', requestStage: 'Response' }] }, sessionId);
