@@ -72,8 +72,10 @@ async function leave(c, sessionId, url) {
 
 async function instrument(c, sessionId, base, tag) {
   await c.send('Page.enable', {}, sessionId);
-  await c.send('Page.addScriptToEvaluateOnNewDocument', { source: beacon(base, tag) }, sessionId);
-  await c.send('Page.setBypassCSP', { enabled: true }, sessionId);
+  for (const [method, params] of [['Page.addScriptToEvaluateOnNewDocument', { source: beacon(base, tag) }], ['Page.setBypassCSP', { enabled: true }]]) {
+    const reply = await outcome(c.send(method, params, sessionId));
+    if (reply.ok || reply.error?.code !== -32000 || !reply.error.message?.startsWith('slicc: refused: scripts and bindings for later documents')) throw new Error(`later-document admission unexpectedly allowed: ${JSON.stringify(reply)}`);
+  }
 }
 
 let watching = null;
@@ -563,6 +565,7 @@ export function protectTest(getLink, describe) {
         const { targetId, sessionId } = await c.attachTo(start);
         await instrument(c, sessionId, base, tag);
         const before = await load(c, sessionId, next);
+        await c.evaluate(beacon(base, tag), sessionId);
         const detached = await leave(c, sessionId, away);
         return { targetId, before, detached };
       }),
@@ -680,6 +683,7 @@ export function protectTest(getLink, describe) {
         await instrument(c, ps, base, tag);
         await c.send('Runtime.runIfWaitingForDebugger', {}, ps);
         out.before = await load(c, ps, `${popup}&again=1`);
+        await c.evaluate(beacon(base, tag), ps);
         out.detached = await leave(c, ps, away);
         const seen = c.events.filter(isPopup).length;
         await c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(direct)}))`, userGesture: true }, sessionId);
@@ -832,6 +836,7 @@ export function protectTest(getLink, describe) {
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(page);
         await instrument(c, sessionId, base, tag);
+        await c.evaluate(beacon(base, tag), sessionId);
         await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
         const isFrame = (e) => e.method === 'Target.attachedToTarget' && e.sessionId === sessionId;
         const attached = c.waitEvent(isFrame, 20000);

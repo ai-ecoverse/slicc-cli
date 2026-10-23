@@ -546,6 +546,9 @@ globalThis.linkTest = {
   agent: agentTest,
   loopback: loopbackTest,
   cdp: cdpTest(() => state.link, describe),
+  playwrightRelay: (url, browser) => import('./playwright.js').then((m) => m.playwrightRelay(() => state.link, url, browser)),
+  laterAdmission: (opts) => import('./persistent.js').then((m) => m.laterAdmissionProof(() => state.link, opts)),
+  persistent: (opts) => import('./persistent.js').then((m) => m.measurePersistent(() => state.link, opts)),
   protect: protectTest(() => state.link, describe),
   guard: {
     start: (opts) => import('./guard.js').then((m) => m.guardStart(() => state.link, opts)),

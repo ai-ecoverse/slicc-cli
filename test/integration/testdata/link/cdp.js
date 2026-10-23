@@ -47,6 +47,7 @@ export class CdpClient {
   #pending = new Map();
   #waiters = new Set();
   #listeners = new Set();
+  #messageListeners = new Set();
   #writing = Promise.resolve();
   #paused = null;
   callTimeout = 0;
@@ -74,6 +75,7 @@ export class CdpClient {
           this.maxMessage = Math.max(this.maxMessage, want);
           const text = decoder.decode(reader.take(want));
           this.messages.push(text);
+          for (const listener of this.#messageListeners) listener(text);
           this.#dispatch(JSON.parse(text));
           want = -1;
         }
@@ -167,6 +169,11 @@ export class CdpClient {
     const next = this.#writing.then(() => this.stream.write(bytes));
     this.#writing = next.catch(() => {});
     return next;
+  }
+
+  onMessage(listener) {
+    this.#messageListeners.add(listener);
+    return () => this.#messageListeners.delete(listener);
   }
 
   on(listener) {

@@ -189,7 +189,19 @@ func (g *guard) sessionRefusedLocked(id string) bool {
 	return false
 }
 
+const refusedLaterDocuments = "scripts and bindings for later documents could run in seven’s pages or the vault, so the guard doesn’t allow them; run a script in the page you see with Runtime.evaluate instead"
+
+var laterDocumentMethods = map[string]bool{
+	"Page.addScriptToEvaluateOnNewDocument": true,
+	"Page.addScriptToEvaluateOnLoad":        true,
+	"Runtime.addBinding":                    true,
+	"Page.setBypassCSP":                     true,
+}
+
 func (g *guard) checkLocked(c *command) string {
+	if laterDocumentMethods[c.method] {
+		return refusedLaterDocuments
+	}
 	if g.lost {
 		return refusedLost
 	}
