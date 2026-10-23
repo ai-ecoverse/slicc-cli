@@ -70,6 +70,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	}
 	kind, ok := g.pending[k]
 	delete(g.pending, k)
+	g.clientRequestAnsweredLocked(k, m.Error != nil)
 	g.continuedLocked(k, m.Error != nil)
 	attached := g.attachCalls[k]
 	g.attachDoneLocked(k)

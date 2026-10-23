@@ -188,5 +188,5 @@ func (g *guard) replayRule(c *command) string {
 	case g.seen[requestKey{c.session, id}] < levelKnown:
 		return refusedUnknown
 	}
-	return ""
+	return refusedReplayXHR
 }

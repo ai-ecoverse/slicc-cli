@@ -17,6 +17,7 @@ const (
 	refusedLost         = "slicc lost track of the browser's targets"
 	refusedPaused       = "slicc didn't pass this paused request to the page, so it could be seven's"
 	refusedRedirect     = "that URL redirects to seven's origin"
+	refusedReplayXHR    = "Network.replayXHR follows redirects inside the browser, so it could send a request to seven's pages or the vault"
 	refusedLoadResource = "Network.loadNetworkResource follows redirects inside the browser, so it could load seven's pages"
 	LostGrace           = 2 * time.Second
 	maxTombstones       = 4096
@@ -109,6 +110,9 @@ type guard struct {
 	handed            map[requestKey]int
 	handedOrder       []handedPause
 	pauses            int
+	pauseLinks        map[requestKey]requestKey
+	clientRequests    map[requestKey]*clientRequestState
+	clientCalls       map[callKey]clientMark
 	continues         map[callKey]handedPause
 	bodyCalls         map[callKey]bodyCall
 	heldAnswers       map[callKey]*heldAnswer
@@ -166,6 +170,9 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		heldExtras:        map[requestKey][]heldExtra{},
 		seen:              map[requestKey]reqLevel{},
 		handed:            map[requestKey]int{},
+		pauseLinks:        map[requestKey]requestKey{},
+		clientRequests:    map[requestKey]*clientRequestState{},
+		clientCalls:       map[callKey]clientMark{},
 		continues:         map[callKey]handedPause{},
 		bodyCalls:         map[callKey]bodyCall{},
 		heldAnswers:       map[callKey]*heldAnswer{},
@@ -187,7 +194,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		maxWorlds:         maxWorlds,
 		bounds:            boundsFromEnv(),
 	}
-	g.patterns = g.documentPatterns()
+	g.patterns = g.protectedRequestPatterns()
 	return g
 }
 

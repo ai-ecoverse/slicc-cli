@@ -107,6 +107,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	k := callKey{c.session, c.id}
 	g.pending[k] = resultKind(c.method)
 	g.noteBodyCallLocked(k, c)
+	g.noteClientRequestLocked(k, c)
 	g.noteContinueLocked(k, c)
 	g.noteCommitLocked(k, c)
 	if t := c.str("targetId"); c.method == "Target.attachToTarget" && t != "" {
@@ -218,6 +219,11 @@ var sessionSettingMethods = map[string]bool{
 var emulationMutators = regexp.MustCompile(`^Emulation\.(set|add|update|remove)[A-Z]`)
 
 func (g *guard) checkLocked(c *command) string {
+	if c.method == "Network.continueInterceptedRequest" {
+		if reason := g.legacyMutationRule(c); reason != "" {
+			return reason
+		}
+	}
 	if c.method == "Page.navigate" && (protect.Scheme(c.str("url")) == "about" || protect.Scheme(c.str("url")) == "") {
 		return refusedInheritedNavigation
 	}
@@ -262,6 +268,9 @@ func (g *guard) checkLocked(c *command) string {
 	}
 	if reason := g.worldCheckLocked(c); reason != "" {
 		return reason
+	}
+	if clientMutation(c) && c.str("requestId") == "" {
+		return refusedClientHop
 	}
 	return g.scan(c.params, c, exemptKeys[c.method], 0)
 }
@@ -543,6 +552,8 @@ func (g *guard) requestRule(id string, c *command) string {
 	switch {
 	case continueOK[c.method] && g.handed[requestKey{c.session, id}] == 0:
 		return refusedPaused
+	case continueOK[c.method] && clientMutation(c):
+		return g.clientRequestRuleLocked(c, id)
 	case !continueOK[c.method] && g.requestMarkedLocked(c.session, id):
 		return refusedBody
 	}

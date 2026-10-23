@@ -96,7 +96,7 @@ func TestCDPChecksBodyAnswersAgainstTheirRequest(t *testing.T) {
 	if strings.Contains(string(b), "secret") {
 		t.Errorf("an answer carried seven's data: %s", b)
 	}
-	refused := map[int]string{0: "seven's origin", 3: "hasn't seen this request", 4: "seven's origin", 6: "seven's origin", 8: "didn't hand out this stream", 9: "didn't hand out this stream", 14: "hasn't seen this request", 15: "seven's origin"}
+	refused := map[int]string{0: "seven's origin", 3: "hasn't seen this request", 4: "seven's origin", 6: "seven's origin", 8: "didn't hand out this stream", 9: "didn't hand out this stream", 13: "Network.replayXHR follows redirects", 14: "hasn't seen this request", 15: "seven's origin"}
 	for i, o := range r.Out {
 		want, refuse := refused[i]
 		switch {
@@ -122,7 +122,7 @@ func TestCDPChecksBodyAnswersAgainstTheirRequest(t *testing.T) {
 		if strings.Contains(m, `"IO.read"`) && (strings.Contains(m, "stream-seven") || strings.Contains(m, "stream-guess")) {
 			t.Errorf("the browser got %s", m)
 		}
-		if strings.Contains(m, `"Network.replayXHR"`) && !strings.Contains(m, `"plain"`) {
+		if strings.Contains(m, `"Network.replayXHR"`) {
 			t.Errorf("the browser got %s", m)
 		}
 		closed = closed || (strings.Contains(m, `"IO.close"`) && strings.Contains(m, "stream-seven"))
