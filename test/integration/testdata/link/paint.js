@@ -52,7 +52,9 @@ async function nested(reader, session, kind) {
     const { frameTree } = await reader.send('Page.getFrameTree', {}, session);
     const nest = frameTree.childFrames?.[0];
     const child = nest?.childFrames?.find((f) => f.frame.name === 'child' && f.frame.url === want);
-    return child && { nest: nest.frame.securityOrigin, child: child.frame.securityOrigin ?? '', url: child.frame.url };
+    if (!child) return undefined;
+    const context = reader.events.findLast((e) => e.sessionId === session && e.method === 'Runtime.executionContextCreated' && e.params.context.auxData?.isDefault && e.params.context.auxData.frameId === child.frame.id);
+    return context && { nest: nest.frame.securityOrigin, child: context.params.context.origin, url: child.frame.url };
   }, `nested ${want} frame`);
 }
 
