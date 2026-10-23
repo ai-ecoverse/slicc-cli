@@ -317,7 +317,7 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	t := g.record(info)
 	t.gone = false
 	prev := t.protected
-	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && g.o.Loaded(t.url) {
+	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && g.o.Loaded(t.url) && !protect.Unparseable(t.url) {
 		nt.historyLocked = true
 		if nt.confirm == nil || nt.confirm.done {
 			nt.confirm = &navTarget{ready: make(chan struct{}), start: time.Now()}

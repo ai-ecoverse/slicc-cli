@@ -98,19 +98,24 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 		{name: "browser session commands with held error snapshot", order: "target-only", state: "error", held: true, browser: true},
 		{name: "browser session commands with held protected snapshot", order: "target-only", state: "protected", held: true, browser: true},
 		{name: "browser session commands with held unknown snapshot", order: "target-only", state: "unknown", held: true, browser: true},
+		{name: "unparseable error hint retains permanent refusal", order: "target-only", state: "unparseable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var reads atomic.Int32
 			var triggered, changed atomic.Bool
 			env, fake := setupFakeProtectEnvOn(t, b, guardBounds("2s", "8s"), func(seven, allowed string) fakeScript {
 				base := guardWaitScript("{}")
-				errorFrame := fmt.Sprintf(`{"id":"T1","url":"chrome-error://chromewebdata/","securityOrigin":"://","unreachableUrl":%q}`, seven+"/protected")
+				failedURL := seven + "/protected"
+				if tc.state == "unparseable" {
+					failedURL = "http://exa mple.sliccy.ai/protected"
+				}
+				errorFrame := fmt.Sprintf(`{"id":"T1","url":"chrome-error://chromewebdata/","securityOrigin":"://","unreachableUrl":%q}`, failedURL)
 				protectedFrame := fmt.Sprintf(`{"id":"T1","url":%q,"securityOrigin":%q}`, seven+"/protected", seven)
 				ordinaryFrame := fmt.Sprintf(`{"id":"T1","url":%q,"securityOrigin":%q}`, allowed+"/blank", allowed)
 				event := func(frame string) string {
 					return `{"method":"Page.frameNavigated","sessionId":"S1","params":{"frame":` + frame + `}}`
 				}
-				targetEvent := fmt.Sprintf(`{"method":"Target.targetInfoChanged","sessionId":"RELAY","params":{"targetInfo":{"targetId":"T1","type":"page","url":%q}}}`, seven+"/protected")
+				targetEvent := fmt.Sprintf(`{"method":"Target.targetInfoChanged","sessionId":"RELAY","params":{"targetInfo":{"targetId":"T1","type":"page","url":%q}}}`, failedURL)
 				return func(method string, params json.RawMessage) (string, []string) {
 					switch method {
 					case "Browser.getBrowserCommandLine":
@@ -215,6 +220,12 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 				if name == "before" {
 					continue
 				}
+				if name == "outstanding" && tc.state == "unparseable" {
+					if answer.OK {
+						t.Error("an answer from a permanently refused target escaped")
+					}
+					continue
+				}
 				control := name == "reload" || name == "navigate" || name == "reset" || name == "pageClose" || name == "close" || name == "earlyAttach" || name == "earlyClose"
 				if usable && control {
 					if !answer.OK {
@@ -227,11 +238,15 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 			if usable && result.Detached {
 				t.Error("a protected error target was permanently detached")
 			}
-			if reads.Load() == 0 || (tc.changes && reads.Load() < 2) {
+			if tc.state == "unparseable" {
+				if reads.Load() != 0 {
+					t.Errorf("unparseable target was deferred to a snapshot: %d", reads.Load())
+				}
+			} else if reads.Load() == 0 || (tc.changes && reads.Load() < 2) {
 				t.Errorf("fresh frame snapshots: %d", reads.Load())
 			}
-			if (tc.state == "protected" || tc.state == "protected-origin" || tc.changes) && !result.Detached {
-				t.Error("a genuine protected document did not detach the client session")
+			if (tc.state == "protected" || tc.state == "protected-origin" || tc.state == "unparseable" || tc.changes) && !result.Detached {
+				t.Error("a protected or unparseable target did not detach the client session")
 			}
 		})
 	}
