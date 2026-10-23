@@ -3,6 +3,7 @@ import { SocketClient } from './observer.js';
 import { auditSetter, evaluate, outcome, until } from './persistent.js';
 
 export async function clientResourceRow(getLink,opts) {
+  if(!['Network.loadNetworkResource','Network.replayXHR'].includes(opts.method))return (await import('./client-mutation.js')).clientMutationRow(getLink,opts);
   const reader=await SocketClient.open(opts.ws);reader.callTimeout=15000;
   const client=opts.leg==='guarded'?await CdpClient.open(getLink(),opts.browser):reader;client.callTimeout=15000;
   let targetId;

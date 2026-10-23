@@ -30,7 +30,7 @@ func TestCDPClientResourceRequestsRefuseProtectedHopsBeforeSending(t *testing.T)
 		t.Fatal("client resource browser missing")
 	}
 	for _, host := range []string{"seven.guard.test", "vault.sliccy.ai"} {
-		for _, method := range []string{"Network.loadNetworkResource", "Network.replayXHR"} {
+		for _, method := range []string{"Network.loadNetworkResource", "Network.replayXHR", "Fetch.continueRequest", "Network.continueInterceptedRequest", "Fetch.fulfillRequest", "Fetch.continueWithAuth"} {
 			for _, redirect := range []bool{false, true} {
 				if method == "Network.replayXHR" && !redirect {
 					continue
@@ -54,6 +54,12 @@ func TestCDPClientResourceRequestsRefuseProtectedHopsBeforeSending(t *testing.T)
 								} `json:"probes"`
 							} `json:"audit"`
 							Counts map[string]int `json:"counts"`
+							Events []struct {
+								Method string `json:"method"`
+								Params struct {
+									ErrorText string `json:"errorText"`
+								} `json:"params"`
+							} `json:"events"`
 						}
 						if err := json.Unmarshal(raw, &row); err != nil {
 							t.Fatal(err)
@@ -75,6 +81,17 @@ func TestCDPClientResourceRequestsRefuseProtectedHopsBeforeSending(t *testing.T)
 							}
 							if !row.Setup.OK || row.Counts["protected"] == 0 {
 								t.Fatalf("native client request positive control did not follow or reach protected origin: %s", raw)
+							}
+							continue
+						}
+						mutation := strings.HasPrefix(method, "Fetch.") || method == "Network.continueInterceptedRequest"
+						if mutation && row.Setup.OK {
+							blocked := false
+							for _, e := range row.Events {
+								blocked = blocked || (e.Method == "Network.loadingFailed" && strings.Contains(e.Params.ErrorText, "ERR_BLOCKED_BY_CLIENT"))
+							}
+							if !blocked || !row.Audit.Complete || len(row.Audit.Probes) != 1 || !row.Audit.Probes[0].Forwarded || row.Counts["protected"] != 0 {
+								t.Errorf("mutated request did not terminate before protected hop: %s", raw)
 							}
 							continue
 						}

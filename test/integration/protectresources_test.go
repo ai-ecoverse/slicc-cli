@@ -49,7 +49,7 @@ func resourceRequestFixture(t *testing.T) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(value)
 			return
 		}
-		if r.URL.Path == "/resource" || r.URL.Path == "/redirect" || r.URL.Path == "/replay" {
+		if r.URL.Path == "/resource" || r.URL.Path == "/redirect" || r.URL.Path == "/replay" || r.URL.Path == "/initial" || r.URL.Path == "/challenge" {
 			role := "ordinary"
 			if strings.HasPrefix(r.Host, "seven.guard.test:") || strings.HasPrefix(r.Host, "vault.sliccy.ai:") {
 				role = "protected"
@@ -63,6 +63,15 @@ func resourceRequestFixture(t *testing.T) *httptest.Server {
 			}
 			counts[key][role]++
 			mu.Unlock()
+			if r.URL.Path == "/challenge" {
+				if r.Header.Get("Authorization") == "" {
+					w.Header().Set("WWW-Authenticate", `Basic realm="fixture"`)
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				http.Redirect(w, r, r.URL.Query().Get("to"), http.StatusFound)
+				return
+			}
 			if r.URL.Path == "/replay" {
 				mu.Lock()
 				to := armed[key]
