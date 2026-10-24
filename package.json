@@ -30,7 +30,7 @@
     "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && GOOS=darwin go vet ./... && GOOS=windows go vet ./... && golangci-lint run",
     "lint:sh": "shellcheck -s sh install.sh test/integration/testdata/install/check.sh && shellcheck scripts/*.sh",
     "format": "gofmt -w .",
-    "test": "node scripts/test-shard.mjs ci/4 -race -count=1 -timeout 15m -v ./test/integration/...",
+    "test": "node scripts/test-shard.mjs ci/5 -race -count=1 -timeout 15m -v ./test/integration/...",
     "test:unit": "go test -race -cover ./cmd/... ./internal/...",
     "build": "go build -trimpath -ldflags \"-s -w\" -o bin/slicc ./cmd/slicc",
     "dist": "SLICC_SIGN=0 scripts/package.sh 0.0.0-dev",
