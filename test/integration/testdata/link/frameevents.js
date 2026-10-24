@@ -52,12 +52,17 @@ export async function measureFrameEvents(getLink, opts) {
   let client = reader;
   let targetId;
   try {
-    ({ targetId } = await reader.send('Target.createTarget', { url: opts.mode === 'running' ? opts.initial : opts.page }));
+    ({ targetId } = await reader.send('Target.createTarget', { url: opts.page }));
     const observer = (await reader.send('Target.attachToTarget', { targetId, flatten: true })).sessionId;
     await reader.send('Page.enable', {}, observer);
     await reader.send('Runtime.enable', {}, observer);
     await reader.send('Target.activateTarget', { targetId });
-    const initial = await nested(reader, observer, opts.kind, opts.needle);
+    await nested(reader, observer, opts.kind, opts.needle);
+    if (opts.mode === 'running') {
+      const start = reader.events.length;
+      await reader.send('Page.navigate', { url: opts.plain }, observer);
+      await until(() => reader.events.slice(start).find((e) => e.sessionId === observer && e.method === 'Page.loadEventFired'), 'plain page load');
+    }
     let session = observer;
     if (guarded) {
       client = await CdpClient.open(getLink(), opts.browser);
@@ -69,9 +74,20 @@ export async function measureFrameEvents(getLink, opts) {
     await sleep(500);
     const before = eventsShowing(client.events.slice(mark).filter((e) => e.sessionId === session), opts.needle);
     const afterEnable = client.events.length;
-    await reader.send('Page.navigate', { url: opts.nest, frameId: initial.frameId }, observer);
+    let restoreType;
+    if (opts.mode === 'running') {
+      const { entries, currentIndex } = await reader.send('Page.getNavigationHistory', {}, observer);
+      const start = reader.events.length;
+      await reader.send('Page.navigateToHistoryEntry', { entryId: entries[currentIndex - 1].id }, observer);
+      const event = await until(() => reader.events.slice(start).find((e) => e.sessionId === observer && e.method === 'Page.frameNavigated' && e.params.frame.id === targetId), 'history restore');
+      restoreType = event.params.type;
+    }
+    const layout = await nested(reader, observer, opts.kind, opts.needle);
+    const context = reader.events.findLast((e) => e.sessionId === observer && e.method === 'Runtime.executionContextCreated' && e.params.context.auxData?.isDefault && e.params.context.auxData.frameId === layout.frameId);
+    const srcdoc = opts.kind === 'srcdoc' ? `<title>${opts.needle}</title><body><h1>${opts.needle}</h1>` : null;
+    await reader.send('Runtime.evaluate', { contextId: context.params.context.id, expression: `(() => { const f = document.createElement('iframe'); f.name = 'child'; if (${JSON.stringify(srcdoc)} !== null) f.srcdoc = ${JSON.stringify(srcdoc)}; document.querySelector('iframe').replaceWith(f); f.contentDocument.title = ${JSON.stringify(opts.needle)}; })()` }, observer);
     const setup = { layout: await nested(reader, observer, opts.kind, opts.needle) };
-    const row = { mode: opts.mode, kind: opts.kind, leg: opts.leg, setup, enabled, before };
+    const row = { mode: opts.mode, kind: opts.kind, leg: opts.leg, setup, enabled, before, restoreType };
     await sleep(3000);
     const mine = client.events.slice(afterEnable).filter((e) => e.sessionId === session);
     row.events = mine.length;

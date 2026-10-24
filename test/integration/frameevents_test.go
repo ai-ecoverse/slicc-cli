@@ -22,10 +22,11 @@ type frameEventsRow struct {
 			Child string `json:"child"`
 		} `json:"layout"`
 	} `json:"setup"`
-	Enabled map[string]string   `json:"enabled"`
-	Before  map[string][]string `json:"before"`
-	Events  int                 `json:"events"`
-	Shown   map[string][]string `json:"shown"`
+	RestoreType string              `json:"restoreType"`
+	Enabled     map[string]string   `json:"enabled"`
+	Before      map[string][]string `json:"before"`
+	Events      int                 `json:"events"`
+	Shown       map[string][]string `json:"shown"`
 }
 
 func frameEventsFixture(t *testing.T, needle string) *httptest.Server {
@@ -93,11 +94,7 @@ func TestCDPEventsAcrossNestedFrames(t *testing.T) {
 					if leg == "ordinary" {
 						nest = "ordinary"
 					}
-					nestOrigin := protected
-					if nest == "ordinary" {
-						nestOrigin = ordinary
-					}
-					opts := map[string]any{"mode": mode, "kind": kind, "leg": leg, "needle": needle, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "page": ordinary + "/top/" + nest + "/" + kind, "initial": ordinary + "/top/ordinary/" + kind, "nest": nestOrigin + "/nest/" + kind}
+					opts := map[string]any{"mode": mode, "kind": kind, "leg": leg, "needle": needle, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "page": ordinary + "/top/" + nest + "/" + kind, "plain": ordinary + "/plain"}
 					var raw json.RawMessage
 					p.evalWithin("linkTest.frameEvents("+jsArgs(opts)+")", &raw, 2*time.Minute)
 					path := filepath.Join("..", "..", "artifacts", "frame-events", mode, kind)
@@ -118,6 +115,9 @@ func TestCDPEventsAcrossNestedFrames(t *testing.T) {
 					}
 					if row.Leg != leg || row.Setup.Layout.Nest != want || row.Setup.Layout.Child != want {
 						t.Fatalf("%s: nested frame not on %s: %+v", leg, want, row.Setup)
+					}
+					if mode == "running" && row.RestoreType != "BackForwardCacheRestore" {
+						t.Fatalf("%s: frame was not restored without a network request: %s", leg, row.RestoreType)
 					}
 					if mode == "running" && row.Enabled["DOM.getDocument"] != "" {
 						t.Fatalf("%s: document was not obtained before protection: %v", leg, row.Enabled)
