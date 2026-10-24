@@ -1,7 +1,7 @@
 import { kernel, onKernel } from './kernel.js';
 import { Frame, Link, ResetError, fetchRaw, resolve } from './link.js';
 import { measureFrameEvents } from './frameevents.js';
-import { measureOOPIF } from './oopif.js';
+import { measureOOPIF, measureOrdinaryBesideProtected } from './oopif.js';
 import { cdpTest } from './cdp.js';
 import { protectTest } from './protect.js';
 import { fsTest } from './fs-test.js';
@@ -548,6 +548,7 @@ globalThis.linkTest = {
   agent: agentTest,
   loopback: loopbackTest,
   frameEvents: (opts) => measureFrameEvents(() => state.link, opts),
+  dailyFrames: (opts) => measureOrdinaryBesideProtected(() => state.link, opts),
   oopif: (opts) => measureOOPIF(() => state.link, opts),
   cdp: cdpTest(() => state.link, describe),
   playwrightRelay: (url, browser) => import('./playwright.js').then((m) => m.playwrightRelay(() => state.link, url, browser)),

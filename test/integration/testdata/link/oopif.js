@@ -21,6 +21,42 @@ async function shot(client, session) {
   return { ok: o.ok, error: o.error?.message ?? '', marked: o.ok ? await pixels(o.result.data) : 0 };
 }
 
+export async function measureOrdinaryBesideProtected(getLink, opts) {
+  const reader = await SocketClient.open(opts.ws);
+  reader.callTimeout = 15000;
+  const client = await CdpClient.open(getLink(), opts.browser);
+  client.callTimeout = 15000;
+  try {
+    const infos = (await reader.send('Target.getTargets', { filter: [{}] })).targetInfos;
+    const info = infos.find((t) => t.type === 'iframe' && t.url === opts.vault);
+    if (!info) throw new Error(`vault iframe missing: ${JSON.stringify(infos)}`);
+    const observer = (await reader.send('Target.attachToTarget', { targetId: opts.ordinaryId, flatten: true })).sessionId;
+    await reader.send('Target.activateTarget', { targetId: opts.ordinaryId });
+    const setup = await shot(reader, observer);
+    const { sessionId: session } = await client.send('Target.attachToTarget', { targetId: opts.ordinaryId, flatten: true });
+    const screenshot = await shot(client, session);
+    const document = await outcome(client.send('DOM.getDocument', { depth: -1, pierce: true }, session));
+    const key = await outcome(client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'x', code: 'KeyX', text: 'x' }, session));
+    await outcome(client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'x', code: 'KeyX' }, session));
+    const keys = await client.send('Runtime.evaluate', { expression: 'globalThis.keys', returnByValue: true }, session);
+    const frames = [];
+    client.on((e) => {
+      if (e.method !== 'Page.screencastFrame' || e.sessionId !== session) return;
+      frames.push(e.params.data);
+      client.send('Page.screencastFrameAck', { sessionId: e.params.sessionId }, session).catch(() => {});
+    });
+    const start = await outcome(client.send('Page.startScreencast', { format: 'png', everyNthFrame: 1 }, session));
+    await sleep(1500);
+    await outcome(client.send('Page.stopScreencast', {}, session));
+    const marks = await Promise.all(frames.map(pixels));
+    const protectedAttach = await outcome(client.send('Target.attachToTarget', { targetId: opts.protectedId, flatten: true }));
+    return { mode: opts.mode, info, setup, screenshot, document: { ok: document.ok, error: document.error?.message ?? '', shown: document.ok && JSON.stringify(document.result).includes('daily-marker') }, input: { ok: key.ok, error: key.error?.message ?? '', keys: keys.result.value }, cast: { ok: start.ok, error: start.error?.message ?? '', frames: frames.length, marked: marks.filter((n) => n >= 1000).length }, protectedAttach: { ok: protectedAttach.ok, error: protectedAttach.error?.message ?? '' } };
+  } finally {
+    await client.close();
+    reader.close();
+  }
+}
+
 export async function measureOOPIF(getLink, opts) {
   const reader = await SocketClient.open(opts.ws);
   reader.callTimeout = 15000;

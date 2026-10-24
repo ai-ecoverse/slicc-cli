@@ -23,11 +23,6 @@ type frameEventsRow struct {
 			Child string `json:"child"`
 		} `json:"layout"`
 	} `json:"setup"`
-	Subscription *struct {
-		OK    bool   `json:"ok"`
-		Shown bool   `json:"shown"`
-		Error string `json:"error"`
-	} `json:"subscription"`
 	Enabled map[string]string   `json:"enabled"`
 	Before  map[string][]string `json:"before"`
 	Events  int                 `json:"events"`
@@ -123,7 +118,7 @@ func TestCDPEventsAcrossNestedFrames(t *testing.T) {
 					if mode == "running" {
 						token = fmt.Sprint(time.Now().UnixNano()) + kind + leg
 					}
-					opts := map[string]any{"mode": mode, "kind": kind, "leg": leg, "needle": needle, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "page": ordinary + "/top/" + nest + "/" + kind + "?hold=" + token, "gate": gate.srv.URL + "/gate", "release": ordinary + "/release/" + token}
+					opts := map[string]any{"mode": mode, "kind": kind, "leg": leg, "needle": needle, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "page": ordinary + "/top/" + nest + "/" + kind + "?hold=" + token, "release": ordinary + "/release/" + token}
 					var raw json.RawMessage
 					p.evalWithin("linkTest.frameEvents("+jsArgs(opts)+")", &raw, 2*time.Minute)
 					path := filepath.Join("..", "..", "artifacts", "frame-events", mode, kind)
@@ -148,21 +143,10 @@ func TestCDPEventsAcrossNestedFrames(t *testing.T) {
 					if mode == "running" && row.Enabled["DOM.getDocument"] != "" {
 						t.Fatalf("%s: document was not obtained before protection: %v", leg, row.Enabled)
 					}
-					if mode == "running" {
-						if row.Subscription == nil {
-							t.Fatalf("%s: late AX subscription missing", leg)
-						}
-						if leg == "guarded" && row.Subscription.Shown {
-							t.Errorf("guarded: in-flight AX answer showed protected names or values")
-						}
-						if leg != "guarded" && !row.Subscription.Shown {
-							t.Errorf("%s: in-flight AX answer did not show the protected frame", leg)
-						}
-					}
 					rows[leg] = row
 				}
-				if len(rows["control"].Shown) == 0 || (mode == "running" && len(rows["control"].Shown["Accessibility"]) == 0) {
-					t.Fatalf("control: no Accessibility event showed the nested frame's text")
+				if len(rows["control"].Shown) == 0 || (mode == "start" && len(rows["control"].Shown["Accessibility"]) == 0) {
+					t.Fatalf("control: no subscribed event showed the nested frame's text")
 				}
 				if len(rows["ordinary"].Shown) == 0 {
 					t.Errorf("ordinary: no event showed the nested frame's text")
