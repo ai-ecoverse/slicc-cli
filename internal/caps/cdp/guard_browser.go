@@ -18,7 +18,7 @@ type browserVerdict struct {
 	lost    bool
 }
 
-func (g *guard) fromBrowser(data []byte) browserVerdict {
+func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	var m message
 	if err := json.Unmarshal(data, &m); err != nil {
 		g.logf("cdp: dropped a browser message that isn't JSON")
@@ -27,6 +27,18 @@ func (g *guard) fromBrowser(data []byte) browserVerdict {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	defer g.resolveUnknownLocked()
+	g.frameEventLocked(&m)
+	defer func() {
+		recheck := m.ID != nil
+		switch m.Method {
+		case "Target.targetCreated", "Target.targetInfoChanged", "Target.targetDestroyed", "Target.attachedToTarget", "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared", "Page.frameAttached", "Page.frameDetached", "Page.frameNavigated":
+			recheck = true
+		}
+		if recheck {
+			verdict.send = append(verdict.send, g.probeFrameParentsLocked()...)
+			verdict.send = append(verdict.send, g.cutFrameCastsLocked()...)
+		}
+	}()
 	g.progressLocked(&m)
 	if m.ID != nil {
 		return g.answerLocked(&m, data)

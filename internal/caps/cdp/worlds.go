@@ -17,6 +17,7 @@ const (
 var heapOK = map[string]bool{"HeapProfiler.enable": true, "HeapProfiler.disable": true, "HeapProfiler.collectGarbage": true, "HeapProfiler.getHeapObjectId": true}
 
 type worldCtx struct {
+	frame          string
 	protectedFrame string
 	unique         string
 	name           string
@@ -63,6 +64,9 @@ func (g *guard) showContextLocked(target, session string, c execContext) {
 	}
 	if sc := s.contexts[c.ID]; sc != nil && sc.unique == c.UniqueID {
 		sc.seen[session] = true
+		if c.AuxData.FrameID != "" {
+			sc.frame = c.AuxData.FrameID
+		}
 		return
 	}
 	g.unshowLocked(target, c.ID)
@@ -73,7 +77,7 @@ func (g *guard) showContextLocked(target, session string, c execContext) {
 		s.full = true
 		return
 	}
-	s.contexts[c.ID] = &worldCtx{unique: c.UniqueID, seen: map[string]bool{session: true}}
+	s.contexts[c.ID] = &worldCtx{frame: c.AuxData.FrameID, unique: c.UniqueID, seen: map[string]bool{session: true}}
 	if c.UniqueID != "" {
 		g.shownUniques[c.UniqueID] = target
 	}
@@ -118,6 +122,9 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	}
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true
+		if c.AuxData.FrameID != "" {
+			wc.frame = c.AuxData.FrameID
+		}
 		if frame != "" {
 			wc.protectedFrame = frame
 		}
@@ -130,7 +137,7 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 		w.full = true
 		return
 	}
-	w.contexts[c.ID] = &worldCtx{unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: frame}
+	w.contexts[c.ID] = &worldCtx{frame: c.AuxData.FrameID, unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: frame}
 	if c.UniqueID != "" {
 		g.worldUniques[c.UniqueID] = target
 	}
@@ -266,8 +273,15 @@ func (g *guard) frameContentCheckLocked(c *command, target string) string {
 	if !g.framesProtectedLocked(target) {
 		return ""
 	}
-	for _, context := range g.worlds[target].contexts {
-		if c.str("frameId") != "" && c.str("frameId") == context.protectedFrame {
+	if w := g.worlds[target]; w != nil {
+		for _, context := range w.contexts {
+			if c.str("frameId") != "" && c.str("frameId") == context.protectedFrame {
+				return refusedTarget
+			}
+		}
+	}
+	if frame := c.str("frameId"); frame != "" {
+		if t := g.targets[frame]; t != nil && !t.gone && t.typ == "iframe" && (t.protected || g.o.Loaded(t.url)) {
 			return refusedTarget
 		}
 	}

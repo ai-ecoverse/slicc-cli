@@ -13,6 +13,9 @@ var framePaintMethods = map[string]bool{
 }
 
 func (g *guard) framesProtectedLocked(target string) bool {
+	if g.iframeProtectedLocked(target) {
+		return true
+	}
 	w := g.worlds[target]
 	if w == nil {
 		return false
