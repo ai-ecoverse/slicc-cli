@@ -15,7 +15,7 @@ func (g *guard) probeFrameParentsLocked() [][]byte {
 	}
 	contexts := map[string]bool{}
 	for _, t := range g.targets {
-		if !t.gone && t.typ == "iframe" && (t.protected || g.o.Loaded(t.url)) && g.iframePageLocked(t) == nil {
+		if !t.gone && t.typ == "iframe" && (t.protected || g.o.Loaded(t.url) || g.framesProtectedLocked(t.id)) && g.iframePageLocked(t) == nil {
 			contexts[t.ctx] = true
 		}
 	}
