@@ -45,6 +45,7 @@ type oopifRow struct {
 
 func oopifFixture(t *testing.T) *httptest.Server {
 	t.Helper()
+	files := http.FileServer(http.Dir(filepath.Join("testdata", "link")))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, port, _ := strings.Cut(r.Host, ":")
 		w.Header().Set("Content-Type", "text/html")
@@ -54,7 +55,11 @@ func oopifFixture(t *testing.T) *httptest.Server {
 			if r.URL.Path == "/protected-top" && r.URL.Query().Get("mode") == "nested" {
 				child = "http://seven.protected.test:" + port + "/protected-nest"
 			}
-			_, _ = fmt.Fprintf(w, `<!doctype html><body><script>globalThis.linkTest = {}; addEventListener('message', (e) => { if (e.data === 'loaded') { globalThis.frameLoaded = true; if (parent !== self) parent.postMessage('loaded', '*'); } });</script><iframe src="%s"></iframe>`, child)
+			module := `<script>globalThis.linkTest = {};</script>`
+			if r.URL.Path == "/protected-top" {
+				module = `<script type="module" src="/page.js"></script>`
+			}
+			_, _ = fmt.Fprintf(w, `<!doctype html><body>%s<script>addEventListener('message', (e) => { if (e.data === 'loaded') { globalThis.frameLoaded = true; if (parent !== self) parent.postMessage('loaded', '*'); } });</script><iframe src="%s"></iframe>`, module, child)
 		case "/daily":
 			_, _ = fmt.Fprint(w, `<!doctype html><body style="margin:0;background:#f0f"><h1>daily-marker</h1><input autofocus><div id="tick" style="width:16px;height:16px"></div><script>globalThis.linkTest = {}; globalThis.keys = 0; addEventListener('keydown', () => globalThis.keys++); let n = 0; setInterval(() => { document.getElementById('tick').style.background = n++ % 2 ? '#000' : '#888'; }, 40);</script>`)
 		case "/child":
@@ -64,7 +69,8 @@ func oopifFixture(t *testing.T) *httptest.Server {
 		case "/plain":
 			_, _ = fmt.Fprint(w, `<!doctype html><body style="background:#fff"><p>plain</p>`)
 		default:
-			http.NotFound(w, r)
+			w.Header().Del("Content-Type")
+			files.ServeHTTP(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)

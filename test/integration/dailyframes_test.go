@@ -23,8 +23,7 @@ func TestCDPProtectedPageFramesKeepOrdinaryTabsUsable(t *testing.T) {
 			seven := "http://seven.protected.test:" + port
 			vault := "http://vault.secret.test:" + port
 			ordinary := "http://page.ordinary.test:" + port
-			srv := pageServer(t)
-			b := launchBrowserOn(t, 0, "--site-per-process", "--host-resolver-rules=MAP *.test 127.0.0.1")
+			b := launchBrowserOn(t, 0, "--site-per-process", "--unsafely-treat-insecure-origin-as-secure="+seven, "--host-resolver-rules=MAP *.test 127.0.0.1")
 			protected := b.openPage(t, seven+"/protected-top?mode="+mode)
 			var loaded bool
 			protected.evalWithin(`new Promise((resolve) => { const check = () => globalThis.frameLoaded ? resolve(true) : setTimeout(check, 20); check(); })`, &loaded, 15*time.Second)
@@ -32,10 +31,9 @@ func TestCDPProtectedPageFramesKeepOrdinaryTabsUsable(t *testing.T) {
 				t.Fatal("protected fixture frames were not loaded before attach")
 			}
 			plain := b.openPage(t, ordinary+"/daily")
-			gate := newGuardGate(t, b.endpoint, srv.URL)
-			env := &linkEnv{t: t, b: b, origin: srv.URL}
-			env.a = startAttach(t, "--cdp", gate.srv.URL, "--origin", srv.URL, "--origin", seven, "--origin", vault, "--name", "daily-frames-node")
-			env.p = b.openPage(t, srv.URL+"/index.html")
+			gate := newGuardGate(t, b.endpoint, seven)
+			env := &linkEnv{t: t, b: b, origin: seven, p: protected}
+			env.a = startAttach(t, "--cdp", gate.srv.URL, "--origin", seven, "--origin", vault, "--name", "daily-frames-node")
 			env.waitUp("")
 			var hello struct {
 				Browsers []helloBrowser `json:"browsers"`
