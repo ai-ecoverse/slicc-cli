@@ -31,7 +31,7 @@ jobs:
         curl -fsSL "https://raw.githubusercontent.com/golangci/golangci-lint/$GOLANGCI_LINT/install.sh" | sh -s -- -b "$RUNNER_TEMP/golangci-lint" "$GOLANGCI_LINT"
         PATH="$RUNNER_TEMP/golangci-lint:$PATH" npm run lint
         npm run lint:sh
-      shards: 4
+      shards: 5
       timeout-minutes: 45
       review-timeout-minutes: 90
       release-secrets: APPLE_CERTIFICATE_BASE64 APPLE_DEVELOPER_CERTIFICATE_PASSWORD APPLE_API_KEY_ID APPLE_API_KEY_ISSUER_ID APPLE_API_KEY_P8_BASE64
