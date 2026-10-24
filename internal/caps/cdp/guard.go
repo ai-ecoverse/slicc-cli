@@ -122,6 +122,7 @@ type guard struct {
 	streamOrder       []string
 	bounds            guardBounds
 	reads             readClock
+	frameProbed       map[string]bool
 	frames            map[string]map[string]bool
 	worlds            map[string]*worldSet
 	worldUniques      map[string]string
@@ -182,6 +183,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		bodyCalls:         map[callKey]bodyCall{},
 		heldAnswers:       map[callKey]*heldAnswer{},
 		streams:           map[string]bool{},
+		frameProbed:       map[string]bool{},
 		frames:            map[string]map[string]bool{},
 		worlds:            map[string]*worldSet{},
 		worldUniques:      map[string]string{},
@@ -322,6 +324,17 @@ func (g *guard) record(info targetInfo) *target {
 	if nt := g.navTargets[t.id]; nt != nil && (t.url != info.URL || t.typ != info.Type) {
 		nt.revision++
 	}
+	if t.url != info.URL {
+		delete(g.frameProbed, t.id)
+		delete(g.frames, t.id)
+	}
+	if info.Type == "iframe" && (t.parentFrame != info.ParentFrameID || t.url != info.URL) {
+		for id, page := range g.targets {
+			if page.typ == "page" && page.ctx == info.BrowserContextID {
+				delete(g.frameProbed, id)
+			}
+		}
+	}
 	t.parentFrame = info.ParentFrameID
 	t.typ, t.url, t.opener, t.openerFrame, t.ctx = info.Type, info.URL, info.OpenerID, info.OpenerFrameID, info.BrowserContextID
 	return t
@@ -415,6 +428,7 @@ func (g *guard) addRefusedLocked(id string) {
 }
 
 func (g *guard) destroyedLocked(id string) {
+	delete(g.frameProbed, id)
 	delete(g.frames, id)
 	g.navForgetLocked(id)
 	g.dropHeldLocked(id)

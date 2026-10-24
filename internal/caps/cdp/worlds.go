@@ -64,6 +64,9 @@ func (g *guard) showContextLocked(target, session string, c execContext) {
 	}
 	if sc := s.contexts[c.ID]; sc != nil && sc.unique == c.UniqueID {
 		sc.seen[session] = true
+		if c.AuxData.FrameID != "" {
+			sc.frame = c.AuxData.FrameID
+		}
 		return
 	}
 	g.unshowLocked(target, c.ID)
@@ -119,6 +122,9 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	}
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true
+		if c.AuxData.FrameID != "" {
+			wc.frame = c.AuxData.FrameID
+		}
 		if frame != "" {
 			wc.protectedFrame = frame
 		}

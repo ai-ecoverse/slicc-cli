@@ -29,13 +29,14 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	defer g.resolveUnknownLocked()
 	g.frameEventLocked(&m)
 	defer func() {
+		recheck := m.ID != nil
 		switch m.Method {
 		case "Target.targetCreated", "Target.targetInfoChanged", "Target.targetDestroyed", "Target.attachedToTarget", "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared", "Page.frameAttached", "Page.frameDetached", "Page.frameNavigated":
+			recheck = true
+		}
+		if recheck {
+			verdict.send = append(verdict.send, g.probeFrameParentsLocked()...)
 			verdict.send = append(verdict.send, g.cutFrameCastsLocked()...)
-		default:
-			if m.ID != nil {
-				verdict.send = append(verdict.send, g.cutFrameCastsLocked()...)
-			}
 		}
 	}()
 	g.progressLocked(&m)
