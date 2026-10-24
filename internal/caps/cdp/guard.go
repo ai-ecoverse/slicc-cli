@@ -58,6 +58,7 @@ type target struct {
 	typ         string
 	url         string
 	opener      string
+	parentFrame string
 	openerFrame string
 	ctx         string
 	protected   bool
@@ -121,6 +122,7 @@ type guard struct {
 	streamOrder       []string
 	bounds            guardBounds
 	reads             readClock
+	frames            map[string]map[string]bool
 	worlds            map[string]*worldSet
 	worldUniques      map[string]string
 	shown             map[string]*shownSet
@@ -180,6 +182,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		bodyCalls:         map[callKey]bodyCall{},
 		heldAnswers:       map[callKey]*heldAnswer{},
 		streams:           map[string]bool{},
+		frames:            map[string]map[string]bool{},
 		worlds:            map[string]*worldSet{},
 		worldUniques:      map[string]string{},
 		shown:             map[string]*shownSet{},
@@ -217,6 +220,7 @@ type targetInfo struct {
 	Type             string `json:"type"`
 	URL              string `json:"url"`
 	OpenerID         string `json:"openerId"`
+	ParentFrameID    string `json:"parentFrameId"`
 	OpenerFrameID    string `json:"openerFrameId"`
 	BrowserContextID string `json:"browserContextId"`
 }
@@ -318,6 +322,7 @@ func (g *guard) record(info targetInfo) *target {
 	if nt := g.navTargets[t.id]; nt != nil && (t.url != info.URL || t.typ != info.Type) {
 		nt.revision++
 	}
+	t.parentFrame = info.ParentFrameID
 	t.typ, t.url, t.opener, t.openerFrame, t.ctx = info.Type, info.URL, info.OpenerID, info.OpenerFrameID, info.BrowserContextID
 	return t
 }
@@ -410,6 +415,7 @@ func (g *guard) addRefusedLocked(id string) {
 }
 
 func (g *guard) destroyedLocked(id string) {
+	delete(g.frames, id)
 	g.navForgetLocked(id)
 	g.dropHeldLocked(id)
 	g.forgetWorldsLocked(id)

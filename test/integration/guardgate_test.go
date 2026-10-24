@@ -31,6 +31,10 @@ type gateConnection struct {
 	mu               sync.Mutex
 	writeMu          sync.Mutex
 	down             *websocket.Conn
+	up               *websocket.Conn
+	commandMethod    string
+	commandSession   string
+	commandPacket    *gatePacket
 	buffer           []gatePacket
 	bufferBytes      int
 	session          string
@@ -137,7 +141,7 @@ func (g *guardGate) socket(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = down.CloseNow() }()
 	up.SetReadLimit(-1)
 	down.SetReadLimit(-1)
-	c := &gateConnection{down: down, sessions: map[string]string{}, attaches: map[string]string{}, urls: map[string][]string{}, forwarded: map[string]bool{}}
+	c := &gateConnection{down: down, up: up, sessions: map[string]string{}, attaches: map[string]string{}, urls: map[string][]string{}, forwarded: map[string]bool{}}
 	g.mu.Lock()
 	g.connections = append(g.connections, c)
 	g.mu.Unlock()
@@ -158,6 +162,12 @@ func (g *guardGate) socket(w http.ResponseWriter, r *http.Request) {
 					}
 					_ = json.Unmarshal(m.Params, &params)
 					c.attaches[gateKey(m.Session, m.ID)] = params.Target
+				}
+				if c.commandMethod == m.Method && c.commandSession == m.Session && c.commandPacket == nil {
+					c.commandPacket = &gatePacket{kind: kind, data: data}
+					c.commandMethod = ""
+					c.mu.Unlock()
+					continue
 				}
 				c.mu.Unlock()
 			}
@@ -301,6 +311,7 @@ func (g *guardGate) control(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		Method    string   `json:"method"`
 		Action    string   `json:"action"`
 		Side      string   `json:"side"`
 		Session   string   `json:"sessionId"`
@@ -320,6 +331,18 @@ func (g *guardGate) control(w http.ResponseWriter, r *http.Request) {
 	c := g.connection(req.Session)
 	if c == nil {
 		http.Error(w, "session unavailable", http.StatusNotFound)
+		return
+	}
+	if req.Action == "release-command" {
+		c.mu.Lock()
+		packet := c.commandPacket
+		c.commandPacket = nil
+		c.mu.Unlock()
+		if packet == nil || c.up.Write(r.Context(), packet.kind, packet.data) != nil {
+			http.Error(w, "command unavailable", http.StatusConflict)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"released": true})
 		return
 	}
 	if req.Action == "release" {
@@ -354,6 +377,15 @@ func (g *guardGate) control(w http.ResponseWriter, r *http.Request) {
 	defer c.mu.Unlock()
 	var result any
 	switch req.Action {
+	case "arm-command":
+		if req.Method == "" || c.commandMethod != "" || c.commandPacket != nil {
+			http.Error(w, "command gate busy", http.StatusConflict)
+			return
+		}
+		c.commandMethod, c.commandSession = req.Method, req.Session
+		result = map[string]any{"armed": true}
+	case "command-status":
+		result = map[string]any{"queued": c.commandPacket != nil}
 	case "arm":
 		if c.hold != nil || c.sessions[req.Session] != req.Target {
 			http.Error(w, "invalid gate", http.StatusConflict)

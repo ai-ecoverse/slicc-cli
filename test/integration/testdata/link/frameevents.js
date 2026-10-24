@@ -52,7 +52,11 @@ async function enable(client, session, frameIds) {
       if (seen.has(id)) continue;
       seen.add(id);
       const children = await outcome(client.send('Accessibility.getChildAXNodes', { id, frameId }, session));
-      if (children.ok) queue.push(...children.result.nodes.map((n) => n.nodeId));
+      if (children.ok) {
+        queue.push(...children.result.nodes.map((n) => n.nodeId));
+        const iframe = children.result.nodes.find((n) => String(n.role?.value).includes('Iframe'));
+        if (iframe) out.iframeAX = iframe.nodeId;
+      }
     }
   }
   return out;
@@ -92,13 +96,28 @@ export async function measureFrameEvents(getLink, opts) {
     await sleep(500);
     const before = eventsShowing(client.events.slice(mark).filter((e) => e.sessionId === session), opts.needle);
     const afterEnable = client.events.length;
+    let subscription;
     if (opts.mode === 'running') {
+      if (!enabled.iframeAX) throw new Error(`no iframe AX subscription node: ${JSON.stringify(enabled)}`);
+      const gate = async (action) => {
+        const response = await fetch(opts.gate, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, sessionId: session, method: 'Accessibility.getChildAXNodes' }) });
+        if (!response.ok) throw new Error(`command gate ${action}: ${response.status}`);
+        return response.json();
+      };
+      await gate('arm-command');
+      const pending = outcome(client.send('Accessibility.getChildAXNodes', { id: enabled.iframeAX, frameId: targetId }, session));
+      await until(async () => (await gate('command-status')).queued, 'AX request admitted before the protected commit');
       await reader.send('Runtime.evaluate', { expression: `fetch(${JSON.stringify(opts.release)}).then((r) => r.text())`, awaitPromise: true, returnByValue: true }, observer);
+      await nested(reader, observer, opts.kind, opts.needle);
+      await sleep(500);
+      await gate('release-command');
+      const answer = await pending;
+      subscription = { ok: answer.ok, error: answer.error?.message ?? '', shown: answer.ok && JSON.stringify(answer.result.nodes.map((n) => [n.name?.value, n.value?.value])).includes(opts.needle), nodes: answer.result?.nodes.map((n) => ({ name: n.name?.value, value: n.value?.value, role: n.role?.value })) };
     }
     const setup = { layout: await nested(reader, observer, opts.kind, opts.needle) };
     await sleep(3000);
     const mine = client.events.slice(afterEnable).filter((e) => e.sessionId === session);
-    const row = { mode: opts.mode, kind: opts.kind, leg: opts.leg, setup, enabled, before, events: mine.length, methods: {}, shown: eventsShowing(mine, opts.needle) };
+    const row = { mode: opts.mode, kind: opts.kind, leg: opts.leg, setup, enabled, before, subscription, events: mine.length, methods: {}, shown: eventsShowing(mine, opts.needle) };
     row.ax = mine.filter((e) => e.method.startsWith('Accessibility.')).slice(0, 5).map((e) => ({ method: e.method, nodes: [e.params.root, ...(e.params.nodes ?? [])].filter(Boolean).map((n) => ({ name: n.name?.value, value: n.value?.value, frameId: n.frameId })) }));
     for (const e of mine) row.methods[e.method] = (row.methods[e.method] ?? 0) + 1;
     return row;
