@@ -21,15 +21,17 @@ func (g *guard) probeFrameParentsLocked() [][]byte {
 	}
 	var send [][]byte
 	for _, t := range g.targets {
-		if t.gone || t.typ != "page" || !t.protected || !contexts[t.ctx] || g.frameProbed[t.id] {
+		if t.gone || t.typ != "page" || !contexts[t.ctx] || g.frameProbed[t.id] {
 			continue
 		}
 		g.frameProbed[t.id] = true
+		g.frameProbeAttempts[t.id]++
 		send = append(send, g.callbackLocked(g.relaySession, "Target.attachToTarget", map[string]any{"targetId": t.id, "flatten": true}, func(m message) [][]byte {
 			var result struct {
 				SessionID string `json:"sessionId"`
 			}
 			if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || result.SessionID == "" {
+				g.frameProbeFailedLocked(t, "Target.attachToTarget")
 				return nil
 			}
 			url := t.url
@@ -48,6 +50,7 @@ func (g *guard) probedFrameTreeLocked(t *target, url string, m message) {
 		Tree ownedFrameTree `json:"frameTree"`
 	}
 	if t.gone || t.url != url || m.Error != nil || json.Unmarshal(m.Result, &result) != nil || result.Tree.Frame.ID != t.id {
+		g.frameProbeFailedLocked(t, "Page.getFrameTree")
 		return
 	}
 	frames := map[string]bool{}
@@ -61,4 +64,11 @@ func (g *guard) probedFrameTreeLocked(t *target, url string, m message) {
 		queue = append(queue, frame.Children...)
 	}
 	g.frames[t.id] = frames
+}
+
+func (g *guard) frameProbeFailedLocked(t *target, method string) {
+	g.logf("cdp: %s did not resolve a frame parent; keeping frame reads locked", method)
+	if g.frameProbeAttempts[t.id] < 2 {
+		delete(g.frameProbed, t.id)
+	}
 }

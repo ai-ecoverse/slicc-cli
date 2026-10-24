@@ -50,16 +50,21 @@ func oopifFixture(t *testing.T) *httptest.Server {
 		_, port, _ := strings.Cut(r.Host, ":")
 		w.Header().Set("Content-Type", "text/html")
 		switch r.URL.Path {
-		case "/protected-top", "/protected-nest":
+		case "/protected-top", "/protected-nest", "/ordinary-top", "/ordinary-nest":
 			child := "http://vault.secret.test:" + port + "/child"
 			if r.URL.Path == "/protected-top" && r.URL.Query().Get("mode") == "nested" {
 				child = "http://seven.protected.test:" + port + "/protected-nest"
+			}
+			if r.URL.Path == "/ordinary-top" {
+				child = "http://page.ordinary.test:" + port + "/ordinary-nest"
 			}
 			module := `<script>globalThis.linkTest = {};</script>`
 			if r.URL.Path == "/protected-top" {
 				module = `<script type="module" src="/page.js"></script>`
 			}
 			_, _ = fmt.Fprintf(w, `<!doctype html><body>%s<script>addEventListener('message', (e) => { if (e.data === 'loaded') { globalThis.frameLoaded = true; if (parent !== self) parent.postMessage('loaded', '*'); } });</script><iframe src="%s"></iframe>`, module, child)
+		case "/link-only":
+			_, _ = fmt.Fprint(w, `<!doctype html><body><script type="module" src="/page.js"></script>`)
 		case "/daily":
 			_, _ = fmt.Fprint(w, `<!doctype html><body style="margin:0;background:#f0f"><h1>daily-marker</h1><input autofocus><div id="tick" style="width:16px;height:16px"></div><script>globalThis.linkTest = {}; globalThis.keys = 0; addEventListener('keydown', () => globalThis.keys++); let n = 0; setInterval(() => { document.getElementById('tick').style.background = n++ % 2 ? '#000' : '#888'; }, 40);</script>`)
 		case "/child":

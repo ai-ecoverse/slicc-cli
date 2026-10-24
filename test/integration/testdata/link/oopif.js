@@ -52,7 +52,15 @@ export async function measureOrdinaryBesideProtected(getLink, opts) {
     const protectedAttach = await outcome(client.send('Target.attachToTarget', { targetId: opts.protectedId, flatten: true }));
     const targetEvents = client.events.filter((e) => e.method.startsWith('Target.'));
     const probeLeaks = targetEvents.filter((e) => e.params?.targetInfo?.targetId === opts.protectedId || e.params?.targetInfo?.targetId === info.targetId || e.params?.targetId === opts.protectedId || (e.sessionId && e.sessionId !== session) || (['Target.attachedToTarget', 'Target.detachedFromTarget'].includes(e.method) && e.params?.sessionId !== session));
-    return { mode: opts.mode, info, setup, screenshot, targetEvents, probeLeaks, document: { ok: document.ok, error: document.error?.message ?? '', shown: document.ok && JSON.stringify(document.result).includes('daily-marker') }, input: { ok: key.ok, error: key.error?.message ?? '', keys: keys.result.value }, cast: { ok: start.ok, error: start.error?.message ?? '', frames: frames.length, marked: marks.filter((n) => n >= 1000).length }, protectedAttach: { ok: protectedAttach.ok, error: protectedAttach.error?.message ?? '' } };
+    let parentSetup;
+    let parentScreenshot;
+    if (opts.parentId) {
+      const rawParent = (await reader.send('Target.attachToTarget', { targetId: opts.parentId, flatten: true })).sessionId;
+      parentSetup = await shot(reader, rawParent);
+      const parent = (await client.send('Target.attachToTarget', { targetId: opts.parentId, flatten: true })).sessionId;
+      parentScreenshot = await shot(client, parent);
+    }
+    return { mode: opts.mode, info, setup, screenshot, targetEvents, probeLeaks, parentSetup, parentScreenshot, document: { ok: document.ok, error: document.error?.message ?? '', shown: document.ok && JSON.stringify(document.result).includes('daily-marker') }, input: { ok: key.ok, error: key.error?.message ?? '', keys: keys.result.value }, cast: { ok: start.ok, error: start.error?.message ?? '', frames: frames.length, marked: marks.filter((n) => n >= 1000).length }, protectedAttach: { ok: protectedAttach.ok, error: protectedAttach.error?.message ?? '' } };
   } finally {
     await client.close();
     reader.close();

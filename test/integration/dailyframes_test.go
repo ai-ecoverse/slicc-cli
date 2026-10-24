@@ -16,7 +16,7 @@ func TestCDPProtectedPageFramesKeepOrdinaryTabsUsable(t *testing.T) {
 		}
 		t.Skip(harnessChromeNotice)
 	}
-	for _, mode := range []string{"direct", "nested"} {
+	for _, mode := range []string{"direct", "nested", "ordinary-nested"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := oopifFixture(t)
 			port := fixture.URL[strings.LastIndexByte(fixture.URL, ':')+1:]
@@ -24,9 +24,19 @@ func TestCDPProtectedPageFramesKeepOrdinaryTabsUsable(t *testing.T) {
 			vault := "http://vault.secret.test:" + port
 			ordinary := "http://page.ordinary.test:" + port
 			b := launchBrowserOn(t, 0, "--site-per-process", "--unsafely-treat-insecure-origin-as-secure="+seven, "--host-resolver-rules=MAP *.test 127.0.0.1")
-			protected := b.openPage(t, seven+"/protected-top?mode="+mode)
+			protectedURL := seven + "/protected-top?mode=" + mode
+			if mode == "ordinary-nested" {
+				protectedURL = seven + "/link-only"
+			}
+			protected := b.openPage(t, protectedURL)
+			framed := protected
+			parentID := ""
+			if mode == "ordinary-nested" {
+				framed = b.openPage(t, ordinary+"/ordinary-top")
+				parentID = framed.target
+			}
 			var loaded bool
-			protected.evalWithin(`new Promise((resolve) => { const check = () => globalThis.frameLoaded ? resolve(true) : setTimeout(check, 20); check(); })`, &loaded, 15*time.Second)
+			framed.evalWithin(`new Promise((resolve) => { const check = () => globalThis.frameLoaded ? resolve(true) : setTimeout(check, 20); check(); })`, &loaded, 15*time.Second)
 			if !loaded {
 				t.Fatal("protected fixture frames were not loaded before attach")
 			}
@@ -42,7 +52,7 @@ func TestCDPProtectedPageFramesKeepOrdinaryTabsUsable(t *testing.T) {
 			if len(hello.Browsers) != 1 {
 				t.Fatal("daily frames browser missing")
 			}
-			opts := map[string]any{"mode": mode, "browser": hello.Browsers[0].ID, "protectedId": protected.target, "ordinaryId": plain.target, "vault": vault + "/child", "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser"}
+			opts := map[string]any{"mode": mode, "browser": hello.Browsers[0].ID, "parentId": parentID, "protectedId": protected.target, "ordinaryId": plain.target, "vault": vault + "/child", "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser"}
 			var raw json.RawMessage
 			env.p.evalWithin("linkTest.dailyFrames("+jsArgs(opts)+")", &raw, 2*time.Minute)
 			path := filepath.Join("..", "..", "artifacts", "daily-frames")
@@ -73,8 +83,10 @@ func TestCDPProtectedPageFramesKeepOrdinaryTabsUsable(t *testing.T) {
 					OK     bool `json:"ok"`
 					Marked int  `json:"marked"`
 				} `json:"cast"`
-				ProbeLeaks      []json.RawMessage `json:"probeLeaks"`
-				ProtectedAttach oopifAnswer       `json:"protectedAttach"`
+				ParentSetup      *oopifAnswer      `json:"parentSetup"`
+				ParentScreenshot *oopifAnswer      `json:"parentScreenshot"`
+				ProbeLeaks       []json.RawMessage `json:"probeLeaks"`
+				ProtectedAttach  oopifAnswer       `json:"protectedAttach"`
 			}
 			if err := json.Unmarshal(raw, &row); err != nil {
 				t.Fatal(err)
@@ -84,6 +96,9 @@ func TestCDPProtectedPageFramesKeepOrdinaryTabsUsable(t *testing.T) {
 			}
 			if !row.Screenshot.OK || row.Screenshot.Marked < 1000 || !row.Cast.OK || row.Cast.Marked == 0 || !row.Document.OK || !row.Document.Shown || !row.Input.OK || row.Input.Keys != 1 {
 				t.Errorf("ordinary tab lost rendering, DOM or Input: %s", raw)
+			}
+			if mode == "ordinary-nested" && (row.Info.ParentFrameID == parentID || row.ParentSetup == nil || !row.ParentSetup.OK || row.ParentSetup.Marked < 1000 || row.ParentScreenshot == nil || row.ParentScreenshot.OK || !strings.Contains(row.ParentScreenshot.Error, "slicc: refused: target is on seven's origin")) {
+				t.Errorf("ordinary nested parent was not proven and precisely protected: %s", raw)
 			}
 			if row.ProbeLeaks == nil || len(row.ProbeLeaks) != 0 {
 				t.Errorf("internal protected-page probe leaked Target events: %s", raw)
