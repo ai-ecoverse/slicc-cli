@@ -24,13 +24,18 @@ async function shot(client, session) {
 export async function measureOOPIF(getLink, opts) {
   const reader = await SocketClient.open(opts.ws);
   reader.callTimeout = 15000;
+  await reader.send('Target.setDiscoverTargets', { discover: true, filter: [] });
   let client = reader;
   try {
     const observer = (await reader.send('Target.attachToTarget', { targetId: opts.targetId, flatten: true })).sessionId;
     await reader.send('Page.enable', {}, observer);
     await reader.send('Runtime.enable', {}, observer);
     await reader.send('Target.activateTarget', { targetId: opts.targetId });
-    const info = await until(async () => (await reader.send('Target.getTargets', { filter: [] })).targetInfos.find((t) => t.type === 'iframe' && t.url === opts.child), 'preloaded iframe target');
+    let allTargets;
+    const info = await until(async () => {
+      allTargets = (await reader.send('Target.getTargets', { filter: [] })).targetInfos;
+      return allTargets.find((t) => t.type === 'iframe' && t.url === opts.child);
+    }, 'preloaded iframe target').catch((error) => { throw new Error(`${error.message}: ${JSON.stringify(allTargets)}`); });
     let painted = 0;
     await until(async () => { painted = (await shot(reader, observer)).marked; return painted >= 1000; }, 'preloaded iframe paint');
     let session = observer;

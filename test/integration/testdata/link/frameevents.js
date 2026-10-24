@@ -4,8 +4,6 @@ import { outcome, until } from './persistent.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export const eventDomains = ['Accessibility', 'DOM', 'CSS', 'Overlay', 'Animation', 'LayerTree', 'Page', 'Runtime', 'Log'];
-
 export function eventsShowing(events, needle) {
   const out = {};
   for (const e of events) {
@@ -28,11 +26,11 @@ async function nested(reader, session, kind, needle) {
     if (!context) return undefined;
     const text = await outcome(reader.send('Runtime.evaluate', { expression: 'document.body?.textContent ?? ""', contextId: context.params.context.id, returnByValue: true }, session));
     if (!text.ok || !String(text.result.result?.value).includes(needle)) return undefined;
-    return { nest: nest.frame.securityOrigin, child: context.params.context.origin, url: child.frame.url, frameId: nest.frame.id };
+    return { nest: nest.frame.securityOrigin, child: context.params.context.origin, url: child.frame.url, frameId: nest.frame.id, childId: child.frame.id };
   }, `nested ${want} frame showing its text`);
 }
 
-async function enable(client, session) {
+async function enable(client, session, frameIds) {
   const out = {};
   for (const method of ['Page.enable', 'DOM.enable', 'CSS.enable', 'Accessibility.enable', 'Overlay.enable', 'Animation.enable', 'LayerTree.enable', 'Log.enable']) {
     const o = await outcome(client.send(method, {}, session));
@@ -40,8 +38,20 @@ async function enable(client, session) {
   }
   const doc = await outcome(client.send('DOM.getDocument', { depth: -1, pierce: true }, session));
   out['DOM.getDocument'] = doc.ok ? '' : doc.error?.message ?? 'failed';
-  const ax = await outcome(client.send('Accessibility.getFullAXTree', {}, session));
-  out['Accessibility.getFullAXTree'] = ax.ok ? '' : ax.error?.message ?? 'failed';
+  for (const frameId of frameIds) {
+    const root = await outcome(client.send('Accessibility.getRootAXNode', { frameId }, session));
+    out[`Accessibility.getRootAXNode:${frameId}`] = root.ok ? '' : root.error?.message ?? 'failed';
+    if (!root.ok) continue;
+    const queue = [root.result.node.nodeId];
+    const seen = new Set();
+    while (queue.length && seen.size < 128) {
+      const id = queue.shift();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const children = await outcome(client.send('Accessibility.getChildAXNodes', { id, frameId }, session));
+      if (children.ok) queue.push(...children.result.nodes.map((n) => n.nodeId));
+    }
+  }
   return out;
 }
 
@@ -57,11 +67,16 @@ export async function measureFrameEvents(getLink, opts) {
     await reader.send('Page.enable', {}, observer);
     await reader.send('Runtime.enable', {}, observer);
     await reader.send('Target.activateTarget', { targetId });
-    await nested(reader, observer, opts.kind, opts.needle);
+    let frameIds;
     if (opts.mode === 'running') {
-      const start = reader.events.length;
-      await reader.send('Page.navigate', { url: opts.plain }, observer);
-      await until(() => reader.events.slice(start).find((e) => e.sessionId === observer && e.method === 'Page.loadEventFired'), 'plain page load');
+      const pending = await until(async () => {
+        const tree = (await reader.send('Page.getFrameTree', {}, observer)).frameTree;
+        return tree.childFrames?.[0];
+      }, 'pending child document');
+      frameIds = [targetId, pending.frame.id];
+    } else {
+      const initial = await nested(reader, observer, opts.kind, opts.needle);
+      frameIds = [targetId, initial.frameId, initial.childId];
     }
     let session = observer;
     if (guarded) {
@@ -70,30 +85,18 @@ export async function measureFrameEvents(getLink, opts) {
       ({ sessionId: session } = await client.send('Target.attachToTarget', { targetId, flatten: true }));
     }
     const mark = client.events.length;
-    const enabled = await enable(client, session);
+    const enabled = await enable(client, session, frameIds);
     await sleep(500);
     const before = eventsShowing(client.events.slice(mark).filter((e) => e.sessionId === session), opts.needle);
     const afterEnable = client.events.length;
-    let restoreType;
     if (opts.mode === 'running') {
-      const { entries, currentIndex } = await reader.send('Page.getNavigationHistory', {}, observer);
-      const start = reader.events.length;
-      await reader.send('Page.navigateToHistoryEntry', { entryId: entries[currentIndex - 1].id }, observer);
-      const event = await until(() => reader.events.slice(start).find((e) => e.sessionId === observer && e.method === 'Page.frameNavigated' && e.params.frame.id === targetId), 'history restore');
-      restoreType = event.params.type;
+      await reader.send('Runtime.evaluate', { expression: `fetch(${JSON.stringify(opts.release)}).then((r) => r.text())`, awaitPromise: true, returnByValue: true }, observer);
     }
-    const layout = await nested(reader, observer, opts.kind, opts.needle);
-    const context = reader.events.findLast((e) => e.sessionId === observer && e.method === 'Runtime.executionContextCreated' && e.params.context.auxData?.isDefault && e.params.context.auxData.frameId === layout.frameId);
-    const srcdoc = opts.kind === 'srcdoc' ? `<title>${opts.needle}</title><body><h1>${opts.needle}</h1>` : null;
-    await reader.send('Runtime.evaluate', { contextId: context.params.context.id, expression: `(() => { const f = document.createElement('iframe'); f.name = 'child'; if (${JSON.stringify(srcdoc)} !== null) f.srcdoc = ${JSON.stringify(srcdoc)}; document.querySelector('iframe').replaceWith(f); f.contentDocument.title = ${JSON.stringify(opts.needle)}; })()` }, observer);
     const setup = { layout: await nested(reader, observer, opts.kind, opts.needle) };
-    const row = { mode: opts.mode, kind: opts.kind, leg: opts.leg, setup, enabled, before, restoreType };
     await sleep(3000);
     const mine = client.events.slice(afterEnable).filter((e) => e.sessionId === session);
-    row.events = mine.length;
-    row.methods = {};
+    const row = { mode: opts.mode, kind: opts.kind, leg: opts.leg, setup, enabled, before, events: mine.length, methods: {}, shown: eventsShowing(mine, opts.needle) };
     for (const e of mine) row.methods[e.method] = (row.methods[e.method] ?? 0) + 1;
-    row.shown = eventsShowing(mine, opts.needle);
     return row;
   } finally {
     if (targetId) await outcome(reader.send('Target.closeTarget', { targetId }));

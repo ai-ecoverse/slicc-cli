@@ -81,7 +81,7 @@ func TestCDPPreAttachedProtectedOOPIFParent(t *testing.T) {
 			}
 			ordinary := "http://page.ordinary.test:" + port
 			srv := pageServer(t)
-			b := launchBrowserOn(t, 0, "--site-per-process", "--host-resolver-rules=MAP *.test 127.0.0.1")
+			b := launchBrowserOn(t, 0, "--site-per-process", "--isolate-origins="+protected+",http://other.unprotected.test:"+port, "--host-resolver-rules=MAP *.test 127.0.0.1")
 			top := b.openPage(t, ordinary+"/top?host="+host)
 			var loaded bool
 			top.evalWithin(`new Promise((resolve) => { const check = () => globalThis.frameLoaded ? resolve(true) : setTimeout(check, 20); check(); })`, &loaded, 15*time.Second)

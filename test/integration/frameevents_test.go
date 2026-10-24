@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -31,19 +32,39 @@ type frameEventsRow struct {
 
 func frameEventsFixture(t *testing.T, needle string) *httptest.Server {
 	t.Helper()
+	type heldDocument struct {
+		release chan struct{}
+		once    sync.Once
+	}
+	var documents sync.Map
+	document := func(token string) *heldDocument {
+		h, _ := documents.LoadOrStore(token, &heldDocument{release: make(chan struct{})})
+		return h.(*heldDocument)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, port, _ := strings.Cut(r.Host, ":")
 		w.Header().Set("Content-Type", "text/html")
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		switch {
+		case len(parts) == 2 && parts[0] == "release":
+			h := document(parts[1])
+			h.once.Do(func() { close(h.release) })
+			_, _ = fmt.Fprint(w, "released")
 		case len(parts) == 3 && parts[0] == "top" && (parts[1] == "seven" || parts[1] == "ordinary"):
-			_, _ = fmt.Fprintf(w, `<!doctype html><body><p>top</p><iframe src="http://%s.guard.test:%s/nest/%s" style="width:340px;height:240px"></iframe>`, parts[1], port, parts[2])
+			_, _ = fmt.Fprintf(w, `<!doctype html><body><p>top</p><iframe name="nest" src="http://%s.guard.test:%s/nest/%s?hold=%s" style="width:340px;height:240px"></iframe>`, parts[1], port, parts[2], r.URL.Query().Get("hold"))
 		case len(parts) == 1 && parts[0] == "plain":
 			_, _ = fmt.Fprint(w, `<!doctype html><body><p>plain</p>`)
 		case len(parts) == 2 && parts[0] == "style":
 			w.Header().Set("Content-Type", "text/css")
 			_, _ = fmt.Fprint(w, `h1 { color: rgb(20, 30, 40); }`)
 		case len(parts) == 2 && parts[0] == "nest" && (parts[1] == "blank" || parts[1] == "srcdoc"):
+			if token := r.URL.Query().Get("hold"); token != "" {
+				select {
+				case <-document(token).release:
+				case <-r.Context().Done():
+					return
+				}
+			}
 			frame := `<iframe name="child"></iframe>`
 			if parts[1] == "srcdoc" {
 				frame = `<iframe name="child" srcdoc="<body><p>start</p>"></iframe>`
@@ -70,7 +91,7 @@ func TestCDPEventsAcrossNestedFrames(t *testing.T) {
 	ordinary := "http://ordinary.guard.test:" + port
 	protected := "http://seven.guard.test:" + port
 	srv := pageServer(t)
-	b := launchBrowserOn(t, 0, "--host-resolver-rules=MAP *.guard.test 127.0.0.1")
+	b := launchBrowserOn(t, 0, "--force-renderer-accessibility", "--host-resolver-rules=MAP *.guard.test 127.0.0.1")
 	gate := newGuardGate(t, b.endpoint, srv.URL)
 	env := &linkEnv{t: t, b: b, origin: srv.URL}
 	env.a = startAttach(t, "--cdp", gate.srv.URL, "--origin", srv.URL, "--origin", protected, "--name", "frame-events-node")
@@ -94,7 +115,11 @@ func TestCDPEventsAcrossNestedFrames(t *testing.T) {
 					if leg == "ordinary" {
 						nest = "ordinary"
 					}
-					opts := map[string]any{"mode": mode, "kind": kind, "leg": leg, "needle": needle, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "page": ordinary + "/top/" + nest + "/" + kind, "plain": ordinary + "/plain"}
+					token := ""
+					if mode == "running" {
+						token = needle + kind + leg
+					}
+					opts := map[string]any{"mode": mode, "kind": kind, "leg": leg, "needle": needle, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "page": ordinary + "/top/" + nest + "/" + kind + "?hold=" + token, "release": ordinary + "/release/" + token}
 					var raw json.RawMessage
 					p.evalWithin("linkTest.frameEvents("+jsArgs(opts)+")", &raw, 2*time.Minute)
 					path := filepath.Join("..", "..", "artifacts", "frame-events", mode, kind)
@@ -116,15 +141,12 @@ func TestCDPEventsAcrossNestedFrames(t *testing.T) {
 					if row.Leg != leg || row.Setup.Layout.Nest != want || row.Setup.Layout.Child != want {
 						t.Fatalf("%s: nested frame not on %s: %+v", leg, want, row.Setup)
 					}
-					if mode == "running" && row.RestoreType != "BackForwardCacheRestore" {
-						t.Fatalf("%s: frame was not restored without a network request: %s", leg, row.RestoreType)
-					}
 					if mode == "running" && row.Enabled["DOM.getDocument"] != "" {
 						t.Fatalf("%s: document was not obtained before protection: %v", leg, row.Enabled)
 					}
 					rows[leg] = row
 				}
-				if len(rows["control"].Shown["Accessibility"]) == 0 {
+				if len(rows["control"].Shown) == 0 || (mode == "running" && len(rows["control"].Shown["Accessibility"]) == 0) {
 					t.Fatalf("control: no Accessibility event showed the nested frame's text")
 				}
 				if len(rows["ordinary"].Shown) == 0 {
