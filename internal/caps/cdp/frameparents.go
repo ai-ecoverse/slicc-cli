@@ -6,12 +6,15 @@ func (g *guard) frameOwnerLocked(frame, context string) *target {
 	if frame == "" {
 		return nil
 	}
+	if t := g.targets[frame]; t != nil && !t.gone && t.ctx == context && (t.typ == "page" || t.typ == "iframe") {
+		return t
+	}
 	var owner *target
 	for _, t := range g.targets {
 		if t.gone || t.ctx != context || (t.typ != "page" && t.typ != "iframe") {
 			continue
 		}
-		known := t.id == frame || g.frames[t.id][frame]
+		known := g.frames[t.id][frame]
 		if s := g.shown[t.id]; s != nil {
 			for _, c := range s.contexts {
 				known = known || c.frame == frame

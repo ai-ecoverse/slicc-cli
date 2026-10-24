@@ -73,7 +73,8 @@ func TestCDPProtectedPageFramesKeepOrdinaryTabsUsable(t *testing.T) {
 					OK     bool `json:"ok"`
 					Marked int  `json:"marked"`
 				} `json:"cast"`
-				ProtectedAttach oopifAnswer `json:"protectedAttach"`
+				ProbeLeaks      []json.RawMessage `json:"probeLeaks"`
+				ProtectedAttach oopifAnswer       `json:"protectedAttach"`
 			}
 			if err := json.Unmarshal(raw, &row); err != nil {
 				t.Fatal(err)
@@ -83,6 +84,9 @@ func TestCDPProtectedPageFramesKeepOrdinaryTabsUsable(t *testing.T) {
 			}
 			if !row.Screenshot.OK || row.Screenshot.Marked < 1000 || !row.Cast.OK || row.Cast.Marked == 0 || !row.Document.OK || !row.Document.Shown || !row.Input.OK || row.Input.Keys != 1 {
 				t.Errorf("ordinary tab lost rendering, DOM or Input: %s", raw)
+			}
+			if row.ProbeLeaks == nil || len(row.ProbeLeaks) != 0 {
+				t.Errorf("internal protected-page probe leaked Target events: %s", raw)
 			}
 			if row.ProtectedAttach.OK || !strings.Contains(row.ProtectedAttach.Error, "slicc: refused: target is on seven's origin") {
 				t.Errorf("protected page attach was not refused: %+v", row.ProtectedAttach)
