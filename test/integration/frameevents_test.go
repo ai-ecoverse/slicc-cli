@@ -23,11 +23,10 @@ type frameEventsRow struct {
 			Child string `json:"child"`
 		} `json:"layout"`
 	} `json:"setup"`
-	RestoreType string              `json:"restoreType"`
-	Enabled     map[string]string   `json:"enabled"`
-	Before      map[string][]string `json:"before"`
-	Events      int                 `json:"events"`
-	Shown       map[string][]string `json:"shown"`
+	Enabled map[string]string   `json:"enabled"`
+	Before  map[string][]string `json:"before"`
+	Events  int                 `json:"events"`
+	Shown   map[string][]string `json:"shown"`
 }
 
 func frameEventsFixture(t *testing.T, needle string) *httptest.Server {
@@ -69,7 +68,7 @@ func frameEventsFixture(t *testing.T, needle string) *httptest.Server {
 			if parts[1] == "srcdoc" {
 				frame = `<iframe name="child" srcdoc="<body><p>start</p>"></iframe>`
 			}
-			_, _ = fmt.Fprintf(w, `<!doctype html><body><p>nest</p>%s<script>let n = 0; setInterval(() => { const d = frames.child.document; if (d.body) { if (!d.querySelector('link')) { const l = d.createElement('link'); l.rel = 'stylesheet'; l.href = '/style/%s.css'; d.head.append(l); } let h = d.querySelector('h1'); if (!h) { h = d.createElement('h1'); h.textContent = '%s-' + n++; d.body.append(h); } else { h.firstChild.data = '%s-' + n++; } const p = d.createElement('p'); p.textContent = '%s-insert-' + n; d.body.append(p); if (d.body.children.length > 6) d.body.lastChild.remove(); d.title = h.textContent; } }, 100);</script>`, frame, needle, needle, needle, needle)
+			_, _ = fmt.Fprintf(w, `<!doctype html><title>%s</title><body><p>nest</p>%s<script>let n = 0; setInterval(() => { const d = frames.child.document; if (d.body) { if (!d.querySelector('link')) { const l = d.createElement('link'); l.rel = 'stylesheet'; l.href = '/style/%s.css'; d.head.append(l); } let h = d.querySelector('h1'); if (!h) { h = d.createElement('h1'); h.textContent = '%s-' + n++; d.body.append(h); } else { h.firstChild.data = '%s-' + n++; } const p = d.createElement('p'); p.textContent = '%s-insert-' + n; d.body.append(p); if (d.body.children.length > 6) d.body.lastChild.remove(); d.title = h.textContent; document.title = h.textContent; } }, 100);</script>`, needle, frame, needle, needle, needle, needle)
 		default:
 			http.NotFound(w, r)
 		}
@@ -117,7 +116,7 @@ func TestCDPEventsAcrossNestedFrames(t *testing.T) {
 					}
 					token := ""
 					if mode == "running" {
-						token = needle + kind + leg
+						token = fmt.Sprint(time.Now().UnixNano()) + kind + leg
 					}
 					opts := map[string]any{"mode": mode, "kind": kind, "leg": leg, "needle": needle, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "page": ordinary + "/top/" + nest + "/" + kind + "?hold=" + token, "release": ordinary + "/release/" + token}
 					var raw json.RawMessage

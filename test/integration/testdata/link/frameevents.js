@@ -7,7 +7,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function eventsShowing(events, needle) {
   const out = {};
   for (const e of events) {
-    if (!JSON.stringify(e.params ?? {}).includes(needle)) continue;
+    const text = e.method.startsWith('Accessibility.')
+      ? JSON.stringify([e.params.root, ...(e.params.nodes ?? [])].filter(Boolean).map((n) => [n.name?.value, n.value?.value]))
+      : JSON.stringify(e.params ?? {});
+    if (!text.includes(needle)) continue;
     const domain = e.method.split('.')[0];
     out[domain] ??= [];
     if (!out[domain].includes(e.method)) out[domain].push(e.method);
@@ -96,6 +99,7 @@ export async function measureFrameEvents(getLink, opts) {
     await sleep(3000);
     const mine = client.events.slice(afterEnable).filter((e) => e.sessionId === session);
     const row = { mode: opts.mode, kind: opts.kind, leg: opts.leg, setup, enabled, before, events: mine.length, methods: {}, shown: eventsShowing(mine, opts.needle) };
+    row.ax = mine.filter((e) => e.method.startsWith('Accessibility.')).slice(0, 5).map((e) => ({ method: e.method, nodes: [e.params.root, ...(e.params.nodes ?? [])].filter(Boolean).map((n) => ({ name: n.name?.value, value: n.value?.value, frameId: n.frameId })) }));
     for (const e of mine) row.methods[e.method] = (row.methods[e.method] ?? 0) + 1;
     return row;
   } finally {

@@ -24,7 +24,7 @@ async function shot(client, session) {
 export async function measureOOPIF(getLink, opts) {
   const reader = await SocketClient.open(opts.ws);
   reader.callTimeout = 15000;
-  await reader.send('Target.setDiscoverTargets', { discover: true, filter: [] });
+  await reader.send('Target.setDiscoverTargets', { discover: true, filter: [{}] });
   let client = reader;
   try {
     const observer = (await reader.send('Target.attachToTarget', { targetId: opts.targetId, flatten: true })).sessionId;
@@ -33,7 +33,7 @@ export async function measureOOPIF(getLink, opts) {
     await reader.send('Target.activateTarget', { targetId: opts.targetId });
     let allTargets;
     const info = await until(async () => {
-      allTargets = (await reader.send('Target.getTargets', { filter: [] })).targetInfos;
+      allTargets = (await reader.send('Target.getTargets', { filter: [{}] })).targetInfos;
       return allTargets.find((t) => t.type === 'iframe' && t.url === opts.child);
     }, 'preloaded iframe target').catch((error) => { throw new Error(`${error.message}: ${JSON.stringify(allTargets)}`); });
     let painted = 0;
@@ -71,7 +71,7 @@ export async function measureOOPIF(getLink, opts) {
     const navStart = reader.events.length;
     await reader.send('Page.navigate', { url: opts.plain }, observer);
     await until(() => reader.events.slice(navStart).find((e) => e.sessionId === observer && e.method === 'Page.loadEventFired'), 'away page load');
-    row.frozen = (await reader.send('Target.getTargets', { filter: [] })).targetInfos.filter((t) => t.type === 'iframe');
+    row.frozen = (await reader.send('Target.getTargets', { filter: [{}] })).targetInfos.filter((t) => t.type === 'iframe');
     row.away = await shot(client, session);
     const history = await reader.send('Page.getNavigationHistory', {}, observer);
     const restoreStart = reader.events.length;
@@ -81,7 +81,7 @@ export async function measureOOPIF(getLink, opts) {
     await until(async () => (await shot(reader, observer)).marked >= 1000, 'restored iframe paint');
     row.restored = await shot(client, session);
     await reader.send('Runtime.evaluate', { expression: "document.querySelector('iframe').remove()" }, observer);
-    await until(async () => !(await reader.send('Target.getTargets', { filter: [] })).targetInfos.some((t) => t.targetId === info.targetId || t.url === opts.child), 'iframe target gone');
+    await until(async () => !(await reader.send('Target.getTargets', { filter: [{}] })).targetInfos.some((t) => t.targetId === info.targetId || t.url === opts.child), 'iframe target gone');
     await sleep(200);
     row.removed = await shot(client, session);
     row.live = await client.send('Runtime.evaluate', { expression: '21 * 2', returnByValue: true }, session);
