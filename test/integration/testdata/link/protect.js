@@ -180,6 +180,20 @@ export function protectTest(getLink, describe) {
         c.resume();
         return { enable: await enable, flood: (await flood).ok };
       }),
+    documentStateSequence: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const before = await outcome(c.send('Runtime.evaluate', { expression: '1' }, sessionId));
+        const shot = outcome(c.send('Page.captureScreenshot', {}, sessionId));
+        await c.send('Page.enable', {}, sessionId);
+        const restored = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.type === 'BackForwardCacheRestore');
+        await c.send('Browser.getBrowserCommandLine');
+        await restored;
+        const after = outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId));
+        await c.send('Browser.getWindowBounds', { windowId: 1 });
+        return { before, after: await after, shot: await shot };
+      }),
     outlivedCapture: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
