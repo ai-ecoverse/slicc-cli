@@ -45,7 +45,7 @@ func TestCDPDocumentSetupFailureSettlesImmediately(t *testing.T) {
 }
 
 func TestCDPInheritedOpenerLifecycle(t *testing.T) {
-	for _, state := range []string{"ordinary", "protected", "unknown-frame", "untouched", "gone"} {
+	for _, state := range []string{"ordinary", "protected", "protected-child", "unknown-frame", "untouched", "gone"} {
 		t.Run(state, func(t *testing.T) {
 			env, fake := setupFakeProtect(t, func(seven, ordinary string) fakeScript {
 				base := guardWaitScript("{}")
@@ -73,8 +73,11 @@ func TestCDPInheritedOpenerLifecycle(t *testing.T) {
 						if state == "gone" {
 							events = append(events, `{"method":"Target.targetDestroyed","sessionId":"RELAY","params":{"targetId":"T1"}}`)
 						}
-						if state == "ordinary" || state == "protected" {
+						if state == "ordinary" || state == "protected" || state == "protected-child" {
 							events = append(events, `{"method":"Page.frameAttached","sessionId":"S1","params":{"frameId":"F1","parentFrameId":"T1"}}`)
+						}
+						if state == "protected-child" {
+							events = append(events, fmt.Sprintf(`{"method":"Runtime.executionContextCreated","sessionId":"S1","params":{"context":{"id":42,"uniqueId":"protected-child","origin":%q,"name":"","auxData":{"isDefault":true,"frameId":"F1"}}}}`, seven))
 						}
 						return "{}", append(events, fmt.Sprintf(`{"method":"Target.attachedToTarget","params":{"sessionId":"POPUP","targetInfo":{"targetId":"T3","type":"page","url":%q,"openerId":"T1","openerFrameId":%q},"waitingForDebugger":false}}`, ordinary+"/popup", openerFrame))
 					case "Target.attachToTarget":
