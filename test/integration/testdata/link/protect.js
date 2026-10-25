@@ -589,6 +589,24 @@ export function protectTest(getLink, describe) {
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
         return { before, probes, stuck, attaches, leaked, detached, after, reattach, close };
       }),
+    biosGuardIDs: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        let id = 2 ** 30;
+        const send = (method, params = {}, sessionId) => {
+          const next = id++;
+          return outcome(c.sendRaw(next, JSON.stringify({ id: next, method, params, sessionId })));
+        };
+        const attach = await send('Target.attachToTarget', { targetId, flatten: true });
+        if (!attach.ok) return { attach };
+        const { sessionId } = attach.result;
+        const fetch = await send('Fetch.enable', {}, sessionId);
+        const tree = await send('Page.getFrameTree', {}, sessionId);
+        const plain = await send('Runtime.evaluate', { expression: '1', returnByValue: true }, sessionId);
+        id = 0x70000000 - 1;
+        const boundary = await send('Runtime.evaluate', { expression: '1', returnByValue: true }, sessionId);
+        return { attach, fetch, tree, plain, boundary };
+      }),
     callBookkeeping: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
@@ -608,7 +626,8 @@ export function protectTest(getLink, describe) {
     clientCallBookkeeping: (browser) =>
       run(browser, async (c) => {
         const raw = (id, method) => JSON.stringify({ id, method });
-        const reserved = await outcome(c.sendRaw(2 ** 30, raw(2 ** 30, 'Browser.getBrowserCommandLine')));
+        const reserved = await outcome(c.sendRaw(0x70000000, raw(0x70000000, 'Browser.getBrowserCommandLine')));
+        const aboveReserved = await outcome(c.sendRaw(0x70000001, raw(0x70000001, 'Browser.getBrowserCommandLine')));
         const original = outcome(c.sendRaw(77, raw(77, 'Browser.getVersion')));
         const duplicate = new Promise((resolve) => {
           const off = c.onMessage((text) => {
@@ -627,7 +646,7 @@ export function protectTest(getLink, describe) {
         const replies = messages.filter((m) => m.id === 77 && m.result && !m.sessionId);
         const unmatched = messages.filter((m) => m.id === 88 || (m.id === 77 && m.sessionId)).length;
         await original;
-        return { reserved, duplicate: refused, original: { ok: replies.length === 1 }, ordinary, unmatched };
+        return { reserved, aboveReserved, duplicate: refused, original: { ok: replies.length === 1 }, ordinary, unmatched };
       }),
     historyCacheProof: (browser) =>
       run(browser, async (c) => {

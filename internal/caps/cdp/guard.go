@@ -23,7 +23,7 @@ const (
 	maxTombstones       = 4096
 	maxRefused          = 4096
 	maxMarked           = 65536
-	relayIDBase         = 1 << 30
+	relayIDBase         = 1879048192
 	maxRetiredCalls     = 4096
 	retiredCallAge      = time.Minute
 )
