@@ -384,10 +384,7 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	prev := t.protected
 	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && g.o.Loaded(t.url) && !protect.Unparseable(t.url) {
 		nt.historyLocked = true
-		if nt.confirm == nil || nt.confirm.done {
-			nt.confirm = &navTarget{ready: make(chan struct{}), start: time.Now()}
-			nt.confirm.awayAt = g.reads.away(nt.confirm.start)
-		}
+		g.beginConfirmLocked(nt)
 		return g.confirmTargetLocked(nt)
 	}
 	t.protected = g.decide(t, prev)

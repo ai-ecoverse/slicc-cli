@@ -180,6 +180,108 @@ export function protectTest(getLink, describe) {
         c.resume();
         return { enable: await enable, flood: (await flood).ok };
       }),
+    subtargetStateSequence: (browser) =>
+      run(browser, async (c) => {
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        const attached = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'CHILD');
+        await c.send('Browser.getBrowserCommandLine');
+        const { params: { sessionId } } = await attached;
+        return {
+          title: await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId)),
+          data: await outcome(c.send('Runtime.evaluate', { expression: 'loadTimeData.data_' }, sessionId)),
+          dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
+        };
+      }),
+    originFrameSequence: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        const attached = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'POPUP');
+        await c.send('Browser.getBrowserCommandLine');
+        await attached;
+        await c.send('Page.enable', {}, 'POPUP');
+        const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === 'POPUP');
+        await c.send('Browser.getWindowBounds');
+        await committed;
+        return outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, 'POPUP'));
+      }),
+    inheritedParentSequence: (browser) =>
+      run(browser, async (c) => {
+        await c.send('Target.createTarget', { url: 'about:blank' });
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        const attached = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'CHILD');
+        await c.send('Browser.getBrowserCommandLine');
+        await attached;
+        await c.send('Page.enable', {}, 'CHILD');
+        const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === 'CHILD');
+        await c.send('Browser.getWindowBounds');
+        await committed;
+        const title = await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, 'CHILD'));
+        await c.send('Browser.getWindowForTarget');
+        return title;
+      }),
+    inheritedDocumentSequence: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        const start = Date.now();
+        const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId);
+        await c.send('Browser.getBrowserCommandLine');
+        await committed;
+        const blank = await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId));
+        const consoleEvent = c.waitEvent((e) => e.method === 'Console.messageAdded' && e.sessionId === sessionId);
+        await c.send('Browser.getWindowBounds');
+        await consoleEvent;
+        return {
+          blank,
+          title: await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId)),
+          dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
+          shot: await outcome(c.send('Page.captureScreenshot', {}, sessionId)),
+          ms: Date.now() - start,
+          scripts: c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId).length,
+          styles: c.events.filter((e) => e.method === 'CSS.styleSheetAdded' && e.sessionId === sessionId).length,
+        };
+      }),
+    ordinaryDocumentSequence: (browser, reload) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        const loaded = reload ? c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 5000) : null;
+        const start = Date.now();
+        await c.send('Browser.getBrowserCommandLine');
+        if (loaded) {
+          await loaded;
+          await c.send('Browser.getWindowBounds');
+        }
+        return {
+          title: await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId)),
+          dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
+          shot: await outcome(c.send('Page.captureScreenshot', {}, sessionId)),
+          ms: Date.now() - start,
+          loaded: Boolean(loaded),
+          scripts: c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId).length,
+          styles: c.events.filter((e) => e.method === 'CSS.styleSheetAdded' && e.sessionId === sessionId).length,
+          pauses: c.events.filter((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId).length,
+        };
+      }),
+    documentStateSequence: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const before = await outcome(c.send('Runtime.evaluate', { expression: '1' }, sessionId));
+        const shot = outcome(c.send('Page.captureScreenshot', {}, sessionId));
+        await c.send('Page.enable', {}, sessionId);
+        const restored = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.type === 'BackForwardCacheRestore');
+        await c.send('Browser.getBrowserCommandLine');
+        await restored;
+        const after = outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId));
+        await c.send('Browser.getWindowBounds', { windowId: 1 });
+        return { before, after: await after, shot: await shot };
+      }),
     outlivedCapture: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });

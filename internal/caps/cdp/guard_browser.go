@@ -56,6 +56,13 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		return browserVerdict{}
 	}
 	if !errorPageEvent(m.Method) && (g.errorPageSessionLocked(m.SessionID) || g.sessionUnconfirmedLocked(m.SessionID)) {
+		switch m.Method {
+		case "Debugger.scriptParsed", "Debugger.scriptFailedToParse":
+			g.scriptEvent(&m, data)
+		case "Debugger.paused":
+			msg, _ := g.newCallLocked(m.SessionID, "Debugger.resume", nil, false)
+			return browserVerdict{send: [][]byte{msg}}
+		}
 		return browserVerdict{}
 	}
 	if h, ok := eventHandlers[m.Method]; ok {
@@ -404,18 +411,31 @@ func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {
 
 func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	var p struct {
+		Type  string `json:"type"`
 		Frame struct {
 			ID             string `json:"id"`
 			ParentID       string `json:"parentId"`
 			SecurityOrigin string `json:"securityOrigin"`
+			URL            string `json:"url"`
+			UnreachableURL string `json:"unreachableUrl"`
 		} `json:"frame"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	t := g.sessionTargetLocked(m.SessionID)
-	if t == nil || p.Frame.ParentID != "" || p.Frame.ID != t.id || !g.o.Loaded(p.Frame.SecurityOrigin) {
+	if t == nil || (p.Frame.ParentID != "" && t.typ != "iframe") || p.Frame.ID != t.id {
 		return browserVerdict{forward: data}
 	}
-	return browserVerdict{send: g.markLocked(t)}
+	if g.o.Loaded(p.Frame.SecurityOrigin) {
+		return browserVerdict{send: g.markLocked(t)}
+	}
+	var send [][]byte
+	if nt := g.navTargets[t.id]; nt != nil {
+		if (nt.confirm != nil && nt.confirm.done && nt.confirm.failed) || p.Type == "BackForwardCacheRestore" || p.Frame.UnreachableURL != "" || strings.HasPrefix(p.Frame.URL, "chrome-error:") || protect.Inheriting(p.Frame.URL) || protect.Unparseable(p.Frame.URL) {
+			g.beginConfirmLocked(nt)
+		}
+		send = g.navEventLocked(nt, m)
+	}
+	return browserVerdict{forward: data, send: send}
 }
 
 func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {

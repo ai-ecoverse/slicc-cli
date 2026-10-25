@@ -66,6 +66,7 @@ type navTarget struct {
 	commits          int
 	failCommit       int
 	worker           bool
+	iframe           bool
 	shared           bool
 	historyLocked    bool
 	protectedHistory map[string]string
@@ -103,7 +104,10 @@ func (g *guard) touchLocked(targetID, typ string) [][]byte {
 	if _, ok := g.navTargets[targetID]; ok {
 		return nil
 	}
-	nt := &navTarget{target: targetID, ready: make(chan struct{}), start: time.Now(), worker: workerTypes[typ], shared: typ == "shared_worker"}
+	nt := &navTarget{target: targetID, ready: make(chan struct{}), start: time.Now(), worker: workerTypes[typ], shared: typ == "shared_worker", iframe: typ == "iframe"}
+	if t := g.targets[targetID]; t != nil && navTypes[typ] && strings.HasPrefix(t.url, "chrome-error:") {
+		g.beginConfirmLocked(nt)
+	}
 	nt.awayAt = g.reads.away(nt.start)
 	g.navTargets[targetID] = nt
 	sent := time.Now()
@@ -365,7 +369,7 @@ func (nt *navTarget) commitLocked(m *message) {
 			nt.unsure = false
 		}
 	case "Page.frameNavigated":
-		if p.Frame.ID != nt.target || p.Frame.ParentID != "" {
+		if p.Frame.ID != nt.target || (p.Frame.ParentID != "" && !nt.iframe) {
 			return
 		}
 		if p.Type == "BackForwardCacheRestore" {
@@ -502,5 +506,5 @@ func (g *guard) noteCommitLocked(k callKey, c *command) {
 func (g *guard) outlivedLocked(k callKey) bool {
 	mk, ok := g.commitMarks[k]
 	delete(g.commitMarks, k)
-	return ok && (mk.nt.failCommit > mk.commits || (mk.nt.historyLocked && !mk.historyLocked))
+	return ok && (mk.nt.failCommit > mk.commits || (mk.nt.historyLocked && !mk.historyLocked) || (mk.nt.confirm != nil && (!mk.nt.confirm.done || mk.nt.confirm.failed)))
 }
