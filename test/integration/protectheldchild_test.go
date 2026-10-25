@@ -153,8 +153,15 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 		Events    []string `json:"events"`
 	}
 	var started bool
-	env.p.eval("window.heldChildNativeWork = linkTest.protect.heldChildNative("+jsArgs("chrome", top.target, protected+"/child")+"); true", &started)
-	env.p.waitFor("window.heldChildNativeReady === true", 10*time.Second)
+	env.p.eval("window.heldChildNativeWork = linkTest.protect.heldChildNative("+jsArgs("chrome", top.target)+"); true", &started)
+	env.p.waitFor("typeof window.heldChildNativeFrame === 'string'", 10*time.Second)
+	var frame string
+	env.p.eval("window.heldChildNativeFrame", &frame)
+	env.p.eval("window.heldChildNativeStart(); true", &started)
+	driveCtx, driveCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	driveErr := top.session.Call(driveCtx, "Page.navigate", map[string]any{"frameId": frame, "url": protected + "/child"}, nil)
+	driveCancel()
+	env.p.waitFor("window.heldChildNativeReady === true", 5*time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	var snapshot struct {
@@ -171,6 +178,9 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 	committed := err == nil && len(snapshot.FrameTree.ChildFrames) == 1 && snapshot.FrameTree.ChildFrames[0].Frame.URL == "chrome-error://chromewebdata/" && snapshot.FrameTree.ChildFrames[0].Frame.UnreachableURL == protected+"/child"
 	env.p.eval("window.heldChildNativeContinue("+jsArgs(committed)+"); true", &started)
 	env.p.evalWithin("window.heldChildNativeWork", &result, 10*time.Second)
+	if driveErr != nil {
+		t.Errorf("native frame navigation: %v", driveErr)
+	}
 	if err != nil {
 		t.Errorf("native frame snapshot: %v", err)
 	}
@@ -233,7 +243,7 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 
 func TestCDPSettlesHeldProtectedChildrenBeforeDetaching(t *testing.T) {
 	b := launchBrowser(t)
-	for _, order := range []string{"known", "pause-first", "attach-first"} {
+	for _, order := range []string{"known", "pause-first", "attach-first", "guard-pause-first", "guard-attach-first"} {
 		t.Run(order, func(t *testing.T) {
 			env, fake := setupFakeProtectEnvOn(t, b, nil, func(seven, _ string) fakeScript {
 				base := guardWaitScript("{}")
@@ -248,10 +258,13 @@ func TestCDPSettlesHeldProtectedChildrenBeforeDetaching(t *testing.T) {
 							attaches = append(attaches, fmt.Sprintf(`{"method":"Target.attachedToTarget","sessionId":%q,"params":{"sessionId":"H%d","targetInfo":{"targetId":"F1","type":"iframe","url":%q},"waitingForDebugger":%t}}`, parent, i+1, url, i == 1))
 						}
 						pause := fmt.Sprintf(`{"method":"Fetch.requestPaused","sessionId":"S2","params":{"requestId":"P1","frameId":"F1","resourceType":"Document","request":{"url":%q}}}`, seven+"/child")
-						if order == "pause-first" {
+						if strings.HasPrefix(order, "guard-") {
+							pause = strings.Replace(pause, `"sessionId":"S2"`, `"sessionId":"S1"`, 1)
+						}
+						if strings.HasSuffix(order, "pause-first") {
 							return "{}", append([]string{pause}, attaches...)
 						}
-						if order == "attach-first" {
+						if strings.HasSuffix(order, "attach-first") {
 							return "{}", append(attaches, pause)
 						}
 						return "{}", attaches
