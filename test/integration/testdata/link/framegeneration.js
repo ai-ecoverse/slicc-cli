@@ -4,21 +4,23 @@ import { evaluate, outcome, until } from './persistent.js';
 
 export async function measureFrameGeneration(getLink, opts) {
   const reader = await SocketClient.open(opts.ws);
-  let client, targetId, context;
+  let client, targetId;
   try {
-    ({ browserContextId: context } = await reader.send('Target.createBrowserContext'));
-    ({ targetId } = await reader.send('Target.createTarget', { url: opts.ordinary + '/framed', browserContextId: context }));
+    targetId = opts.targetId;
     const { sessionId: observer } = await reader.send('Target.attachToTarget', { targetId, flatten: true });
     await reader.send('Page.enable', {}, observer);
     await reader.send('Target.activateTarget', { targetId });
+    let observed;
     const old = await until(async () => {
       const tree = (await reader.send('Page.getFrameTree', {}, observer)).frameTree;
+      observed = tree;
       return tree.childFrames?.some((f) => f.frame.url === opts.protected + '/child') && tree;
-    }, 'protected OOPIF document');
+    }, 'protected OOPIF document').catch((e) => { throw new Error(`${e.message}: ${JSON.stringify(observed)}`); });
     const child = old.childFrames.find((f) => f.frame.url === opts.protected + '/child').frame.id;
     const info = (await reader.send('Target.getTargetInfo', { targetId: child })).targetInfo;
     const owned = await outcome(reader.send('DOM.getFrameOwner', { frameId: child }, observer));
     if (info.type !== 'iframe' || info.parentFrameId !== targetId || !owned.ok || !owned.result.backendNodeId) throw new Error('current protected OOPIF ownership missing');
+    await until(async () => await evaluate(reader, observer, 'document.readyState') === 'complete', 'framed document loaded');
     await evaluate(reader, observer, "addEventListener('pageshow', (e) => { globalThis.restored = e.persisted; }); true");
     const history = await reader.send('Page.getNavigationHistory', {}, observer);
     const entry = history.entries[history.currentIndex];
@@ -58,7 +60,6 @@ export async function measureFrameGeneration(getLink, opts) {
     return { old, next, info, frozen, owned, absent, restoredOwner, restore: restore.params, tree, dom, shot: { ok: shot.ok, error: shot.error }, input, ms, back };
   } finally {
     if (client) await client.close();
-    if (context) await outcome(reader.send('Target.disposeBrowserContext', { browserContextId: context }));
     reader.close();
   }
 }

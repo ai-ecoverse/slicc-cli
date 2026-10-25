@@ -17,7 +17,7 @@ func TestCDPNativeLateAttachedFrozenIframe(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		_, port, _ := strings.Cut(r.Host, ":")
 		if r.URL.Path == "/framed" {
-			_, _ = fmt.Fprintf(w, `<!doctype html><body><iframe src="http://seven.guard.test:%s/child"></iframe>`, port)
+			_, _ = fmt.Fprintf(w, `<!doctype html><body><script>globalThis.linkTest = {};</script><iframe src="http://seven.guard.test:%s/child"></iframe>`, port)
 		} else {
 			_, _ = fmt.Fprint(w, `<!doctype html><body><p>fixture</p>`)
 		}
@@ -28,6 +28,12 @@ func TestCDPNativeLateAttachedFrozenIframe(t *testing.T) {
 	protected := "http://seven.guard.test:" + port
 	srv := pageServer(t)
 	b := launchBrowserOn(t, 0, "--site-per-process", "--host-resolver-rules=MAP *.test 127.0.0.1")
+	top := b.openPage(t, ordinary+"/framed")
+	var loaded bool
+	top.evalWithin("new Promise((resolve) => { if (document.readyState === 'complete') resolve(true); else addEventListener('load', () => resolve(true)); })", &loaded, 15*time.Second)
+	if !loaded {
+		t.Fatal("framed document was not loaded before attach")
+	}
 	gate := newGuardGate(t, b.endpoint, srv.URL)
 	env := &linkEnv{t: t, b: b, origin: srv.URL}
 	env.a = startAttach(t, "--cdp", gate.srv.URL, "--origin", srv.URL, "--origin", protected, "--name", "frame-generation-node")
@@ -40,7 +46,7 @@ func TestCDPNativeLateAttachedFrozenIframe(t *testing.T) {
 	if len(hello.Browsers) != 1 {
 		t.Fatal("frame generation browser missing")
 	}
-	opts := map[string]any{"browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "ordinary": ordinary, "protected": protected}
+	opts := map[string]any{"targetId": top.target, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "ordinary": ordinary, "protected": protected}
 	var raw json.RawMessage
 	env.p.evalWithin("linkTest.frameGeneration("+jsArgs(opts)+")", &raw, time.Minute)
 	path := filepath.Join("..", "..", "artifacts", "frame-generation")
@@ -74,11 +80,14 @@ func TestCDPNativeLateAttachedFrozenIframe(t *testing.T) {
 }
 
 func TestCDPIframeProtectionFollowsRootDocument(t *testing.T) {
-	for _, mode := range []string{"known", "unknown"} {
+	for _, mode := range []string{"known", "unknown", "absent", "error", "malformed", "pending"} {
 		t.Run(mode, func(t *testing.T) {
 			env, fake := setupFakeProtect(t, func(seven, ordinary string) fakeScript {
 				base := guardWaitScript("{}")
 				loader := "old"
+				if mode == "absent" || mode == "pending" {
+					loader = "new"
+				}
 				frame := func() string {
 					return fmt.Sprintf(`{"id":"T1","loaderId":%q,"url":%q,"securityOrigin":%q}`, loader, ordinary+"/fixture", ordinary)
 				}
@@ -100,10 +109,27 @@ func TestCDPIframeProtectionFollowsRootDocument(t *testing.T) {
 						return "{}", events
 					case "Browser.getWindowBounds":
 						loader = "new"
+						if mode == "pending" {
+							loader = "old"
+						}
 						return "{}", commit("Navigation")
 					case "Browser.getWindowForTarget":
 						loader = "old"
 						return "{}", commit("BackForwardCacheRestore")
+					case "DOM.getFrameOwner":
+						switch mode {
+						case "unknown":
+							return `{"backendNodeId":7}`, nil
+						case "absent", "pending":
+							if loader == "old" {
+								return `{"backendNodeId":7}`, nil
+							}
+							return "!Frame with the given id was not found.", nil
+						case "error":
+							return "!DOM agent unavailable", nil
+						default:
+							return "{}", nil
+						}
 					case "Page.getFrameTree":
 						return `{"frameTree":{"frame":` + frame() + `}}`, nil
 					case "DOM.getDocument":
@@ -114,13 +140,16 @@ func TestCDPIframeProtectionFollowsRootDocument(t *testing.T) {
 					return base(method, params)
 				}
 			})
+			if mode == "pending" {
+				fake.gate("DOM.getFrameOwner", "Browser.getWindowBounds")
+			}
 			var result struct {
 				Before []cdpOutcome `json:"before"`
 				Next   []cdpOutcome `json:"next"`
 				Back   []cdpOutcome `json:"back"`
 				MS     int          `json:"ms"`
 			}
-			env.evalJSON(t, fmt.Sprintf("linkTest.protect.frameGenerationSequence('chrome-2', %t)", mode == "known"), &result)
+			env.evalJSON(t, "linkTest.protect.frameGenerationSequence('chrome-2', "+jsArgs(mode)+")", &result)
 			refused := "slicc: refused: target is on seven's origin"
 			check := func(label string, results []cdpOutcome, allowed bool) {
 				t.Helper()
@@ -133,9 +162,9 @@ func TestCDPIframeProtectionFollowsRootDocument(t *testing.T) {
 					}
 				}
 			}
-			check("original", result.Before, false)
-			if mode == "known" {
-				check("next", result.Next, true)
+			check("original", result.Before, mode == "absent")
+			if mode == "known" || mode == "absent" || mode == "pending" {
+				check("next", result.Next, mode != "pending")
 				check("restored", result.Back, false)
 				if result.MS >= 5000 {
 					t.Errorf("document transition exceeded bound: %d ms", result.MS)
@@ -153,8 +182,11 @@ func TestCDPIframeProtectionFollowsRootDocument(t *testing.T) {
 				}
 			}
 			want := 0
-			if mode == "known" {
+			if mode == "known" || mode == "absent" {
 				want = 1
+			}
+			if mode == "absent" {
+				want = 2
 			}
 			for _, method := range []string{"Page.getFrameTree", "DOM.getDocument", "Page.captureScreenshot", "Input.dispatchMouseEvent"} {
 				if counts[method] != want {

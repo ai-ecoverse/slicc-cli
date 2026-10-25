@@ -245,7 +245,7 @@ export function protectTest(getLink, describe) {
           styles: c.events.filter((e) => e.method === 'CSS.styleSheetAdded' && e.sessionId === sessionId).length,
         };
       }),
-    frameGenerationSequence: (browser, known) =>
+    frameGenerationSequence: (browser, mode) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
@@ -266,7 +266,7 @@ export function protectTest(getLink, describe) {
         };
         await barrier('Browser.getBrowserCommandLine');
         const before = await reads();
-        if (!known) return { before };
+        if (!['known', 'absent', 'pending'].includes(mode)) return { before };
         const start = Date.now();
         await barrier('Browser.getWindowBounds');
         const next = await reads();
