@@ -1,6 +1,6 @@
 import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
-import { evaluate, outcome, until } from './persistent.js';
+import { auditSetter, evaluate, outcome, until } from './persistent.js';
 
 export async function measureFrameGeneration(getLink, opts) {
   const reader = await SocketClient.open(opts.ws);
@@ -53,11 +53,17 @@ export async function measureFrameGeneration(getLink, opts) {
     if (restore.params.type !== 'BackForwardCacheRestore' || restore.params.frame.loaderId !== old.frame.loaderId) throw new Error('protected-OOPIF document did not restore from BFCache');
     const restoredOwner = await outcome(reader.send('DOM.getFrameOwner', { frameId: child }, observer));
     const back = [];
+    const audits = [];
     for (const [method, params] of [
       ['Page.getFrameTree', {}], ['DOM.getDocument', {}], ['Page.captureScreenshot', {}],
       ['Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 }],
-    ]) back.push(await outcome(client.send(method, params, sessionId)));
-    return { old, next, info, frozen, owned, absent, restoredOwner, restore: restore.params, tree, dom, shot: { ok: shot.ok, error: shot.error }, input, ms, back };
+    ]) {
+      const sent = client.sent.length;
+      const reply = await outcome(client.send(method, params, sessionId));
+      back.push(reply);
+      audits.push(await auditSetter(opts.gate, sessionId, client.sent[sent].id, reply));
+    }
+    return { old, next, info, frozen, owned, absent, restoredOwner, restore: restore.params, tree, dom, shot: { ok: shot.ok, error: shot.error }, input, ms, back, audits };
   } finally {
     if (client) await client.close();
     reader.close();

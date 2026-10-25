@@ -46,7 +46,7 @@ func TestCDPNativeLateAttachedFrozenIframe(t *testing.T) {
 	if len(hello.Browsers) != 1 {
 		t.Fatal("frame generation browser missing")
 	}
-	opts := map[string]any{"targetId": top.target, "browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "ordinary": ordinary, "protected": protected}
+	opts := map[string]any{"targetId": top.target, "browser": hello.Browsers[0].ID, "gate": gate.srv.URL + "/gate", "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "ordinary": ordinary, "protected": protected}
 	var raw json.RawMessage
 	env.p.evalWithin("linkTest.frameGeneration("+jsArgs(opts)+")", &raw, time.Minute)
 	path := filepath.Join("..", "..", "artifacts", "frame-generation")
@@ -65,12 +65,25 @@ func TestCDPNativeLateAttachedFrozenIframe(t *testing.T) {
 		RestoredOwner cdpOutcome   `json:"restoredOwner"`
 		Back          []cdpOutcome `json:"back"`
 		MS            int          `json:"ms"`
+		Audits        []struct {
+			Probes []struct {
+				Forwarded bool `json:"forwarded"`
+			} `json:"probes"`
+		} `json:"audits"`
 	}
 	if err := json.Unmarshal(raw, &row); err != nil {
 		t.Fatal(err)
 	}
 	if !row.Tree.OK || !row.DOM.OK || !row.Shot.OK || !row.Input.OK || !row.RestoredOwner.OK || row.MS >= 5000 || len(row.Back) != 4 {
 		t.Fatalf("ordinary/restore ownership: %s", raw)
+	}
+	if len(row.Audits) != 4 {
+		t.Fatal("restored forwarding audits missing")
+	}
+	for _, audit := range row.Audits {
+		if len(audit.Probes) != 1 || audit.Probes[0].Forwarded {
+			t.Errorf("restored command reached Chrome: %+v", audit)
+		}
 	}
 	for _, r := range row.Back {
 		if r.OK || !strings.Contains(r.Error.Message, "slicc: refused: target is on seven's origin") {
