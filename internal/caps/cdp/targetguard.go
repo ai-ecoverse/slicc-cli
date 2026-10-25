@@ -128,6 +128,20 @@ func (g *guard) frameParentReasonLocked(t *target, parentID string) string {
 	return ""
 }
 
+func (g *guard) ordinaryOpenerFrameLocked(owner, frame string) bool {
+	if g.framesProtectedLocked(owner) {
+		return false
+	}
+	if shown := g.shown[owner]; shown != nil && !shown.full {
+		for _, context := range shown.contexts {
+			if context.defaultWorld && context.frame == frame {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (g *guard) ordinaryFrameParentLocked(t *target, parentID string) bool {
 	if inheritedParentID(t, parentID) == "" {
 		return t.typ != "iframe"
@@ -136,7 +150,7 @@ func (g *guard) ordinaryFrameParentLocked(t *target, parentID string) bool {
 	if parent == nil || parent.gone || parent.protected || g.decide(parent, parent.protected) || g.targetUnconfirmedLocked(parent.id) {
 		return false
 	}
-	if g.targets[inheritedParentID(t, parentID)] == nil && g.framesProtectedLocked(parent.id) {
+	if id := inheritedParentID(t, parentID); g.targets[id] == nil && !g.ordinaryOpenerFrameLocked(parent.id, id) {
 		return false
 	}
 	nt := g.navTargets[parent.id]

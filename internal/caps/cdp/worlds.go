@@ -17,6 +17,7 @@ const (
 var heapOK = map[string]bool{"HeapProfiler.enable": true, "HeapProfiler.disable": true, "HeapProfiler.collectGarbage": true, "HeapProfiler.getHeapObjectId": true}
 
 type worldCtx struct {
+	defaultWorld   bool
 	frame          string
 	protectedFrame string
 	unique         string
@@ -64,6 +65,7 @@ func (g *guard) showContextLocked(target, session string, c execContext) {
 	}
 	if sc := s.contexts[c.ID]; sc != nil && sc.unique == c.UniqueID {
 		sc.seen[session] = true
+		sc.defaultWorld = c.AuxData.IsDefault
 		if c.AuxData.FrameID != "" {
 			sc.frame = c.AuxData.FrameID
 		}
@@ -77,7 +79,7 @@ func (g *guard) showContextLocked(target, session string, c execContext) {
 		s.full = true
 		return
 	}
-	s.contexts[c.ID] = &worldCtx{frame: c.AuxData.FrameID, unique: c.UniqueID, seen: map[string]bool{session: true}}
+	s.contexts[c.ID] = &worldCtx{defaultWorld: c.AuxData.IsDefault, frame: c.AuxData.FrameID, unique: c.UniqueID, seen: map[string]bool{session: true}}
 	if c.UniqueID != "" {
 		g.shownUniques[c.UniqueID] = target
 	}
