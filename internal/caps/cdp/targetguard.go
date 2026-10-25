@@ -9,6 +9,7 @@ import (
 
 func (g *guard) beginConfirmLocked(nt *navTarget) {
 	if nt.confirm == nil || nt.confirm.done {
+		nt.confirming = false
 		nt.confirm = &navTarget{ready: make(chan struct{}), start: time.Now()}
 		nt.confirm.awayAt = g.reads.away(nt.confirm.start)
 	}
@@ -27,13 +28,13 @@ func (g *guard) confirmTargetLocked(nt *navTarget) [][]byte {
 }
 
 func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m message) [][]byte {
-	nt.confirming = false
 	if g.navTargets[nt.target] != nt {
 		return nil
 	}
 	if nt.confirm != check {
 		return g.confirmTargetLocked(nt)
 	}
+	nt.confirming = false
 	if check.done {
 		return nil
 	}
@@ -65,6 +66,14 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		check.settle(false)
 		return g.markLocked(t)
 	}
+	if inheritedDocument(frame.URL, frame.UnreachableURL) {
+		if g.o.Target(frame.URL, t.protected, g.openerState(t)) || !g.ordinaryFrameParentLocked(t, frame.ParentID) {
+			check.settle(true)
+			return nil
+		}
+		check.settle(false)
+		return nil
+	}
 	if frame.SecurityOrigin == "" {
 		check.settle(true)
 		return nil
@@ -80,6 +89,22 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 	}
 	check.settle(false)
 	return nil
+}
+
+func inheritedDocument(url, unreachable string) bool {
+	return url != "" && protect.Inheriting(url) && unreachable == ""
+}
+
+func (g *guard) ordinaryFrameParentLocked(t *target, parentID string) bool {
+	if parentID == "" {
+		return t.typ != "iframe"
+	}
+	parent := g.targets[parentID]
+	if parent == nil || parent.gone || parent.protected || g.decide(parent, parent.protected) || g.targetUnconfirmedLocked(parentID) {
+		return false
+	}
+	nt := g.navTargets[parentID]
+	return nt == nil || (!nt.failed && !nt.historyLocked)
 }
 
 func (g *guard) targetReasonLocked(id string) string {

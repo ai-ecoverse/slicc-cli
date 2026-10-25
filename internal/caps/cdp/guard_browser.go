@@ -411,7 +411,7 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	}
 	var send [][]byte
 	if nt := g.navTargets[t.id]; nt != nil {
-		if p.Type == "BackForwardCacheRestore" || p.Frame.UnreachableURL != "" || strings.HasPrefix(p.Frame.URL, "chrome-error:") || protect.Inheriting(p.Frame.URL) || protect.Unparseable(p.Frame.URL) {
+		if (nt.confirm != nil && nt.confirm.done && nt.confirm.failed) || p.Type == "BackForwardCacheRestore" || p.Frame.UnreachableURL != "" || strings.HasPrefix(p.Frame.URL, "chrome-error:") || protect.Inheriting(p.Frame.URL) || protect.Unparseable(p.Frame.URL) {
 			g.beginConfirmLocked(nt)
 		}
 		send = g.navEventLocked(nt, m)

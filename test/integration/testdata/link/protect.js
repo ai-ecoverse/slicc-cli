@@ -192,6 +192,29 @@ export function protectTest(getLink, describe) {
           dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
         };
       }),
+    inheritedDocumentSequence: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        const start = Date.now();
+        const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId);
+        await c.send('Browser.getBrowserCommandLine');
+        await committed;
+        const blank = await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId));
+        const consoleEvent = c.waitEvent((e) => e.method === 'Console.messageAdded' && e.sessionId === sessionId);
+        await c.send('Browser.getWindowBounds');
+        await consoleEvent;
+        return {
+          blank,
+          title: await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId)),
+          dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
+          shot: await outcome(c.send('Page.captureScreenshot', {}, sessionId)),
+          ms: Date.now() - start,
+          scripts: c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId).length,
+          styles: c.events.filter((e) => e.method === 'CSS.styleSheetAdded' && e.sessionId === sessionId).length,
+        };
+      }),
     ordinaryDocumentSequence: (browser, reload) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
