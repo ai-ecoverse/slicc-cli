@@ -180,6 +180,18 @@ export function protectTest(getLink, describe) {
         c.resume();
         return { enable: await enable, flood: (await flood).ok };
       }),
+    subtargetStateSequence: (browser) =>
+      run(browser, async (c) => {
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        const attached = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'CHILD');
+        await c.send('Browser.getBrowserCommandLine');
+        const { params: { sessionId } } = await attached;
+        return {
+          title: await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId)),
+          data: await outcome(c.send('Runtime.evaluate', { expression: 'loadTimeData.data_' }, sessionId)),
+          dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
+        };
+      }),
     documentStateSequence: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
