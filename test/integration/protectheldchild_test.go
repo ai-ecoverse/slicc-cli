@@ -168,6 +168,7 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 		FrameTree struct {
 			ChildFrames []struct {
 				Frame struct {
+					ID             string `json:"id"`
 					URL            string `json:"url"`
 					UnreachableURL string `json:"unreachableUrl"`
 				} `json:"frame"`
@@ -175,7 +176,21 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 		} `json:"frameTree"`
 	}
 	err := top.session.Call(ctx, "Page.getFrameTree", nil, &snapshot)
-	committed := err == nil && len(snapshot.FrameTree.ChildFrames) == 1 && snapshot.FrameTree.ChildFrames[0].Frame.URL == "chrome-error://chromewebdata/" && snapshot.FrameTree.ChildFrames[0].Frame.UnreachableURL == protected+"/child"
+	var childSnapshot struct {
+		FrameTree struct {
+			Frame struct {
+				URL            string `json:"url"`
+				UnreachableURL string `json:"unreachableUrl"`
+			} `json:"frame"`
+		} `json:"frameTree"`
+	}
+	childSession, childErr := b.client.Attach(ctx, frame)
+	if childErr == nil {
+		childErr = childSession.Call(ctx, "Page.getFrameTree", nil, &childSnapshot)
+		_ = childSession.Detach(ctx)
+	}
+	committed := err == nil && childErr == nil && len(snapshot.FrameTree.ChildFrames) == 1 && snapshot.FrameTree.ChildFrames[0].Frame.ID == frame && childSnapshot.FrameTree.Frame.URL == "chrome-error://chromewebdata/" && childSnapshot.FrameTree.Frame.UnreachableURL == protected+"/child"
+	t.Logf("native snapshots parentChildren=%d childError=%t childFailedURL=%t", len(snapshot.FrameTree.ChildFrames), childSnapshot.FrameTree.Frame.URL == "chrome-error://chromewebdata/", childSnapshot.FrameTree.Frame.UnreachableURL == protected+"/child")
 	env.p.eval("window.heldChildNativeContinue("+jsArgs(committed)+"); true", &started)
 	env.p.evalWithin("window.heldChildNativeWork", &result, 10*time.Second)
 	if driveErr != nil {
@@ -183,6 +198,9 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("native frame snapshot: %v", err)
+	}
+	if childErr != nil {
+		t.Errorf("native child snapshot: %v", childErr)
 	}
 	mu.Lock()
 	defer mu.Unlock()
