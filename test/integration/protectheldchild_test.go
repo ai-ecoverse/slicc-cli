@@ -26,12 +26,77 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 	port := fixture.URL[strings.LastIndexByte(fixture.URL, ':')+1:]
 	protected := "http://seven.protected.test:" + port
 	ordinary := "http://page.ordinary.test:" + port
-	b := launchBrowserOn(t, 0, "--site-per-process", "--host-resolver-rules=MAP *.test 127.0.0.1")
+	b := launchBrowserOn(t, 0, "--site-per-process", "--isolate-origins="+protected+","+ordinary, "--host-resolver-rules=MAP *.test 127.0.0.1")
+	observerCtx, observerCancel := context.WithTimeout(context.Background(), time.Minute)
+	defer observerCancel()
+	sub := b.client.Subscribe()
+	defer sub.Close()
+	observerErrors := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case <-observerCtx.Done():
+				return
+			case event, ok := <-sub.Events():
+				if !ok {
+					return
+				}
+				if event.Method != "Target.attachedToTarget" {
+					continue
+				}
+				var attached struct {
+					SessionID string `json:"sessionId"`
+					Waiting   bool   `json:"waitingForDebugger"`
+					Info      struct {
+						Type string `json:"type"`
+					} `json:"targetInfo"`
+				}
+				_ = json.Unmarshal(event.Params, &attached)
+				callCtx, callCancel := context.WithTimeout(observerCtx, 3*time.Second)
+				var err error
+				if attached.Waiting {
+					err = b.client.Call(callCtx, attached.SessionID, "Runtime.runIfWaitingForDebugger", nil, nil)
+				}
+				if err == nil && attached.Info.Type == "page" {
+					err = b.client.Call(callCtx, attached.SessionID, "Runtime.enable", nil, nil)
+					if err == nil {
+						err = b.client.Call(callCtx, attached.SessionID, "Target.setAutoAttach", map[string]any{"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}, nil)
+					}
+				}
+				callCancel()
+				if err != nil && observerCtx.Err() == nil {
+					select {
+					case observerErrors <- err:
+					default:
+					}
+				}
+			}
+		}
+	}()
+	if err := b.client.Call(observerCtx, "", "Target.setAutoAttach", map[string]any{"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true, "filter": []any{map[string]any{"type": "service_worker", "exclude": true}, map[string]any{"type": "browser", "exclude": true}, map[string]any{"type": "tab", "exclude": true}, map[string]any{}}}, nil); err != nil {
+		t.Fatal(err)
+	}
 	control := b.openPage(t, ordinary+"/plain")
 	var loaded bool
 	control.evalWithin(`new Promise((resolve) => { const f = document.createElement('iframe'); f.onload = () => resolve(true); f.src = `+jsArgs(protected+"/child")+`; document.body.append(f); })`, &loaded, 10*time.Second)
 	if !loaded || protectedHits.Load() == 0 {
 		t.Fatal("raw cross-site child control did not load")
+	}
+	var targets struct {
+		Infos []struct {
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		} `json:"targetInfos"`
+	}
+	if err := b.client.Call(observerCtx, "", "Target.getTargets", map[string]any{"filter": []any{map[string]any{}}}, &targets); err != nil {
+		t.Fatal(err)
+	}
+	oopif := false
+	for _, info := range targets.Infos {
+		oopif = oopif || info.Type == "iframe" && info.URL == protected+"/child"
+	}
+	if !oopif {
+		t.Fatal("native fixture setup: the raw cross-site child is not an iframe target")
 	}
 	before := protectedHits.Load()
 	srv := pageServer(t)
@@ -143,7 +208,7 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 		t.Errorf("native two-session fixture not established: %v", waiting)
 	}
 	for _, event := range result.Events {
-		if strings.Contains(event, protected) {
+		if strings.Contains(event, protected+"/child") {
 			t.Errorf("native protected child information reached the client: %s", event)
 		}
 		for sid := range waiting {
@@ -151,6 +216,11 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 				t.Errorf("native hidden child session reached the client: %s", event)
 			}
 		}
+	}
+	select {
+	case err := <-observerErrors:
+		t.Errorf("native observer setup: %v", err)
+	default:
 	}
 	if !result.Committed {
 		t.Error("native child navigation did not commit its blocked error frame within the bound")
