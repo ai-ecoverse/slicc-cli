@@ -8,9 +8,13 @@ import (
 )
 
 func TestCDPDocumentSetupFailureSettlesImmediately(t *testing.T) {
-	for _, failure := range []string{"attach", "setup", "lost"} {
+	for _, failure := range []string{"attach", "setup", "lost", "limit"} {
 		t.Run(failure, func(t *testing.T) {
-			env, fake := setupFakeProtectEnv(t, guardBounds("10s", "60s"), func(_, _ string) fakeScript {
+			bounds, wait := guardBounds("10s", "60s"), 2000
+			if failure == "limit" {
+				bounds, wait = guardBounds("60s", "2s"), 8000
+			}
+			env, fake := setupFakeProtectEnv(t, bounds, func(_, _ string) fakeScript {
 				return func(method string, _ json.RawMessage) (string, []string) {
 					switch method {
 					case "Browser.getBrowserCommandLine":
@@ -32,11 +36,20 @@ func TestCDPDocumentSetupFailureSettlesImmediately(t *testing.T) {
 				}
 			})
 			fake.gate("Page.getFrameTree", "Browser.neverCalled")
+			if failure == "limit" {
+				fake.gate("Network.enable", "Browser.neverCalled")
+			}
 			var result struct {
 				cdpOutcome
 				MS int `json:"ms"`
 			}
-			env.evalJSON(t, "linkTest.protect.documentLifecycle('chrome-2', false, true)", &result)
+			env.evalJSON(t, fmt.Sprintf("linkTest.protect.documentLifecycle('chrome-2', false, true, %d)", wait), &result)
+			if failure == "limit" {
+				if want := "slicc: refused: slicc can't keep seven's origin out of this target: its guard wasn't ready in 2s"; !result.refused() || result.Error.Message != want {
+					t.Fatalf("guard bound during a pending confirmation: %+v, want %q", result, want)
+				}
+				return
+			}
 			if !result.refused() || result.MS > 1500 {
 				t.Fatalf("setup failure did not refuse promptly: %+v", result)
 			}
@@ -45,7 +58,7 @@ func TestCDPDocumentSetupFailureSettlesImmediately(t *testing.T) {
 }
 
 func TestCDPInheritedOpenerLifecycle(t *testing.T) {
-	for _, state := range []string{"ordinary", "ordinary-gone", "protected", "protected-child", "protected-gone", "unknown-frame", "untouched", "gone"} {
+	for _, state := range []string{"ordinary", "ordinary-gone", "protected", "protected-child", "protected-gone", "unknown-frame", "untouched", "gone", "opener-frame-gone"} {
 		t.Run(state, func(t *testing.T) {
 			env, fake := setupFakeProtect(t, func(seven, ordinary string) fakeScript {
 				base := guardWaitScript("{}")
@@ -73,10 +86,10 @@ func TestCDPInheritedOpenerLifecycle(t *testing.T) {
 						if state == "gone" {
 							events = append(events, `{"method":"Target.targetDestroyed","sessionId":"RELAY","params":{"targetId":"T1"}}`)
 						}
-						if state == "ordinary" || state == "ordinary-gone" || state == "protected" || state == "protected-child" || state == "protected-gone" {
+						if state == "ordinary" || state == "ordinary-gone" || state == "protected" || state == "protected-child" || state == "protected-gone" || state == "opener-frame-gone" {
 							events = append(events, `{"method":"Page.frameAttached","sessionId":"S1","params":{"frameId":"F1","parentFrameId":"T1"}}`)
 						}
-						if state == "ordinary" || state == "ordinary-gone" || state == "protected-child" || state == "protected-gone" {
+						if state == "ordinary" || state == "ordinary-gone" || state == "protected-child" || state == "protected-gone" || state == "opener-frame-gone" {
 							origin := ordinary
 							if state == "protected-child" || state == "protected-gone" {
 								origin = seven
@@ -93,7 +106,11 @@ func TestCDPInheritedOpenerLifecycle(t *testing.T) {
 							return `{"sessionId":"GUARD_POPUP"}`, nil
 						}
 					case "Browser.getWindowBounds":
-						events := []string{`{"method":"Page.frameNavigated","sessionId":"POPUP","params":{"frame":{"id":"T3","url":"about:blank","securityOrigin":"://"}}}`}
+						var events []string
+						if state == "opener-frame-gone" {
+							events = append(events, `{"method":"Target.targetDestroyed","sessionId":"RELAY","params":{"targetId":"T1"}}`)
+						}
+						events = append(events, `{"method":"Page.frameNavigated","sessionId":"POPUP","params":{"frame":{"id":"T3","url":"about:blank","securityOrigin":"://"}}}`)
 						if state == "ordinary-gone" || state == "protected-gone" {
 							events = append(events, `{"method":"Runtime.executionContextDestroyed","sessionId":"S1","params":{"executionContextId":42,"executionContextUniqueId":"opener-child"}}`)
 						}
@@ -120,6 +137,9 @@ func TestCDPInheritedOpenerLifecycle(t *testing.T) {
 			}
 			if (state == "untouched" && !strings.Contains(result.Error.Message, "unknown opener")) || (state == "gone" && !strings.Contains(result.Error.Message, "gone opener")) {
 				t.Fatalf("opener diagnostic: %+v", result)
+			}
+			if want := "slicc: refused: slicc can't keep seven's origin out of this target: inherited document has a gone opener or parent"; state == "opener-frame-gone" && result.Error.Message != want {
+				t.Fatalf("gone owner of an in-process opener frame: %+v, want %q", result, want)
 			}
 			for _, raw := range fake.received() {
 				var m struct {
