@@ -56,7 +56,14 @@ func (g *guard) iframeProtectedLocked(id string) bool {
 		if t.gone || t.typ != "iframe" || t.ctx != page.ctx || (!t.protected && !g.o.Loaded(t.url) && !g.framesProtectedLocked(t.id)) {
 			continue
 		}
+		g.bindIframeDocumentLocked(t)
+		if g.iframeDocumentInactiveLocked(t) {
+			continue
+		}
 		parent := g.iframePageLocked(t)
+		if parent == nil && t.framePage != nil && !t.framePage.gone {
+			parent = t.framePage
+		}
 		if parent == nil || parent == page {
 			return true
 		}
@@ -81,6 +88,7 @@ func (g *guard) frameEventLocked(m *message) {
 		Frame   struct {
 			ID       string `json:"id"`
 			ParentID string `json:"parentId"`
+			LoaderID string `json:"loaderId"`
 		} `json:"frame"`
 	}
 	if json.Unmarshal(m.Params, &p) != nil {
@@ -97,6 +105,10 @@ func (g *guard) frameEventLocked(m *message) {
 		if len(g.frames[id]) < g.maxWorlds {
 			g.frames[id][p.FrameID] = true
 		}
+		if t := g.targets[p.FrameID]; t != nil {
+			t.frameOwner = nil
+			t.frameDocument = ""
+		}
 	case "Page.frameDetached":
 		delete(g.frames[id], p.FrameID)
 		if p.Reason == "remove" {
@@ -105,6 +117,9 @@ func (g *guard) frameEventLocked(m *message) {
 	case "Page.frameNavigated":
 		g.clearBlockedChildrenLocked(p.Frame.ID)
 		if p.Frame.ID == id && p.Frame.ParentID == "" {
+			if page := g.targets[id]; page != nil && page.typ == "page" {
+				g.rootDocumentLocked(page, p.Frame.LoaderID)
+			}
 			delete(g.frames, id)
 		}
 	}

@@ -556,6 +556,7 @@ globalThis.linkTest = {
   stickyAdmission: (opts) => import('./sticky.js').then((m) => m.stickyAdmissionProof(() => state.link, opts)),
   clientResource: (opts) => import('./client-resource.js').then((m) => m.clientResourceRow(() => state.link, opts)),
   resourceBlock: (opts) => import('./resource-block.js').then((m) => m.resourceBlockRow(() => state.link, opts)),
+  frameGeneration: (opts) => import('./framegeneration.js').then((m) => m.measureFrameGeneration(() => state.link, opts)),
   compoundFrames: (opts) => import('./compoundframes.js').then((m) => m.measureCompoundFrames(() => state.link, opts)),
   paint: (opts) => import('./paint.js').then((m) => m.measurePaint(() => state.link, opts)),
   sticky: (opts) => import('./sticky.js').then((m) => m.measureSticky(() => state.link, opts)),

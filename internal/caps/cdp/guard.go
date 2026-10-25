@@ -56,15 +56,20 @@ type relayCall struct {
 }
 
 type target struct {
-	id          string
-	typ         string
-	url         string
-	opener      string
-	parentFrame string
-	openerFrame string
-	ctx         string
-	protected   bool
-	gone        bool
+	id               string
+	typ              string
+	url              string
+	opener           string
+	parentFrame      string
+	openerFrame      string
+	ctx              string
+	protected        bool
+	gone             bool
+	document         string
+	documentRevision uint64
+	framePage        *target
+	frameDocument    string
+	frameOwner       *frameOwnership
 }
 
 type session struct {
@@ -358,6 +363,7 @@ func (g *guard) record(info targetInfo) *target {
 		nt.revision++
 	}
 	if t.url != info.URL {
+		t.frameOwner = nil
 		delete(g.frameProbeAttempts, t.id)
 		delete(g.frameProbed, t.id)
 		delete(g.frames, t.id)
@@ -370,8 +376,12 @@ func (g *guard) record(info targetInfo) *target {
 			}
 		}
 	}
+	if t.parentFrame != info.ParentFrameID || t.ctx != info.BrowserContextID {
+		t.framePage, t.frameDocument, t.frameOwner = nil, "", nil
+	}
 	t.parentFrame = info.ParentFrameID
 	t.typ, t.url, t.opener, t.openerFrame, t.ctx = info.Type, info.URL, info.OpenerID, info.OpenerFrameID, info.BrowserContextID
+	g.bindIframeDocumentLocked(t)
 	return t
 }
 

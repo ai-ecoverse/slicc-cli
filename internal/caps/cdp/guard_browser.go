@@ -37,6 +37,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		}
 		if recheck {
 			verdict.send = append(verdict.send, g.probeFrameParentsLocked()...)
+			verdict.send = append(verdict.send, g.probeIframeOwnersLocked()...)
 			verdict.send = append(verdict.send, g.cutFrameCastsLocked()...)
 		}
 	}()

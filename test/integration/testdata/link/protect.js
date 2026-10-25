@@ -245,6 +245,35 @@ export function protectTest(getLink, describe) {
           styles: c.events.filter((e) => e.method === 'CSS.styleSheetAdded' && e.sessionId === sessionId).length,
         };
       }),
+    frameGenerationSequence: (browser, mode) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        const barrier = async (method) => {
+          await c.send(method);
+          await c.send('Browser.getVersion');
+        };
+        const reads = async () => {
+          const results = [];
+          for (const [method, params] of [
+            ['Page.getFrameTree', {}],
+            ['DOM.getDocument', {}],
+            ['Page.captureScreenshot', {}],
+            ['Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 }],
+          ]) results.push(await outcome(c.send(method, params, sessionId)));
+          return results;
+        };
+        await barrier('Browser.getBrowserCommandLine');
+        const before = await reads();
+        if (!['known', 'absent', 'pending'].includes(mode)) return { before };
+        const start = Date.now();
+        await barrier('Browser.getWindowBounds');
+        const next = await reads();
+        await barrier('Browser.getWindowForTarget');
+        const back = await reads();
+        return { before, next, back, ms: Date.now() - start };
+      }),
     ordinaryDocumentSequence: (browser, reload) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
