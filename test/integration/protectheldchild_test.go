@@ -166,6 +166,9 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 	defer cancel()
 	var snapshot struct {
 		FrameTree struct {
+			Frame struct {
+				ID string `json:"id"`
+			} `json:"frame"`
 			ChildFrames []struct {
 				Frame struct {
 					ID             string `json:"id"`
@@ -179,6 +182,8 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 	var childSnapshot struct {
 		FrameTree struct {
 			Frame struct {
+				ID             string `json:"id"`
+				ParentID       string `json:"parentId"`
 				URL            string `json:"url"`
 				UnreachableURL string `json:"unreachableUrl"`
 			} `json:"frame"`
@@ -189,8 +194,8 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 		childErr = childSession.Call(ctx, "Page.getFrameTree", nil, &childSnapshot)
 		_ = childSession.Detach(ctx)
 	}
-	committed := err == nil && childErr == nil && len(snapshot.FrameTree.ChildFrames) == 1 && snapshot.FrameTree.ChildFrames[0].Frame.ID == frame && childSnapshot.FrameTree.Frame.URL == "chrome-error://chromewebdata/" && childSnapshot.FrameTree.Frame.UnreachableURL == protected+"/child"
-	t.Logf("native snapshots parentChildren=%d childError=%t childFailedURL=%t", len(snapshot.FrameTree.ChildFrames), childSnapshot.FrameTree.Frame.URL == "chrome-error://chromewebdata/", childSnapshot.FrameTree.Frame.UnreachableURL == protected+"/child")
+	committed := err == nil && childErr == nil && snapshot.FrameTree.Frame.ID == top.target && childSnapshot.FrameTree.Frame.ID == frame && childSnapshot.FrameTree.Frame.ParentID == top.target && childSnapshot.FrameTree.Frame.URL == "chrome-error://chromewebdata/" && childSnapshot.FrameTree.Frame.UnreachableURL == protected+"/child"
+	t.Logf("native snapshots parentChildren=%d childID=%t childParent=%t childError=%t childFailedURL=%t", len(snapshot.FrameTree.ChildFrames), childSnapshot.FrameTree.Frame.ID == frame, childSnapshot.FrameTree.Frame.ParentID == top.target, childSnapshot.FrameTree.Frame.URL == "chrome-error://chromewebdata/", childSnapshot.FrameTree.Frame.UnreachableURL == protected+"/child")
 	env.p.eval("window.heldChildNativeContinue("+jsArgs(committed)+"); true", &started)
 	env.p.evalWithin("window.heldChildNativeWork", &result, 10*time.Second)
 	if driveErr != nil {
