@@ -145,7 +145,6 @@ type guard struct {
 	maxWorlds          int
 	casting            map[string]bool
 	castCut            map[string]bool
-	debuggerPauses     map[string]*heldDebuggerPause
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -204,7 +203,6 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		commitMarks:        map[callKey]commitMark{},
 		casting:            map[string]bool{},
 		castCut:            map[string]bool{},
-		debuggerPauses:     map[string]*heldDebuggerPause{},
 		maxWorlds:          maxWorlds,
 		bounds:             boundsFromEnv(),
 	}
@@ -457,7 +455,6 @@ func (g *guard) destroyedLocked(id string) {
 }
 
 func (g *guard) forgetSessionLocked(id string) {
-	delete(g.debuggerPauses, id)
 	g.goneLocked(id)
 	g.forgetWorldSessionLocked(id)
 	g.forgetCastLocked(id)

@@ -8,15 +8,14 @@ import (
 )
 
 type browserVerdict struct {
-	forward  []byte
-	page     [][]byte
-	send     [][]byte
-	hold     []string
-	extra    []requestKey
-	answers  []callKey
-	pauses   []requestKey
-	debugger []*heldDebuggerPause
-	lost     bool
+	forward []byte
+	page    [][]byte
+	send    [][]byte
+	hold    []string
+	extra   []requestKey
+	answers []callKey
+	pauses  []requestKey
+	lost    bool
 }
 
 func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
@@ -27,7 +26,6 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	defer g.flushDebuggerPausesLocked(&verdict)
 	defer g.resolveUnknownLocked()
 	g.frameEventLocked(&m)
 	defer func() {
@@ -61,7 +59,8 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		case "Debugger.scriptParsed", "Debugger.scriptFailedToParse":
 			g.scriptEvent(&m, data)
 		case "Debugger.paused":
-			return g.holdDebuggerPauseLocked(&m, data)
+			msg, _ := g.newCallLocked(m.SessionID, "Debugger.resume", nil, false)
+			return browserVerdict{send: [][]byte{msg}}
 		}
 		return browserVerdict{}
 	}
@@ -393,10 +392,13 @@ func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {
 
 func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	var p struct {
+		Type  string `json:"type"`
 		Frame struct {
 			ID             string `json:"id"`
 			ParentID       string `json:"parentId"`
 			SecurityOrigin string `json:"securityOrigin"`
+			URL            string `json:"url"`
+			UnreachableURL string `json:"unreachableUrl"`
 		} `json:"frame"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
@@ -409,7 +411,9 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	}
 	var send [][]byte
 	if nt := g.navTargets[t.id]; nt != nil {
-		g.beginConfirmLocked(nt)
+		if p.Type == "BackForwardCacheRestore" || p.Frame.UnreachableURL != "" || strings.HasPrefix(p.Frame.URL, "chrome-error:") || protect.Inheriting(p.Frame.URL) || protect.Unparseable(p.Frame.URL) {
+			g.beginConfirmLocked(nt)
+		}
 		send = g.navEventLocked(nt, m)
 	}
 	return browserVerdict{forward: data, send: send}

@@ -210,6 +210,8 @@ export function protectTest(getLink, describe) {
           shot: await outcome(c.send('Page.captureScreenshot', {}, sessionId)),
           ms: Date.now() - start,
           loaded: Boolean(loaded),
+          scripts: c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId).length,
+          styles: c.events.filter((e) => e.method === 'CSS.styleSheetAdded' && e.sessionId === sessionId).length,
           pauses: c.events.filter((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId).length,
         };
       }),
