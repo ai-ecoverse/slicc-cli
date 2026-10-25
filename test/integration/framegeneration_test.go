@@ -3,9 +3,75 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestCDPNativeLateAttachedFrozenIframe(t *testing.T) {
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, port, _ := strings.Cut(r.Host, ":")
+		if r.URL.Path == "/framed" {
+			_, _ = fmt.Fprintf(w, `<!doctype html><body><iframe src="http://seven.guard.test:%s/child"></iframe>`, port)
+		} else {
+			_, _ = fmt.Fprint(w, `<!doctype html><body><p>fixture</p>`)
+		}
+	}))
+	t.Cleanup(fixture.Close)
+	port := fixture.URL[strings.LastIndexByte(fixture.URL, ':')+1:]
+	ordinary := "http://ordinary.outer.test:" + port
+	protected := "http://seven.guard.test:" + port
+	srv := pageServer(t)
+	b := launchBrowserOn(t, 0, "--site-per-process", "--host-resolver-rules=MAP *.test 127.0.0.1")
+	gate := newGuardGate(t, b.endpoint, srv.URL)
+	env := &linkEnv{t: t, b: b, origin: srv.URL}
+	env.a = startAttach(t, "--cdp", gate.srv.URL, "--origin", srv.URL, "--origin", protected, "--name", "frame-generation-node")
+	env.p = b.openPage(t, srv.URL+"/index.html")
+	env.waitUp("")
+	var hello struct {
+		Browsers []helloBrowser `json:"browsers"`
+	}
+	env.p.eval("linkTest.ready()", &hello)
+	if len(hello.Browsers) != 1 {
+		t.Fatal("frame generation browser missing")
+	}
+	opts := map[string]any{"browser": hello.Browsers[0].ID, "ws": strings.Replace(gate.srv.URL, "http", "ws", 1) + "/browser", "ordinary": ordinary, "protected": protected}
+	var raw json.RawMessage
+	env.p.evalWithin("linkTest.frameGeneration("+jsArgs(opts)+")", &raw, time.Minute)
+	path := filepath.Join("..", "..", "artifacts", "frame-generation")
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "native.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("native ownership: %s", raw)
+	var row struct {
+		Tree          cdpOutcome   `json:"tree"`
+		DOM           cdpOutcome   `json:"dom"`
+		Shot          cdpOutcome   `json:"shot"`
+		Input         cdpOutcome   `json:"input"`
+		RestoredOwner cdpOutcome   `json:"restoredOwner"`
+		Back          []cdpOutcome `json:"back"`
+		MS            int          `json:"ms"`
+	}
+	if err := json.Unmarshal(raw, &row); err != nil {
+		t.Fatal(err)
+	}
+	if !row.Tree.OK || !row.DOM.OK || !row.Shot.OK || !row.Input.OK || !row.RestoredOwner.OK || row.MS >= 5000 || len(row.Back) != 4 {
+		t.Fatalf("ordinary/restore ownership: %s", raw)
+	}
+	for _, r := range row.Back {
+		if r.OK || !strings.Contains(r.Error.Message, "slicc: refused: target is on seven's origin") {
+			t.Errorf("restored document command escaped: %+v", r)
+		}
+	}
+}
 
 func TestCDPIframeProtectionFollowsRootDocument(t *testing.T) {
 	for _, mode := range []string{"known", "unknown"} {
