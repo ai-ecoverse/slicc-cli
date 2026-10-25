@@ -521,9 +521,11 @@ export function protectTest(getLink, describe) {
         const refused = await duplicate;
         const ordinary = await outcome(c.send('Browser.getHistograms'));
         await c.send('Browser.getBrowserCommandLine');
-        const replies = c.messages.map((m) => JSON.parse(m)).filter((m) => m.id === 77 && m.result);
+        const messages = c.messages.map((m) => JSON.parse(m));
+        const replies = messages.filter((m) => m.id === 77 && m.result && !m.sessionId);
+        const unmatched = messages.filter((m) => m.id === 88 || (m.id === 77 && m.sessionId)).length;
         await original;
-        return { reserved, duplicate: refused, original: { ok: replies.length === 1 }, ordinary };
+        return { reserved, duplicate: refused, original: { ok: replies.length === 1 }, ordinary, unmatched };
       }),
     historyCacheProof: (browser) =>
       run(browser, async (c) => {

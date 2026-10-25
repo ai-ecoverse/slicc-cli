@@ -59,16 +59,25 @@ func TestCDPCallBookkeeping(t *testing.T) {
 }
 
 func TestCDPClientCallBookkeeping(t *testing.T) {
-	env, fake := setupFakeProtect(t, func(string, string) fakeScript { return guardWaitScript("{}") })
+	env, fake := setupFakeProtect(t, func(string, string) fakeScript {
+		base := guardWaitScript("{}")
+		return func(method string, params json.RawMessage) (string, []string) {
+			if method == "Browser.getHistograms" {
+				return "{}", []string{`{"id":77,"sessionId":"OTHER","result":{}}`, `{"id":88,"result":{}}`}
+			}
+			return base(method, params)
+		}
+	})
 	fake.gate("Browser.getVersion", "Browser.getHistograms")
 	var result struct {
 		Reserved  cdpOutcome `json:"reserved"`
 		Duplicate cdpOutcome `json:"duplicate"`
 		Original  cdpOutcome `json:"original"`
 		Ordinary  cdpOutcome `json:"ordinary"`
+		Unmatched int        `json:"unmatched"`
 	}
 	env.evalJSON(t, "linkTest.protect.clientCallBookkeeping('chrome-2')", &result)
-	if !result.Reserved.refused() || !result.Duplicate.refused() || !result.Original.OK || !result.Ordinary.OK {
+	if !result.Reserved.refused() || !result.Duplicate.refused() || !result.Original.OK || !result.Ordinary.OK || result.Unmatched != 0 {
 		t.Fatalf("call outcomes: %+v", result)
 	}
 }
