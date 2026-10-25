@@ -53,10 +53,12 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		UnreachableURL string `json:"unreachableUrl"`
 	}
 	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
+		check.settle(true)
 		return nil
 	}
 	t := g.targets[nt.target]
 	if t == nil || t.gone {
+		check.settle(true)
 		return nil
 	}
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
@@ -64,14 +66,16 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		return g.markLocked(t)
 	}
 	if frame.SecurityOrigin == "" {
+		check.settle(true)
 		return nil
 	}
 	ev := protect.Evidence{DocumentURL: frame.URL, UnreachableURL: frame.UnreachableURL}
-	if protect.ErrorPage(frame.UnreachableURL, ev) && g.o.Loaded(frame.UnreachableURL) {
+	if protect.ErrorPage(frame.UnreachableURL, ev) && !protect.Inheriting(frame.UnreachableURL) {
 		check.settle(false)
 		return g.navEventLocked(nt, &message{Method: "Page.frameNavigated", Params: encode(map[string]any{"frame": result.FrameTree.Frame})})
 	}
 	if frame.URL == "" || protect.Inheriting(frame.URL) || protect.Unparseable(frame.URL) || frame.UnreachableURL != "" {
+		check.settle(true)
 		return nil
 	}
 	check.settle(false)

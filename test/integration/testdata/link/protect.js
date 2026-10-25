@@ -192,6 +192,26 @@ export function protectTest(getLink, describe) {
           dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
         };
       }),
+    ordinaryDocumentSequence: (browser, reload) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        const loaded = reload ? c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 5000) : null;
+        const start = Date.now();
+        await c.send('Browser.getBrowserCommandLine');
+        if (loaded) {
+          await loaded;
+          await c.send('Browser.getWindowBounds');
+        }
+        return {
+          title: await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, sessionId)),
+          dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
+          shot: await outcome(c.send('Page.captureScreenshot', {}, sessionId)),
+          ms: Date.now() - start,
+          loaded: Boolean(loaded),
+        };
+      }),
     documentStateSequence: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });

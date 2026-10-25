@@ -55,6 +55,13 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		return browserVerdict{}
 	}
 	if !errorPageEvent(m.Method) && (g.errorPageSessionLocked(m.SessionID) || g.sessionUnconfirmedLocked(m.SessionID)) {
+		switch m.Method {
+		case "Debugger.scriptParsed", "Debugger.scriptFailedToParse":
+			g.scriptEvent(&m, data)
+		case "Debugger.paused":
+			msg, _ := g.newCallLocked(m.SessionID, "Debugger.resume", nil, false)
+			return browserVerdict{send: [][]byte{msg}}
+		}
 		return browserVerdict{}
 	}
 	if h, ok := eventHandlers[m.Method]; ok {
