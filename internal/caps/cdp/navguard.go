@@ -76,6 +76,12 @@ type navTarget struct {
 }
 
 func (nt *navTarget) settle(failed bool) {
+	if failed {
+		nt.failed = true
+		if nt.confirm != nil {
+			nt.confirm.settle(true)
+		}
+	}
 	if nt.done {
 		return
 	}
@@ -308,7 +314,7 @@ func (g *guard) navCheckLocked(sessionID string) string {
 	}
 	nt, ok := g.navTargets[s.target]
 	if ok && nt.confirm != nil && (!nt.confirm.done || nt.confirm.failed) {
-		return refusedGuard
+		return g.confirmReasonLocked(nt)
 	}
 	switch {
 	case ok && nt.done && !nt.failed:
