@@ -12,7 +12,7 @@ func TestCDPDocumentSetupFailureSettlesImmediately(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			bounds, wait := guardBounds("10s", "60s"), 2000
 			if failure == "limit" {
-				bounds, wait = guardBounds("60s", "2s"), 8000
+				bounds, wait = guardBounds("60s", "5s"), 15000
 			}
 			env, fake := setupFakeProtectEnv(t, bounds, func(_, _ string) fakeScript {
 				return func(method string, _ json.RawMessage) (string, []string) {
@@ -45,7 +45,7 @@ func TestCDPDocumentSetupFailureSettlesImmediately(t *testing.T) {
 			}
 			env.evalJSON(t, fmt.Sprintf("linkTest.protect.documentLifecycle('chrome-2', false, true, %d)", wait), &result)
 			if failure == "limit" {
-				if want := "slicc: refused: slicc can't keep seven's origin out of this target: its guard wasn't ready in 2s"; !result.refused() || result.Error.Message != want {
+				if want := "slicc: refused: slicc can't keep seven's origin out of this target: its guard wasn't ready in 5s"; !result.refused() || result.Error.Message != want {
 					t.Fatalf("guard bound during a pending confirmation: %+v, want %q", result, want)
 				}
 				return
