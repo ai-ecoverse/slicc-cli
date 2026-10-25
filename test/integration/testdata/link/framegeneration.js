@@ -10,14 +10,12 @@ export async function measureFrameGeneration(getLink, opts) {
     const { sessionId: observer } = await reader.send('Target.attachToTarget', { targetId, flatten: true });
     await reader.send('Page.enable', {}, observer);
     await reader.send('Target.activateTarget', { targetId });
-    let observed;
-    const old = await until(async () => {
-      const tree = (await reader.send('Page.getFrameTree', {}, observer)).frameTree;
-      observed = tree;
-      return tree.childFrames?.some((f) => f.frame.url === opts.protected + '/child') && tree;
-    }, 'protected OOPIF document').catch((e) => { throw new Error(`${e.message}: ${JSON.stringify(observed)}`); });
-    const child = old.childFrames.find((f) => f.frame.url === opts.protected + '/child').frame.id;
-    const info = (await reader.send('Target.getTargetInfo', { targetId: child })).targetInfo;
+    const info = await until(async () => {
+      const { targetInfos } = await reader.send('Target.getTargets', { filter: [{}] });
+      return targetInfos.find((t) => t.type === 'iframe' && t.url === opts.protected + '/child' && t.parentFrameId === targetId);
+    }, 'protected OOPIF target');
+    const child = info.targetId;
+    const old = (await reader.send('Page.getFrameTree', {}, observer)).frameTree;
     const owned = await outcome(reader.send('DOM.getFrameOwner', { frameId: child }, observer));
     if (info.type !== 'iframe' || info.parentFrameId !== targetId || !owned.ok || !owned.result.backendNodeId) throw new Error('current protected OOPIF ownership missing');
     await until(async () => await evaluate(reader, observer, 'document.readyState') === 'complete', 'framed document loaded');
@@ -45,8 +43,10 @@ export async function measureFrameGeneration(getLink, opts) {
     const shot = await outcome(client.send('Page.captureScreenshot', {}, sessionId));
     const input = await outcome(client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 }, sessionId));
     const ms = Date.now() - start;
-    const committed = reader.waitEvent((e) => e.sessionId === observer && e.method === 'Page.frameNavigated' && e.params.frame.id === targetId);
-    const relayCommit = client.waitEvent((e) => e.sessionId === sessionId && e.method === 'Page.frameNavigated' && e.params.frame.id === targetId);
+    const rawStart = reader.events.length;
+    const relayStart = client.events.length;
+    const committed = reader.waitEvent((e) => reader.events.indexOf(e) >= rawStart && e.sessionId === observer && e.method === 'Page.frameNavigated' && e.params.frame.id === targetId);
+    const relayCommit = client.waitEvent((e) => client.events.indexOf(e) >= relayStart && e.sessionId === sessionId && e.method === 'Page.frameNavigated' && e.params.frame.id === targetId);
     await reader.send('Page.navigateToHistoryEntry', { entryId: entry.id }, observer);
     const restore = await committed;
     await relayCommit;
