@@ -97,14 +97,20 @@ func inheritedDocument(url, unreachable string) bool {
 
 func (g *guard) ordinaryFrameParentLocked(t *target, parentID string) bool {
 	if parentID == "" {
-		return t.typ != "iframe"
+		if t.typ == "iframe" {
+			return false
+		}
+		parentID = t.opener
+		if parentID == "" {
+			return true
+		}
 	}
 	parent := g.targets[parentID]
 	if parent == nil || parent.gone || parent.protected || g.decide(parent, parent.protected) || g.targetUnconfirmedLocked(parentID) {
 		return false
 	}
 	nt := g.navTargets[parentID]
-	return nt == nil || (!nt.failed && !nt.historyLocked)
+	return nt != nil && nt.done && !nt.failed && !nt.historyLocked
 }
 
 func (g *guard) targetReasonLocked(id string) string {

@@ -192,6 +192,21 @@ export function protectTest(getLink, describe) {
           dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
         };
       }),
+    inheritedParentSequence: (browser) =>
+      run(browser, async (c) => {
+        await c.send('Target.createTarget', { url: 'about:blank' });
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        const attached = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'CHILD');
+        await c.send('Browser.getBrowserCommandLine');
+        await attached;
+        await c.send('Page.enable', {}, 'CHILD');
+        const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === 'CHILD');
+        await c.send('Browser.getWindowBounds');
+        await committed;
+        const title = await outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, 'CHILD'));
+        await c.send('Browser.getWindowForTarget');
+        return title;
+      }),
     inheritedDocumentSequence: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
