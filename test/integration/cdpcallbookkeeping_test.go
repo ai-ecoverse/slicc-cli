@@ -31,7 +31,7 @@ func TestCDPCallBookkeeping(t *testing.T) {
 					probe.ID, probe.SessionID = m.ID, m.SessionID
 				}
 			}
-			if probe.ID < 1<<30 || probe.SessionID == "" {
+			if probe.ID < 0x70000000 || probe.SessionID == "" {
 				t.Fatalf("missing call: %+v", probe)
 			}
 			env.p.eval("window.callFinish("+jsArgs(probe.ID, reuse)+"); true", &value)
@@ -70,14 +70,15 @@ func TestCDPClientCallBookkeeping(t *testing.T) {
 	})
 	fake.gate("Browser.getVersion", "Browser.getHistograms")
 	var result struct {
-		Reserved  cdpOutcome `json:"reserved"`
-		Duplicate cdpOutcome `json:"duplicate"`
-		Original  cdpOutcome `json:"original"`
-		Ordinary  cdpOutcome `json:"ordinary"`
-		Unmatched int        `json:"unmatched"`
+		Reserved      cdpOutcome `json:"reserved"`
+		AboveReserved cdpOutcome `json:"aboveReserved"`
+		Duplicate     cdpOutcome `json:"duplicate"`
+		Original      cdpOutcome `json:"original"`
+		Ordinary      cdpOutcome `json:"ordinary"`
+		Unmatched     int        `json:"unmatched"`
 	}
 	env.evalJSON(t, "linkTest.protect.clientCallBookkeeping('chrome-2')", &result)
-	if !result.Reserved.refused() || !result.Duplicate.refused() || !result.Original.OK || !result.Ordinary.OK || result.Unmatched != 0 {
+	if !result.Reserved.refused() || !result.AboveReserved.refused() || !result.Duplicate.refused() || !result.Original.OK || !result.Ordinary.OK || result.Unmatched != 0 {
 		t.Fatalf("call outcomes: %+v", result)
 	}
 }

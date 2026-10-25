@@ -83,7 +83,7 @@ func historyLagProxy(t *testing.T, endpoint string) (*httptest.Server, *historyL
 						Method string `json:"method"`
 					}
 					if json.Unmarshal(data, &m) == nil {
-						if m.ID < 1<<30 {
+						if m.ID < 0x70000000 {
 							lag.mu.Lock()
 							lag.forwarded = append(lag.forwarded, m.Method)
 							lag.mu.Unlock()

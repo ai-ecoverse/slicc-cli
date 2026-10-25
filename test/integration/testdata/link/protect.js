@@ -626,7 +626,8 @@ export function protectTest(getLink, describe) {
     clientCallBookkeeping: (browser) =>
       run(browser, async (c) => {
         const raw = (id, method) => JSON.stringify({ id, method });
-        const reserved = await outcome(c.sendRaw(2 ** 30, raw(2 ** 30, 'Browser.getBrowserCommandLine')));
+        const reserved = await outcome(c.sendRaw(0x70000000, raw(0x70000000, 'Browser.getBrowserCommandLine')));
+        const aboveReserved = await outcome(c.sendRaw(0x70000001, raw(0x70000001, 'Browser.getBrowserCommandLine')));
         const original = outcome(c.sendRaw(77, raw(77, 'Browser.getVersion')));
         const duplicate = new Promise((resolve) => {
           const off = c.onMessage((text) => {
@@ -645,7 +646,7 @@ export function protectTest(getLink, describe) {
         const replies = messages.filter((m) => m.id === 77 && m.result && !m.sessionId);
         const unmatched = messages.filter((m) => m.id === 88 || (m.id === 77 && m.sessionId)).length;
         await original;
-        return { reserved, duplicate: refused, original: { ok: replies.length === 1 }, ordinary, unmatched };
+        return { reserved, aboveReserved, duplicate: refused, original: { ok: replies.length === 1 }, ordinary, unmatched };
       }),
     historyCacheProof: (browser) =>
       run(browser, async (c) => {
