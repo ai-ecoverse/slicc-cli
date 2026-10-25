@@ -22,7 +22,7 @@ func TestCDPInheritedDocumentSequencing(t *testing.T) {
 					`{"method":"Page.frameNavigated","sessionId":"S2","params":{"type":"Navigation","frame":` + plain + `}}`,
 					fmt.Sprintf(`{"method":"Debugger.scriptParsed","sessionId":"S2","params":{"scriptId":"fixture","url":%q,"executionContextId":1}}`, ordinary+"/fixture.js"),
 					fmt.Sprintf(`{"method":"CSS.styleSheetAdded","sessionId":"S2","params":{"header":{"styleSheetId":"fixture","sourceURL":%q}}}`, ordinary+"/fixture.css"),
-					`{"method":"Console.messageAdded","sessionId":"S2","params":{"message":{"source":"console-api","level":"log","text":"fixture"}}}`,
+					fmt.Sprintf(`{"method":"Console.messageAdded","sessionId":"S2","params":{"message":{"source":"console-api","level":"log","text":"fixture","url":%q}}}`, ordinary+"/fixture.js"),
 				}
 			case "Page.getFrameTree":
 				return `{"frameTree":{"frame":` + frame + `}}`, nil
