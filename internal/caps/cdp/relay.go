@@ -246,6 +246,7 @@ func (rl *relay) toPage() {
 		for _, k := range v.pauses {
 			rl.expirePauseLater(k)
 		}
+		rl.expireDebuggersLater(v.debugger)
 		if v.forward != nil {
 			v.page = append([][]byte{v.forward}, v.page...)
 		}
@@ -284,6 +285,20 @@ func (rl *relay) readBrowser(ctx context.Context) (websocket.MessageType, []byte
 	typ, data, err := rl.conn.Read(ctx)
 	rl.g.reads.left(time.Now())
 	return typ, data, err
+}
+
+func (rl *relay) expireDebuggersLater(pauses []*heldDebuggerPause) {
+	for _, h := range pauses {
+		rl.expireDebuggerLater(h)
+	}
+}
+
+func (rl *relay) expireDebuggerLater(h *heldDebuggerPause) {
+	time.AfterFunc(HistoryTimeout, func() {
+		if msg := rl.g.expireDebuggerPause(h); msg != nil {
+			_ = rl.conn.Write(context.Background(), websocket.MessageText, msg)
+		}
+	})
 }
 
 func (rl *relay) expireLater(sessionID string) {

@@ -8,14 +8,15 @@ import (
 )
 
 type browserVerdict struct {
-	forward []byte
-	page    [][]byte
-	send    [][]byte
-	hold    []string
-	extra   []requestKey
-	answers []callKey
-	pauses  []requestKey
-	lost    bool
+	forward  []byte
+	page     [][]byte
+	send     [][]byte
+	hold     []string
+	extra    []requestKey
+	answers  []callKey
+	pauses   []requestKey
+	debugger []*heldDebuggerPause
+	lost     bool
 }
 
 func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
@@ -26,6 +27,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	defer g.flushDebuggerPausesLocked(&verdict)
 	defer g.resolveUnknownLocked()
 	g.frameEventLocked(&m)
 	defer func() {
@@ -59,8 +61,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		case "Debugger.scriptParsed", "Debugger.scriptFailedToParse":
 			g.scriptEvent(&m, data)
 		case "Debugger.paused":
-			msg, _ := g.newCallLocked(m.SessionID, "Debugger.resume", nil, false)
-			return browserVerdict{send: [][]byte{msg}}
+			return g.holdDebuggerPauseLocked(&m, data)
 		}
 		return browserVerdict{}
 	}

@@ -21,6 +21,9 @@ func TestCDPOrdinaryDocumentConfirmation(t *testing.T) {
 						events := []string{`{"method":"Page.frameNavigated","sessionId":"S2","params":{"frame":` + frame + `}}`}
 						if reload {
 							events = append(events,
+								`{"method":"Runtime.executionContextCreated","sessionId":"S2","params":{"context":{"id":2,"origin":"chrome-extension://fixture","name":"fixture","auxData":{"isDefault":false,"type":"isolated","frameId":"T1"}}}}`,
+								`{"method":"Debugger.scriptParsed","sessionId":"S2","params":{"scriptId":"hidden","executionContextId":2}}`,
+								`{"method":"Debugger.paused","sessionId":"S2","params":{"callFrames":[{"callFrameId":"hidden","location":{"scriptId":"hidden"}}]}}`,
 								`{"method":"Debugger.scriptParsed","sessionId":"S2","params":{"scriptId":"fixture","executionContextId":1}}`,
 								`{"method":"Debugger.paused","sessionId":"S2","params":{"callFrames":[{"callFrameId":"fixture","location":{"scriptId":"fixture"}}]}}`,
 								`{"method":"Page.loadEventFired","sessionId":"S2","params":{"timestamp":1}}`)
@@ -47,10 +50,14 @@ func TestCDPOrdinaryDocumentConfirmation(t *testing.T) {
 				Shot   cdpOutcome `json:"shot"`
 				MS     int        `json:"ms"`
 				Loaded bool       `json:"loaded"`
+				Pauses int        `json:"pauses"`
 			}
 			env.evalJSON(t, fmt.Sprintf("linkTest.protect.ordinaryDocumentSequence('chrome-2', %t)", reload), &result)
 			if !result.Title.OK || !result.DOM.OK || !result.Shot.OK || result.MS >= 5000 || result.Loaded != reload {
 				t.Fatalf("ordinary document confirmation: %+v", result)
+			}
+			if reload && result.Pauses != 1 {
+				t.Fatalf("ordinary debugger pause was lost or hidden pause exposed: %+v", result)
 			}
 			resumed := false
 			for _, raw := range fake.received() {
