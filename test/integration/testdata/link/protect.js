@@ -890,6 +890,17 @@ export function protectTest(getLink, describe) {
         await outcome(c.send('Target.detachFromTarget', { sessionId: h.sessionId }));
         return out;
       }),
+    heldChild: (browser, page) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(page);
+        const second = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Fetch.enable', { patterns: [{ resourceType: 'Document' }] }, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true, filter: [{ type: 'iframe' }, { exclude: true }] }, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, second.sessionId);
+        const done = c.waitEvent((e) => e.method === 'Runtime.consoleAPICalled' && e.params.args?.[0]?.value === 'settled-child', 2000).then(() => true, () => false);
+        await c.send('Browser.getBrowserCommandLine');
+        return { completed: await done, events: c.events.map((e) => JSON.stringify(e)) };
+      }),
     navHang: (browser, opener, hang, wait) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(opener);
