@@ -119,6 +119,11 @@ func (g *guard) inheritedParentLocked(t *target, parentID string) *target {
 
 func (g *guard) frameParentReasonLocked(t *target, parentID string) string {
 	parent := g.inheritedParentLocked(t, parentID)
+	if parent == nil && t.openerFrame != "" && inheritedParentID(t, parentID) == t.openerFrame {
+		if opener := g.targets[t.opener]; opener != nil && opener.gone {
+			parent = opener
+		}
+	}
 	if parent != nil && parent.gone {
 		return "inherited document has a gone opener or parent"
 	}
