@@ -589,6 +589,24 @@ export function protectTest(getLink, describe) {
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
         return { before, probes, stuck, attaches, leaked, detached, after, reattach, close };
       }),
+    biosGuardIDs: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        let id = 2 ** 30;
+        const send = (method, params = {}, sessionId) => {
+          const next = id++;
+          return outcome(c.sendRaw(next, JSON.stringify({ id: next, method, params, sessionId })));
+        };
+        const attach = await send('Target.attachToTarget', { targetId, flatten: true });
+        if (!attach.ok) return { attach };
+        const { sessionId } = attach.result;
+        const fetch = await send('Fetch.enable', {}, sessionId);
+        const tree = await send('Page.getFrameTree', {}, sessionId);
+        const plain = await send('Runtime.evaluate', { expression: '1', returnByValue: true }, sessionId);
+        id = 0x70000000 - 1;
+        const boundary = await send('Runtime.evaluate', { expression: '1', returnByValue: true }, sessionId);
+        return { attach, fetch, tree, plain, boundary };
+      }),
     callBookkeeping: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
