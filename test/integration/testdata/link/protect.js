@@ -1,4 +1,4 @@
-import { CdpClient } from './cdp.js';
+import { CdpClient, frameMessage } from './cdp.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -486,6 +486,46 @@ export function protectTest(getLink, describe) {
         await sleep(2000);
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
         return { before, probes, stuck, attaches, leaked, detached, after, reattach, close };
+      }),
+    callBookkeeping: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        window.callReady = true;
+        await new Promise((resolve) => { window.callStart = resolve; });
+        window.callHistory = await outcome(c.send('Page.navigateToHistoryEntry', { entryId: 8 }, sessionId));
+        const { id, reuse } = await new Promise((resolve) => { window.callFinish = (id, reuse) => resolve({ id, reuse }); });
+        let reserved;
+        if (reuse) reserved = await outcome(c.sendRaw(id, JSON.stringify({ id, method: 'Page.enable', sessionId })));
+        const ordinary = await outcome(c.send('Browser.getVersion'));
+        await c.send('Browser.getBrowserCommandLine');
+        window.callResult = { history: window.callHistory, reserved, ordinary, messages: c.messages.map((m) => JSON.parse(m)) };
+        return window.callResult;
+      }),
+    clientCallBookkeeping: (browser) =>
+      run(browser, async (c) => {
+        const raw = (id, method) => JSON.stringify({ id, method });
+        const reserved = await outcome(c.sendRaw(2 ** 30, raw(2 ** 30, 'Browser.getBrowserCommandLine')));
+        const original = outcome(c.sendRaw(77, raw(77, 'Browser.getVersion')));
+        const duplicate = new Promise((resolve) => {
+          const off = c.onMessage((text) => {
+            const m = JSON.parse(text);
+            if (m.id === 77 && m.error) {
+              off();
+              resolve({ ok: false, error: m.error });
+            }
+          });
+        });
+        await c.write(frameMessage(raw(77, 'Browser.getVersion')));
+        const refused = await duplicate;
+        const ordinary = await outcome(c.send('Browser.getHistograms'));
+        await c.send('Browser.getBrowserCommandLine');
+        const messages = c.messages.map((m) => JSON.parse(m));
+        const replies = messages.filter((m) => m.id === 77 && m.result && !m.sessionId);
+        const unmatched = messages.filter((m) => m.id === 88 || (m.id === 77 && m.sessionId)).length;
+        await original;
+        return { reserved, duplicate: refused, original: { ok: replies.length === 1 }, ordinary, unmatched };
       }),
     historyCacheProof: (browser) =>
       run(browser, async (c) => {

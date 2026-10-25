@@ -224,6 +224,9 @@ var sessionSettingMethods = map[string]bool{
 var emulationMutators = regexp.MustCompile(`^Emulation\.(set|add|update|remove)[A-Z]`)
 
 func (g *guard) checkLocked(c *command) string {
+	if c.id >= relayIDBase {
+		return "id " + itoa(c.id) + " is reserved"
+	}
 	if c.method == "Network.continueInterceptedRequest" {
 		if reason := g.legacyMutationRule(c); reason != "" {
 			return reason

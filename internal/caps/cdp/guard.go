@@ -24,6 +24,8 @@ const (
 	maxRefused          = 4096
 	maxMarked           = 65536
 	relayIDBase         = 1 << 30
+	maxRetiredCalls     = 4096
+	retiredCallAge      = time.Minute
 )
 
 var refusedParse = strings.TrimPrefix(protect.UnparseableRefusal(), "slicc: refused: ")
@@ -92,6 +94,7 @@ type guard struct {
 	ownContexts        map[string]bool
 	pending            map[callKey]callKind
 	relayCalls         map[callKey]*relayCall
+	retiredCalls       map[callKey]time.Time
 	nextID             int64
 	marked             map[string]map[string]bool
 	markedCount        int
@@ -165,6 +168,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		ownContexts:        map[string]bool{},
 		pending:            map[callKey]callKind{},
 		relayCalls:         map[callKey]*relayCall{},
+		retiredCalls:       map[callKey]time.Time{},
 		nextID:             relayIDBase,
 		marked:             map[string]map[string]bool{},
 		saturated:          map[string]bool{},
@@ -283,8 +287,32 @@ func (g *guard) cancel(c *relayCall) {
 	for k, v := range g.relayCalls {
 		if v == c {
 			delete(g.relayCalls, k)
+			g.retireCallLocked(k, time.Now())
 		}
 	}
+}
+
+func (g *guard) expireRetiredLocked(now time.Time) {
+	for k, at := range g.retiredCalls {
+		if now.Sub(at) >= retiredCallAge {
+			delete(g.retiredCalls, k)
+		}
+	}
+}
+
+func (g *guard) retireCallLocked(k callKey, now time.Time) {
+	g.expireRetiredLocked(now)
+	if len(g.retiredCalls) >= maxRetiredCalls {
+		var oldest callKey
+		var at time.Time
+		for key, retired := range g.retiredCalls {
+			if at.IsZero() || retired.Before(at) {
+				oldest, at = key, retired
+			}
+		}
+		delete(g.retiredCalls, oldest)
+	}
+	g.retiredCalls[k] = now
 }
 
 func (g *guard) setRelaySession(id string) {

@@ -3,6 +3,7 @@ package cdp
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
@@ -68,6 +69,16 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	return browserVerdict{forward: data}
 }
 
+func (g *guard) ownsClientAnswerLocked(k callKey) bool {
+	g.expireRetiredLocked(time.Now())
+	if _, retired := g.retiredCalls[k]; retired {
+		delete(g.retiredCalls, k)
+		return false
+	}
+	_, ok := g.pending[k]
+	return ok
+}
+
 func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	k := callKey{m.SessionID, *m.ID}
 	if rc, ok := g.relayCalls[k]; ok {
@@ -80,7 +91,10 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		}
 		return browserVerdict{}
 	}
-	kind, ok := g.pending[k]
+	if !g.ownsClientAnswerLocked(k) {
+		return browserVerdict{}
+	}
+	kind := g.pending[k]
 	delete(g.pending, k)
 	g.clientRequestAnsweredLocked(k, m.Error != nil)
 	g.continuedLocked(k, m.Error != nil)
@@ -99,7 +113,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if body {
 		return g.bodyAnswerLocked(k, bc, m, data)
 	}
-	if !ok || m.Error != nil || kind == kindPlain {
+	if m.Error != nil || kind == kindPlain {
 		return browserVerdict{forward: data}
 	}
 	res, ok := decodeObject(m.Result)
