@@ -136,6 +136,9 @@ func (g *guard) ordinaryFrameParentLocked(t *target, parentID string) bool {
 	if parent == nil || parent.gone || parent.protected || g.decide(parent, parent.protected) || g.targetUnconfirmedLocked(parent.id) {
 		return false
 	}
+	if g.targets[inheritedParentID(t, parentID)] == nil && g.framesProtectedLocked(parent.id) {
+		return false
+	}
 	nt := g.navTargets[parent.id]
 	return nt != nil && nt.done && !nt.failed && !nt.historyLocked
 }

@@ -77,7 +77,6 @@ type navTarget struct {
 
 func (nt *navTarget) settle(failed bool) {
 	if failed {
-		nt.failed = true
 		if nt.confirm != nil {
 			nt.confirm.settle(true)
 		}
