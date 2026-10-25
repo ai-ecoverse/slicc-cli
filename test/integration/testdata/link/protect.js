@@ -192,6 +192,30 @@ export function protectTest(getLink, describe) {
           dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
         };
       }),
+    documentLifecycle: (browser, touch, setupFailure) =>
+      run(browser, async (c) => {
+        if (touch) {
+          const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+          const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+          await c.send('Page.enable', {}, sessionId);
+        }
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        const attached = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'POPUP');
+        await c.send('Browser.getBrowserCommandLine');
+        await attached;
+        if (!setupFailure) {
+          await c.send('Page.enable', {}, 'POPUP');
+          const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === 'POPUP');
+          await c.send('Browser.getWindowBounds');
+          await committed;
+        }
+        const start = Date.now();
+        const answer = await Promise.race([
+          outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, 'POPUP')),
+          sleep(2000).then(() => ({ ok: false, timedOut: true })),
+        ]);
+        return { ...answer, ms: Date.now() - start };
+      }),
     originFrameSequence: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });

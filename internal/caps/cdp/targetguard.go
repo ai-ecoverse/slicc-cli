@@ -13,6 +13,9 @@ func (g *guard) beginConfirmLocked(nt *navTarget) {
 		nt.confirm = &navTarget{ready: make(chan struct{}), start: time.Now()}
 		nt.confirm.awayAt = g.reads.away(nt.confirm.start)
 	}
+	if nt.failed {
+		nt.confirm.settle(true)
+	}
 }
 
 func (g *guard) confirmTargetLocked(nt *navTarget) [][]byte {
@@ -68,6 +71,7 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 	}
 	if inheritedDocument(frame.URL, frame.UnreachableURL) {
 		if g.o.Target(frame.URL, t.protected, g.openerState(t)) || !g.ordinaryFrameParentLocked(t, frame.ParentID) {
+			check.reason = g.frameParentReasonLocked(t, frame.ParentID)
 			check.settle(true)
 			return nil
 		}
@@ -95,25 +99,69 @@ func inheritedDocument(url, unreachable string) bool {
 	return url != "" && protect.Inheriting(url) && unreachable == ""
 }
 
-func (g *guard) ordinaryFrameParentLocked(t *target, parentID string) bool {
-	if parentID == "" {
-		if t.typ == "iframe" {
-			return false
-		}
-		parentID = t.openerFrame
-		if parentID == "" {
-			parentID = t.opener
-		}
-		if parentID == "" {
-			return true
-		}
+func inheritedParentID(t *target, parentID string) string {
+	if parentID != "" || t.typ == "iframe" {
+		return parentID
 	}
-	parent := g.targets[parentID]
-	if parent == nil || parent.gone || parent.protected || g.decide(parent, parent.protected) || g.targetUnconfirmedLocked(parentID) {
+	if t.openerFrame != "" {
+		return t.openerFrame
+	}
+	return t.opener
+}
+
+func (g *guard) inheritedParentLocked(t *target, parentID string) *target {
+	id := inheritedParentID(t, parentID)
+	if parent := g.targets[id]; parent != nil {
+		return parent
+	}
+	return g.frameOwnerLocked(id, t.ctx)
+}
+
+func (g *guard) frameParentReasonLocked(t *target, parentID string) string {
+	parent := g.inheritedParentLocked(t, parentID)
+	if parent != nil && parent.gone {
+		return "inherited document has a gone opener or parent"
+	}
+	if parent == nil || g.navTargets[parent.id] == nil {
+		return "inherited document has an unknown opener or parent; slicc never confirmed it"
+	}
+	return ""
+}
+
+func (g *guard) ordinaryOpenerFrameLocked(owner, frame string) bool {
+	if g.framesProtectedLocked(owner) {
 		return false
 	}
-	nt := g.navTargets[parentID]
+	if shown := g.shown[owner]; shown != nil && !shown.full {
+		for _, context := range shown.contexts {
+			if context.defaultWorld && context.frame == frame {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (g *guard) ordinaryFrameParentLocked(t *target, parentID string) bool {
+	if inheritedParentID(t, parentID) == "" {
+		return t.typ != "iframe"
+	}
+	parent := g.inheritedParentLocked(t, parentID)
+	if parent == nil || parent.gone || parent.protected || g.decide(parent, parent.protected) || g.targetUnconfirmedLocked(parent.id) {
+		return false
+	}
+	if id := inheritedParentID(t, parentID); g.targets[id] == nil && !g.ordinaryOpenerFrameLocked(parent.id, id) {
+		return false
+	}
+	nt := g.navTargets[parent.id]
 	return nt != nil && nt.done && !nt.failed && !nt.historyLocked
+}
+
+func (g *guard) confirmReasonLocked(nt *navTarget) string {
+	if nt.confirm.reason != "" {
+		return refusedGuard + ": " + nt.confirm.reason
+	}
+	return refusedGuard
 }
 
 func (g *guard) targetReasonLocked(id string) string {
@@ -121,7 +169,7 @@ func (g *guard) targetReasonLocked(id string) string {
 		return refusedTarget
 	}
 	if g.targetUnconfirmedLocked(id) {
-		return refusedGuard
+		return g.confirmReasonLocked(g.navTargets[id])
 	}
 	return ""
 }
