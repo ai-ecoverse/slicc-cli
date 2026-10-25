@@ -890,6 +890,36 @@ export function protectTest(getLink, describe) {
         await outcome(c.send('Target.detachFromTarget', { sessionId: h.sessionId }));
         return out;
       }),
+    heldChildNative: (browser, targetId) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const second = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        await c.send('Page.enable', {}, second.sessionId);
+        await c.send('Fetch.enable', { patterns: [{ resourceType: 'Document' }] }, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true, filter: [{ type: 'iframe' }, { exclude: true }] }, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, second.sessionId);
+        const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.params.frame.parentId && e.params.frame.url === 'chrome-error://chromewebdata/', 3000).then(() => true, () => false);
+        await c.evaluate("(() => { const f = document.createElement('iframe'); f.name = 'held-child-fixture'; document.body.append(f); return true; })()", second.sessionId);
+        const { frameTree } = await c.send('Page.getFrameTree', {}, second.sessionId);
+        window.heldChildNativeFrame = frameTree.childFrames.find((f) => f.frame.name === 'held-child-fixture').frame.id;
+        await new Promise((resolve) => { window.heldChildNativeStart = resolve; });
+        await committed;
+        window.heldChildNativeReady = true;
+        const nativeCommitted = await new Promise((resolve) => { window.heldChildNativeContinue = resolve; });
+        return { committed: nativeCommitted, events: c.events.map((e) => JSON.stringify(e)) };
+      }),
+    heldChild: (browser, page) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(page);
+        const second = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Fetch.enable', { patterns: [{ resourceType: 'Document' }] }, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true, filter: [{ type: 'iframe' }, { exclude: true }] }, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, second.sessionId);
+        const done = c.waitEvent((e) => e.method === 'Runtime.consoleAPICalled' && e.params.args?.[0]?.value === 'settled-child', 2000).then(() => true, () => false);
+        await c.send('Browser.getBrowserCommandLine');
+        return { completed: await done, events: c.events.map((e) => JSON.stringify(e)) };
+      }),
     navHang: (browser, opener, hang, wait) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(opener);

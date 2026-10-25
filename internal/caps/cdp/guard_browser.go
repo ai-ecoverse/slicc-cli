@@ -308,13 +308,13 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		info.URL = t.url
 	}
 	send := g.observeLocked(info)
-	if g.targetProtectedLocked(info.TargetID) {
-		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID}))}
+	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" {
+		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID, target: info.TargetID, waiting: p.WaitingForDebugger})...)}
 	}
 	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
 	}
-	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type}
+	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
 	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
 	}
@@ -333,9 +333,13 @@ func (g *guard) workerEndedEvent(m *message, data []byte) browserVerdict {
 	if !ok || s.typ != "shared_worker" {
 		return browserVerdict{forward: data}
 	}
-	g.logf("cdp: detached a session on a shared worker that ended")
+	g.logf("cdp: detached a session on a shared worker that ended target=%s session=%s parent=%s", s.target, s.id, s.parent)
+	var send [][]byte
+	if s.waiting {
+		send = append(send, g.resumeLocked(s.id, s.target))
+	}
 	msg, _ := g.newCallLocked(s.parent, "Target.detachFromTarget", map[string]any{"sessionId": s.id}, false)
-	return browserVerdict{forward: data, send: [][]byte{msg}}
+	return browserVerdict{forward: data, send: append(send, msg)}
 }
 
 func (g *guard) attachAnsweredLocked(parent string, res map[string]any, t *target) {
@@ -358,7 +362,8 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.lost = true
 		return browserVerdict{lost: true}
 	}
-	if _, ok := g.held[p.SessionID]; ok {
+	if h, ok := g.held[p.SessionID]; ok {
+		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		delete(g.held, p.SessionID)
 		g.forgetSessionLocked(p.SessionID)
 		return browserVerdict{}

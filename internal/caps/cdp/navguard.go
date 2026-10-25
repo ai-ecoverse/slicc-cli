@@ -222,10 +222,13 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		return send
 	}
 	if g.o.Loaded(p.Request.URL) && (p.ResourceType == "Document" || g.clientOwnedLocked(nt.target, p.NetworkID)) {
-		if p.ResourceType == "Document" && (p.FrameID == nt.target || p.FrameID == "") {
-			nt.historyLocked = true
+		if p.ResourceType == "Document" {
+			if p.FrameID == nt.target || p.FrameID == "" {
+				nt.historyLocked = true
+			}
+			send = append(send, g.blockChildLocked(nt.target, p.FrameID)...)
 		}
-		g.logf("cdp: failed a protected document or client-issued request in a target this stream touched")
+		g.logf("cdp: failed a protected document or client-issued request in a target this stream touched target=%s session=%s frame=%s", nt.target, nt.session, p.FrameID)
 		msg, _ := g.newCallLocked(nt.session, "Fetch.failRequest", map[string]any{"requestId": p.RequestID, "errorReason": "BlockedByClient"}, false)
 		return append(send, msg)
 	}

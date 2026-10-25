@@ -54,6 +54,8 @@ type guardGate struct {
 	srv         *httptest.Server
 	endpoint    string
 	origin      string
+	transform   func([]byte) []byte
+	observe     func(gateCommand)
 }
 
 func gateKey(session string, id int64) string { return fmt.Sprintf("%s/%d", session, id) }
@@ -150,6 +152,9 @@ func (g *guardGate) socket(w http.ResponseWriter, r *http.Request) {
 			}
 			var m gateCommand
 			if json.Unmarshal(data, &m) == nil {
+				if g.observe != nil {
+					g.observe(m)
+				}
 				c.mu.Lock()
 				c.forwarded[gateKey(m.Session, m.ID)] = true
 				if m.Method == "Target.attachToTarget" {
@@ -170,6 +175,9 @@ func (g *guardGate) socket(w http.ResponseWriter, r *http.Request) {
 		kind, data, err := up.Read(ctx)
 		if err != nil {
 			return
+		}
+		if g.transform != nil {
+			data = g.transform(data)
 		}
 		var m struct {
 			Session string `json:"sessionId"`
