@@ -3,9 +3,138 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestCDPNativeProtectedChildSettlement(t *testing.T) {
+	var protectedHits atomic.Int32
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.Host, "seven.protected.test:") {
+			protectedHits.Add(1)
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, "<!doctype html><body>child fixture</body>")
+	}))
+	t.Cleanup(fixture.Close)
+	port := fixture.URL[strings.LastIndexByte(fixture.URL, ':')+1:]
+	protected := "http://seven.protected.test:" + port
+	ordinary := "http://page.ordinary.test:" + port
+	b := launchBrowserOn(t, 0, "--site-per-process", "--host-resolver-rules=MAP *.test 127.0.0.1")
+	control := b.openPage(t, ordinary+"/plain")
+	var loaded bool
+	control.evalWithin(`new Promise((resolve) => { const f = document.createElement('iframe'); f.onload = () => resolve(true); f.src = `+jsArgs(protected+"/child")+`; document.body.append(f); })`, &loaded, 10*time.Second)
+	if !loaded || protectedHits.Load() == 0 {
+		t.Fatal("raw cross-site child control did not load")
+	}
+	before := protectedHits.Load()
+	srv := pageServer(t)
+	top := b.openPage(t, ordinary+"/plain")
+	gate := newGuardGate(t, b.endpoint, srv.URL)
+	var mu sync.Mutex
+	frames := map[string]bool{}
+	waiting := map[string]bool{}
+	var commands []gateCommand
+	gate.observe = func(m gateCommand) {
+		mu.Lock()
+		defer mu.Unlock()
+		commands = append(commands, m)
+	}
+	gate.transform = func(data []byte) []byte {
+		var m struct {
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		if json.Unmarshal(data, &m) != nil {
+			return data
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if m.Method == "Fetch.requestPaused" {
+			req, _ := m.Params["request"].(map[string]any)
+			if req["url"] == protected+"/child" {
+				frame, _ := m.Params["frameId"].(string)
+				frames[frame] = true
+			}
+		}
+		if m.Method == "Target.attachedToTarget" {
+			info, _ := m.Params["targetInfo"].(map[string]any)
+			frame, _ := info["targetId"].(string)
+			if info["type"] == "iframe" && frames[frame] {
+				sid, _ := m.Params["sessionId"].(string)
+				paused, _ := m.Params["waitingForDebugger"].(bool)
+				waiting[sid] = paused
+				info["url"] = protected + "/child"
+				var event map[string]any
+				_ = json.Unmarshal(data, &event)
+				event["params"] = m.Params
+				data, _ = json.Marshal(event)
+			}
+		}
+		return data
+	}
+	env := &linkEnv{t: t, b: b, origin: srv.URL}
+	env.a = startAttach(t, "--cdp", gate.srv.URL, "--origin", srv.URL, "--origin", protected, "--name", "held-child-node")
+	env.p = b.openPage(t, srv.URL+"/index.html")
+	env.waitUp("")
+	var result struct {
+		Committed bool     `json:"committed"`
+		Events    []string `json:"events"`
+	}
+	env.p.evalWithin("linkTest.protect.heldChildNative("+jsArgs("chrome", top.target, protected+"/child")+")", &result, 20*time.Second)
+	mu.Lock()
+	defer mu.Unlock()
+	resumed := map[string]bool{}
+	detached := map[string]bool{}
+	for _, call := range commands {
+		if call.Method == "Runtime.runIfWaitingForDebugger" {
+			resumed[call.Session] = true
+		}
+		if call.Method == "Target.detachFromTarget" {
+			var p struct {
+				Session string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(call.Params, &p)
+			if paused, ok := waiting[p.Session]; ok {
+				detached[p.Session] = true
+				if paused && !resumed[p.Session] {
+					t.Error("native waiting child detached without first resuming its navigation throttle")
+				}
+			}
+		}
+	}
+	paused := 0
+	for sid, waits := range waiting {
+		if waits {
+			paused++
+		}
+		if !detached[sid] {
+			t.Errorf("native child session %s was not hidden and detached within the bound", sid)
+		}
+	}
+	if len(waiting) < 2 || paused == 0 {
+		t.Errorf("native two-session fixture not established: %v", waiting)
+	}
+	for _, event := range result.Events {
+		if strings.Contains(event, protected) {
+			t.Errorf("native protected child information reached the client: %s", event)
+		}
+		for sid := range waiting {
+			if strings.Contains(event, sid) {
+				t.Errorf("native hidden child session reached the client: %s", event)
+			}
+		}
+	}
+	if protectedHits.Load() != before {
+		t.Error("guarded child reached the protected fixture server")
+	}
+	t.Logf("native error commit=%t hidden children=%d waiting=%d", result.Committed, len(detached), paused)
+}
 
 func TestCDPSettlesHeldProtectedChildrenBeforeDetaching(t *testing.T) {
 	b := launchBrowser(t)

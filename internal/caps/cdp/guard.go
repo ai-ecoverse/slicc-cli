@@ -71,6 +71,7 @@ type session struct {
 	parent  string
 	typ     string
 	refused bool
+	waiting bool
 }
 
 type guard struct {
@@ -102,6 +103,7 @@ type guard struct {
 	gone               map[string]bool
 	goneOrder          []string
 	held               map[string]*heldSession
+	blockedChildren    map[string]string
 	explicit           map[string]int
 	attachCalls        map[callKey]string
 	patterns           []any
@@ -172,6 +174,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		unknown:            map[string]*navTarget{},
 		gone:               map[string]bool{},
 		held:               map[string]*heldSession{},
+		blockedChildren:    map[string]string{},
 		explicit:           map[string]int{},
 		attachCalls:        map[callKey]string{},
 		heldExtras:         map[requestKey][]heldExtra{},
@@ -405,7 +408,7 @@ func (g *guard) markLocked(t *target) [][]byte {
 }
 
 func (g *guard) protectLocked(t *target) [][]byte {
-	g.logf("cdp: a target moved onto a protected origin; detaching its sessions")
+	g.logf("cdp: a target moved onto a protected origin; detaching its sessions target=%s", t.id)
 	var out [][]byte
 	for _, s := range g.sessions {
 		if s.target != t.id || s.refused {
@@ -413,6 +416,10 @@ func (g *guard) protectLocked(t *target) [][]byte {
 		}
 		s.refused = true
 		g.addRefusedLocked(s.id)
+		g.logf("cdp: detaching a session on a protected origin target=%s session=%s parent=%s waiting=%t", t.id, s.id, s.parent, s.waiting)
+		if s.waiting {
+			out = append(out, g.resumeLocked(s.id, t.id))
+		}
 		msg, _ := g.newCallLocked(s.parent, "Target.detachFromTarget", map[string]any{"sessionId": s.id}, false)
 		out = append(out, msg)
 	}
@@ -432,6 +439,7 @@ func (g *guard) addRefusedLocked(id string) {
 }
 
 func (g *guard) destroyedLocked(id string) {
+	g.clearBlockedChildrenLocked(id)
 	delete(g.frameProbeAttempts, id)
 	delete(g.frameProbed, id)
 	delete(g.frames, id)

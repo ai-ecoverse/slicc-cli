@@ -253,7 +253,7 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 			delete(g.handed, requestKey{m.SessionID, id})
 			g.markRequestLocked(m.SessionID, id)
 			g.markRequestLocked(m.SessionID, other)
-			return false, false, [][]byte{g.settlePausedLocked(m, p, id)}
+			return false, false, g.settlePausedLocked(m, p, id)
 		}
 		g.handOutLocked(requestKey{m.SessionID, id})
 		if g.requestMarkedLocked(m.SessionID, other) || g.namesProtectedLocked(p["responseHeaders"]) {
@@ -293,7 +293,7 @@ func (g *guard) continuedLocked(k callKey, failed bool) {
 	}
 }
 
-func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) []byte {
+func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) [][]byte {
 	defaultAuth := map[string]any{"response": "Default"}
 	document := p["resourceType"] == "Document"
 	idKey := g.pauseLinks[requestKey{m.SessionID, id}]
@@ -302,10 +302,12 @@ func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) []by
 		defaultAuth = map[string]any{"response": "CancelAuth"}
 	}
 	var method string
+	frameID, _ := p["frameId"].(string)
+	targetID := g.worldTargetLocked(m.SessionID)
 	params := map[string]any{"requestId": id}
 	switch m.Method {
 	case "Network.requestIntercepted":
-		g.logf("cdp: settled an intercepted request into a protected origin without showing it to the page")
+		g.logf("cdp: settled an intercepted request into a protected origin without showing it to the page target=%s session=%s frame=%s", targetID, m.SessionID, frameID)
 		method = "Network.continueInterceptedRequest"
 		params = map[string]any{"interceptionId": id}
 		if _, ok := p["authChallenge"]; ok {
@@ -314,21 +316,25 @@ func (g *guard) settlePausedLocked(m *message, p map[string]any, id string) []by
 			params["errorReason"] = "BlockedByClient"
 		}
 	case "Fetch.authRequired":
-		g.logf("cdp: answered an auth challenge from a protected origin without showing it to the page")
+		g.logf("cdp: answered an auth challenge from a protected origin without showing it to the page target=%s session=%s frame=%s", targetID, m.SessionID, frameID)
 		method = "Fetch.continueWithAuth"
 		params["authChallengeResponse"] = defaultAuth
 	default:
 		if document || owned {
-			g.logf("cdp: failed a document request into a protected origin that a page session paused")
+			g.logf("cdp: failed a document request into a protected origin that a page session paused target=%s session=%s frame=%s", targetID, m.SessionID, frameID)
 			method = "Fetch.failRequest"
 			params["errorReason"] = "BlockedByClient"
 		} else {
-			g.logf("cdp: continued a request into a protected origin without showing it to the page")
+			g.logf("cdp: continued a request into a protected origin without showing it to the page target=%s session=%s frame=%s", targetID, m.SessionID, frameID)
 			method = "Fetch.continueRequest"
 		}
 	}
+	var send [][]byte
+	if document && params["errorReason"] == "BlockedByClient" {
+		send = g.blockChildLocked(targetID, frameID)
+	}
 	msg, _ := g.newCallLocked(m.SessionID, method, params, false)
-	return msg
+	return append(send, msg)
 }
 
 type handedPause struct {

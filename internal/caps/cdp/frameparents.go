@@ -77,6 +77,7 @@ func (g *guard) frameEventLocked(m *message) {
 	}
 	var p struct {
 		FrameID string `json:"frameId"`
+		Reason  string `json:"reason"`
 		Frame   struct {
 			ID       string `json:"id"`
 			ParentID string `json:"parentId"`
@@ -98,7 +99,11 @@ func (g *guard) frameEventLocked(m *message) {
 		}
 	case "Page.frameDetached":
 		delete(g.frames[id], p.FrameID)
+		if p.Reason == "remove" {
+			g.clearBlockedChildrenLocked(p.FrameID)
+		}
 	case "Page.frameNavigated":
+		g.clearBlockedChildrenLocked(p.Frame.ID)
 		if p.Frame.ID == id && p.Frame.ParentID == "" {
 			delete(g.frames, id)
 		}

@@ -890,6 +890,19 @@ export function protectTest(getLink, describe) {
         await outcome(c.send('Target.detachFromTarget', { sessionId: h.sessionId }));
         return out;
       }),
+    heldChildNative: (browser, targetId, child) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const second = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        await c.send('Page.enable', {}, second.sessionId);
+        await c.send('Fetch.enable', { patterns: [{ resourceType: 'Document' }] }, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true, filter: [{ type: 'iframe' }, { exclude: true }] }, sessionId);
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, second.sessionId);
+        const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.params.frame.parentId && e.params.frame.url === 'chrome-error://chromewebdata/', 3000).then(() => true, () => false);
+        await c.evaluate(`(() => { const f = document.createElement('iframe'); f.src = ${JSON.stringify(child)}; document.body.append(f); return true; })()`, second.sessionId);
+        return { committed: await committed, events: c.events.map((e) => JSON.stringify(e)) };
+      }),
     heldChild: (browser, page) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(page);
