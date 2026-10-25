@@ -36,8 +36,9 @@ func TestCDPSubtargetStateSequencing(t *testing.T) {
 	})
 	var result map[string]cdpOutcome
 	env.evalJSON(t, "linkTest.protect.subtargetStateSequence('chrome-2')", &result)
-	for method, answer := range result {
-		if !answer.refused() {
+	for _, method := range []string{"title", "data", "dom"} {
+		answer, ok := result[method]
+		if !ok || !answer.refused() {
 			t.Errorf("subtarget state %s: %+v", method, answer)
 		}
 	}

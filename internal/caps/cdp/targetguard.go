@@ -2,9 +2,17 @@ package cdp
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
+
+func (g *guard) beginConfirmLocked(nt *navTarget) {
+	if nt.confirm == nil || nt.confirm.done {
+		nt.confirm = &navTarget{ready: make(chan struct{}), start: time.Now()}
+		nt.confirm.awayAt = g.reads.away(nt.confirm.start)
+	}
+}
 
 func (g *guard) confirmTargetLocked(nt *navTarget) [][]byte {
 	check := nt.confirm
@@ -44,7 +52,7 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		SecurityOrigin string `json:"securityOrigin"`
 		UnreachableURL string `json:"unreachableUrl"`
 	}
-	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || frame.ParentID != "" {
+	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
 		return nil
 	}
 	t := g.targets[nt.target]
@@ -59,7 +67,7 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		return nil
 	}
 	ev := protect.Evidence{DocumentURL: frame.URL, UnreachableURL: frame.UnreachableURL}
-	if protect.ErrorPage(t.url, ev) && g.o.Loaded(frame.UnreachableURL) {
+	if protect.ErrorPage(frame.UnreachableURL, ev) && g.o.Loaded(frame.UnreachableURL) {
 		check.settle(false)
 		return g.navEventLocked(nt, &message{Method: "Page.frameNavigated", Params: encode(map[string]any{"frame": result.FrameTree.Frame})})
 	}

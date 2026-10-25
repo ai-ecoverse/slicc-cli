@@ -393,10 +393,18 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	t := g.sessionTargetLocked(m.SessionID)
-	if t == nil || p.Frame.ParentID != "" || p.Frame.ID != t.id || !g.o.Loaded(p.Frame.SecurityOrigin) {
+	if t == nil || (p.Frame.ParentID != "" && t.typ != "iframe") || p.Frame.ID != t.id {
 		return browserVerdict{forward: data}
 	}
-	return browserVerdict{send: g.markLocked(t)}
+	if g.o.Loaded(p.Frame.SecurityOrigin) {
+		return browserVerdict{send: g.markLocked(t)}
+	}
+	var send [][]byte
+	if nt := g.navTargets[t.id]; nt != nil {
+		g.beginConfirmLocked(nt)
+		send = g.navEventLocked(nt, m)
+	}
+	return browserVerdict{forward: data, send: send}
 }
 
 func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
