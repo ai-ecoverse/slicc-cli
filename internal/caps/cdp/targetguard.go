@@ -100,7 +100,10 @@ func (g *guard) ordinaryFrameParentLocked(t *target, parentID string) bool {
 		if t.typ == "iframe" {
 			return false
 		}
-		parentID = t.opener
+		parentID = t.openerFrame
+		if parentID == "" {
+			parentID = t.opener
+		}
 		if parentID == "" {
 			return true
 		}
