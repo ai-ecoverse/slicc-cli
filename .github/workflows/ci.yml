@@ -32,6 +32,7 @@ jobs:
         PATH="$RUNNER_TEMP/golangci-lint:$PATH" npm run lint
         npm run lint:sh
       shards: 5
+      flaky-retry: 0
       timeout-minutes: 45
       review-timeout-minutes: 90
       release-secrets: APPLE_CERTIFICATE_BASE64 APPLE_DEVELOPER_CERTIFICATE_PASSWORD APPLE_API_KEY_ID APPLE_API_KEY_ISSUER_ID APPLE_API_KEY_P8_BASE64
