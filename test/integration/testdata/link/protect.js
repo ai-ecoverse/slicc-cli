@@ -901,7 +901,10 @@ export function protectTest(getLink, describe) {
         await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, second.sessionId);
         const committed = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.params.frame.parentId && e.params.frame.url === 'chrome-error://chromewebdata/', 3000).then(() => true, () => false);
         await c.evaluate(`(() => { const f = document.createElement('iframe'); f.src = ${JSON.stringify(child)}; document.body.append(f); return true; })()`, second.sessionId);
-        return { committed: await committed, events: c.events.map((e) => JSON.stringify(e)) };
+        await committed;
+        window.heldChildNativeReady = true;
+        const nativeCommitted = await new Promise((resolve) => { window.heldChildNativeContinue = resolve; });
+        return { committed: nativeCommitted, events: c.events.map((e) => JSON.stringify(e)) };
       }),
     heldChild: (browser, page) =>
       run(browser, async (c) => {

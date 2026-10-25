@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,7 +20,7 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 			protectedHits.Add(1)
 		}
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = fmt.Fprint(w, "<!doctype html><body>child fixture</body>")
+		_, _ = fmt.Fprint(w, "<!doctype html><body>child fixture<script>globalThis.linkTest = {};</script>")
 	}))
 	t.Cleanup(fixture.Close)
 	port := fixture.URL[strings.LastIndexByte(fixture.URL, ':')+1:]
@@ -86,7 +87,28 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 		Committed bool     `json:"committed"`
 		Events    []string `json:"events"`
 	}
-	env.p.evalWithin("linkTest.protect.heldChildNative("+jsArgs("chrome", top.target, protected+"/child")+")", &result, 20*time.Second)
+	var started bool
+	env.p.eval("window.heldChildNativeWork = linkTest.protect.heldChildNative("+jsArgs("chrome", top.target, protected+"/child")+"); true", &started)
+	env.p.waitFor("window.heldChildNativeReady === true", 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var snapshot struct {
+		FrameTree struct {
+			ChildFrames []struct {
+				Frame struct {
+					URL            string `json:"url"`
+					UnreachableURL string `json:"unreachableUrl"`
+				} `json:"frame"`
+			} `json:"childFrames"`
+		} `json:"frameTree"`
+	}
+	err := top.session.Call(ctx, "Page.getFrameTree", nil, &snapshot)
+	committed := err == nil && len(snapshot.FrameTree.ChildFrames) == 1 && snapshot.FrameTree.ChildFrames[0].Frame.URL == "chrome-error://chromewebdata/" && snapshot.FrameTree.ChildFrames[0].Frame.UnreachableURL == protected+"/child"
+	env.p.eval("window.heldChildNativeContinue("+jsArgs(committed)+"); true", &started)
+	env.p.evalWithin("window.heldChildNativeWork", &result, 10*time.Second)
+	if err != nil {
+		t.Errorf("native frame snapshot: %v", err)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	resumed := map[string]bool{}
@@ -129,6 +151,9 @@ func TestCDPNativeProtectedChildSettlement(t *testing.T) {
 				t.Errorf("native hidden child session reached the client: %s", event)
 			}
 		}
+	}
+	if !result.Committed {
+		t.Error("native child navigation did not commit its blocked error frame within the bound")
 	}
 	if protectedHits.Load() != before {
 		t.Error("guarded child reached the protected fixture server")
