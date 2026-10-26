@@ -192,7 +192,7 @@ export function protectTest(getLink, describe) {
           dom: await outcome(c.send('DOM.getDocument', {}, sessionId)),
         };
       }),
-    documentLifecycle: (browser, touch, setupFailure) =>
+    documentLifecycle: (browser, touch, setupFailure, wait = 2000) =>
       run(browser, async (c) => {
         if (touch) {
           const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
@@ -212,7 +212,7 @@ export function protectTest(getLink, describe) {
         const start = Date.now();
         const answer = await Promise.race([
           outcome(c.send('Runtime.evaluate', { expression: 'document.title' }, 'POPUP')),
-          sleep(2000).then(() => ({ ok: false, timedOut: true })),
+          sleep(wait).then(() => ({ ok: false, timedOut: true })),
         ]);
         return { ...answer, ms: Date.now() - start };
       }),
