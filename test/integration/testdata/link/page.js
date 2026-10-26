@@ -555,6 +555,7 @@ globalThis.linkTest = {
   laterAdmission: (opts) => import('./persistent.js').then((m) => m.laterAdmissionProof(() => state.link, opts)),
   stickyAdmission: (opts) => import('./sticky.js').then((m) => m.stickyAdmissionProof(() => state.link, opts)),
   clientResource: (opts) => import('./client-resource.js').then((m) => m.clientResourceRow(() => state.link, opts)),
+  errorContent: (opts) => import('./errorcontent.js').then((m) => m.errorContent(() => state.link, opts)),
   resourceBlock: (opts) => import('./resource-block.js').then((m) => m.resourceBlockRow(() => state.link, opts)),
   frameGeneration: (opts) => import('./framegeneration.js').then((m) => m.measureFrameGeneration(() => state.link, opts)),
   compoundFrames: (opts) => import('./compoundframes.js').then((m) => m.measureCompoundFrames(() => state.link, opts)),
