@@ -65,11 +65,13 @@ func historyLagProxy(t *testing.T, endpoint string) (*httptest.Server, *historyL
 			return
 		}
 		defer func() { _ = up.CloseNow() }()
+		up.SetReadLimit(-1)
 		down, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer func() { _ = down.CloseNow() }()
+		down.SetReadLimit(-1)
 		go func() {
 			defer cancel()
 			for {

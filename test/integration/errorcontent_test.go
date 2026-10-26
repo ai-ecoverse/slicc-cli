@@ -96,7 +96,11 @@ func errorContentHistoryEntry(t *testing.T, s *cdp.Session, url string) int {
 
 func errorContentCall(t *testing.T, env *protectEnv, opts map[string]any, out any) {
 	t.Helper()
-	env.evalJSON(t, "linkTest.errorContent("+jsArgs(opts)+")", out)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if err := env.p.session.Evaluate(ctx, "linkTest.errorContent("+jsArgs(opts)+")", cdp.EvaluateOptions{ReturnByValue: true, AwaitPromise: true}, out); err != nil {
+		t.Fatalf("error document client action %s: %v", opts["action"], err)
+	}
 }
 
 func errorContentRead(t *testing.T, env *protectEnv, lag *historyLag, s *cdp.Session, targetID, failedURL string, protected bool, commit errorContentCommit) {
@@ -234,12 +238,19 @@ func TestCDPErrorDocumentContentReads(t *testing.T) {
 				env.p = b.openPage(t, srv.URL+"/index.html")
 				env.waitUp("")
 				var result any
-				attach := func(id string) {
+				attach := func(t *testing.T, id string) {
+					t.Helper()
 					errorContentCall(t, env, map[string]any{"action": "attach", "browser": "chrome-2", "targetId": id}, &result)
 				}
-				arm := func() { errorContentCall(t, env, map[string]any{"action": "arm"}, &result) }
-				closeClient := func() { errorContentCall(t, env, map[string]any{"action": "close"}, &result) }
-				attach(target.TargetID)
+				arm := func(t *testing.T) {
+					t.Helper()
+					errorContentCall(t, env, map[string]any{"action": "arm"}, &result)
+				}
+				closeClient := func(t *testing.T) {
+					t.Helper()
+					errorContentCall(t, env, map[string]any{"action": "close"}, &result)
+				}
+				attach(t, target.TargetID)
 				if !preAttach {
 					commit := errorContentNavigate(t, s, "Page.navigate", map[string]any{"url": failedURL})
 					errorContentRead(t, env, lag, s, target.TargetID, failedURL, true, commit)
@@ -250,7 +261,7 @@ func TestCDPErrorDocumentContentReads(t *testing.T) {
 						if !preAttach || back == "history-back" {
 							errorContentNavigate(t, s, "Page.navigate", map[string]any{"url": allowed + "/after"})
 						}
-						arm()
+						arm(t)
 						method, params := "Page.navigateToHistoryEntry", map[string]any{"entryId": entryID}
 						if back == "history-back" {
 							method, params = "Runtime.evaluate", map[string]any{"expression": "setTimeout(() => history.back(), 0); true"}
@@ -262,7 +273,7 @@ func TestCDPErrorDocumentContentReads(t *testing.T) {
 						errorContentRead(t, env, lag, s, target.TargetID, failedURL, true, commit)
 					})
 				}
-				closeClient()
+				closeClient(t)
 				if protectedHits.Load() != 0 {
 					t.Fatal("a guarded document reached the fixture server")
 				}
@@ -284,11 +295,11 @@ func TestCDPErrorDocumentContentReads(t *testing.T) {
 						if err := observer.Call(cctx, "Page.enable", nil, nil); err != nil {
 							t.Fatal(err)
 						}
-						attach(control.TargetID)
+						attach(t, control.TargetID)
 						ordinaryURL := allowed + "/controller/fixture-id"
 						commit := errorContentNavigate(t, observer, "Page.navigate", map[string]any{"url": ordinaryURL})
 						errorContentRead(t, env, lag, observer, control.TargetID, ordinaryURL, false, commit)
-						closeClient()
+						closeClient(t)
 					})
 				}
 			})
