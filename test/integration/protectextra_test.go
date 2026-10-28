@@ -142,7 +142,10 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 				result = `{"sessionId":"CLIENT_BROWSER"}`
 			}
 		case "Target.getTargets":
-			result = `{"targetInfos":[]}`
+			result, after = f.script(m.Method, m.Params)
+			if result == "{}" {
+				result = `{"targetInfos":[]}`
+			}
 		default:
 			result, after = f.script(m.Method, m.Params)
 			if result == "{}" && m.Method == "Page.getNavigationHistory" {

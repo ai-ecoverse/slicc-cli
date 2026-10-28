@@ -39,6 +39,12 @@ func TestCDPDiscoveryScrubsEncodedAndUnschemedProtectedTitles(t *testing.T) {
 					events = append(events, fmt.Sprintf(`{"method":"Page.frameNavigated","params":{"frame":{"id":"F1","url":%q,"name":%q}}}`, allowed+"/blank", text), fmt.Sprintf(`{"method":"Console.messageAdded","params":{"message":{"text":%q}}}`, text))
 				}
 				return "{}", events
+			case "Target.getTargets":
+				infos := make([]string, len(titles))
+				for i := range infos {
+					infos[i] = info(i)
+				}
+				return `{"targetInfos":[` + strings.Join(infos, ",") + `]}`, nil
 			case "Target.getTargetInfo":
 				var p struct {
 					TargetID string `json:"targetId"`
@@ -66,10 +72,13 @@ func TestCDPDiscoveryScrubsEncodedAndUnschemedProtectedTitles(t *testing.T) {
 			Title string `json:"title"`
 		} `json:"infos"`
 		Text []string `json:"text"`
+		List []struct {
+			Title string `json:"title"`
+		} `json:"list"`
 	}
 	env.evalJSON(t, "linkTest.protect.discoveryScrub('chrome-2')", &result)
 	want := []string{encodedOrigin, bareHost, "ordinary title", encodedOrigin, bareHost, "", "vault.sliccy.ai", "controller.sliccy.ai", "prefix " + encodedOrigin + " suffix", "prefix " + bareHost + " suffix"}
-	if len(result.Events) != 2*len(want) || len(result.Infos) != len(want) {
+	if len(result.Events) != 2*len(want) || len(result.Infos) != len(want) || len(result.List) != len(want) {
 		t.Fatalf("discovery coverage: %+v", result)
 	}
 	for _, event := range result.Events {
@@ -84,6 +93,11 @@ func TestCDPDiscoveryScrubsEncodedAndUnschemedProtectedTitles(t *testing.T) {
 	for i, info := range result.Infos {
 		if info.Title != want[i] {
 			t.Errorf("getTargetInfo T%d title %q, want %q", i, info.Title, want[i])
+		}
+	}
+	for i, info := range result.List {
+		if info.Title != want[i] {
+			t.Errorf("getTargets T%d title %q, want %q", i, info.Title, want[i])
 		}
 	}
 	textWant := []string{encodedOrigin, encodedOrigin, bareHost, bareHost, "", "", "vault.sliccy.ai", "vault.sliccy.ai", "controller.sliccy.ai", "controller.sliccy.ai"}

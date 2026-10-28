@@ -1690,6 +1690,7 @@ export function protectTest(getLink, describe) {
         for (let i = 0; i < 10; i++) infos.push((await c.send('Target.getTargetInfo', { targetId: `T${i}` })).targetInfo);
         return {
           infos,
+          list: (await c.send('Target.getTargets')).targetInfos,
           events: c.events.filter((e) => ['Target.targetCreated', 'Target.targetInfoChanged'].includes(e.method)).map((e) => ({ method: e.method, info: e.params.targetInfo })),
           text: c.events.filter((e) => ['Page.frameNavigated', 'Console.messageAdded'].includes(e.method)).map((e) => e.method === 'Page.frameNavigated' ? e.params.frame.name : e.params.message.text),
         };

@@ -1,6 +1,10 @@
 package cdp
 
-import "strings"
+import (
+	"cmp"
+	"slices"
+	"strings"
+)
 
 var opaque = map[string]bool{"value": true, "preview": true, "customPreview": true, "arguments": true, "returnValue": true}
 
@@ -187,38 +191,81 @@ func schemeStarts(s string, at int) []int {
 	return starts
 }
 
-func sepPart(s string, i int, raw byte, enc string) int {
-	switch {
-	case i < len(s) && s[i] == raw:
-		return 1
-	case i+len(enc) <= len(s) && strings.EqualFold(s[i:i+len(enc)], enc):
-		return len(enc)
-	}
-	return 0
+const maxScrubLayers = 5
+
+type urlCut struct {
+	start int
+	end   int
+	value string
 }
 
-func sepAt(s string, i int) int {
-	n := sepPart(s, i, ':', "%3a")
-	if n == 0 {
-		return 0
+func urlRunEnd(s string, start int, offsets []int) int {
+	end := start
+	encoded := offsets[start+1]-offsets[start] > 1
+	for end < len(s) && !urlEnd(s[end]) && (!encoded || s[end] != '&' || offsets[end+1]-offsets[end] > 1) {
+		end++
 	}
-	for range 2 {
-		m := sepPart(s, i+n, '/', "%2f")
-		if m == 0 {
-			return 0
-		}
-		n += m
-	}
-	return n
+	return end
 }
 
-func nextSep(s string, from int) (int, int) {
-	for i := from; i < len(s); i++ {
-		if n := sepAt(s, i); n > 0 {
-			return i, n
+func authorityByte(c byte) bool {
+	return schemeByte(c) || c == '_' || c == ':' || c == '[' || c == ']' || c == '%' || c >= 0x80
+}
+
+func (g *guard) embeddedCuts(s string, offsets []int) []urlCut {
+	var cuts []urlCut
+	for from := 0; from < len(s); {
+		rel := strings.Index(s[from:], "://")
+		if rel < 0 {
+			break
+		}
+		at := from + rel
+		end := urlRunEnd(s, at, offsets)
+		for _, start := range schemeStarts(s, at) {
+			u := s[start:end]
+			if g.o.Loaded(u) {
+				r := redactURL(u)
+				if !strings.EqualFold(strings.TrimSuffix(u, "/"), r) {
+					cuts = append(cuts, urlCut{offsets[start], offsets[end], r})
+				}
+				break
+			}
+		}
+		from = at + 3
+	}
+	return append(cuts, g.unschemedCuts(s, offsets)...)
+}
+
+func (g *guard) unschemedCuts(s string, offsets []int) []urlCut {
+	var cuts []urlCut
+	for at := 0; at < len(s); at++ {
+		if s[at] != '/' {
+			continue
+		}
+		start := at
+		for start > 0 && authorityByte(s[start-1]) {
+			start--
+		}
+		if start == at || start >= 3 && s[start-3:start] == "://" {
+			continue
+		}
+		for start < at {
+			host := s[start:at]
+			if g.o.URL("http://"+host+"/") || g.o.URL("https://"+host+"/") {
+				end := urlRunEnd(s, at, offsets)
+				if s[start:end] != host+"/" {
+					cuts = append(cuts, urlCut{offsets[start], offsets[end], host})
+				}
+				break
+			}
+			colon := strings.IndexByte(s[start:at], ':')
+			if colon < 0 {
+				break
+			}
+			start += colon + 1
 		}
 	}
-	return -1, 0
+	return cuts
 }
 
 func unhex(c byte) (byte, bool) {
@@ -233,8 +280,9 @@ func unhex(c byte) (byte, bool) {
 	return 0, false
 }
 
-func unescapeOnce(s string) string {
+func decodeURLLayer(s string, offsets []int) (string, []int) {
 	var b strings.Builder
+	next := []int{offsets[0]}
 	for i := 0; i < len(s); i++ {
 		if s[i] == '%' && i+2 < len(s) {
 			hi, ok1 := unhex(s[i+1])
@@ -242,48 +290,56 @@ func unescapeOnce(s string) string {
 			if ok1 && ok2 {
 				b.WriteByte(hi<<4 | lo)
 				i += 2
+				next = append(next, offsets[i+1])
 				continue
 			}
 		}
 		b.WriteByte(s[i])
+		next = append(next, offsets[i+1])
 	}
-	return b.String()
+	return b.String(), next
 }
 
 func (g *guard) cutEmbedded(s string) (string, bool) {
-	if !strings.Contains(s, "://") && !strings.Contains(s, "%") {
+	if !strings.ContainsAny(s, "/%") {
 		return s, false
 	}
-	var b strings.Builder
-	changed := false
-	i := 0
-	for {
-		j, n := nextSep(s, i)
-		if j < 0 {
+	offsets := make([]int, len(s)+1)
+	for i := range offsets {
+		offsets[i] = i
+	}
+	layer := s
+	var cuts []urlCut
+	for depth := 0; ; depth++ {
+		cuts = append(cuts, g.embeddedCuts(layer, offsets)...)
+		next, positions := decodeURLLayer(layer, offsets)
+		if next == layer {
 			break
 		}
-		end := j + n
-		for end < len(s) && !urlEnd(s[end]) && (n == 3 || s[end] != '&') {
-			end++
+		if depth == maxScrubLayers {
+			return "", true
 		}
-		cut := false
-		for _, start := range schemeStarts(s, j) {
-			u := s[start:end]
-			if n != 3 {
-				u = unescapeOnce(u)
-			}
-			if g.o.Loaded(u) {
-				b.WriteString(s[i:start])
-				b.WriteString(redactURL(u))
-				i, cut, changed = end, true, true
-				break
-			}
-		}
-		if !cut {
-			b.WriteString(s[i : j+n])
-			i = j + n
-		}
+		layer, offsets = next, positions
 	}
-	b.WriteString(s[i:])
-	return b.String(), changed
+	if len(cuts) == 0 {
+		return s, false
+	}
+	slices.SortFunc(cuts, func(a, b urlCut) int {
+		if n := cmp.Compare(a.start, b.start); n != 0 {
+			return n
+		}
+		return cmp.Compare(b.end, a.end)
+	})
+	var b strings.Builder
+	at := 0
+	for _, cut := range cuts {
+		if cut.start < at {
+			continue
+		}
+		b.WriteString(s[at:cut.start])
+		b.WriteString(cut.value)
+		at = cut.end
+	}
+	b.WriteString(s[at:])
+	return b.String(), true
 }
