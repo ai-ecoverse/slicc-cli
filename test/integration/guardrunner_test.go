@@ -358,11 +358,12 @@ func TestCDPGuardVectorsSkipC9OnlyOnMacOS(t *testing.T) {
 }
 
 type guardRun struct {
-	variant    string
-	slots      int
-	only       string
-	inject     string
-	rowTimeout time.Duration
+	variant        string
+	slots          int
+	only           string
+	inject         string
+	rowTimeout     time.Duration
+	errorPageVault bool
 }
 
 func runGuardVectors(t *testing.T, variant string) {
@@ -432,19 +433,23 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		slots[i] = slot{ID: hello.Browsers[i].ID, WS: strings.Replace(gates[i].srv.URL, "http", "ws", 1) + "/browser", Gate: gates[i].srv.URL + "/gate"}
 	}
 	sha := guardSHA()
+	if run.errorPageVault {
+		targets["seven"] = targets["vault"]
+	}
 	opts := map[string]any{
-		"browsers":     slots,
-		"targets":      targets,
-		"capabilities": map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "inboundDelay": true, "forwardAudit": true},
-		"variants":     []string{run.variant},
-		"parallel":     n,
-		"log":          "http://127.0.0.1:" + strconv.Itoa(fix.log),
-		"sha":          sha,
-		"rowTimeoutMs": run.rowTimeout.Milliseconds(),
-		"only":         run.only,
-		"skips":        guardSkips,
-		"inject":       run.inject,
-		"settleScale":  guardSettleScale(),
+		"browsers":       slots,
+		"targets":        targets,
+		"capabilities":   map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "inboundDelay": true, "forwardAudit": true},
+		"variants":       []string{run.variant},
+		"parallel":       n,
+		"log":            "http://127.0.0.1:" + strconv.Itoa(fix.log),
+		"sha":            sha,
+		"rowTimeoutMs":   run.rowTimeout.Milliseconds(),
+		"only":           run.only,
+		"skips":          guardSkips,
+		"inject":         run.inject,
+		"errorPageVault": run.errorPageVault,
+		"settleScale":    guardSettleScale(),
 	}
 	var started struct {
 		Started bool `json:"started"`

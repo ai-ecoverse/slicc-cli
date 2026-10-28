@@ -158,6 +158,10 @@ export function guardStart(getLink, opts) {
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
     if (opts.only) set.vectors = set.vectors.filter((v) => v.id === opts.only);
+    if (opts.errorPageVault) {
+      set.vectors = set.vectors.filter((v) => v.trigger?.some((s) => s.errorPage));
+      for (const v of set.vectors) v.targets = ['vault'];
+    }
     for (const v of set.vectors) if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
     const mouseDiagnostics = new Map();
     const running = run(set, {
