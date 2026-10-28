@@ -10,10 +10,11 @@ import (
 
 func TestCDPKeepsOrdinaryColonChainsAndScrubsProtectedSuffixes(t *testing.T) {
 	unicode := strings.Repeat("é:", 64) + "/x " + strings.Repeat("é:", 6400) + "/x "
-	tests := []struct {
+	type row struct {
 		text string
 		want string
-	}{
+	}
+	tests := []row{
 		{unicode + "https://vault.sliccy.ai/scrub-secret-fixture", unicode + "https://vault.sliccy.ai"},
 		{strings.Repeat("catalog.example.org:443/fixture ", 80) + "https://docs.example.com/", strings.Repeat("catalog.example.org:443/fixture ", 80) + "https://docs.example.com/"},
 		{"seven.sliccy.ai:443/scrub-secret-fixture", "seven.sliccy.ai:443"},
@@ -22,7 +23,11 @@ func TestCDPKeepsOrdinaryColonChainsAndScrubsProtectedSuffixes(t *testing.T) {
 		{"prefix:se\u200bven.sliccy.ai:443/scrub-secret-fixture", "prefix:se\u200bven.sliccy.ai:443"},
 		{"prefix:%73even.sliccy.ai:443/scrub-secret-fixture", "prefix:%73even.sliccy.ai:443"},
 	}
-	env, _ := setupFakeProtect(t, func(_, allowed string) fakeScript {
+	env, _ := setupFakeProtect(t, func(seven, allowed string) fakeScript {
+		for _, alias := range []string{"2130706433", "0x7f.1"} {
+			host := "prefix:" + alias + seven[strings.LastIndexByte(seven, ':'):]
+			tests = append(tests, row{host + "/scrub-secret-fixture", host})
+		}
 		return func(method string, _ json.RawMessage) (string, []string) {
 			if method != "Target.setDiscoverTargets" {
 				return "{}", nil
