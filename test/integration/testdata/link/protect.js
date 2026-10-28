@@ -1700,16 +1700,18 @@ export function protectTest(getLink, describe) {
         await load(c, sessionId, url);
         await c.send('Target.setDiscoverTargets', { discover: true });
         await c.send('Console.enable', {}, sessionId);
-        const ready = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === targetId && e.params.targetInfo.title === 'scrub-bound-ready');
-        await Promise.all([ready, c.evaluate("document.title = 'scrub-bound-ready'; true", sessionId)]);
         const mark = c.events.length;
-        const title = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === targetId, 5000);
         const consoleText = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Console.messageAdded' && e.sessionId === sessionId, 5000);
+        c.callTimeout = 5000;
         const start = performance.now();
-        const [changed, logged] = await Promise.all([title, consoleText, c.evaluate(`document.title = ${JSON.stringify(text)}; console.log(document.title); true`, sessionId)]);
+        const title = c.evaluate(`new Promise((resolve) => { document.title = ${JSON.stringify(text)}; console.log(document.title); requestAnimationFrame(() => resolve(document.title === ${JSON.stringify(text)})); })`, sessionId).then(async (set) => {
+          if (!set) throw new Error('the page did not set its adversarial title');
+          return (await c.send('Target.getTargetInfo', { targetId })).targetInfo.title;
+        });
+        const [receivedTitle, logged] = await Promise.all([title, consoleText]);
         const elapsed = performance.now() - start;
         await c.send('Target.closeTarget', { targetId });
-        return { title: changed.params.targetInfo.title, console: logged.params.message.text, elapsed };
+        return { title: receivedTitle, console: logged.params.message.text, elapsed };
       }),
     scrubBoundedDiscovery: (browser) =>
       run(browser, async (c) => {

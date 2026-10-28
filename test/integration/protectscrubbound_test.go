@@ -67,6 +67,9 @@ func TestCDPBoundsPageControlledTitleAndConsoleScrubbing(t *testing.T) {
 				if strings.Contains(text, "scrub-secret-fixture") {
 					t.Errorf("%s leaked protected URL details", name)
 				}
+				if text != "" {
+					t.Errorf("%s did not exercise the capped adversarial string", name)
+				}
 			}
 			t.Logf("title and console delivered in %.0f ms", result.Elapsed)
 		})
