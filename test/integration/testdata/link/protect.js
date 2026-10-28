@@ -1681,13 +1681,29 @@ export function protectTest(getLink, describe) {
         const events = c.events.filter((e) => workers.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
         return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })), log };
       }),
+    ordinaryScrubHTML: (url, html) =>
+      run('chrome', async (c) => {
+        const { targetId, sessionId } = await c.attachTo('about:blank');
+        await c.send('Page.enable', {}, sessionId);
+        await load(c, sessionId, url);
+        const control = await c.evaluate(`document.body.innerHTML = ${JSON.stringify(html)}; document.documentElement.outerHTML`, sessionId);
+        const { root } = await c.send('DOM.getDocument', {}, sessionId);
+        const nodeId = root.children.find((node) => node.nodeType === 1).nodeId;
+        const { outerHTML } = await c.send('DOM.getOuterHTML', { nodeId }, sessionId);
+        await c.send('Target.closeTarget', { targetId });
+        return { control, guarded: outerHTML };
+      }),
     scrubBoundedPage: (url, text) =>
       run('chrome', async (c) => {
-        const { targetId, sessionId } = await c.attachTo(url);
+        const { targetId, sessionId } = await c.attachTo('about:blank');
+        await c.send('Page.enable', {}, sessionId);
+        await load(c, sessionId, url);
         await c.send('Target.setDiscoverTargets', { discover: true });
         await c.send('Console.enable', {}, sessionId);
+        const ready = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === targetId && e.params.targetInfo.title === 'scrub-bound-ready');
+        await Promise.all([ready, c.evaluate("document.title = 'scrub-bound-ready'; true", sessionId)]);
         const mark = c.events.length;
-        const title = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === targetId && e.params.targetInfo.title !== '', 5000);
+        const title = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === targetId, 5000);
         const consoleText = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Console.messageAdded' && e.sessionId === sessionId, 5000);
         const start = performance.now();
         const [changed, logged] = await Promise.all([title, consoleText, c.evaluate(`document.title = ${JSON.stringify(text)}; console.log(document.title); true`, sessionId)]);

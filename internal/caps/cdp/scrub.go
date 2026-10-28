@@ -192,6 +192,22 @@ func schemeStarts(s string, at int) []int {
 }
 
 const maxScrubLayers = 5
+const maxScrubURLs = 64
+const maxScrubURLBytes = 64 * 1024
+
+type urlBudget struct {
+	calls int
+	bytes int
+}
+
+func (b *urlBudget) take(calls, bytes int) bool {
+	if b.calls < calls || b.bytes < bytes {
+		return false
+	}
+	b.calls -= calls
+	b.bytes -= bytes
+	return true
+}
 
 type urlCut struct {
 	start int
@@ -215,6 +231,22 @@ func urlRunEnd(s string, start int, offsets []int) int {
 	return end
 }
 
+type urlRuns struct {
+	plain   int
+	encoded int
+}
+
+func (r *urlRuns) end(s string, start int, offsets []int) int {
+	end := &r.plain
+	if offsets != nil && offsets[start+1]-offsets[start] > 1 {
+		end = &r.encoded
+	}
+	if start >= *end {
+		*end = urlRunEnd(s, start, offsets)
+	}
+	return *end
+}
+
 func authorityByte(c byte) bool {
 	return schemeByte(c) || c == '_' || c == ':' || c == '[' || c == ']' || c == '%' || c >= 0x80
 }
@@ -224,8 +256,73 @@ type embeddedURL struct {
 	origin    string
 }
 
-func (g *guard) embeddedCuts(s string, offsets []int) []urlCut {
+func ordinaryPort(host string) (string, bool) {
+	colon := strings.LastIndexByte(host, ':')
+	if colon < 0 {
+		return host, true
+	}
+	port := host[colon+1:]
+	if len(port) == 0 || len(port) > 5 {
+		return "", false
+	}
+	n := 0
+	for i := range len(port) {
+		if port[i] < '0' || port[i] > '9' {
+			return "", false
+		}
+		n = n*10 + int(port[i]-'0')
+	}
+	if n > 65535 {
+		return "", false
+	}
+	return host[:colon], true
+}
+
+func ordinaryDNS(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	host = strings.TrimSuffix(host, ".")
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		if len(label) >= 4 && strings.EqualFold(label[:4], "xn--") {
+			return false
+		}
+		for i := range len(label) {
+			if !schemeByte(label[i]) || label[i] == '+' {
+				return false
+			}
+		}
+	}
+	last := host[strings.LastIndexByte(host, '.')+1:]
+	if len(last) >= 2 && strings.EqualFold(last[:2], "0x") {
+		return false
+	}
+	return strings.ContainsAny(last, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+}
+
+func (g *guard) ordinaryEmbedded(u string) bool {
+	prefix := 0
+	if len(u) >= 7 && strings.EqualFold(u[:7], "http://") {
+		prefix = 7
+	} else if len(u) >= 8 && strings.EqualFold(u[:8], "https://") {
+		prefix = 8
+	} else {
+		return false
+	}
+	host := u[prefix:]
+	if end := strings.IndexAny(host, "/?#\\"); end >= 0 {
+		host = host[:end]
+	}
+	host, ok := ordinaryPort(host)
+	return ok && !g.o.MayNameHost(host) && ordinaryDNS(host)
+}
+
+func (g *guard) embeddedCuts(s string, offsets []int, budget *urlBudget) ([]urlCut, bool) {
 	var cuts []urlCut
+	var runs urlRuns
 	cache := map[string]embeddedURL{}
 	for from := 0; from < len(s); {
 		rel := strings.Index(s[from:], "://")
@@ -233,11 +330,17 @@ func (g *guard) embeddedCuts(s string, offsets []int) []urlCut {
 			break
 		}
 		at := from + rel
-		end := urlRunEnd(s, at, offsets)
+		end := runs.end(s, at, offsets)
 		for _, start := range schemeStarts(s, at) {
 			u := s[start:end]
+			if g.ordinaryEmbedded(u) {
+				continue
+			}
 			v, known := cache[u]
 			if !known {
+				if !budget.take(1, len(u)) {
+					return nil, false
+				}
 				v.protected = g.o.Loaded(u)
 				if v.protected {
 					v.origin = redactURL(u)
@@ -255,11 +358,13 @@ func (g *guard) embeddedCuts(s string, offsets []int) []urlCut {
 		}
 		from = at + 3
 	}
-	return append(cuts, g.unschemedCuts(s, offsets)...)
+	more, complete := g.unschemedCuts(s, offsets, budget)
+	return append(cuts, more...), complete
 }
 
-func (g *guard) unschemedCuts(s string, offsets []int) []urlCut {
+func (g *guard) unschemedCuts(s string, offsets []int, budget *urlBudget) ([]urlCut, bool) {
 	var cuts []urlCut
+	var runs urlRuns
 	for at := 0; at < len(s); at++ {
 		if s[at] != '/' {
 			continue
@@ -273,8 +378,11 @@ func (g *guard) unschemedCuts(s string, offsets []int) []urlCut {
 		}
 		for start < at {
 			host := s[start:at]
+			if !budget.take(2, 2*(len(host)+len("https:///"))) {
+				return nil, false
+			}
 			if g.o.URL("http://"+host+"/") || g.o.URL("https://"+host+"/") {
-				end := urlRunEnd(s, at, offsets)
+				end := runs.end(s, at, offsets)
 				if s[start:end] != host+"/" {
 					cuts = append(cuts, urlCut{urlOffset(offsets, start), urlOffset(offsets, end), host})
 				}
@@ -287,7 +395,7 @@ func (g *guard) unschemedCuts(s string, offsets []int) []urlCut {
 			start += colon + 1
 		}
 	}
-	return cuts
+	return cuts, true
 }
 
 func unhex(c byte) (byte, bool) {
@@ -334,8 +442,13 @@ func (g *guard) cutEmbedded(s string) (string, bool) {
 	var offsets []int
 	layer := s
 	var cuts []urlCut
+	budget := urlBudget{calls: maxScrubURLs, bytes: maxScrubURLBytes}
 	for depth := 0; ; depth++ {
-		cuts = append(cuts, g.embeddedCuts(layer, offsets)...)
+		more, complete := g.embeddedCuts(layer, offsets, &budget)
+		if !complete {
+			return "", true
+		}
+		cuts = append(cuts, more...)
 		next, positions := decodeURLLayer(layer, offsets)
 		if next == layer {
 			break
