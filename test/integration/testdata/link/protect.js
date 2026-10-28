@@ -1681,6 +1681,29 @@ export function protectTest(getLink, describe) {
         const events = c.events.filter((e) => workers.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
         return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })), log };
       }),
+    scrubBoundedPage: (url, text) =>
+      run('chrome', async (c) => {
+        const { targetId, sessionId } = await c.attachTo(url);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await c.send('Console.enable', {}, sessionId);
+        const mark = c.events.length;
+        const title = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === targetId && e.params.targetInfo.title !== '', 5000);
+        const consoleText = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Console.messageAdded' && e.sessionId === sessionId, 5000);
+        const start = performance.now();
+        const [changed, logged] = await Promise.all([title, consoleText, c.evaluate(`document.title = ${JSON.stringify(text)}; console.log(document.title); true`, sessionId)]);
+        const elapsed = performance.now() - start;
+        await c.send('Target.closeTarget', { targetId });
+        return { title: changed.params.targetInfo.title, console: logged.params.message.text, elapsed };
+      }),
+    scrubBoundedDiscovery: (browser) =>
+      run(browser, async (c) => {
+        const done = c.waitEvent((e) => e.method === 'Console.messageAdded' && e.params.message.text === 'scrub-bound-done', 5000);
+        await Promise.all([done, c.send('Target.setDiscoverTargets', { discover: true })]);
+        return {
+          titles: c.events.filter((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId.startsWith('BOUND')).map((e) => e.params.targetInfo.title),
+          console: c.events.filter((e) => e.method === 'Console.messageAdded' && e.params.message.text !== 'scrub-bound-done').map((e) => e.params.message.text),
+        };
+      }),
     discoveryScrub: (browser) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === 'T9', 15000);
