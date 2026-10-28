@@ -1681,6 +1681,47 @@ export function protectTest(getLink, describe) {
         const events = c.events.filter((e) => workers.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
         return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })), log };
       }),
+    ordinaryScrubHTML: (url, html) =>
+      run('chrome', async (c) => {
+        const { targetId, sessionId } = await c.attachTo('about:blank');
+        await c.send('Page.enable', {}, sessionId);
+        await load(c, sessionId, url);
+        const control = await c.evaluate(`document.body.innerHTML = ${JSON.stringify(html)}; document.documentElement.outerHTML`, sessionId);
+        const { root } = await c.send('DOM.getDocument', {}, sessionId);
+        const nodeId = root.children.find((node) => node.nodeType === 1).nodeId;
+        const { outerHTML } = await c.send('DOM.getOuterHTML', { nodeId }, sessionId);
+        await c.send('Target.closeTarget', { targetId });
+        return { control, guarded: outerHTML };
+      }),
+    scrubBoundedPage: (url, text, titleText) =>
+      run('chrome', async (c) => {
+        const { targetId, sessionId } = await c.attachTo('about:blank');
+        await c.send('Page.enable', {}, sessionId);
+        await load(c, sessionId, url);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await c.send('Console.enable', {}, sessionId);
+        const mark = c.events.length;
+        const consoleText = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Console.messageAdded' && e.sessionId === sessionId, 5000);
+        c.callTimeout = 5000;
+        const start = performance.now();
+        const title = c.evaluate(`new Promise((resolve) => { document.dispatchEvent(new CustomEvent('scrub-bound', { detail: ${JSON.stringify({ title: titleText, text })} })); requestAnimationFrame(() => requestAnimationFrame(() => resolve(document.title === ${JSON.stringify(titleText)}))); })`, sessionId).then(async (set) => {
+          if (!set) throw new Error('the page did not set its adversarial title');
+          return (await c.send('Target.getTargetInfo', { targetId })).targetInfo.title;
+        });
+        const [receivedTitle, logged] = await Promise.all([title, consoleText]);
+        const elapsed = performance.now() - start;
+        await c.send('Target.closeTarget', { targetId });
+        return { title: receivedTitle, console: logged.params.message.text, elapsed };
+      }),
+    scrubBoundedDiscovery: (browser) =>
+      run(browser, async (c) => {
+        const done = c.waitEvent((e) => e.method === 'Console.messageAdded' && e.params.message.text === 'scrub-bound-done', 5000);
+        await Promise.all([done, c.send('Target.setDiscoverTargets', { discover: true })]);
+        return {
+          titles: c.events.filter((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId.startsWith('BOUND')).map((e) => e.params.targetInfo.title),
+          console: c.events.filter((e) => e.method === 'Console.messageAdded' && e.params.message.text !== 'scrub-bound-done').map((e) => e.params.message.text),
+        };
+      }),
     discoveryScrub: (browser) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === 'T9', 15000);
