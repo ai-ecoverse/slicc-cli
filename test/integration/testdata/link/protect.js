@@ -504,7 +504,7 @@ export function protectTest(getLink, describe) {
         }
         return { trials: results };
       }),
-    errorTargetRace: (browser, away, protectedURL, held = false, browserSession = false) =>
+    errorTargetRace: (browser, away, protectedURL, held = false, browserSession = false, detach = false) =>
       run(browser, async (c) => {
         c.callTimeout = 10000;
         const { targetId } = await c.send('Target.createTarget', { url: away });
@@ -549,7 +549,8 @@ export function protectTest(getLink, describe) {
         results.afterReset = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
         results.pageClose = await outcome(c.send('Page.close', {}, sessionId));
         results.close = await outcome(c.send('Target.closeTarget', { targetId }));
-        const detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
+        const gone = (e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId;
+        const detached = detach ? await c.waitEvent(gone, 5000).then(() => true, () => false) : c.events.some(gone);
         return { answers: results, detached };
       }),
     errorPage: (browser, targetId, sevenURL) =>

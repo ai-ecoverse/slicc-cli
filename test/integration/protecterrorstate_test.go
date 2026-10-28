@@ -179,7 +179,8 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 				fake.gate("Page.getFrameTree", "Browser.getWindowBounds")
 			}
 			var value any
-			env.p.eval("window.targetRaceWork = linkTest.protect.errorTargetRace("+jsArgs("chrome-2", env.allowed+"/blank", env.plain.URL+"/protected", tc.held, tc.browser)+"); true", &value)
+			detach := tc.state == "protected" || tc.state == "protected-origin" || tc.state == "unparseable" || tc.changes
+			env.p.eval("window.targetRaceWork = linkTest.protect.errorTargetRace("+jsArgs("chrome-2", env.allowed+"/blank", env.plain.URL+"/protected", tc.held, tc.browser, detach)+"); true", &value)
 			env.p.waitFor("window.targetRaceReady === true", 10*time.Second)
 			if tc.held {
 				var settled bool
@@ -246,7 +247,7 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 			} else if reads.Load() == 0 || (tc.changes && reads.Load() < 2) {
 				t.Errorf("fresh frame snapshots: %d", reads.Load())
 			}
-			if (tc.state == "protected" || tc.state == "protected-origin" || tc.state == "unparseable" || tc.changes) && !result.Detached {
+			if detach && !result.Detached {
 				t.Error("a protected or unparseable target did not detach the client session")
 			}
 		})
