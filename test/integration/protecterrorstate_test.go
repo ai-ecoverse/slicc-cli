@@ -174,6 +174,7 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 				}
 			})
 			fake.gate("Runtime.callFunctionOn", "Browser.getBrowserCommandLine")
+			fake.delay("Target.detachFromTarget", 500*time.Millisecond)
 			if tc.held {
 				fake.gate("Page.getFrameTree", "Browser.getWindowBounds")
 			}
