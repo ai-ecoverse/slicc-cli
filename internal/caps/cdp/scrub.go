@@ -555,6 +555,14 @@ func (g *guard) unschemedHost(host string, budget *urlBudget) (bool, bool) {
 	return g.o.URL("http://"+host+"/") || g.o.URL("https://"+host+"/"), true
 }
 
+func (g *guard) skipUnschemedAuthority(s string, start, end int) bool {
+	if start == end || start >= 3 && s[start-3:start] == "://" {
+		return true
+	}
+	host := s[start:end]
+	return len(host) <= maxScrubHostBytes && !strings.HasPrefix(host, "[") && strings.Count(host, ":") >= 2 && !g.longAuthorityMayName(host)
+}
+
 func (g *guard) unschemedCuts(s string, offsets []int, budget *urlBudget) ([]urlCut, bool) {
 	var cuts []urlCut
 	var runs urlRuns
@@ -566,7 +574,7 @@ func (g *guard) unschemedCuts(s string, offsets []int, budget *urlBudget) ([]url
 		for start > 0 && authorityByte(s[start-1]) {
 			start--
 		}
-		if start == at || start >= 3 && s[start-3:start] == "://" {
+		if g.skipUnschemedAuthority(s, start, at) {
 			continue
 		}
 		if len(s[start:at]) > maxScrubHostBytes {

@@ -74,6 +74,7 @@ func TestCDPKeepsMultilingualAndEncodedOrdinaryHTML(t *testing.T) {
 		{"IPv6 prefixes", `<a href="https://docs.example.com/">docs</a>` + strings.Repeat("<li>2001:db8:1::/48</li>", 12), "", ""},
 		{"colon timestamps", `<a href="https://docs.example.com/">docs</a>` + strings.Repeat("<td>12:34:56/</td>", 40), "", ""},
 		{"schedule ranges", strings.Repeat("<li>09:30–17:45/</li>", 40), "", ""},
+		{"Unicode colon chain with protected URL", "<p>" + strings.Repeat("é:", 64) + "/x " + strings.Repeat("é:", 6400) + "/x https://vault.sliccy.ai/scrub-secret-fixture</p>", "https://vault.sliccy.ai/scrub-secret-fixture", "https://vault.sliccy.ai"},
 		{"long ordinary Chinese paragraph", "<p>" + scrubHan(100*1024) + "/x</p>", "", ""},
 		{"fullwidth protected host", strings.Repeat("<li>9,99 €/Monat</li>", 50) + `<a href="https://ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ/doc/secret-fixture">fixture</a>`, "https://ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ/doc/secret-fixture", "https://seven.sliccy.ai"},
 		{"percent protected host", links.String() + `<a href="https://%73even.sliccy.ai/doc/secret-fixture">fixture</a>`, "https://%73even.sliccy.ai/doc/secret-fixture", "https://seven.sliccy.ai"},
@@ -123,7 +124,7 @@ func TestCDPBoundsPageControlledTitleAndConsoleScrubbing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			title := tc.text
 			if tc.name == "colons" {
-				title = strings.Repeat("é:", 64) + "/x " + title
+				title = strings.Repeat("é:", 64) + "vault.sliccy.ai/x " + title
 			}
 			suffix := " " + env.seven + "/scrub-secret-fixture?token=scrub-secret-fixture"
 			var result struct {
@@ -197,7 +198,7 @@ func TestCDPBoundsFakeDiscoveryAndConsoleScrubbing(t *testing.T) {
 			var events []string
 			for i, text := range []string{
 				strings.Repeat("a://", 6400),
-				strings.Repeat("é:", 64) + "/x " + strings.Repeat("é:", 6400) + "/x",
+				strings.Repeat("é:", 64) + "vault.sliccy.ai/x " + strings.Repeat("é:", 6400) + "/x",
 				strings.Repeat("a://", 100) + "https://VAULT.SLICCY.AI/scrub-secret-fixture",
 				strings.Repeat("a://", 100) + "https%253A%252F%252Fvault.sliccy.ai%252Fscrub-secret-fixture",
 				strings.Repeat("é:", 100) + "vault.sliccy.ai/scrub-secret-fixture",
