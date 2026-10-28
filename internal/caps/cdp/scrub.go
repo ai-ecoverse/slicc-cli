@@ -381,6 +381,24 @@ func (g *guard) hasProtectedIP() bool {
 }
 
 func (g *guard) longAuthorityMayName(host string) bool {
+	return g.normalizedAuthorityMayName(host, false)
+}
+
+func (g *guard) colonIPMayName(host string) bool {
+	for {
+		canonical, settled := canonicalAuthority(host)
+		if settled && canonical != "" && g.o.MayNameHost(canonical) {
+			return true
+		}
+		colon := strings.IndexByte(host, ':')
+		if colon < 0 {
+			return false
+		}
+		host = host[colon+1:]
+	}
+}
+
+func (g *guard) normalizedAuthorityMayName(host string, colon bool) bool {
 	host = foldAuthority(host)
 	ascii := strings.Map(func(r rune) rune {
 		if r >= utf8.RuneSelf || r == '%' {
@@ -406,7 +424,10 @@ func (g *guard) longAuthorityMayName(host string) bool {
 			return true
 		}
 	}
-	return ip && ipShapeSuffix(host)
+	if !ip || !colon {
+		return ip && ipShapeSuffix(host)
+	}
+	return g.colonIPMayName(host)
 }
 
 func canonicalAuthority(host string) (string, bool) {
@@ -555,6 +576,14 @@ func (g *guard) unschemedHost(host string, budget *urlBudget) (bool, bool) {
 	return g.o.URL("http://"+host+"/") || g.o.URL("https://"+host+"/"), true
 }
 
+func (g *guard) skipUnschemedAuthority(s string, start, end int) bool {
+	if start == end || start >= 3 && s[start-3:start] == "://" {
+		return true
+	}
+	host := s[start:end]
+	return len(host) <= maxScrubHostBytes && !strings.HasPrefix(host, "[") && strings.Count(host, ":") >= 2 && !g.normalizedAuthorityMayName(host, true)
+}
+
 func (g *guard) unschemedCuts(s string, offsets []int, budget *urlBudget) ([]urlCut, bool) {
 	var cuts []urlCut
 	var runs urlRuns
@@ -566,7 +595,7 @@ func (g *guard) unschemedCuts(s string, offsets []int, budget *urlBudget) ([]url
 		for start > 0 && authorityByte(s[start-1]) {
 			start--
 		}
-		if start == at || start >= 3 && s[start-3:start] == "://" {
+		if g.skipUnschemedAuthority(s, start, at) {
 			continue
 		}
 		if len(s[start:at]) > maxScrubHostBytes {

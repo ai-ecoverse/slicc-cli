@@ -71,6 +71,10 @@ func TestCDPKeepsMultilingualAndEncodedOrdinaryHTML(t *testing.T) {
 		{"Chinese text", strings.Repeat("<p>首页/新闻</p>", 50), "", ""},
 		{"percent paths", links.String(), "", ""},
 		{"ordinary IPs", ips.String(), "", ""},
+		{"IPv6 prefixes", `<a href="https://docs.example.com/">docs</a>` + strings.Repeat("<li>2001:db8:1::/48</li>", 12), "", ""},
+		{"colon timestamps", `<a href="https://docs.example.com/">docs</a>` + strings.Repeat("<td>12:34:56/</td>", 40), "", ""},
+		{"schedule ranges", strings.Repeat("<li>09:30–17:45/</li>", 40), "", ""},
+		{"Unicode colon chain with protected URL", "<p>" + strings.Repeat("é:", 64) + "/x " + strings.Repeat("é:", 6400) + "/x https://vault.sliccy.ai/scrub-secret-fixture</p>", "https://vault.sliccy.ai/scrub-secret-fixture", "https://vault.sliccy.ai"},
 		{"long ordinary Chinese paragraph", "<p>" + scrubHan(100*1024) + "/x</p>", "", ""},
 		{"fullwidth protected host", strings.Repeat("<li>9,99 €/Monat</li>", 50) + `<a href="https://ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ/doc/secret-fixture">fixture</a>`, "https://ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ/doc/secret-fixture", "https://seven.sliccy.ai"},
 		{"percent protected host", links.String() + `<a href="https://%73even.sliccy.ai/doc/secret-fixture">fixture</a>`, "https://%73even.sliccy.ai/doc/secret-fixture", "https://seven.sliccy.ai"},
@@ -120,7 +124,7 @@ func TestCDPBoundsPageControlledTitleAndConsoleScrubbing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			title := tc.text
 			if tc.name == "colons" {
-				title = strings.Repeat("é:", 64) + "/x " + title
+				title = strings.Repeat("é:", 64) + "vault.sliccy.ai/x " + title
 			}
 			suffix := " " + env.seven + "/scrub-secret-fixture?token=scrub-secret-fixture"
 			var result struct {
@@ -194,11 +198,13 @@ func TestCDPBoundsFakeDiscoveryAndConsoleScrubbing(t *testing.T) {
 			var events []string
 			for i, text := range []string{
 				strings.Repeat("a://", 6400),
-				strings.Repeat("é:", 64) + "/x " + strings.Repeat("é:", 6400) + "/x",
+				strings.Repeat("é:", 64) + "vault.sliccy.ai/x " + strings.Repeat("é:", 6400) + "/x",
 				strings.Repeat("a://", 100) + "https://VAULT.SLICCY.AI/scrub-secret-fixture",
 				strings.Repeat("a://", 100) + "https%253A%252F%252Fvault.sliccy.ai%252Fscrub-secret-fixture",
 				strings.Repeat("é:", 100) + "vault.sliccy.ai/scrub-secret-fixture",
 				"https://vault.sliccy.ai/" + strings.Repeat("x", 100*1024) + "scrub-secret-fixture",
+				strings.Repeat("seven.sliccy.ai:1:2/scrub-secret-fixture ", 40),
+				strings.Repeat("ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ:1:2/scrub-secret-fixture ", 40),
 			} {
 				text += " " + seven + "/scrub-secret-fixture?token=scrub-secret-fixture"
 				events = append(events,
@@ -214,7 +220,7 @@ func TestCDPBoundsFakeDiscoveryAndConsoleScrubbing(t *testing.T) {
 		Console []string `json:"console"`
 	}
 	env.evalJSONWithin(t, "linkTest.protect.scrubBoundedDiscovery('chrome-2')", &result, 20*time.Second)
-	if len(result.Titles) != 6 || len(result.Console) != 6 {
+	if len(result.Titles) != 8 || len(result.Console) != 8 {
 		t.Fatalf("missing bounded discovery or console events: %d, %d", len(result.Titles), len(result.Console))
 	}
 	for _, text := range append(result.Titles, result.Console...) {
