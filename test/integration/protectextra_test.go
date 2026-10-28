@@ -179,7 +179,11 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		if d > 0 {
 			go func() {
 				time.Sleep(d)
-				_ = c.Write(ctx, websocket.MessageText, []byte(reply))
+				for _, e := range append([]string{reply}, after...) {
+					if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
+						return
+					}
+				}
 			}()
 			continue
 		}
