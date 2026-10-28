@@ -174,12 +174,14 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 				}
 			})
 			fake.gate("Runtime.callFunctionOn", "Browser.getBrowserCommandLine")
-			fake.delay("Target.detachFromTarget", 500*time.Millisecond)
+			detach := tc.state == "protected" || tc.state == "protected-origin" || tc.state == "unparseable" || tc.changes
+			if detach {
+				fake.delay("Target.detachFromTarget", 500*time.Millisecond)
+			}
 			if tc.held {
 				fake.gate("Page.getFrameTree", "Browser.getWindowBounds")
 			}
 			var value any
-			detach := tc.state == "protected" || tc.state == "protected-origin" || tc.state == "unparseable" || tc.changes
 			env.p.eval("window.targetRaceWork = linkTest.protect.errorTargetRace("+jsArgs("chrome-2", env.allowed+"/blank", env.plain.URL+"/protected", tc.held, tc.browser, detach)+"); true", &value)
 			env.p.waitFor("window.targetRaceReady === true", 10*time.Second)
 			if tc.held {
