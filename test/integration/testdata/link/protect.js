@@ -1693,7 +1693,7 @@ export function protectTest(getLink, describe) {
         await c.send('Target.closeTarget', { targetId });
         return { control, guarded: outerHTML };
       }),
-    scrubBoundedPage: (url, text) =>
+    scrubBoundedPage: (url, text, titleText) =>
       run('chrome', async (c) => {
         const { targetId, sessionId } = await c.attachTo('about:blank');
         await c.send('Page.enable', {}, sessionId);
@@ -1704,7 +1704,7 @@ export function protectTest(getLink, describe) {
         const consoleText = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Console.messageAdded' && e.sessionId === sessionId, 5000);
         c.callTimeout = 5000;
         const start = performance.now();
-        const title = c.evaluate(`new Promise((resolve) => { document.dispatchEvent(new CustomEvent('scrub-bound', { detail: ${JSON.stringify(text)} })); requestAnimationFrame(() => resolve(document.title === ${JSON.stringify(text)})); })`, sessionId).then(async (set) => {
+        const title = c.evaluate(`new Promise((resolve) => { document.dispatchEvent(new CustomEvent('scrub-bound', { detail: ${JSON.stringify({ title: titleText, text })} })); requestAnimationFrame(() => requestAnimationFrame(() => resolve(document.title === ${JSON.stringify(titleText)}))); })`, sessionId).then(async (set) => {
           if (!set) throw new Error('the page did not set its adversarial title');
           return (await c.send('Target.getTargetInfo', { targetId })).targetInfo.title;
         });

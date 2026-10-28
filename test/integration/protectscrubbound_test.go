@@ -51,7 +51,7 @@ func TestCDPBoundsPageControlledTitleAndConsoleScrubbing(t *testing.T) {
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/scrub.js" {
 			w.Header().Set("Content-Type", "text/javascript")
-			_, _ = w.Write([]byte(`document.addEventListener('scrub-bound', (event) => { document.title = event.detail; console.log(document.title); });`))
+			_, _ = w.Write([]byte(`document.addEventListener('scrub-bound', (event) => { document.title = event.detail.title; console.log(event.detail.text); });`))
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
@@ -67,12 +67,17 @@ func TestCDPBoundsPageControlledTitleAndConsoleScrubbing(t *testing.T) {
 		{"colons", strings.Repeat("é:", 6400) + "/x"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			title := tc.text
+			if tc.name == "colons" {
+				title = strings.Repeat("é:", 64) + "/x " + title
+			}
+			suffix := " " + env.seven + "/scrub-secret-fixture?token=scrub-secret-fixture"
 			var result struct {
 				Title   string  `json:"title"`
 				Console string  `json:"console"`
 				Elapsed float64 `json:"elapsed"`
 			}
-			env.evalJSONWithin(t, "linkTest.protect.scrubBoundedPage("+jsArgs(ordinary+"/", tc.text+" "+env.seven+"/scrub-secret-fixture?token=scrub-secret-fixture")+")", &result, 20*time.Second)
+			env.evalJSONWithin(t, "linkTest.protect.scrubBoundedPage("+jsArgs(ordinary+"/", tc.text+suffix, title+suffix)+")", &result, 20*time.Second)
 			if result.Elapsed <= 0 || result.Elapsed >= 5000 {
 				t.Fatalf("page-controlled event delivery took %.0f ms", result.Elapsed)
 			}
@@ -81,7 +86,7 @@ func TestCDPBoundsPageControlledTitleAndConsoleScrubbing(t *testing.T) {
 					t.Errorf("%s leaked protected URL details", name)
 				}
 				if text != "" {
-					t.Errorf("%s did not exercise the capped adversarial string", name)
+					t.Errorf("%s did not exercise the capped adversarial string (%d bytes, prefix %q)", name, len(text), text[:min(len(text), 80)])
 				}
 			}
 			t.Logf("title and console delivered in %.0f ms", result.Elapsed)
