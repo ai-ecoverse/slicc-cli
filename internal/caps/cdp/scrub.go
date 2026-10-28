@@ -199,9 +199,16 @@ type urlCut struct {
 	value string
 }
 
+func urlOffset(offsets []int, at int) int {
+	if offsets == nil {
+		return at
+	}
+	return offsets[at]
+}
+
 func urlRunEnd(s string, start int, offsets []int) int {
 	end := start
-	encoded := offsets[start+1]-offsets[start] > 1
+	encoded := offsets != nil && offsets[start+1]-offsets[start] > 1
 	for end < len(s) && !urlEnd(s[end]) && (!encoded || s[end] != '&' || offsets[end+1]-offsets[end] > 1) {
 		end++
 	}
@@ -212,8 +219,14 @@ func authorityByte(c byte) bool {
 	return schemeByte(c) || c == '_' || c == ':' || c == '[' || c == ']' || c == '%' || c >= 0x80
 }
 
+type embeddedURL struct {
+	protected bool
+	origin    string
+}
+
 func (g *guard) embeddedCuts(s string, offsets []int) []urlCut {
 	var cuts []urlCut
+	cache := map[string]embeddedURL{}
 	for from := 0; from < len(s); {
 		rel := strings.Index(s[from:], "://")
 		if rel < 0 {
@@ -223,10 +236,19 @@ func (g *guard) embeddedCuts(s string, offsets []int) []urlCut {
 		end := urlRunEnd(s, at, offsets)
 		for _, start := range schemeStarts(s, at) {
 			u := s[start:end]
-			if g.o.Loaded(u) {
-				r := redactURL(u)
-				if !strings.EqualFold(strings.TrimSuffix(u, "/"), r) {
-					cuts = append(cuts, urlCut{offsets[start], offsets[end], r})
+			v, known := cache[u]
+			if !known {
+				v.protected = g.o.Loaded(u)
+				if v.protected {
+					v.origin = redactURL(u)
+				}
+				if len(cache) < 64 {
+					cache[u] = v
+				}
+			}
+			if v.protected {
+				if !strings.EqualFold(strings.TrimSuffix(u, "/"), v.origin) {
+					cuts = append(cuts, urlCut{urlOffset(offsets, start), urlOffset(offsets, end), v.origin})
 				}
 				break
 			}
@@ -246,7 +268,7 @@ func (g *guard) unschemedCuts(s string, offsets []int) []urlCut {
 		for start > 0 && authorityByte(s[start-1]) {
 			start--
 		}
-		if start == at || start >= 3 && s[start-3:start] == "://" {
+		if start == at || start >= 3 && s[start-3:start] == "://" || !g.o.MayNameHost(s[start:at]) {
 			continue
 		}
 		for start < at {
@@ -254,7 +276,7 @@ func (g *guard) unschemedCuts(s string, offsets []int) []urlCut {
 			if g.o.URL("http://"+host+"/") || g.o.URL("https://"+host+"/") {
 				end := urlRunEnd(s, at, offsets)
 				if s[start:end] != host+"/" {
-					cuts = append(cuts, urlCut{offsets[start], offsets[end], host})
+					cuts = append(cuts, urlCut{urlOffset(offsets, start), urlOffset(offsets, end), host})
 				}
 				break
 			}
@@ -281,8 +303,13 @@ func unhex(c byte) (byte, bool) {
 }
 
 func decodeURLLayer(s string, offsets []int) (string, []int) {
+	if !strings.Contains(s, "%") {
+		return s, offsets
+	}
 	var b strings.Builder
-	next := []int{offsets[0]}
+	b.Grow(len(s))
+	next := make([]int, 1, len(s)+1)
+	next[0] = urlOffset(offsets, 0)
 	for i := 0; i < len(s); i++ {
 		if s[i] == '%' && i+2 < len(s) {
 			hi, ok1 := unhex(s[i+1])
@@ -290,24 +317,21 @@ func decodeURLLayer(s string, offsets []int) (string, []int) {
 			if ok1 && ok2 {
 				b.WriteByte(hi<<4 | lo)
 				i += 2
-				next = append(next, offsets[i+1])
+				next = append(next, urlOffset(offsets, i+1))
 				continue
 			}
 		}
 		b.WriteByte(s[i])
-		next = append(next, offsets[i+1])
+		next = append(next, urlOffset(offsets, i+1))
 	}
 	return b.String(), next
 }
 
 func (g *guard) cutEmbedded(s string) (string, bool) {
-	if !strings.ContainsAny(s, "/%") {
+	if !strings.ContainsAny(s, "/%") || !strings.Contains(s, "%") && !strings.Contains(s, "://") && !g.o.MayNameHost(s) {
 		return s, false
 	}
-	offsets := make([]int, len(s)+1)
-	for i := range offsets {
-		offsets[i] = i
-	}
+	var offsets []int
 	layer := s
 	var cuts []urlCut
 	for depth := 0; ; depth++ {

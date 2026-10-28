@@ -167,6 +167,17 @@ func (o *Origins) URL(raw string) bool {
 	return origin != "" && o != nil && slices.Contains(o.extra, origin)
 }
 
+func (o *Origins) MayNameHost(raw string) bool {
+	for i := range len(raw) {
+		if raw[i] >= 0x80 || raw[i] == '%' {
+			return true
+		}
+	}
+	raw = strings.ToLower(raw)
+	mentions := func(host string) bool { return strings.Contains(raw, host) }
+	return slices.ContainsFunc(rules.Domains, mentions) || slices.ContainsFunc(rules.Hosts, mentions) || o != nil && slices.ContainsFunc(o.hosts, mentions)
+}
+
 func (o *Origins) Loaded(raw string) bool {
 	return o.URL(raw) || Unparseable(raw)
 }
