@@ -4,11 +4,26 @@ import (
 	"cmp"
 	"slices"
 	"strings"
+
+	whatwg "github.com/nlnwa/whatwg-url/url"
 )
 
 var opaque = map[string]bool{"value": true, "preview": true, "customPreview": true, "arguments": true, "returnValue": true}
 
 var headerLists = map[string]bool{"headers": true, "requestHeaders": true, "responseHeaders": true}
+
+var hostParser = whatwg.NewParser()
+var hostBase, _ = hostParser.Parse("http://host.invalid/")
+
+func scrubKind(headers, urls bool) string {
+	if headers {
+		return "headers"
+	}
+	if urls {
+		return "url"
+	}
+	return "metadata"
+}
 
 type scrubItem struct {
 	v       any
@@ -134,7 +149,7 @@ func (g *guard) scrubMap(t map[string]any, headers bool, changed *bool) []scrubI
 			}
 		}
 		if str, ok := val.(string); ok {
-			if r, ok := g.cutEmbedded(str); ok {
+			if r, ok := g.cutEmbeddedKind(str, scrubKind(headers, urlKey(k))); ok {
 				t[k], *changed = r, true
 			}
 			continue
@@ -154,7 +169,7 @@ func (g *guard) scrubList(t []any, it scrubItem, changed *bool) []scrubItem {
 			}
 		}
 		if str, ok := val.(string); ok {
-			if r, ok := g.cutEmbedded(str); ok {
+			if r, ok := g.cutEmbeddedKind(str, scrubKind(it.headers, it.urls)); ok {
 				t[i], *changed = r, true
 			}
 			continue
@@ -303,6 +318,46 @@ func ordinaryDNS(host string) bool {
 	return strings.ContainsAny(last, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 }
 
+func canonicalAuthority(host string) (string, bool) {
+	if strings.HasPrefix(host, "[") {
+		end := strings.IndexByte(host, ']')
+		if end < 0 {
+			return "", true
+		}
+		tail := host[end+1:]
+		if tail != "" && !strings.HasPrefix(tail, ":") {
+			return "", true
+		}
+		if tail != "" {
+			if _, ok := ordinaryPort("host" + tail); !ok && tail != ":" {
+				return "", false
+			}
+		}
+		host = host[:end+1]
+	} else if colon := strings.IndexByte(host, ':'); colon >= 0 {
+		if strings.IndexByte(host[colon+1:], ':') >= 0 {
+			return "", false
+		}
+		if _, ok := ordinaryPort(host); !ok && colon+1 != len(host) {
+			return "", false
+		}
+		host = host[:colon]
+	}
+	u, err := hostParser.BasicParser(host, nil, hostBase.Clone(), whatwg.StateHostname)
+	if err != nil || u == nil {
+		return "", true
+	}
+	return u.Hostname(), true
+}
+
+func (g *guard) mayNameAuthority(host string) bool {
+	if ordinaryDNS(host) && !g.o.MayNameHost(host) {
+		return false
+	}
+	canonical, settled := canonicalAuthority(host)
+	return !settled || canonical != "" && g.o.MayNameHost(canonical)
+}
+
 func (g *guard) ordinaryEmbedded(u string) bool {
 	prefix := 0
 	if len(u) >= 7 && strings.EqualFold(u[:7], "http://") {
@@ -316,8 +371,12 @@ func (g *guard) ordinaryEmbedded(u string) bool {
 	if end := strings.IndexAny(host, "/?#\\"); end >= 0 {
 		host = host[:end]
 	}
-	host, ok := ordinaryPort(host)
-	return ok && !g.o.MayNameHost(host) && ordinaryDNS(host)
+	name, ok := ordinaryPort(host)
+	if ok && !g.o.MayNameHost(name) && ordinaryDNS(name) {
+		return true
+	}
+	canonical, settled := canonicalAuthority(host)
+	return settled && canonical != "" && !g.o.MayNameHost(canonical)
 }
 
 func (g *guard) embeddedCuts(s string, offsets []int, budget *urlBudget) ([]urlCut, bool) {
@@ -362,6 +421,16 @@ func (g *guard) embeddedCuts(s string, offsets []int, budget *urlBudget) ([]urlC
 	return append(cuts, more...), complete
 }
 
+func (g *guard) unschemedHost(host string, budget *urlBudget) (bool, bool) {
+	if !g.mayNameAuthority(host) {
+		return false, true
+	}
+	if !budget.take(2, 2*(len(host)+len("https:///"))) {
+		return false, false
+	}
+	return g.o.URL("http://"+host+"/") || g.o.URL("https://"+host+"/"), true
+}
+
 func (g *guard) unschemedCuts(s string, offsets []int, budget *urlBudget) ([]urlCut, bool) {
 	var cuts []urlCut
 	var runs urlRuns
@@ -373,15 +442,16 @@ func (g *guard) unschemedCuts(s string, offsets []int, budget *urlBudget) ([]url
 		for start > 0 && authorityByte(s[start-1]) {
 			start--
 		}
-		if start == at || start >= 3 && s[start-3:start] == "://" || !g.o.MayNameHost(s[start:at]) {
+		if start == at || start >= 3 && s[start-3:start] == "://" {
 			continue
 		}
 		for start < at {
 			host := s[start:at]
-			if !budget.take(2, 2*(len(host)+len("https:///"))) {
+			protected, complete := g.unschemedHost(host, budget)
+			if !complete {
 				return nil, false
 			}
-			if g.o.URL("http://"+host+"/") || g.o.URL("https://"+host+"/") {
+			if protected {
 				end := runs.end(s, at, offsets)
 				if s[start:end] != host+"/" {
 					cuts = append(cuts, urlCut{urlOffset(offsets, start), urlOffset(offsets, end), host})
@@ -436,6 +506,17 @@ func decodeURLLayer(s string, offsets []int) (string, []int) {
 }
 
 func (g *guard) cutEmbedded(s string) (string, bool) {
+	return g.cutEmbeddedKind(s, "metadata")
+}
+
+func (g *guard) blankEmbedded(s, kind string) (string, bool) {
+	if g.logf != nil {
+		g.logf("cdp: scrub blanked kind=%s length=%d", kind, len(s))
+	}
+	return "", true
+}
+
+func (g *guard) cutEmbeddedKind(s, kind string) (string, bool) {
 	if !strings.ContainsAny(s, "/%") || !strings.Contains(s, "%") && !strings.Contains(s, "://") && !g.o.MayNameHost(s) {
 		return s, false
 	}
@@ -446,7 +527,7 @@ func (g *guard) cutEmbedded(s string) (string, bool) {
 	for depth := 0; ; depth++ {
 		more, complete := g.embeddedCuts(layer, offsets, &budget)
 		if !complete {
-			return "", true
+			return g.blankEmbedded(s, kind)
 		}
 		cuts = append(cuts, more...)
 		next, positions := decodeURLLayer(layer, offsets)
@@ -454,7 +535,7 @@ func (g *guard) cutEmbedded(s string) (string, bool) {
 			break
 		}
 		if depth == maxScrubLayers {
-			return "", true
+			return g.blankEmbedded(s, kind)
 		}
 		layer, offsets = next, positions
 	}

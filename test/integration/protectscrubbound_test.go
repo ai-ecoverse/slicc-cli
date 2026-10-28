@@ -46,6 +46,48 @@ func TestCDPKeepsLargeHTMLWithDistinctOrdinaryURLs(t *testing.T) {
 	}
 }
 
+func TestCDPKeepsMultilingualAndEncodedOrdinaryHTML(t *testing.T) {
+	env := setupProtect(t)
+	var links, ips strings.Builder
+	for i := range 80 {
+		fmt.Fprintf(&links, `<a href="https://example.com/caf%%C3%%A9%d/menu">café</a>`, i)
+		fmt.Fprintf(&ips, `<a href="http://192.168.1.%d/menu">IP</a>`, i+1)
+	}
+	for _, tc := range []struct {
+		name string
+		html string
+		from string
+		to   string
+	}{
+		{"euro pricing", strings.Repeat("<li>9,99 €/Monat</li>", 50), "", ""},
+		{"Chinese text", strings.Repeat("<p>首页/新闻</p>", 50), "", ""},
+		{"percent paths", links.String(), "", ""},
+		{"ordinary IPs", ips.String(), "", ""},
+		{"fullwidth protected host", strings.Repeat("<li>9,99 €/Monat</li>", 50) + `<a href="https://ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ/doc/secret-fixture">fixture</a>`, "https://ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ/doc/secret-fixture", "https://seven.sliccy.ai"},
+		{"percent protected host", links.String() + `<a href="https://%73even.sliccy.ai/doc/secret-fixture">fixture</a>`, "https://%73even.sliccy.ai/doc/secret-fixture", "https://seven.sliccy.ai"},
+		{"fullwidth bare host", `<p>ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ/doc/secret-fixture</p>`, "ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ/doc/secret-fixture", "ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ"},
+		{"percent bare host", `<p>%73even.sliccy.ai/doc/secret-fixture</p>`, "%73even.sliccy.ai/doc/secret-fixture", "%73even.sliccy.ai"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var result struct {
+				Control string `json:"control"`
+				Guarded string `json:"guarded"`
+			}
+			env.evalJSON(t, "linkTest.protect.ordinaryScrubHTML("+jsArgs(env.allowed+"/blank", tc.html)+")", &result)
+			want := result.Control
+			if tc.from != "" {
+				if !strings.Contains(want, tc.from) {
+					t.Fatal("the protected fixture was absent from the page's HTML")
+				}
+				want = strings.ReplaceAll(want, tc.from, tc.to)
+			}
+			if result.Guarded != want {
+				t.Fatalf("DOM.getOuterHTML changed unexpectedly: control=%d bytes, guarded=%d bytes, want=%d bytes", len(result.Control), len(result.Guarded), len(want))
+			}
+		})
+	}
+}
+
 func TestCDPBoundsPageControlledTitleAndConsoleScrubbing(t *testing.T) {
 	env := setupProtect(t)
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,5 +172,8 @@ func TestCDPBoundsFakeDiscoveryAndConsoleScrubbing(t *testing.T) {
 		if text != "" {
 			t.Error("a capped metadata string was not blanked")
 		}
+	}
+	if !strings.Contains(env.a.stderr.String(), "cdp: scrub blanked kind=metadata length=") {
+		t.Error("SLICC_DEBUG did not report the fail-closed blank")
 	}
 }
