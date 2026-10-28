@@ -1704,7 +1704,7 @@ export function protectTest(getLink, describe) {
         const consoleText = c.waitEvent((e) => c.events.indexOf(e) >= mark && e.method === 'Console.messageAdded' && e.sessionId === sessionId, 5000);
         c.callTimeout = 5000;
         const start = performance.now();
-        const title = c.evaluate(`new Promise((resolve) => { document.title = ${JSON.stringify(text)}; console.log(document.title); requestAnimationFrame(() => resolve(document.title === ${JSON.stringify(text)})); })`, sessionId).then(async (set) => {
+        const title = c.evaluate(`new Promise((resolve) => { document.dispatchEvent(new CustomEvent('scrub-bound', { detail: ${JSON.stringify(text)} })); requestAnimationFrame(() => resolve(document.title === ${JSON.stringify(text)})); })`, sessionId).then(async (set) => {
           if (!set) throw new Error('the page did not set its adversarial title');
           return (await c.send('Target.getTargetInfo', { targetId })).targetInfo.title;
         });

@@ -3,6 +3,8 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +48,17 @@ func TestCDPKeepsLargeHTMLWithDistinctOrdinaryURLs(t *testing.T) {
 
 func TestCDPBoundsPageControlledTitleAndConsoleScrubbing(t *testing.T) {
 	env := setupProtect(t)
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/scrub.js" {
+			w.Header().Set("Content-Type", "text/javascript")
+			_, _ = w.Write([]byte(`document.addEventListener('scrub-bound', (event) => { document.title = event.detail; console.log(document.title); });`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><title>scrub fixture</title><script src="/scrub.js"></script><body>scrub fixture`))
+	}))
+	t.Cleanup(fixture.Close)
+	ordinary := strings.Replace(fixture.URL, "127.0.0.1", "localhost", 1)
 	for _, tc := range []struct {
 		name string
 		text string
@@ -59,7 +72,7 @@ func TestCDPBoundsPageControlledTitleAndConsoleScrubbing(t *testing.T) {
 				Console string  `json:"console"`
 				Elapsed float64 `json:"elapsed"`
 			}
-			env.evalJSONWithin(t, "linkTest.protect.scrubBoundedPage("+jsArgs(env.allowed+"/blank", tc.text+" "+env.seven+"/scrub-secret-fixture?token=scrub-secret-fixture")+")", &result, 20*time.Second)
+			env.evalJSONWithin(t, "linkTest.protect.scrubBoundedPage("+jsArgs(ordinary+"/", tc.text+" "+env.seven+"/scrub-secret-fixture?token=scrub-secret-fixture")+")", &result, 20*time.Second)
 			if result.Elapsed <= 0 || result.Elapsed >= 5000 {
 				t.Fatalf("page-controlled event delivery took %.0f ms", result.Elapsed)
 			}
