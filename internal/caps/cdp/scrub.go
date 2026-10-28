@@ -2,10 +2,18 @@ package cdp
 
 import (
 	"cmp"
+	"net"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
+	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 	whatwg "github.com/nlnwa/whatwg-url/url"
+	"golang.org/x/net/idna"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 var opaque = map[string]bool{"value": true, "preview": true, "customPreview": true, "arguments": true, "returnValue": true}
@@ -209,6 +217,7 @@ func schemeStarts(s string, at int) []int {
 const maxScrubLayers = 5
 const maxScrubURLs = 64
 const maxScrubURLBytes = 64 * 1024
+const maxScrubHostBytes = 4 * 1024
 
 type urlBudget struct {
 	calls int
@@ -318,7 +327,92 @@ func ordinaryDNS(host string) bool {
 	return strings.ContainsAny(last, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 }
 
+func foldAuthority(host string) string {
+	for range maxScrubLayers {
+		next, _ := decodeURLLayer(host, nil)
+		if next == host {
+			break
+		}
+		host = next
+	}
+	host = cases.Fold().String(norm.NFKC.String(host))
+	host = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r) || unicode.Is(unicode.Variation_Selector, r) {
+			return -1
+		}
+		if r == '\u3002' || r == '\uff0e' || r == '\uff61' {
+			return '.'
+		}
+		return r
+	}, host)
+	return cases.Fold().String(norm.NFKC.String(host))
+}
+
+func ipShapeRune(r rune) bool {
+	return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || strings.ContainsRune("x.:[]+-", r)
+}
+
+func ipShapeSuffix(host string) bool {
+	if at := strings.LastIndexFunc(host, func(r rune) bool { return !ipShapeRune(r) }); at >= 0 {
+		_, size := utf8.DecodeRuneInString(host[at:])
+		host = host[at+size:]
+		colon := strings.IndexByte(host, ':')
+		if colon < 0 {
+			return false
+		}
+		host = host[colon+1:]
+	}
+	return strings.ContainsAny(host, "0123456789[")
+}
+
+func (g *guard) protectedHostNames() []string {
+	rules := sliccbrowsers.Default().ProtectedOrigins
+	names := append(slices.Clone(rules.Hosts), rules.Domains...)
+	for _, origin := range g.o.Extra() {
+		names = append(names, protect.Host(origin))
+	}
+	return names
+}
+
+func (g *guard) hasProtectedIP() bool {
+	return slices.ContainsFunc(g.protectedHostNames(), func(name string) bool {
+		return net.ParseIP(strings.Trim(name, "[]")) != nil
+	})
+}
+
+func (g *guard) longAuthorityMayName(host string) bool {
+	host = foldAuthority(host)
+	ascii := strings.Map(func(r rune) rune {
+		if r >= utf8.RuneSelf || r == '%' {
+			return '?'
+		}
+		return r
+	}, host)
+	if g.o.MayNameHost(ascii) {
+		return true
+	}
+	ip := false
+	for _, name := range g.protectedHostNames() {
+		ip = ip || net.ParseIP(strings.Trim(name, "[]")) != nil
+		if !strings.Contains(name, "xn--") && !strings.Contains(name, "%") {
+			continue
+		}
+		decoded, err := idna.ToUnicode(name)
+		if err != nil {
+			return true
+		}
+		decoded = foldAuthority(decoded)
+		if decoded != "" && strings.Contains(host, decoded) {
+			return true
+		}
+	}
+	return ip && ipShapeSuffix(host)
+}
+
 func canonicalAuthority(host string) (string, bool) {
+	if len(host) > maxScrubHostBytes {
+		return "", false
+	}
 	if strings.HasPrefix(host, "[") {
 		end := strings.IndexByte(host, ']')
 		if end < 0 {
@@ -379,6 +473,34 @@ func (g *guard) ordinaryEmbedded(u string) bool {
 	return settled && canonical != "" && !g.o.MayNameHost(canonical)
 }
 
+func (g *guard) longEmbeddedSafe(prefix string, budget *urlBudget) bool {
+	if strings.EqualFold(prefix, "http://") || strings.EqualFold(prefix, "https://") {
+		return true
+	}
+	probe := prefix + "scrub-host.invalid/"
+	return budget.take(1, len(probe)) && !g.o.Loaded(probe)
+}
+
+func (g *guard) loadEmbedded(u string, budget *urlBudget, cache map[string]embeddedURL) (embeddedURL, bool) {
+	if g.ordinaryEmbedded(u) {
+		return embeddedURL{}, true
+	}
+	if v, known := cache[u]; known {
+		return v, true
+	}
+	if !budget.take(1, len(u)) {
+		return embeddedURL{}, false
+	}
+	v := embeddedURL{protected: g.o.Loaded(u)}
+	if v.protected {
+		v.origin = redactURL(u)
+	}
+	if len(cache) < 64 {
+		cache[u] = v
+	}
+	return v, true
+}
+
 func (g *guard) embeddedCuts(s string, offsets []int, budget *urlBudget) ([]urlCut, bool) {
 	var cuts []urlCut
 	var runs urlRuns
@@ -390,23 +512,25 @@ func (g *guard) embeddedCuts(s string, offsets []int, budget *urlBudget) ([]urlC
 		}
 		at := from + rel
 		end := runs.end(s, at, offsets)
+		authority := s[at+3 : end]
+		if stop := strings.IndexAny(authority, "/?#\\"); stop >= 0 {
+			authority = authority[:stop]
+		}
+		long := len(authority) > maxScrubHostBytes
+		if long && g.longAuthorityMayName(authority) {
+			return nil, false
+		}
 		for _, start := range schemeStarts(s, at) {
 			u := s[start:end]
-			if g.ordinaryEmbedded(u) {
-				continue
-			}
-			v, known := cache[u]
-			if !known {
-				if !budget.take(1, len(u)) {
+			if long {
+				if !g.longEmbeddedSafe(s[start:at+3], budget) {
 					return nil, false
 				}
-				v.protected = g.o.Loaded(u)
-				if v.protected {
-					v.origin = redactURL(u)
-				}
-				if len(cache) < 64 {
-					cache[u] = v
-				}
+				continue
+			}
+			v, complete := g.loadEmbedded(u, budget, cache)
+			if !complete {
+				return nil, false
 			}
 			if v.protected {
 				if !strings.EqualFold(strings.TrimSuffix(u, "/"), v.origin) {
@@ -443,6 +567,12 @@ func (g *guard) unschemedCuts(s string, offsets []int, budget *urlBudget) ([]url
 			start--
 		}
 		if start == at || start >= 3 && s[start-3:start] == "://" {
+			continue
+		}
+		if len(s[start:at]) > maxScrubHostBytes {
+			if g.longAuthorityMayName(s[start:at]) {
+				return nil, false
+			}
 			continue
 		}
 		for start < at {
@@ -517,7 +647,7 @@ func (g *guard) blankEmbedded(s, kind string) (string, bool) {
 }
 
 func (g *guard) cutEmbeddedKind(s, kind string) (string, bool) {
-	if !strings.ContainsAny(s, "/%") || !strings.Contains(s, "%") && !strings.Contains(s, "://") && !g.o.MayNameHost(s) {
+	if !strings.ContainsAny(s, "/%") || !strings.Contains(s, "%") && !strings.Contains(s, "://") && !g.o.MayNameHost(s) && !g.hasProtectedIP() {
 		return s, false
 	}
 	var offsets []int
