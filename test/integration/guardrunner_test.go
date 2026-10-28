@@ -519,6 +519,9 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	unsupported := map[string]int{}
 	for _, r := range sum.Results {
 		name := r.ID + " " + r.Target + " " + r.Variant
+		if r.ID == "C8.protected-error-page" {
+			t.Logf("%s: client discovery diagnostic=%s", name, r.Diagnostics)
+		}
 		if r.ID == "C9.page-drivable" {
 			t.Logf("%s: mouse transport evidence=%s", name, r.Diagnostics)
 			checkMouseEvidence(t, r)

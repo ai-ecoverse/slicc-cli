@@ -2,6 +2,7 @@ import { run } from '/vendor/slicc-browsers/guard-runner.mjs';
 import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
 import { foregroundMouseCall } from './foreground.js';
+import { diagnoseC8 } from './c8-discovery-diagnostic.js';
 
 const CALL_TIMEOUT_MS = 10000;
 
@@ -158,8 +159,10 @@ export function guardStart(getLink, opts) {
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
     if (opts.only) set.vectors = set.vectors.filter((v) => v.id === opts.only);
+    for (const v of set.vectors) if (v.trigger?.some((s) => s.errorPage)) v.targets = ['seven', 'vault'];
     for (const v of set.vectors) if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
     const mouseDiagnostics = new Map();
+    const discoveryDiagnostics = new Map();
     const running = run(set, {
       clientFactory: async ({ slot, vector, target, variant }) => {
         const b = browsers[slot % browsers.length];
@@ -176,6 +179,7 @@ export function guardStart(getLink, opts) {
         }
         await unguarded.send('Target.setDiscoverTargets', { discover: true });
         const guarded = sessionBound(client, 'client', { inject: opts.inject });
+        if (vector.id === 'C8.protected-error-page') discoveryDiagnostics.set(rowKey({ id: vector.id, target, variant }), diagnoseC8(guarded));
         guarded.inboundDelay = delayedInbound(b.gate, opts);
         return {
           client: guarded,
@@ -197,6 +201,8 @@ export function guardStart(getLink, opts) {
       log: (row) => {
         const evidence = mouseDiagnostics.get(rowKey(row));
         if (evidence) { row.diagnostics = evidence; mouseDiagnostics.delete(rowKey(row)); }
+        const discovery = discoveryDiagnostics.get(rowKey(row));
+        if (discovery) { row.diagnostics = discovery(); discoveryDiagnostics.delete(rowKey(row)); }
         state.started.delete(rowKey(row));
         if (row.inFlight) row.errors = [...(row.errors ?? []), ...describeSessions(row)];
         state.rows.push(row);

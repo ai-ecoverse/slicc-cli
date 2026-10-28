@@ -1681,6 +1681,19 @@ export function protectTest(getLink, describe) {
         const events = c.events.filter((e) => workers.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
         return { events, results: results.map((r) => ({ call: r.call, text: JSON.stringify(r) })), log };
       }),
+    discoveryScrub: (browser) =>
+      run(browser, async (c) => {
+        const done = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === 'T9', 15000);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await done;
+        const infos = [];
+        for (let i = 0; i < 10; i++) infos.push((await c.send('Target.getTargetInfo', { targetId: `T${i}` })).targetInfo);
+        return {
+          infos,
+          events: c.events.filter((e) => ['Target.targetCreated', 'Target.targetInfoChanged'].includes(e.method)).map((e) => ({ method: e.method, info: e.params.targetInfo })),
+          text: c.events.filter((e) => ['Page.frameNavigated', 'Console.messageAdded'].includes(e.method)).map((e) => e.method === 'Page.frameNavigated' ? e.params.frame.name : e.params.message.text),
+        };
+      }),
     extraInfo: (browser, last) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Network.responseReceivedExtraInfo' && e.params.requestId === last, 15000);
