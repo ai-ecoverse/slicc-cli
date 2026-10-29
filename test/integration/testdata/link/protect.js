@@ -1,5 +1,7 @@
 import { CdpClient, frameMessage } from './cdp.js';
 
+export const blanked = 'data:text/html,%3Ctitle%3Eblocked%3C%2Ftitle%3E';
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function outcome(promise) {
@@ -592,7 +594,7 @@ export function protectTest(getLink, describe) {
         await second;
         const listedFailed = await listedOnceCommitted(c, other.targetId);
         await sleep(300);
-        const wiped = await outcome(c.send('Page.navigate', { url: 'about:blank#blocked' }, other.sessionId));
+        const wiped = await outcome(c.send('Page.navigate', { url: blanked }, other.sessionId));
         await sleep(300);
         const listedError = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === other.targetId) ?? null;
         const closeError = await outcome(c.send('Target.closeTarget', { targetId: other.targetId }));
@@ -948,7 +950,7 @@ export function protectTest(getLink, describe) {
         await sleep(800);
         answers.evaluateReloaded = await ask('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true });
         const detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
-        const blank = await ask('Page.navigate', { url: 'about:blank#blocked' });
+        const blank = await ask('Page.navigate', { url: blanked });
         answers.historyAfter = await ask('Page.getNavigationHistory');
         answers.evaluateAfter = await ask('Runtime.evaluate', { expression: 'location.href', returnByValue: true });
         const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === targetId) ?? null;

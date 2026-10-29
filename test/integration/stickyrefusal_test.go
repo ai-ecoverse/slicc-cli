@@ -29,7 +29,7 @@ func TestCDPRefusesStickyEmulationAndInheritedNavigationWithoutForwarding(t *tes
 		} `json:"audit"`
 	}
 	env.p.eval("linkTest.stickyAdmission("+jsArgs(opts)+")", &rows)
-	if len(rows) != 26 {
+	if len(rows) != 27 {
 		t.Fatalf("missing sticky refusal or regex boundary cases: %d", len(rows))
 	}
 	for _, row := range rows {
