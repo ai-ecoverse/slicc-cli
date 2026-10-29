@@ -335,6 +335,7 @@ func (e *navEnv) testRedirectSecret(t *testing.T) {
 			Detached    bool            `json:"detached"`
 			Answers     json.RawMessage `json:"answers"`
 			Blank       cdpOutcome      `json:"blank"`
+			Landed      *blankedFrame   `json:"landed"`
 			Listed      *protectTarget  `json:"listed"`
 			Before      int             `json:"framesBefore"`
 			OnError     int             `json:"framesOnError"`
@@ -356,18 +357,22 @@ func (e *navEnv) testRedirectSecret(t *testing.T) {
 			t.Fatalf("screenshots: %d before the error page for %s and %d answered after it committed (%v)", r.ShotsBefore, base, r.ShotsAfter, r.ShotErrors)
 		case r.Before == 0 || r.OnError != 0:
 			t.Fatalf("screencast frames: %d before the error page for %s and %d on it", r.Before, base, r.OnError)
-		case r.Detached || !r.Blank.refused() || r.Blank.Error.Message != refusedInheritedText || !r.Close.OK || r.Listed == nil || r.Listed.URL != base:
+		case r.Detached || !r.Blank.OK || r.Landed == nil || r.Landed.Unreachable != "" || !r.Close.OK || r.Listed == nil || r.Listed.URL != blankedURL || r.Listed.Title != "blocked":
 			t.Fatalf("the error page for %s isn't drivable: %+v", base, r)
 		}
 		var answers map[string]cdpOutcome
 		_ = json.Unmarshal(r.Answers, &answers)
+		var after struct {
+			History navHistory `json:"historyAfter"`
+		}
+		_ = json.Unmarshal(r.Answers, &after)
 		for _, m := range []string{"Runtime.evaluate", "DOM.getDocument", "Page.captureSnapshot", "Page.addScriptToEvaluateOnNewDocument", "DOM.enable", "javascript:", "Page.reload with a script", "evaluateReloaded"} {
 			if !answers[m].refused() {
 				t.Errorf("%s on the error page for %s: %+v", m, base, answers[m])
 			}
 		}
-		if !answers["Page.reload"].OK || !answers["evaluateAfter"].refused() {
-			t.Errorf("reloading the error page for %s, or content quarantine once it left: %+v %+v", base, answers["Page.reload"], answers["evaluateAfter"])
+		if !answers["Page.reload"].OK || answers["evaluateAfter"].Error.Message != refusedHistoryText || !after.History.endsBlanked(base) {
+			t.Errorf("reloading the error page for %s, or content quarantine once it was wiped: %+v %+v %+v", base, answers["Page.reload"], answers["evaluateAfter"], after.History)
 		}
 	}
 }
