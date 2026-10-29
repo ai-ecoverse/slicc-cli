@@ -1,6 +1,7 @@
 import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
 import { auditSetter, evaluate, outcome, until } from './persistent.js';
+import { blanked } from './protect.js';
 
 export const headersRefusal = 'slicc: refused: settings for a whole session (headers, user agent, locale, time zone, cache, network conditions, blocked URLs, emulation) could reach seven’s pages or the vault, so the guard doesn’t allow them; change a request through Fetch instead';
 export const inheritedRefusal = 'slicc: refused: a browser-side navigation to about: gives the page the origin of whatever drives the browser, so the guard doesn’t send it; open a new tab on about:blank instead';
@@ -15,6 +16,7 @@ export async function stickyAdmissionProof(getLink, opts) {
     cases.push(...['Emulation.setFocusEmulationEnabled','Emulation.setDeviceMetricsOverride','Emulation.addVirtualSensor','Emulation.updateVirtualSensor','Emulation.removeVirtualSensor'].map((method)=>({method,params:{},expected:headersRefusal})));
     cases.push(...['about:blank','about:blank#blocked','about:srcdoc','ABOUT:BLANK','about:version','invalid-relative'].map((url)=>({method:'Page.navigate',params:{url},expected:inheritedRefusal})));
     cases.push(...['Emulation.set','Emulation.setx','Emulation.addx','Emulation.updatex','Emulation.removex'].map((method)=>({method,params:{},expected:null})));
+    cases.push({method:'Page.navigate',params:{url:blanked},expected:null});
     const rows=[];
     for(const c of cases) {
       const before=client.sent.length;

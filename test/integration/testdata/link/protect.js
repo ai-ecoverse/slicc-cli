@@ -1,5 +1,7 @@
 import { CdpClient, frameMessage } from './cdp.js';
 
+export const blanked = 'data:text/html,%3Ctitle%3Eblocked%3C%2Ftitle%3E';
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function outcome(promise) {
@@ -38,6 +40,20 @@ const listedOnceCommitted = async (c, targetId) => {
     await sleep(100);
   }
 };
+
+const listedOnceBlanked = async (c, targetId) => {
+  for (let tries = 1; ; tries += 1) {
+    const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === targetId) ?? null;
+    if (tries >= 50 || (listed?.url === blanked && listed.title === 'blocked')) return listed;
+    await sleep(100);
+  }
+};
+
+const landsBlanked = (c, sessionId) =>
+  c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && !e.params.frame.parentId && e.params.frame.url === blanked, 20000).then(
+    (e) => ({ url: e.params.frame.url, unreachable: e.params.frame.unreachableUrl ?? '' }),
+    () => null,
+  );
 
 const observerNavigation = async (targetId, params) => {
   window.protectObserverRequest = { targetId, ...params };
@@ -592,12 +608,16 @@ export function protectTest(getLink, describe) {
         await second;
         const listedFailed = await listedOnceCommitted(c, other.targetId);
         await sleep(300);
-        const wiped = await outcome(c.send('Page.navigate', { url: 'about:blank#blocked' }, other.sessionId));
-        await sleep(300);
-        const listedError = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === other.targetId) ?? null;
+        const mark = c.events.length;
+        const landing = landsBlanked(c, other.sessionId);
+        const wiped = await outcome(c.send('Page.navigate', { url: blanked }, other.sessionId));
+        const landed = await landing;
+        const listedError = await listedOnceBlanked(c, other.targetId);
+        const historyError = await outcome(c.send('Page.getNavigationHistory', {}, other.sessionId));
+        const wipeNamed = JSON.stringify(c.events.slice(mark).filter((e) => e.sessionId === other.sessionId || e.params?.targetInfo?.targetId === other.targetId)).includes(new URL(sevenURL).origin);
         const closeError = await outcome(c.send('Target.closeTarget', { targetId: other.targetId }));
         const shown = JSON.stringify(c.events.filter((e) => e.method.startsWith('Target.'))).includes(sevenURL);
-        return { before, unreachable: params.frame.unreachableUrl, detached, listed, info: { url: targetInfo.url, title: targetInfo.title }, reload, blank, href, unchanged, leaked: leaked || shown, locked, after, reattach, close, wiped, listedFailed, listedError, closeError };
+        return { before, unreachable: params.frame.unreachableUrl, detached, listed, info: { url: targetInfo.url, title: targetInfo.title }, reload, blank, href, unchanged, leaked: leaked || shown, locked, after, reattach, close, wiped, landed, wipeNamed, historyError, listedFailed, listedError, closeError };
       }),
     restoreRace: (browser, targetId, sevenOrigin) =>
       run(browser, async (c) => {
@@ -948,13 +968,15 @@ export function protectTest(getLink, describe) {
         await sleep(800);
         answers.evaluateReloaded = await ask('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true });
         const detached = c.events.some((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId);
-        const blank = await ask('Page.navigate', { url: 'about:blank#blocked' });
+        const landing = landsBlanked(c, sessionId);
+        const blank = await ask('Page.navigate', { url: blanked });
+        const landed = await landing;
+        const listed = await listedOnceBlanked(c, targetId);
         answers.historyAfter = await ask('Page.getNavigationHistory');
         answers.evaluateAfter = await ask('Runtime.evaluate', { expression: 'location.href', returnByValue: true });
-        const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === targetId) ?? null;
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
         await sleep(300);
-        return { unreachable: params.frame.unreachableUrl, detached, answers, blank, listed, close, framesBefore, framesOnError, shotsBefore, shotsAfter, shotMessages: [...new Set(shots.map((x) => x.message))], seen: JSON.stringify([answers, c.events.filter((e) => e.method !== 'Page.screencastFrame')]) };
+        return { unreachable: params.frame.unreachableUrl, detached, answers, blank, landed, listed, close, framesBefore, framesOnError, shotsBefore, shotsAfter, shotMessages: [...new Set(shots.map((x) => x.message))], seen: JSON.stringify([answers, c.events.filter((e) => e.method !== 'Page.screencastFrame')]) };
       }),
     navPopup: (browser, base, tag, opener, popup, away, direct) =>
       run(browser, async (c) => {

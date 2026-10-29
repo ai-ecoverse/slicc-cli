@@ -29,7 +29,7 @@ func TestCDPRefusesStickyEmulationAndInheritedNavigationWithoutForwarding(t *tes
 		} `json:"audit"`
 	}
 	env.p.eval("linkTest.stickyAdmission("+jsArgs(opts)+")", &rows)
-	if len(rows) != 26 {
+	if len(rows) != 27 {
 		t.Fatalf("missing sticky refusal or regex boundary cases: %d", len(rows))
 	}
 	for _, row := range rows {
@@ -38,7 +38,7 @@ func TestCDPRefusesStickyEmulationAndInheritedNavigationWithoutForwarding(t *tes
 		}
 		if row.Expected == nil {
 			if !row.Audit.Probes[0].Forwarded || row.Setup.refused() {
-				t.Errorf("nonmatching Emulation method over-blocked: %s %+v", row.Method, row)
+				t.Errorf("%s %s over-blocked: %+v", row.Method, row.Params, row)
 			}
 			continue
 		}

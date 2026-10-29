@@ -41,6 +41,40 @@ type protectTarget struct {
 	OpenerID string `json:"openerId"`
 }
 
+const blankedURL = "data:text/html,%3Ctitle%3Eblocked%3C%2Ftitle%3E"
+
+const refusedHistoryText = "slicc: refused: the target's history may restore a protected document"
+
+type blankedFrame struct {
+	URL         string `json:"url"`
+	Unreachable string `json:"unreachable"`
+}
+
+type navHistory struct {
+	OK     bool `json:"ok"`
+	Result struct {
+		CurrentIndex int `json:"currentIndex"`
+		Entries      []struct {
+			URL          string `json:"url"`
+			UserTypedURL string `json:"userTypedURL"`
+		} `json:"entries"`
+	} `json:"result"`
+}
+
+func (h navHistory) endsBlanked(origin string) bool {
+	if !h.OK || h.Result.CurrentIndex < 0 || h.Result.CurrentIndex >= len(h.Result.Entries) || h.Result.Entries[h.Result.CurrentIndex].URL != blankedURL {
+		return false
+	}
+	for _, x := range h.Result.Entries {
+		for _, u := range []string{x.URL, x.UserTypedURL} {
+			if strings.HasPrefix(u, origin) && u != origin {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func setupProtect(t *testing.T) *protectEnv {
 	t.Helper()
 	return setupProtectOn(t, launchBrowser(t))
@@ -299,6 +333,9 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 		Reattach     cdpOutcome     `json:"reattach"`
 		Close        cdpOutcome     `json:"close"`
 		Wiped        cdpOutcome     `json:"wiped"`
+		Landed       *blankedFrame  `json:"landed"`
+		WipeNamed    bool           `json:"wipeNamed"`
+		HistoryError navHistory     `json:"historyError"`
 		ListedFailed *protectTarget `json:"listedFailed"`
 		ListedError  *protectTarget `json:"listedError"`
 		CloseError   cdpOutcome     `json:"closeError"`
@@ -315,9 +352,14 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 		t.Fatalf("seven's document, restored into the same tab, didn't lock it: %+v", r)
 	case r.ListedFailed == nil || r.ListedFailed.URL != e.seven || r.ListedFailed.Title != e.seven:
 		t.Fatalf("a tab on an error page for seven's URL is listed as %+v", r.ListedFailed)
-	case !r.Wiped.refused() || r.Wiped.Error.Message != refusedInheritedText || !r.CloseError.OK || r.ListedError == nil || r.ListedError.URL != e.seven:
-		t.Fatalf("wiping and closing a tab on an error page for seven's URL: %+v wiped to %+v", r, r.ListedError)
+	case !r.Wiped.OK || r.Landed == nil || r.Landed.Unreachable != "" || r.ListedError == nil || r.ListedError.URL != blankedURL || r.ListedError.Title != "blocked":
+		t.Fatalf("wiping a tab on an error page for seven's URL with seven's blank page: %+v wiped to %+v", r, r.ListedError)
+	case r.WipeNamed || !r.HistoryError.endsBlanked(e.seven):
+		t.Fatalf("a tab wiped off an error page for seven's URL still names it: %+v", r)
+	case !r.CloseError.OK:
+		t.Fatalf("closing a wiped tab: %+v", r.CloseError)
 	}
+	t.Logf("history after the wipe: %+v", r.HistoryError.Result)
 }
 
 func (e *protectEnv) directTab(t *testing.T, u string) (string, *cdp.Session) {
