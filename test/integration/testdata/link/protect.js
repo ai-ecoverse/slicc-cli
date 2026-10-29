@@ -1723,6 +1723,15 @@ export function protectTest(getLink, describe) {
           console: c.events.filter((e) => e.method === 'Console.messageAdded' && e.params.message.text !== 'scrub-bound-done').map((e) => e.params.message.text),
         };
       }),
+    fragmentDiscovery: (browser) =>
+      run(browser, async (c) => {
+        const done = c.waitEvent((e) => e.method === 'Console.messageAdded' && e.params.message.text === 'fragment-scrub-done', 5000);
+        await Promise.all([done, c.send('Target.setDiscoverTargets', { discover: true })]);
+        return {
+          infos: c.events.filter((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId.startsWith('FRAG')).map((e) => e.params.targetInfo),
+          received: JSON.stringify(c.events),
+        };
+      }),
     discoveryScrub: (browser) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === 'T9', 15000);
