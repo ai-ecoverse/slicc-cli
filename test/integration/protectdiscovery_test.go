@@ -110,3 +110,84 @@ func TestCDPDiscoveryScrubsEncodedAndUnschemedProtectedTitles(t *testing.T) {
 		}
 	}
 }
+
+func TestCDPDiscoveryCutsProtectedHostsInURLFragments(t *testing.T) {
+	type fragmentCase struct {
+		prefix, host, raw string
+	}
+	const fixture = "/doc/path-secret-fixture"
+	var cases []fragmentCase
+	var events []string
+	env, _ := setupFakeProtect(t, func(seven, allowed string) fakeScript {
+		for _, host := range []string{"vault.sliccy.ai", "seven.sliccy.ai", "controller.sliccy.ai", strings.TrimPrefix(seven, "http://")} {
+			tail := host + fixture
+			for _, form := range []struct{ prefix, tail string }{
+				{"https://ordinary.example/?a=https://x.example/#", tail},
+				{"https://ordinary.example/#", tail},
+				{"https://ordinary.example/?a=" + url.QueryEscape("https://x.example/#"), url.QueryEscape(tail)},
+				{"https://ordinary.example/#", url.PathEscape(tail)},
+				{"https://ordinary.example/?a=https://x.example/#", url.PathEscape(tail)},
+			} {
+				raw := form.prefix + form.tail
+				events = append(events, fmt.Sprintf(`{"method":"Target.targetInfoChanged","params":{"targetInfo":{"targetId":"FRAG%d","type":"page","url":%q,"title":%q}}}`, len(cases), raw, raw))
+				cases = append(cases, fragmentCase{form.prefix, host, raw})
+			}
+		}
+		events = append(events, `{"method":"Console.messageAdded","params":{"message":{"text":"fragment-scrub-done"}}}`)
+		return func(method string, _ json.RawMessage) (string, []string) {
+			if method == "Target.setDiscoverTargets" {
+				return "{}", events
+			}
+			return "{}", nil
+		}
+	})
+	for i, c := range cases {
+		var sent struct {
+			Params struct {
+				TargetInfo struct {
+					URL   string `json:"url"`
+					Title string `json:"title"`
+				} `json:"targetInfo"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(events[i]), &sent); err != nil || sent.Params.TargetInfo.URL != c.raw || sent.Params.TargetInfo.Title != c.raw || !strings.Contains(events[i], "path-secret-fixture") {
+			t.Fatalf("the fake's event %d does not carry the fixture in its title and URL: %s", i, events[i])
+		}
+		u, err := url.Parse(c.raw)
+		if err == nil && u.Fragment == "" {
+			u, err = url.Parse(u.Query().Get("a"))
+		}
+		if err != nil || u.Fragment != c.host+fixture {
+			t.Fatalf("the fake's URL %q does not put the fixture in a URL fragment, so fragments went untested", c.raw)
+		}
+	}
+	var result struct {
+		Infos []struct {
+			TargetID string `json:"targetId"`
+			Title    string `json:"title"`
+			URL      string `json:"url"`
+		} `json:"infos"`
+		Received string `json:"received"`
+	}
+	env.evalJSON(t, "linkTest.protect.fragmentDiscovery('chrome-2')", &result)
+	if len(result.Infos) != len(cases) {
+		t.Fatalf("fragment discovery coverage: got %d of %d events", len(result.Infos), len(cases))
+	}
+	for _, info := range result.Infos {
+		var i int
+		if _, err := fmt.Sscanf(info.TargetID, "FRAG%d", &i); err != nil || i < 0 || i >= len(cases) {
+			t.Fatalf("unknown fragment target: %+v", info)
+		}
+		c := cases[i]
+		for name, got := range map[string]string{"title": info.Title, "url": info.URL} {
+			if rest, ok := strings.CutPrefix(got, c.prefix); !ok || rest != c.host && rest != url.QueryEscape(c.host) {
+				t.Errorf("%s for %q: got %q, want %q", name, c.raw, got, c.prefix+c.host)
+			}
+		}
+	}
+	for _, leak := range []string{"path-secret-fixture", "/doc", "%2fdoc"} {
+		if strings.Contains(strings.ToLower(result.Received), leak) {
+			t.Errorf("%q reached the client", leak)
+		}
+	}
+}
