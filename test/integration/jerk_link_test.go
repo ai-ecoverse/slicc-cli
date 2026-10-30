@@ -83,7 +83,15 @@ func jerkCalls(t *testing.T, log string) []map[string]any {
 	return calls
 }
 
-func lastArgs(t *testing.T, log string) (string, map[string]any) {
+func jerkRuns(t *testing.T, log string) int {
+	t.Helper()
+	if _, err := os.Stat(log); err != nil {
+		return 0
+	}
+	return len(jerkCalls(t, log))
+}
+
+func lastArgv(t *testing.T, log string) ([]string, map[string]any) {
 	t.Helper()
 	calls := jerkCalls(t, log)
 	if len(calls) == 0 {
@@ -94,6 +102,12 @@ func lastArgs(t *testing.T, log string) (string, map[string]any) {
 	for _, a := range c["args"].([]any) {
 		args = append(args, a.(string))
 	}
+	return args, c
+}
+
+func lastArgs(t *testing.T, log string) (string, map[string]any) {
+	t.Helper()
+	args, c := lastArgv(t, log)
 	return strings.Join(args, " "), c
 }
 
@@ -119,6 +133,8 @@ func TestJerkOverTheLink(t *testing.T) {
 	t.Run("create", func(t *testing.T) { testJerkCreate(t, e, log) })
 	t.Run("seal and unseal", func(t *testing.T) { testJerkSeal(t, e.p, log) })
 	t.Run("refusals", func(t *testing.T) { testJerkRefusals(t, e.p) })
+	t.Run("mcp:url ids", func(t *testing.T) { testJerkMCPURL(t, e, log) })
+	t.Run("mcp:url refusals", func(t *testing.T) { testJerkMCPURLRefusals(t, e.p, log) })
 	t.Run("nothing secret in the log", func(t *testing.T) {
 		if strings.Contains(e.a.stderr.String(), "gho_secret") {
 			t.Fatalf("slicc's log shows a token:\n%s", e.a.stderr.String())
@@ -245,6 +261,261 @@ func testJerkRefusals(t *testing.T, p *page) {
 			t.Fatalf("%v: %+v, want %s", c.open, r, c.want)
 		}
 	}
+}
+
+const jerkMCPID = "mcp:url:http://127.0.0.1:8931/mcp/k3y"
+
+func testJerkMCPURL(t *testing.T, e *linkEnv, log string) {
+	r := e.p.jerk(t, map[string]any{"op": "create", "provider": jerkMCPID, "scope": "read", "params": map[string]string{"host": "x"}})
+	if r.Reset != "" || r.last()["exit"] != 0.0 || r.last()["provider"] != jerkMCPID {
+		t.Fatalf("create %+v", r)
+	}
+	if args, _ := lastArgv(t, log); !slices.Equal(args, []string{jerkMCPID, "create", "--via-link", "--seven-origin", e.origin, "--scope", "read", "-p", "host=x"}) {
+		t.Fatalf("create ran jerk %q", args)
+	}
+	r = e.p.jerk(t, map[string]any{"op": "seal", "provider": jerkMCPID, "duration": 900})
+	if r.Reset != "" || len(r.of("lease")) != 1 || r.last()["provider"] != jerkMCPID {
+		t.Fatalf("seal %+v", r)
+	}
+	if args, c := lastArgv(t, log); !slices.Equal(args, []string{jerkMCPID, "lease", "--via-link"}) || c["duration"] != "900" {
+		t.Fatalf("seal ran jerk %q %v", args, c)
+	}
+	r = e.p.jerk(t, map[string]any{"op": "unseal", "provider": jerkMCPID, "lease_id": "lease-1"})
+	if r.Reset != "" || r.last()["message"] != "dropped lease-1" || r.last()["provider"] != jerkMCPID {
+		t.Fatalf("unseal %+v", r)
+	}
+	if args, c := lastArgv(t, log); !slices.Equal(args, []string{jerkMCPID, "drop", "--lease", "--via-link"}) || c["lease"] != "lease-1" {
+		t.Fatalf("unseal ran jerk %q %v", args, c)
+	}
+	base := "mcp:url:http://127.0.0.1:8931/"
+	longest := base + strings.Repeat("a", 2048-len(base))
+	if r := e.p.jerk(t, map[string]any{"op": "create", "provider": longest}); r.Reset != "" {
+		t.Fatalf("a 2048-byte id: %+v", r)
+	}
+}
+
+func testJerkMCPURLRefusals(t *testing.T, p *page, log string) {
+	before := jerkRuns(t, log)
+	base := "mcp:url:https://example.com/"
+	for _, id := range []string{
+		"mcp:bb",
+		"mcp:url:",
+		"mcp:url:https://EXAMPLE.com/",
+		"mcp:url:https://example.com:443/",
+		"mcp:url:https://example.com:0/",
+		"mcp:url:https://example.com",
+		"mcp:url:https://example.com/?a=1",
+		"mcp:url:https://example.com/?",
+		"mcp:url:https://example.com/#f",
+		"mcp:url:https://example.com/#",
+		"mcp:url:https://user:pw@example.com/",
+		"mcp:url:http://example.com/",
+		"mcp:url:https://example.com/a/../b",
+		"mcp:url:https://example.com/a\\b",
+		"mcp:url:https://example.com/a\nb",
+		"mcp:url:https://example.com/\x7f",
+		"mcp:url:https://example.com/ü",
+		base + strings.Repeat("a", 2049-len(base)),
+	} {
+		for _, op := range []string{"create", "seal", "unseal"} {
+			if r := p.jerk(t, map[string]any{"op": op, "provider": id, "lease_id": "x"}); r.Reset != "EPROTO" {
+				t.Fatalf("%s %q: %+v", op, id, r)
+			}
+		}
+	}
+	for _, op := range []string{"status", "accounts"} {
+		r := p.jerk(t, map[string]any{"op": op, "provider": jerkMCPID})
+		if r.Reset != "EPROTO" || r.Detail != op+" needs a provider matching ^[a-z0-9][a-z0-9-]{0,63}$" {
+			t.Fatalf("%s %+v", op, r)
+		}
+	}
+	if after := jerkRuns(t, log); after != before {
+		t.Fatalf("refused ids ran jerk %d times", after-before)
+	}
+}
+
+func TestMCPURLsMatchJerk(t *testing.T) {
+	for _, c := range []struct{ raw, canonical string }{
+		{"https://example.com/", "https://example.com/"},
+		{"https://example.com/mcp/", "https://example.com/mcp/"},
+		{"https://example.com:8443/mcp", "https://example.com:8443/mcp"},
+		{"http://localhost/", "http://localhost/"},
+		{"http://localhost:3000/mcp", "http://localhost:3000/mcp"},
+		{"http://127.0.0.1:8931/mcp", "http://127.0.0.1:8931/mcp"},
+		{"http://[::1]:3000/", "http://[::1]:3000/"},
+		{"https://[2001:db8::1]/", "https://[2001:db8::1]/"},
+		{"https://1.2.3.4:8443/x", "https://1.2.3.4:8443/x"},
+		{"https://example.com./", "https://example.com./"},
+		{"https://xn--mnchen-3ya.de/mcp", "https://xn--mnchen-3ya.de/mcp"},
+		{"https://example.com/a%2Fb", "https://example.com/a%2Fb"},
+		{"https://example.com/a%2fb", "https://example.com/a%2fb"},
+		{"https://example.com/%zz", "https://example.com/%zz"},
+		{"https://example.com/a^b|c[d]", "https://example.com/a^b|c[d]"},
+		{"https://example.com//a", "https://example.com//a"},
+		{"https://example.com/~a!$&'()*+,;=:@", "https://example.com/~a!$&'()*+,;=:@"},
+		{"https://example.com", "https://example.com/"},
+		{"https://example.com:443/", "https://example.com/"},
+		{"http://localhost:80/", "http://localhost/"},
+		{"https://EXAMPLE.com/", "https://example.com/"},
+		{"HTTPS://example.com/", "https://example.com/"},
+		{"https://example.com:08443/", "https://example.com:8443/"},
+		{"https://example.com/a/../b", "https://example.com/b"},
+		{"https://example.com/a/%2e%2e/b", "https://example.com/b"},
+		{"https://example.com/a/./b", "https://example.com/a/b"},
+		{"https://example.com\\a", "https://example.com/a"},
+		{"https://example.com/a\\b", "https://example.com/a/b"},
+		{"https:/example.com/", "https://example.com/"},
+		{"https:example.com/", "https://example.com/"},
+		{"https://example.com/a b", "https://example.com/a%20b"},
+		{"https://example.com/a\"b", "https://example.com/a%22b"},
+		{"https://example.com/a<b>", "https://example.com/a%3Cb%3E"},
+		{"https://example.com/a`b", "https://example.com/a%60b"},
+		{"https://example.com/a{b}", "https://example.com/a%7Bb%7D"},
+		{"https://example.com/ü", "https://example.com/%C3%BC"},
+		{"https://münchen.de/", "https://xn--mnchen-3ya.de/"},
+		{"https://ex%61mple.com/", "https://example.com/"},
+		{"https://2130706433/", "https://127.0.0.1/"},
+		{"https://0x7f.1/", "https://127.0.0.1/"},
+		{"http://127.1/", "http://127.0.0.1/"},
+		{"https://[::ffff:127.0.0.1]/", "https://[::ffff:7f00:1]/"},
+		{"http://[0:0:0:0:0:0:0:1]/", "http://[::1]/"},
+		{"https://@example.com/", "https://example.com/"},
+		{"https://example.com:/", "https://example.com/"},
+		{"https://example.com/?", ""},
+		{"https://example.com/?a=1", ""},
+		{"https://example.com/#", ""},
+		{"https://example.com/#f", ""},
+		{"https://user@example.com/", ""},
+		{"https://user:pw@example.com/", ""},
+		{"http://example.com/", ""},
+		{"http://192.168.1.1/", ""},
+		{"http://localhost./", ""},
+		{"ftp://example.com/", ""},
+		{"wss://example.com/", ""},
+		{"file:///etc/passwd", ""},
+		{"https://", ""},
+		{"https://[::1/", ""},
+		{"https://example.com:65536/", ""},
+		{"https://a|b.com/", ""},
+	} {
+		_, ok := jerk.ParseMCPURL(jerk.MCPURLPrefix + c.raw)
+		if ok != (c.raw == c.canonical) {
+			t.Errorf("%q: admitted %v, jerk prints %q", c.raw, ok, c.canonical)
+		}
+		if c.canonical == "" {
+			continue
+		}
+		if _, ok := jerk.ParseMCPURL(jerk.MCPURLPrefix + c.canonical); !ok {
+			t.Errorf("jerk prints %q and slicc refuses it", c.canonical)
+		}
+	}
+}
+
+func TestJerkMCPURLPolicy(t *testing.T) {
+	t.Setenv("PATH", fakeJerkDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	j, _ := jerk.Find()
+	if j == nil {
+		t.Fatal("no fake jerk")
+	}
+	useLog := func(t *testing.T) string {
+		log := filepath.Join(t.TempDir(), "jerk.log")
+		t.Setenv("FAKEJERK_LOG", log)
+		return log
+	}
+	refused := func(t *testing.T, p *page, log string, ids ...string) {
+		t.Helper()
+		before := jerkRuns(t, log)
+		for _, id := range ids {
+			for _, op := range []string{"create", "seal", "unseal"} {
+				r := p.jerk(t, map[string]any{"op": op, "provider": id, "lease_id": "x"})
+				if r.Reset != "EACCES" || r.Detail == "" || strings.Contains(r.Detail, "/mcp") {
+					t.Fatalf("%s %s: %+v", op, id, r)
+				}
+			}
+		}
+		if after := jerkRuns(t, log); after != before {
+			t.Fatalf("refused ids ran jerk %d times", after-before)
+		}
+	}
+	t.Run("remote", func(t *testing.T) {
+		log := useLog(t)
+		deny, err := policy.ParseRules([]string{"93.184.215.15:443"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pol := policy.Remote().With(nil, deny)
+		dns := newFakeDNS(t)
+		dns.set("public.slicc.test", "93.184.215.14", "2606:2800:21f:cb07:6820:80da:af6b:8b2c")
+		dns.set("mixed.slicc.test", "93.184.215.14", "127.0.0.1")
+		dns.set("private.slicc.test", "10.0.0.1")
+		dns.set("pinned.slicc.test", "127.0.0.1")
+		hosts, err := policy.ParseHosts(strings.NewReader("93.184.215.14 pinned.slicc.test localhost\n10.0.0.1 public.slicc.test\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := setupInProcess(t, pol, func(n *node.Node) {
+			capjerk.Register(n, capjerk.Options{Jerk: j, Seal: true, Resolver: &policy.Resolver{Policy: pol, Base: dns.resolver(), Hosts: hosts}})
+		})
+		for _, id := range []string{"mcp:url:https://public.slicc.test/mcp", "mcp:url:https://93.184.215.14:8443/mcp", "mcp:url:https://93.184.215.15:8443/mcp"} {
+			if r := env.p.jerk(t, map[string]any{"op": "create", "provider": id}); r.Reset != "" {
+				t.Fatalf("%s: %+v", id, r)
+			}
+			if args, _ := lastArgs(t, log); args != id+" create --via-link" {
+				t.Fatalf("create ran jerk %s", args)
+			}
+		}
+		refused(t, env.p, log,
+			"mcp:url:http://127.0.0.1:8931/mcp",
+			"mcp:url:http://localhost:8931/mcp",
+			"mcp:url:http://[::1]:8931/mcp",
+			"mcp:url:https://10.0.0.1/mcp",
+			"mcp:url:https://192.168.1.1:8443/mcp",
+			"mcp:url:https://169.254.169.254/mcp",
+			"mcp:url:https://[::ffff:7f00:1]/mcp",
+			"mcp:url:https://[64:ff9b::7f00:1]/mcp",
+			"mcp:url:https://93.184.215.15/mcp",
+			"mcp:url:https://private.slicc.test/mcp",
+			"mcp:url:https://mixed.slicc.test/mcp",
+			"mcp:url:https://pinned.slicc.test/mcp",
+			"mcp:url:https://missing.slicc.test/mcp",
+		)
+	})
+	t.Run("local", func(t *testing.T) {
+		log := useLog(t)
+		env := setupInProcess(t, policy.Local(9444), func(n *node.Node) {
+			capjerk.Register(n, capjerk.Options{Jerk: j, Seal: true})
+		})
+		for _, open := range []map[string]any{
+			{"op": "create", "provider": jerkMCPID},
+			{"op": "seal", "provider": jerkMCPID},
+			{"op": "unseal", "provider": jerkMCPID, "lease_id": "x"},
+			{"op": "list", "provider": jerkMCPID},
+		} {
+			if r := env.p.jerk(t, open); r.Reset != "" {
+				t.Fatalf("%v: %+v", open, r)
+			}
+		}
+		if args, _ := lastArgs(t, log); args != "list --json" {
+			t.Fatalf("list ran jerk %s", args)
+		}
+		logs := env.a.stderr.String()
+		for _, op := range []string{"create", "seal", "unseal"} {
+			if want := "jerk: " + op + " mcp:url:http://127.0.0.1: exit 0"; !strings.Contains(logs, want) {
+				t.Fatalf("no %q in the log:\n%s", want, logs)
+			}
+		}
+		if strings.Contains(logs, "k3y") || strings.Contains(logs, ":8931") {
+			t.Fatalf("the log shows the URL:\n%s", logs)
+		}
+		refused(t, env.p, log, "mcp:url:http://127.0.0.1:9444/mcp", "mcp:url:https://169.254.169.254/mcp")
+	})
+	t.Run("no policy", func(t *testing.T) {
+		log := useLog(t)
+		env := setupInProcess(t, nil, func(n *node.Node) {
+			capjerk.Register(n, capjerk.Options{Jerk: j, Seal: true})
+		})
+		refused(t, env.p, log, "mcp:url:https://93.184.215.14/mcp")
+	})
 }
 
 func TestJerkOffOrMissing(t *testing.T) {
