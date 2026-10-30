@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -56,7 +57,7 @@ func npmScript(t *testing.T, name string) string {
 }
 
 func TestCIIsOneCallerOfTheSharedPipelineAtTheHarnessRelease(t *testing.T) {
-	for dir, want := range map[string][]string{"../../.github": {"workflows"}, "../../.github/workflows": {"ci.yml"}} {
+	for dir, want := range map[string][]string{"../../.github": {"workflows"}, "../../.github/workflows": {"ci.yml", "windows.yml"}} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatal(err)
@@ -102,9 +103,32 @@ func TestCIRunsOnPullRequestsMergeGroupsAndMainAndCancelsOnlyPullRequests(t *tes
 }
 
 func TestTheWorkflowHasNoCommentsButRenovateAnnotations(t *testing.T) {
-	for i, line := range strings.Split(ciYAML(t), "\n") {
-		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "# renovate:") {
-			t.Errorf("ci.yml line %d is a comment: %s", i+1, line)
+	for _, file := range []string{"ci.yml", "windows.yml"} {
+		for i, line := range strings.Split(readRepo(t, ".github/workflows/"+file), "\n") {
+			if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "# renovate:") {
+				t.Errorf("%s line %d is a comment: %s", file, i+1, line)
+			}
+		}
+	}
+}
+
+func TestTheWindowsWorkflowRunsOnlyTheArgumentTestOnPushesToMain(t *testing.T) {
+	yml := readRepo(t, ".github/workflows/windows.yml")
+	for _, want := range []string{
+		"\non:\n  push:\n    branches: [main]\n\npermissions:\n  contents: read\n\njobs:\n",
+		"\n    runs-on: windows-latest\n    timeout-minutes: ",
+		"\n      - run: npm ci\n      - run: go test -count=1 -v -run '^TestWindowsArgs$' ./test/integration/\n",
+	} {
+		if !strings.Contains(yml, want) {
+			t.Errorf("windows.yml lacks %q", want)
+		}
+	}
+	if !slices.Contains(declaredTests(t), "TestWindowsArgs") {
+		t.Error("windows.yml runs TestWindowsArgs, which no test file declares")
+	}
+	for _, uses := range regexp.MustCompile(`(?m)uses: (\S+)$`).FindAllStringSubmatch(yml, -1) {
+		if !regexp.MustCompile(`^[a-z-]+/[a-z-]+@[0-9a-f]{40}$`).MatchString(uses[1]) {
+			t.Errorf("windows.yml uses %s, want a full commit SHA", uses[1])
 		}
 	}
 }
