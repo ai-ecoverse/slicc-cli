@@ -761,7 +761,7 @@ Link spec §5.14 (J1). slicc-jerk (`jerk`, [Companion tools](#companion-tools)) 
 - jerk's exits 0 to 5 are results. slicc never logs a lease or a result's contents, only `jerk: <op> <provider>: exit <n>`.
 
 **RESETs:**
-- `EPROTO`: an unknown op, a missing or malformed `provider` (`^[a-z0-9][a-z0-9-]{0,63}$`) or `lease_id`, a `duration` out of range, a `scope` that isn't printable words, or a `param` whose key isn't `^[a-z][a-z0-9_]{0,31}$` or whose value isn't printable (at most 16, 256 bytes each). On Windows, also any value for jerk (`scope`, `param`, `lease_id`) that contains `%`, `&`, `|`, `^`, `<`, `>`, `!`, `"`, `(` or `)`. Host jerk checks the keys against the provider's own `params` and exits 2 for unknown ones.
+- `EPROTO`: an unknown op, a missing or malformed `provider` (`^[a-z0-9][a-z0-9-]{0,63}$`) or `lease_id`, a `duration` out of range, a `scope` that isn't printable words, or a `param` whose key isn't `^[a-z][a-z0-9_]{0,31}$` or whose value isn't printable (at most 16, 256 bytes each). On Windows, also any value for jerk (`scope`, `param`, `lease_id`) that contains `%`, `&`, `|`, `^`, `<`, `>`, `!`, `"`, `(`, `)` or anything outside ASCII. Host jerk checks the keys against the provider's own `params` and exits 2 for unknown ones.
 - `EACCES`: `drop` (there's no such op; `unseal` drops what jerk minted), and `seal` or `unseal` without `jerk-seal`.
 - `EBUSY`: a second `create` on a link while one runs.
 - `ETIMEDOUT`: a `create` still running after 2 min 30 s, which is then killed. Other ops get 60 s and then answer exit 1, `jerk timed out`.

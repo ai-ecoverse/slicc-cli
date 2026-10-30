@@ -148,7 +148,15 @@ func provider(req open) (string, error) {
 }
 
 func Allowed(goos, value string) bool {
-	return goos != "windows" || !strings.ContainsAny(value, windowsRefused)
+	if goos != "windows" {
+		return true
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] >= 0x80 || strings.IndexByte(windowsRefused, value[i]) >= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) call(st *link.Stream, req open) (hostjerk.Call, error) {

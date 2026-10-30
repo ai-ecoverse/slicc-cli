@@ -335,6 +335,24 @@ func TestJerkValuesOnAWindowsHost(t *testing.T) {
 			t.Fatalf("%q on each platform", v)
 		}
 	}
+	for _, c := range []string{"＆", "％", "＂", "｜", "é"} {
+		v := "a" + c + "b"
+		r := env.p.jerk(t, map[string]any{"op": "create", "provider": "github", "params": map[string]string{"value": v}})
+		if r.Reset != "EPROTO" || !strings.Contains(r.Detail, "Windows") {
+			t.Fatalf("param %q: %+v", v, r)
+		}
+		for _, open := range []map[string]any{
+			{"op": "create", "provider": "github", "scope": v},
+			{"op": "unseal", "provider": "github", "lease_id": v},
+		} {
+			if r := env.p.jerk(t, open); r.Reset != "EPROTO" {
+				t.Fatalf("%v: %+v", open, r)
+			}
+		}
+		if capjerk.Allowed("windows", v) || !capjerk.Allowed("linux", v) || !capjerk.Allowed("darwin", v) {
+			t.Fatalf("%q on each platform", v)
+		}
+	}
 	if _, err := os.Stat(log); !os.IsNotExist(err) {
 		t.Fatalf("jerk ran for a refused value: %v", err)
 	}
