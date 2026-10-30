@@ -448,8 +448,13 @@ func TestJerkMCPURLPolicy(t *testing.T) {
 		dns.set("public.slicc.test", "93.184.215.14", "2606:2800:21f:cb07:6820:80da:af6b:8b2c")
 		dns.set("mixed.slicc.test", "93.184.215.14", "127.0.0.1")
 		dns.set("private.slicc.test", "10.0.0.1")
+		dns.set("pinned.slicc.test", "127.0.0.1")
+		hosts, err := policy.ParseHosts(strings.NewReader("93.184.215.14 pinned.slicc.test localhost\n10.0.0.1 public.slicc.test\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
 		env := setupInProcess(t, pol, func(n *node.Node) {
-			capjerk.Register(n, capjerk.Options{Jerk: j, Seal: true, Resolver: &policy.Resolver{Policy: pol, Base: dns.resolver()}})
+			capjerk.Register(n, capjerk.Options{Jerk: j, Seal: true, Resolver: &policy.Resolver{Policy: pol, Base: dns.resolver(), Hosts: hosts}})
 		})
 		for _, id := range []string{"mcp:url:https://public.slicc.test/mcp", "mcp:url:https://93.184.215.14:8443/mcp", "mcp:url:https://93.184.215.15:8443/mcp"} {
 			if r := env.p.jerk(t, map[string]any{"op": "create", "provider": id}); r.Reset != "" {
@@ -471,6 +476,7 @@ func TestJerkMCPURLPolicy(t *testing.T) {
 			"mcp:url:https://93.184.215.15/mcp",
 			"mcp:url:https://private.slicc.test/mcp",
 			"mcp:url:https://mixed.slicc.test/mcp",
+			"mcp:url:https://pinned.slicc.test/mcp",
 			"mcp:url:https://missing.slicc.test/mcp",
 		)
 	})

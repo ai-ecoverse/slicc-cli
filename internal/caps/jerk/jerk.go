@@ -177,7 +177,7 @@ func (s *Server) reachable(st *link.Stream, req open) error {
 		case <-ctx.Done():
 		}
 	}()
-	if err := s.o.Resolver.CheckStream(ctx, u.Host, u.Port); err != nil {
+	if err := s.o.Resolver.CheckSubprocess(ctx, u.Host, u.Port); err != nil {
 		return errors.New(policy.Errno + ": " + err.Error())
 	}
 	return nil
