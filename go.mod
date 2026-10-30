@@ -19,7 +19,7 @@ require (
 	github.com/pion/ice/v4 v4.4.8
 	github.com/pion/logging v0.2.4
 	github.com/pion/webrtc/v4 v4.2.25
-	github.com/pkg/sftp v1.13.11
+	github.com/pkg/sftp v1.13.12
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.61.0
 	golang.org/x/sys v0.49.0
