@@ -309,6 +309,44 @@ func TestJerkLimitsInProcess(t *testing.T) {
 	}
 }
 
+func TestJerkValuesOnAWindowsHost(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "jerk.log")
+	t.Setenv("PATH", fakeJerkDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKEJERK_LOG", log)
+	j, _ := jerk.Find()
+	if j == nil {
+		t.Fatal("no fake jerk")
+	}
+	env := setupInProcess(t, policy.Local(), func(n *node.Node) {
+		capjerk.Register(n, capjerk.Options{Jerk: j, Seal: true, GOOS: "windows"})
+	})
+	for _, c := range []string{"%", "&", "|", "^", "<", ">", "!", `"`, "(", ")"} {
+		v := "a" + c + "b"
+		for _, open := range []map[string]any{
+			{"op": "create", "provider": "github", "scope": v},
+			{"op": "create", "provider": "github", "params": map[string]string{"value": v}},
+			{"op": "unseal", "provider": "github", "lease_id": v},
+		} {
+			if r := env.p.jerk(t, open); r.Reset != "EPROTO" || !strings.Contains(r.Detail, "Windows") {
+				t.Fatalf("%v: %+v", open, r)
+			}
+		}
+		if capjerk.Allowed("windows", v) || !capjerk.Allowed("linux", v) || !capjerk.Allowed("darwin", v) {
+			t.Fatalf("%q on each platform", v)
+		}
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Fatalf("jerk ran for a refused value: %v", err)
+	}
+	r := env.p.jerk(t, map[string]any{"op": "create", "provider": "github", "scope": "repo read", "params": map[string]string{"value": "a-b"}})
+	if r.Reset != "" {
+		t.Fatalf("plain values: %+v", r)
+	}
+	if _, err := os.Stat(log); err != nil {
+		t.Fatalf("jerk didn't run for plain values: %v", err)
+	}
+}
+
 func TestFollowJerkFlags(t *testing.T) {
 	dir := fakeJerkDir(t)
 	log := filepath.Join(t.TempDir(), "jerk.log")

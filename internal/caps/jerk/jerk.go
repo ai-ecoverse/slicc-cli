@@ -6,8 +6,11 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"runtime"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +26,7 @@ const (
 	DefaultCreateTimeout = 2*time.Minute + 30*time.Second
 	maxParams            = 16
 	maxValue             = 256
+	windowsRefused       = "%&|^<>!\"()"
 )
 
 var (
@@ -37,6 +41,7 @@ type Options struct {
 	CreateTimeout time.Duration
 	Timeout       time.Duration
 	Logf          func(format string, args ...any)
+	GOOS          string
 }
 
 type Server struct {
@@ -86,6 +91,9 @@ func New(o Options) *Server {
 	}
 	if o.Timeout <= 0 {
 		o.Timeout = hostjerk.Timeout
+	}
+	if o.GOOS == "" {
+		o.GOOS = runtime.GOOS
 	}
 	return &Server{o: o, creating: map[*link.Link]bool{}}
 }
@@ -139,7 +147,24 @@ func provider(req open) (string, error) {
 	return *req.Provider, nil
 }
 
+func Allowed(goos, value string) bool {
+	return goos != "windows" || !strings.ContainsAny(value, windowsRefused)
+}
+
 func (s *Server) call(st *link.Stream, req open) (hostjerk.Call, error) {
+	call, err := s.build(st, req)
+	if err != nil {
+		return hostjerk.Call{}, err
+	}
+	for _, v := range slices.Concat(call.Args, call.Env) {
+		if !Allowed(s.o.GOOS, v) {
+			return hostjerk.Call{}, protoError("a value has a character jerk can't take on Windows")
+		}
+	}
+	return call, nil
+}
+
+func (s *Server) build(st *link.Stream, req open) (hostjerk.Call, error) {
 	switch req.Op {
 	case "list":
 		return hostjerk.Call{Args: []string{"list", "--json"}}, nil
