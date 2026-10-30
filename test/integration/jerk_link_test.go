@@ -309,6 +309,62 @@ func TestJerkLimitsInProcess(t *testing.T) {
 	}
 }
 
+func TestJerkValuesOnAWindowsHost(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "jerk.log")
+	t.Setenv("PATH", fakeJerkDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKEJERK_LOG", log)
+	j, _ := jerk.Find()
+	if j == nil {
+		t.Fatal("no fake jerk")
+	}
+	env := setupInProcess(t, policy.Local(), func(n *node.Node) {
+		capjerk.Register(n, capjerk.Options{Jerk: j, Seal: true, GOOS: "windows"})
+	})
+	for _, c := range []string{"%", "&", "|", "^", "<", ">", "!", `"`, "(", ")"} {
+		v := "a" + c + "b"
+		for _, open := range []map[string]any{
+			{"op": "create", "provider": "github", "scope": v},
+			{"op": "create", "provider": "github", "params": map[string]string{"value": v}},
+			{"op": "unseal", "provider": "github", "lease_id": v},
+		} {
+			if r := env.p.jerk(t, open); r.Reset != "EPROTO" || !strings.Contains(r.Detail, "Windows") {
+				t.Fatalf("%v: %+v", open, r)
+			}
+		}
+		if capjerk.Allowed("windows", v) || !capjerk.Allowed("linux", v) || !capjerk.Allowed("darwin", v) {
+			t.Fatalf("%q on each platform", v)
+		}
+	}
+	for _, c := range []string{"＆", "％", "＂", "｜", "é"} {
+		v := "a" + c + "b"
+		r := env.p.jerk(t, map[string]any{"op": "create", "provider": "github", "params": map[string]string{"value": v}})
+		if r.Reset != "EPROTO" || !strings.Contains(r.Detail, "Windows") {
+			t.Fatalf("param %q: %+v", v, r)
+		}
+		for _, open := range []map[string]any{
+			{"op": "create", "provider": "github", "scope": v},
+			{"op": "unseal", "provider": "github", "lease_id": v},
+		} {
+			if r := env.p.jerk(t, open); r.Reset != "EPROTO" {
+				t.Fatalf("%v: %+v", open, r)
+			}
+		}
+		if capjerk.Allowed("windows", v) || !capjerk.Allowed("linux", v) || !capjerk.Allowed("darwin", v) {
+			t.Fatalf("%q on each platform", v)
+		}
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Fatalf("jerk ran for a refused value: %v", err)
+	}
+	r := env.p.jerk(t, map[string]any{"op": "create", "provider": "github", "scope": "repo read", "params": map[string]string{"value": "a-b"}})
+	if r.Reset != "" {
+		t.Fatalf("plain values: %+v", r)
+	}
+	if _, err := os.Stat(log); err != nil {
+		t.Fatalf("jerk didn't run for plain values: %v", err)
+	}
+}
+
 func TestFollowJerkFlags(t *testing.T) {
 	dir := fakeJerkDir(t)
 	log := filepath.Join(t.TempDir(), "jerk.log")
@@ -388,5 +444,50 @@ func TestFollowJerkWithoutJerk(t *testing.T) {
 	p.eval("linkTest.ready()", &hello)
 	if slices.Contains(hello.Caps, "jerk") {
 		t.Fatalf("HELLO %+v", hello)
+	}
+}
+
+func TestJerkRunsItsOwnBinaryOnWindows(t *testing.T) {
+	exe := filepath.Join("@ai-ecoverse", "slicc-jerk-win32-x64", "bin", "jerk.exe")
+	nested := filepath.Join("@ai-ecoverse", "slicc-jerk", "node_modules", exe)
+	for name, tc := range map[string]struct {
+		candidate, ships string
+		want             bool
+	}{
+		"cmd beside the package": {filepath.Join("node_modules", ".bin", "jerk.cmd"), filepath.Join("node_modules", exe), true},
+		"upper case":             {filepath.Join("node_modules", ".bin", "JERK.CMD"), filepath.Join("node_modules", exe), true},
+		"bat":                    {filepath.Join("node_modules", ".bin", "jerk.BAT"), filepath.Join("node_modules", exe), true},
+		"nested in the package":  {filepath.Join("node_modules", ".bin", "jerk.cmd"), filepath.Join("node_modules", nested), true},
+		"a global install's cmd": {"jerk.cmd", filepath.Join("node_modules", nested), true},
+		"a cmd without the exe":  {filepath.Join("node_modules", ".bin", "jerk.cmd"), "", false},
+		"a bat without the exe":  {filepath.Join("node_modules", ".bin", "jerk.Bat"), "", false},
+		"no extension":           {filepath.Join("data", "jerk"), "", false},
+		"an exe of another arch": {filepath.Join("node_modules", ".bin", "jerk.cmd"), filepath.Join("node_modules", "@ai-ecoverse", "slicc-jerk-win32-arm64", "bin", "jerk.exe"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			candidate := filepath.Join(root, tc.candidate)
+			writeFile(t, candidate, "launcher")
+			var want []string
+			if tc.ships != "" {
+				writeFile(t, filepath.Join(root, tc.ships), "exe")
+			}
+			if tc.want {
+				want = []string{filepath.Join(root, tc.ships)}
+			}
+			if got := jerk.Runnable([]string{candidate}, "windows", "amd64"); !slices.Equal(got, want) {
+				t.Fatalf("%v, want %v", got, want)
+			}
+		})
+	}
+	root := t.TempDir()
+	shim, data := filepath.Join(root, "jerk.cmd"), filepath.Join(root, "data", "jerk.exe")
+	writeFile(t, shim, "launcher")
+	writeFile(t, data, "exe")
+	if got := jerk.Runnable([]string{shim, data}, "windows", "amd64"); !slices.Equal(got, []string{data}) {
+		t.Fatalf("the next candidate after a shim: %v", got)
+	}
+	if got := jerk.Runnable([]string{shim, data}, "linux", "amd64"); !slices.Equal(got, []string{shim, data}) {
+		t.Fatalf("another platform: %v", got)
 	}
 }

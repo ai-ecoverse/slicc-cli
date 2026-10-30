@@ -239,7 +239,7 @@ slicc works with slicc-jerk (`jerk`), which runs on this machine and gets tokens
 
 fnox (secrets on a real OS) is upstream jdx/fnox: install it from https://fnox.jdx.dev. slicc doesn't install it.
 
-**With npm.** `@ai-ecoverse/slicc` and `sliccy` list `@ai-ecoverse/slicc-jerk` as an `optionalDependency` (`^` the latest release), but only when it is on the registry when the release is staged (`npm-stage.mjs --companions`); otherwise it is left out with a notice. The publish check that waits for the platform packages doesn't wait for it. When the package is installed, the launcher puts its `node_modules/.bin` first on `PATH` for the binary, so `jerk` resolves for slicc and its children.
+**With npm.** `@ai-ecoverse/slicc` and `sliccy` list `@ai-ecoverse/slicc-jerk` as an `optionalDependency` (`^` the latest release), but only when it is on the registry when the release is staged (`npm-stage.mjs --companions`); otherwise it is left out with a notice. The publish check that waits for the platform packages doesn't wait for it. When the package is installed, the launcher puts its `node_modules/.bin` first on `PATH` for the binary, so `jerk` resolves for slicc and its children. On Windows it puts the `bin` folder of `@ai-ecoverse/slicc-jerk-win32-<arch>`, which holds `jerk.exe`, there instead, and adds nothing when that package is missing.
 
 **`slicc install jerk`** installs jerk into the data folder's `bin` (any other name, or none, exits 2 with `slicc install: name jerk` and the usage):
 - `jerk` from the latest release of `ai-ecoverse/slicc-jerk` (0.6.0 or later, the first with the `--via-link` calls the link needs; an older latest release is refused with `slicc install: ai-ecoverse/slicc-jerk <version> is older than 0.6.0, the first release slicc works with`);
@@ -736,7 +736,7 @@ Any value of `credentialed` other than `false` or `null` counts as true, so a ma
 
 Link spec §5.14 (J1). slicc-jerk (`jerk`, [Companion tools](#companion-tools)) gets tokens on this machine. Over the link seven can ask it for status, start sign-ins a human completes, and seal a lease into its vault. No token crosses the link except in `seal`'s `lease` event, which only seven's link layer reads and hands to the vault.
 
-**Offered** when host jerk is found: of the first `jerk` on `PATH` and `jerk` in the data folder's `bin`, in that order, the first whose `jerk --version` names 0.6.0 or later. 0.6.0 is the first slicc-jerk with the `--via-link` calls below. An older jerk counts as absent: slicc says `jerk: host jerk <version> is older than 0.6.0; run slicc install jerk`, and HELLO has neither cap.
+**Offered** when host jerk is found: of the first `jerk` on `PATH` and `jerk` in the data folder's `bin`, in that order, the first whose `jerk --version` names 0.6.0 or later. 0.6.0 is the first slicc-jerk with the `--via-link` calls below. On Windows slicc only runs a `.exe`: any other candidate, such as npm's `jerk.cmd`, stands for the `@ai-ecoverse/slicc-jerk-win32-<arch>` `bin\jerk.exe` of the same npm install, and is skipped when there is none. An older jerk counts as absent: slicc says `jerk: host jerk <version> is older than 0.6.0; run slicc install jerk`, and HELLO has neither cap.
 - `slicc` and `slicc attach`: caps `jerk` and `jerk-seal`, unless `--no-jerk`.
 - `follow`: only with `--jerk` (cap `jerk`) or `--jerk-seal` (both).
 - `prompt`, `watch`, `wait` and `abort`: never.
@@ -761,7 +761,7 @@ Link spec §5.14 (J1). slicc-jerk (`jerk`, [Companion tools](#companion-tools)) 
 - jerk's exits 0 to 5 are results. slicc never logs a lease or a result's contents, only `jerk: <op> <provider>: exit <n>`.
 
 **RESETs:**
-- `EPROTO`: an unknown op, a missing or malformed `provider` (`^[a-z0-9][a-z0-9-]{0,63}$`) or `lease_id`, a `duration` out of range, a `scope` that isn't printable words, or a `param` whose key isn't `^[a-z][a-z0-9_]{0,31}$` or whose value isn't printable (at most 16, 256 bytes each). Host jerk checks the keys against the provider's own `params` and exits 2 for unknown ones.
+- `EPROTO`: an unknown op, a missing or malformed `provider` (`^[a-z0-9][a-z0-9-]{0,63}$`) or `lease_id`, a `duration` out of range, a `scope` that isn't printable words, or a `param` whose key isn't `^[a-z][a-z0-9_]{0,31}$` or whose value isn't printable (at most 16, 256 bytes each). On Windows, also any value for jerk (`scope`, `param`, `lease_id`) that contains `%`, `&`, `|`, `^`, `<`, `>`, `!`, `"`, `(`, `)` or anything outside ASCII. Host jerk checks the keys against the provider's own `params` and exits 2 for unknown ones.
 - `EACCES`: `drop` (there's no such op; `unseal` drops what jerk minted), and `seal` or `unseal` without `jerk-seal`.
 - `EBUSY`: a second `create` on a link while one runs.
 - `ETIMEDOUT`: a `create` still running after 2 min 30 s, which is then killed. Other ops get 60 s and then answer exit 1, `jerk timed out`.
