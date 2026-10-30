@@ -8,7 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/ai-ecoverse/go-optel v1.0.1
 	github.com/ai-ecoverse/slicc-browsers v1.18.21
-	github.com/andybalholm/brotli v1.2.6
+	github.com/andybalholm/brotli v1.2.7
 	github.com/charmbracelet/x/conpty v0.2.0
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
