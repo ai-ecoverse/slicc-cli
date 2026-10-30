@@ -14,15 +14,17 @@ import (
 	hostjerk "github.com/ai-ecoverse/slicc-cli/internal/jerk"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
+	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 )
 
 const (
-	Kind                 = "jerk"
-	Cap                  = "jerk"
-	SealCap              = "jerk-seal"
-	DefaultCreateTimeout = 2*time.Minute + 30*time.Second
-	maxParams            = 16
-	maxValue             = 256
+	Kind                  = "jerk"
+	Cap                   = "jerk"
+	SealCap               = "jerk-seal"
+	DefaultCreateTimeout  = 2*time.Minute + 30*time.Second
+	DefaultResolveTimeout = 10 * time.Second
+	maxParams             = 16
+	maxValue              = 256
 )
 
 var (
@@ -31,12 +33,14 @@ var (
 )
 
 type Options struct {
-	Jerk          *hostjerk.Jerk
-	Seal          bool
-	Origin        func(*link.Link) string
-	CreateTimeout time.Duration
-	Timeout       time.Duration
-	Logf          func(format string, args ...any)
+	Jerk           *hostjerk.Jerk
+	Seal           bool
+	Origin         func(*link.Link) string
+	Resolver       *policy.Resolver
+	ResolveTimeout time.Duration
+	CreateTimeout  time.Duration
+	Timeout        time.Duration
+	Logf           func(format string, args ...any)
 }
 
 type Server struct {
@@ -68,6 +72,9 @@ func Register(n *node.Node, o Options) *Server {
 	if o.Origin == nil {
 		o.Origin = n.PeerOrigin
 	}
+	if o.Resolver == nil {
+		o.Resolver = n.Resolver()
+	}
 	s := New(o)
 	n.Handle(Cap, Kind, s.Handle)
 	if o.Seal {
@@ -80,6 +87,9 @@ func Register(n *node.Node, o Options) *Server {
 func New(o Options) *Server {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
+	}
+	if o.ResolveTimeout <= 0 {
+		o.ResolveTimeout = DefaultResolveTimeout
 	}
 	if o.CreateTimeout <= 0 {
 		o.CreateTimeout = DefaultCreateTimeout
@@ -97,6 +107,9 @@ func (s *Server) Handle(st *link.Stream) {
 		return
 	}
 	call, err := s.call(st, req)
+	if err == nil {
+		err = s.reachable(st, req)
+	}
 	if err != nil {
 		var pe protoError
 		if errors.As(err, &pe) {
@@ -132,11 +145,42 @@ func (s *Server) release(l *link.Link) {
 	s.mu.Unlock()
 }
 
+func takesMCPURL(op string) bool { return op == "create" || op == "seal" || op == "unseal" }
+
 func provider(req open) (string, error) {
+	if req.Provider != nil && takesMCPURL(req.Op) && hostjerk.IsMCPURL(*req.Provider) {
+		if _, ok := hostjerk.ParseMCPURL(*req.Provider); !ok {
+			return "", protoError(req.Op + " needs a canonical " + hostjerk.MCPURLPrefix + " id")
+		}
+		return *req.Provider, nil
+	}
 	if req.Provider == nil || !hostjerk.ValidProvider(*req.Provider) {
 		return "", protoError(req.Op + " needs a provider matching ^[a-z0-9][a-z0-9-]{0,63}$")
 	}
 	return *req.Provider, nil
+}
+
+func (s *Server) reachable(st *link.Stream, req open) error {
+	if !takesMCPURL(req.Op) {
+		return nil
+	}
+	u, ok := hostjerk.ParseMCPURL(*req.Provider)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.o.ResolveTimeout)
+	defer cancel()
+	go func() {
+		select {
+		case <-st.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	if err := s.o.Resolver.CheckStream(ctx, u.Host, u.Port); err != nil {
+		return errors.New(policy.Errno + ": " + err.Error())
+	}
+	return nil
 }
 
 func (s *Server) call(st *link.Stream, req open) (hostjerk.Call, error) {
@@ -274,7 +318,7 @@ func (s *Server) run(st *link.Stream, req open, call hostjerk.Call) {
 		call.Timeout = s.o.Timeout
 	}
 	p := ""
-	if req.Provider != nil {
+	if req.Provider != nil && req.Op != "list" {
 		p = *req.Provider
 	}
 	out := s.exec(ctx, req.Op, p, call)
@@ -287,7 +331,7 @@ func (s *Server) run(st *link.Stream, req open, call hostjerk.Call) {
 		_ = st.Reset("ECONNRESET: jerk couldn't start")
 		return
 	}
-	s.o.Logf("jerk: %s %s: exit %d", req.Op, p, out.Result.Exit)
+	s.o.Logf("jerk: %s %s: exit %d", req.Op, logged(p), out.Result.Exit)
 	switch {
 	case ctx.Err() != nil:
 		return
@@ -303,6 +347,13 @@ func (s *Server) run(st *link.Stream, req open, call hostjerk.Call) {
 	}
 	write(resultEvent{Event: "result", Result: out.Result})
 	_ = st.CloseWrite()
+}
+
+func logged(p string) string {
+	if u, ok := hostjerk.ParseMCPURL(p); ok {
+		return u.String()
+	}
+	return p
 }
 
 func (s *Server) exec(ctx context.Context, op, p string, call hostjerk.Call) hostjerk.Outcome {

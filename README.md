@@ -749,20 +749,22 @@ Link spec §5.14 (J1). slicc-jerk (`jerk`, [Companion tools](#companion-tools)) 
 | `list` | `jerk` | `jerk list --json` |
 | `status` | `jerk` | `jerk <provider> get --json` (never `--reveal`) |
 | `accounts` | `jerk` | `jerk <provider> list --json` |
-| `create` | `jerk` | `jerk <provider> create --via-link [--seven-origin <origin>] [--scope S] [-p k=v]…` |
-| `seal` | `jerk-seal` | `FNOX_LEASE_DURATION=<duration> jerk <provider> lease --via-link` (`duration` 1 to 86 400 whole seconds, default 3600) |
-| `unseal` | `jerk-seal` | `FNOX_LEASE_ID=<lease_id> jerk <provider> drop --lease --via-link` |
+| `create` | `jerk` | `jerk <id> create --via-link [--seven-origin <origin>] [--scope S] [-p k=v]…` |
+| `seal` | `jerk-seal` | `FNOX_LEASE_DURATION=<duration> jerk <id> lease --via-link` (`duration` 1 to 86 400 whole seconds, default 3600) |
+| `unseal` | `jerk-seal` | `FNOX_LEASE_ID=<lease_id> jerk <id> drop --lease --via-link` |
 
+- `<id>` is the `provider`: a name, or for an MCP server `mcp:url:<url>` with the URL exactly as jerk prints it: `https`, or `http` only on `localhost`, `127.0.0.1` or `[::1]`; no userinfo, query or fragment, even empty ones; lower-case scheme and host, no default port and no port 0, `/` for an empty path, no dot segments. The whole id is printable ASCII and at most 2048 bytes. There is no `mcp:<server>` form, and `status` and `accounts` take names only.
+- Before running jerk for an `mcp:url:` id, slicc checks the URL's host and port against the link's [network policy](#network-policy), as `net` does, so a remote link can't aim host jerk at this machine's loopback or private ranges. A name is resolved first, for at most 10 s, and every address must pass. A failed lookup or a node with no policy refuses.
 - `--seven-origin` is the origin of the seven tab slicc set up with over CDP. A link set up over stdio or the tray hub has none, and `create` runs without it.
 - **OPENED `{}`** once jerk has started. Then NDJSON events, then END:
   - `{ "event": "progress", "message" }` for `create`, from each `{"event":"progress","message"}` line jerk writes;
   - `{ "event": "lease", "credentials", "expires_at", "lease_id" }`, once, for `seal`, only when jerk exited 0 with string credentials and an RFC 3339 `expires_at`; otherwise the result is exit 1, `jerk gave no lease with an expiry`;
   - exactly one `{ "event": "result", "exit", "provider"?, "user"?, "scopes"?, "expires_at"?, "env"?, "message", "items"? }`. `items` holds the rows of `list` and `accounts`. Results and rows keep only these status fields: `provider`, `name`, `source`, `requires`, `cli`, `user`, `scopes`, `expires_at`, `env` and `id`, as strings, booleans or string lists. Anything else jerk prints (a masked token, say) is dropped.
-- jerk's exits 0 to 5 are results. slicc never logs a lease or a result's contents, only `jerk: <op> <provider>: exit <n>`.
+- jerk's exits 0 to 5 are results. slicc never logs a lease or a result's contents, only `jerk: <op> <provider>: exit <n>`. An `mcp:url:` id is logged as `mcp:url:<scheme>://<host>`, since some MCP servers carry a key in the URL's path.
 
 **RESETs:**
-- `EPROTO`: an unknown op, a missing or malformed `provider` (`^[a-z0-9][a-z0-9-]{0,63}$`) or `lease_id`, a `duration` out of range, a `scope` that isn't printable words, or a `param` whose key isn't `^[a-z][a-z0-9_]{0,31}$` or whose value isn't printable (at most 16, 256 bytes each). Host jerk checks the keys against the provider's own `params` and exits 2 for unknown ones.
-- `EACCES`: `drop` (there's no such op; `unseal` drops what jerk minted), and `seal` or `unseal` without `jerk-seal`.
+- `EPROTO`: an unknown op, a missing or malformed `provider` (`^[a-z0-9][a-z0-9-]{0,63}$`, or a canonical `mcp:url:` id for `create`, `seal` and `unseal`) or `lease_id`, a `duration` out of range, a `scope` that isn't printable words, or a `param` whose key isn't `^[a-z][a-z0-9_]{0,31}$` or whose value isn't printable (at most 16, 256 bytes each). Host jerk checks the keys against the provider's own `params` and exits 2 for unknown ones.
+- `EACCES`: `drop` (there's no such op; `unseal` drops what jerk minted), `seal` or `unseal` without `jerk-seal`, and an `mcp:url:` id whose host the policy refuses.
 - `EBUSY`: a second `create` on a link while one runs.
 - `ETIMEDOUT`: a `create` still running after 2 min 30 s, which is then killed. Other ops get 60 s and then answer exit 1, `jerk timed out`.
 - `ECONNRESET`: jerk couldn't start, died of a signal, or exited with a code above 5.
@@ -1930,13 +1932,13 @@ HELLO adds `"jerk": { "version": "1.0.0" }` next to `caps`.
 | `list` | `jerk` | the kernel facade or bios | none | `jerk list --json` | |
 | `status` | `jerk` | facade or bios | `provider` | `jerk <provider> get --json` without `--reveal`; the node keeps only the status fields | |
 | `accounts` | `jerk` | facade or bios | `provider` | `jerk <provider> list --json` | |
-| `create` | `jerk` | facade or bios | `provider`, `scope?`, `params?` | `jerk <provider> create --via-link --seven-origin <origin of the linked page> [--scope S] [-p k=v]` | only when the provider's create **opens a sign-in page a human completes**: `[oauth]` modes `loopback`, `intercept` and `device`, and CLI flows marked `create.link = true`. Never `--force`. Never a create that mints a token with no UI (`npm token create`, `lease_via = "create"`). |
-| `seal` | `jerk-seal` | **bios's link layer only**; the facade refuses it | `provider`, `duration?` (default 3600) | `FNOX_LEASE_DURATION=<duration> jerk <provider> lease --via-link` | |
-| `unseal` | `jerk-seal` | **bios's link layer only** | `provider`, `lease_id` | `FNOX_LEASE_ID=<lease_id> jerk <provider> drop --lease --via-link` | revokes upstream only what jerk minted |
+| `create` | `jerk` | facade or bios | `provider`, `scope?`, `params?` | `jerk <id> create --via-link --seven-origin <origin of the linked page> [--scope S] [-p k=v]` | only when the provider's create **opens a sign-in page a human completes**: `[oauth]` modes `loopback`, `intercept` and `device`, and CLI flows marked `create.link = true`. Never `--force`. Never a create that mints a token with no UI (`npm token create`, `lease_via = "create"`). |
+| `seal` | `jerk-seal` | **bios's link layer only**; the facade refuses it | `provider`, `duration?` (default 3600) | `FNOX_LEASE_DURATION=<duration> jerk <id> lease --via-link` | |
+| `unseal` | `jerk-seal` | **bios's link layer only** | `provider`, `lease_id` | `FNOX_LEASE_ID=<lease_id> jerk <id> drop --lease --via-link` | revokes upstream only what jerk minted |
 
 - **`--via-link`** is a host-jerk flag. It forbids a terminal, `--reveal`, `--force` and CLI logout. Its stdout is status JSON, plus the single lease object for `lease`. Host jerk enforces it again itself, so a buggy node can't widen it.
 - **There's no `drop` op.** A provider CLI logout is never possible over J1, and jerk-minted lease tokens are dropped through `unseal`.
-- **`provider`** matches `^[a-z0-9][a-z0-9-]{0,63}$`. **`params`** must be well formed (the node-side details below), otherwise `EPROTO`. Whether a key is one the provider declares is checked by host jerk, and an undeclared key arrives as `result.exit` 2.
+- **`provider`** (`<id>` in the table) matches `^[a-z0-9][a-z0-9-]{0,63}$`. `create`, `seal` and `unseal` also take `mcp:url:<canonical url>`, the only id form for an MCP server; its host and port must pass the node's policy (see [`jerk`](#jerk-slicc-jerk-over-the-link)). **`params`** must be well formed (the node-side details below), otherwise `EPROTO`. Whether a key is one the provider declares is checked by host jerk, and an undeclared key arrives as `result.exit` 2.
 - **OPENED:** `{}` once the node has started host jerk.
 - **Bytes node → page:** newline-delimited JSON events, then END.
   - `{ "event": "progress", "message": "sign-in opened in Google Chrome on laptop" }`, zero or more of them, for `create` only. A device-flow user code may appear here, since it is useless without the human's approval.
@@ -1950,8 +1952,8 @@ HELLO adds `"jerk": { "version": "1.0.0" }` next to `caps`.
 
 | RESET | when | in-kernel jerk exits |
 |---|---|---|
-| `EPROTO` | bad OPEN: unknown op, missing field, unknown param | 1 |
-| `EACCES` | the op isn't allowed over J1 (the table above); a remote link lacks `--jerk` or `--jerk-seal`; or `seal`/`unseal` came through the kernel facade | 2 |
+| `EPROTO` | bad OPEN: unknown op, missing field, unknown param, an `mcp:url:` id that isn't canonical | 1 |
+| `EACCES` | the op isn't allowed over J1 (the table above); a remote link lacks `--jerk` or `--jerk-seal`; `seal`/`unseal` came through the kernel facade; or the node's policy refuses an `mcp:url:` id's host | 2 |
 | `EBUSY` | a `create` is already in flight on this link (at most one at a time) | 1 |
 | `ETIMEDOUT` | `create` ran past the provider `timeout` plus 30 s | 3 |
 | `ECONNRESET` | host jerk died, or the link dropped | 1 |

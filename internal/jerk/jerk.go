@@ -8,10 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	whatwg "github.com/nlnwa/whatwg-url/url"
 )
 
 const (
@@ -19,6 +22,8 @@ const (
 	DefaultDuration = 3600
 	MaxDuration     = 86400
 	Timeout         = 60 * time.Second
+	MCPURLPrefix    = "mcp:url:"
+	maxMCPURLID     = 2048
 	maxOutput       = 1 << 20
 	maxString       = 1024
 	maxItems        = 1024
@@ -27,6 +32,8 @@ const (
 var (
 	providerRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 	versionRE  = regexp.MustCompile(`\b(\d+)\.(\d+)\.(\d+)\b`)
+
+	loopbackHosts = []string{"localhost", "127.0.0.1", "[::1]"}
 )
 
 type Jerk struct {
@@ -74,15 +81,55 @@ var rowFields = map[string]bool{
 func ValidProvider(p string) bool { return providerRE.MatchString(p) }
 
 func ValidLeaseID(id string) bool {
-	if id == "" || len(id) > 256 {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		if id[i] < 0x21 || id[i] > 0x7e {
+	return id != "" && len(id) <= 256 && visible(id)
+}
+
+func visible(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
 			return false
 		}
 	}
 	return true
+}
+
+type MCPURL struct {
+	Scheme string
+	Host   string
+	Port   uint16
+}
+
+func (u MCPURL) String() string { return MCPURLPrefix + u.Scheme + "://" + u.Host }
+
+func IsMCPURL(id string) bool { return strings.HasPrefix(id, MCPURLPrefix) }
+
+func ParseMCPURL(id string) (MCPURL, bool) {
+	raw, ok := strings.CutPrefix(id, MCPURLPrefix)
+	if !ok || len(id) > maxMCPURLID || !visible(id) || strings.ContainsAny(raw, "?#") {
+		return MCPURL{}, false
+	}
+	u, err := whatwg.Parse(raw)
+	if err != nil || u.Href(false) != raw || u.Username() != "" || u.Password() != "" {
+		return MCPURL{}, false
+	}
+	host := u.Hostname()
+	var port uint16
+	switch {
+	case u.Scheme() == "https":
+		port = 443
+	case u.Scheme() == "http" && slices.Contains(loopbackHosts, host):
+		port = 80
+	default:
+		return MCPURL{}, false
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.ParseUint(p, 10, 16)
+		if err != nil || n == 0 {
+			return MCPURL{}, false
+		}
+		port = uint16(n)
+	}
+	return MCPURL{Scheme: u.Scheme(), Host: host, Port: port}, true
 }
 
 func Find(dirs ...string) (*Jerk, string) {
