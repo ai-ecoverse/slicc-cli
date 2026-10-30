@@ -192,9 +192,17 @@ Object.defineProperty(process, 'arch', { value: 'x64' });
 		"shim":    {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			modules := filepath.Join(t.TempDir(), "node_modules")
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			modules := filepath.Join(root, "node_modules")
 			install(t, stage(t, node, tool), modules, false)
-			writeExe(t, filepath.Join(modules, "@ai-ecoverse", "slicc-windows-amd64", "bin", "slicc.exe"), data)
+			exe := filepath.Join(modules, "@ai-ecoverse", "slicc-windows-amd64", "bin", "slicc.exe")
+			if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeExe(t, exe, data)
 			writeFile(t, filepath.Join(modules, "@ai-ecoverse", "slicc-jerk", "package.json"), `{"name":"@ai-ecoverse/slicc-jerk","bin":{"jerk":"bin/jerk.js"}}`)
 			bins := filepath.Join(modules, ".bin")
 			writeFile(t, filepath.Join(bins, "jerk.cmd"), "@node jerk.js %*\r\n")
