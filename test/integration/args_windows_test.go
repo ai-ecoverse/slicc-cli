@@ -21,7 +21,7 @@ import (
 func TestWindowsArgs(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "package.json"), `{"name":"windows-args","private":true}`)
-	npm := exec.Command("npm", "install", "--no-audit", "--no-fund", "@ai-ecoverse/slicc-jerk")
+	npm := exec.Command("cmd", "/c", "npm", "install", "--no-audit", "--no-fund", "@ai-ecoverse/slicc-jerk")
 	npm.Dir = root
 	if out, err := npm.CombinedOutput(); err != nil {
 		t.Fatalf("npm install: %v\n%s", err, out)
