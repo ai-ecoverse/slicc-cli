@@ -171,3 +171,56 @@ func TestNPMLauncherPutsCompanionsOnPath(t *testing.T) {
 		t.Fatalf("jerk isn't on the PATH from %s: %v", bins, got)
 	}
 }
+
+func TestNPMLauncherPutsTheJerkExeOnPathOnWindows(t *testing.T) {
+	node := requireNode(t)
+	tool := filepath.Join(t.TempDir(), exeName("printpath"))
+	if out, err := exec.Command("go", "build", "-o", tool, "./testdata/printpath").CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	data, err := os.ReadFile(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	win32 := filepath.Join(t.TempDir(), "win32.js")
+	writeFile(t, win32, `Object.defineProperty(process, 'platform', { value: 'win32' });
+Object.defineProperty(process, 'arch', { value: 'x64' });
+`)
+	for name, tc := range map[string]struct{ exe string }{
+		"hoisted": {exe: filepath.Join("@ai-ecoverse", "slicc-jerk-win32-x64", "bin")},
+		"nested":  {exe: filepath.Join("@ai-ecoverse", "slicc-jerk", "node_modules", "@ai-ecoverse", "slicc-jerk-win32-x64", "bin")},
+		"shim":    {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			modules := filepath.Join(t.TempDir(), "node_modules")
+			install(t, stage(t, node, tool), modules, false)
+			writeExe(t, filepath.Join(modules, "@ai-ecoverse", "slicc-windows-amd64", "bin", "slicc.exe"), data)
+			writeFile(t, filepath.Join(modules, "@ai-ecoverse", "slicc-jerk", "package.json"), `{"name":"@ai-ecoverse/slicc-jerk","bin":{"jerk":"bin/jerk.js"}}`)
+			bins := filepath.Join(modules, ".bin")
+			writeFile(t, filepath.Join(bins, "jerk.cmd"), "@node jerk.js %*\r\n")
+			writeFile(t, filepath.Join(bins, "jerk"), "#!/bin/sh\n")
+			if tc.exe != "" {
+				writeFile(t, filepath.Join(modules, tc.exe, "jerk.exe"), "exe")
+			}
+			env := isolatedEnv(t)
+			before := ""
+			for _, kv := range env {
+				if strings.HasPrefix(kv, "PATH=") {
+					before = strings.TrimPrefix(kv, "PATH=")
+				}
+			}
+			r := runBin(t, env, node, "--require", win32, filepath.Join(modules, "@ai-ecoverse", "slicc", "bin", "slicc.js"))
+			var got map[string]string
+			if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
+				t.Fatalf("%+v", r)
+			}
+			want := before
+			if tc.exe != "" {
+				want = filepath.Join(modules, tc.exe) + string(os.PathListSeparator) + before
+			}
+			if got["path"] != want {
+				t.Fatalf("PATH %q, want %q", got["path"], want)
+			}
+		})
+	}
+}

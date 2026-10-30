@@ -46,14 +46,20 @@ function binaryPath() {
 
 const companions = { '@ai-ecoverse/slicc-jerk': 'jerk' };
 
+function companionPaths(modules, pkg, bin) {
+  const bins = path.join(modules, '.bin');
+  if (process.platform !== 'win32') return [path.join(bins, bin)];
+  const exe = path.join(`${pkg}-win32-${process.arch}`, 'bin', `${bin}.exe`);
+  return [path.join(modules, pkg, 'node_modules', exe), path.join(modules, exe), path.join(bins, `${bin}.exe`)];
+}
+
 function companionDirs() {
-  const names = (bin) => (process.platform === 'win32' ? [`${bin}.cmd`, `${bin}.exe`, bin] : [bin]);
   const dirs = [];
   for (const [pkg, bin] of Object.entries(companions)) {
     for (const modules of require.resolve.paths(pkg) || []) {
       if (!fs.existsSync(path.join(modules, pkg, 'package.json'))) continue;
-      const dir = path.join(modules, '.bin');
-      if (names(bin).some((n) => fs.existsSync(path.join(dir, n))) && !dirs.includes(dir)) dirs.push(dir);
+      const found = companionPaths(modules, pkg, bin).find((file) => fs.existsSync(file));
+      if (found && !dirs.includes(path.dirname(found))) dirs.push(path.dirname(found));
       break;
     }
   }

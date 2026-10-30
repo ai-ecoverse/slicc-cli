@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +29,7 @@ const (
 var (
 	providerRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 	versionRE  = regexp.MustCompile(`\b(\d+)\.(\d+)\.(\d+)\b`)
+	npmArch    = map[string]string{"amd64": "x64", "arm64": "arm64"}
 )
 
 type Jerk struct {
@@ -86,8 +89,12 @@ func ValidLeaseID(id string) bool {
 }
 
 func Find(dirs ...string) (*Jerk, string) {
+	return first(Runnable(candidates(dirs), runtime.GOOS, runtime.GOARCH))
+}
+
+func first(paths []string) (*Jerk, string) {
 	old := ""
-	for _, path := range candidates(dirs) {
+	for _, path := range paths {
 		v := version(path)
 		if v == nil {
 			continue
@@ -119,13 +126,39 @@ func candidates(dirs []string) []string {
 	}
 	for _, d := range dirs {
 		for _, name := range []string{"jerk", "jerk.exe"} {
-			p := d + string(os.PathSeparator) + name
+			out = append(out, d+string(os.PathSeparator)+name)
+		}
+	}
+	return out
+}
+
+func Runnable(paths []string, goos, goarch string) []string {
+	var out []string
+	for _, path := range paths {
+		for _, p := range executables(path, goos, goarch) {
 			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && !sameFile(out, fi) {
 				out = append(out, p)
 			}
 		}
 	}
 	return out
+}
+
+func executables(path, goos, goarch string) []string {
+	if goos != "windows" || strings.EqualFold(filepath.Ext(path), ".exe") {
+		return []string{path}
+	}
+	arch, ok := npmArch[goarch]
+	if !ok {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	modules := filepath.Join(dir, "node_modules")
+	if strings.EqualFold(filepath.Base(dir), ".bin") {
+		modules = filepath.Dir(dir)
+	}
+	exe := filepath.Join("@ai-ecoverse", "slicc-jerk-win32-"+arch, "bin", "jerk.exe")
+	return []string{filepath.Join(modules, "@ai-ecoverse", "slicc-jerk", "node_modules", exe), filepath.Join(modules, exe)}
 }
 
 func sameFile(paths []string, fi os.FileInfo) bool {

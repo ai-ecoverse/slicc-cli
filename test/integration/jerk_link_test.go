@@ -390,3 +390,48 @@ func TestFollowJerkWithoutJerk(t *testing.T) {
 		t.Fatalf("HELLO %+v", hello)
 	}
 }
+
+func TestJerkRunsItsOwnBinaryOnWindows(t *testing.T) {
+	exe := filepath.Join("@ai-ecoverse", "slicc-jerk-win32-x64", "bin", "jerk.exe")
+	nested := filepath.Join("@ai-ecoverse", "slicc-jerk", "node_modules", exe)
+	for name, tc := range map[string]struct {
+		candidate, ships string
+		want             bool
+	}{
+		"cmd beside the package": {filepath.Join("node_modules", ".bin", "jerk.cmd"), filepath.Join("node_modules", exe), true},
+		"upper case":             {filepath.Join("node_modules", ".bin", "JERK.CMD"), filepath.Join("node_modules", exe), true},
+		"bat":                    {filepath.Join("node_modules", ".bin", "jerk.BAT"), filepath.Join("node_modules", exe), true},
+		"nested in the package":  {filepath.Join("node_modules", ".bin", "jerk.cmd"), filepath.Join("node_modules", nested), true},
+		"a global install's cmd": {"jerk.cmd", filepath.Join("node_modules", nested), true},
+		"a cmd without the exe":  {filepath.Join("node_modules", ".bin", "jerk.cmd"), "", false},
+		"a bat without the exe":  {filepath.Join("node_modules", ".bin", "jerk.Bat"), "", false},
+		"no extension":           {filepath.Join("data", "jerk"), "", false},
+		"an exe of another arch": {filepath.Join("node_modules", ".bin", "jerk.cmd"), filepath.Join("node_modules", "@ai-ecoverse", "slicc-jerk-win32-arm64", "bin", "jerk.exe"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			candidate := filepath.Join(root, tc.candidate)
+			writeFile(t, candidate, "launcher")
+			var want []string
+			if tc.ships != "" {
+				writeFile(t, filepath.Join(root, tc.ships), "exe")
+			}
+			if tc.want {
+				want = []string{filepath.Join(root, tc.ships)}
+			}
+			if got := jerk.Runnable([]string{candidate}, "windows", "amd64"); !slices.Equal(got, want) {
+				t.Fatalf("%v, want %v", got, want)
+			}
+		})
+	}
+	root := t.TempDir()
+	shim, data := filepath.Join(root, "jerk.cmd"), filepath.Join(root, "data", "jerk.exe")
+	writeFile(t, shim, "launcher")
+	writeFile(t, data, "exe")
+	if got := jerk.Runnable([]string{shim, data}, "windows", "amd64"); !slices.Equal(got, []string{data}) {
+		t.Fatalf("the next candidate after a shim: %v", got)
+	}
+	if got := jerk.Runnable([]string{shim, data}, "linux", "amd64"); !slices.Equal(got, []string{shim, data}) {
+		t.Fatalf("another platform: %v", got)
+	}
+}
