@@ -769,6 +769,8 @@ Link spec §5.14 (J1). slicc-jerk (`jerk`, [Companion tools](#companion-tools)) 
 
 A page RESET or a closed link kills the jerk it started.
 
+**Windows:** from 1.35.0 through 1.49.34, values sent over the link could reach npm's `jerk.cmd` launcher through cmd.exe, which could expand or run them. Fixed in 1.49.35 (2026-10-30): slicc runs jerk's own `jerk.exe`, and on Windows hosts refuses `% & | ^ < > ! " ( )` and non-ASCII in values bound for jerk. Upgrade to 1.49.35 or later.
+
 ### `cdp` (browser control)
 
 > **Warning:** a seven with the `cdp` capability has full control of every listed browser: its tabs, cookies, stored passwords and logged-in sessions, files it can download, and anything a page in it can reach. That includes the browser seven runs in (`seven: true`), whether slicc launched it or not: with `slicc` or `slicc attach` on your everyday browser, seven can drive all of that browser, without a further prompt. List only browsers you would let that seven use as you. For `follow` that is a seven on another machine. The exceptions are seven's own origin and the browser's privileged pages (its settings and password manager, extension pages such as a password manager's or a wallet's, and `file://`), which the node keeps out of reach (see below).
