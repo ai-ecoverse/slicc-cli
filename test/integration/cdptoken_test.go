@@ -16,12 +16,11 @@ const cdpToken = "9f2c4e6a8b0d1f3e5a7c9e1b3d5f7a9c"
 
 func tokenCDP(t *testing.T) *httptest.Server {
 	t.Helper()
-	var srv *httptest.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/" + cdpToken + "/json/version":
-			ws := "ws" + strings.TrimPrefix(srv.URL, "http") + "/devtools/browser/" + cdpToken
+			ws := "ws://" + r.Host + "/devtools/browser/" + cdpToken
 			_ = json.NewEncoder(w).Encode(map[string]string{"Browser": "Quiet (WebKit)", "Protocol-Version": "1.3", "User-Agent": "Version/27.0 Safari/604.1", "webSocketDebuggerUrl": ws})
 		case "/" + cdpToken + "/json/list":
 			_, _ = w.Write([]byte(`[{"id":"a","type":"page","title":"t","url":"https://example.test/"}]`))
@@ -29,7 +28,7 @@ func tokenCDP(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusForbidden)
 		}
 	})
-	srv = httptest.NewServer(mux)
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
