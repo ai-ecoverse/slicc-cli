@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -273,6 +274,10 @@ func (r *run) ensureTab(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	if err := r.client.Call(tctx, "", "Target.createTarget", map[string]any{"url": r.cfg.Page}, nil); err != nil {
+		var refused *cdp.Error
+		if errors.As(err, &refused) {
+			return false, fmt.Errorf("open %s: %w. A browser can keep seven's pages from debugging clients: open seven there yourself and link it through seven's Link a device with slicc <join-url> follow", protect.Redact(r.cfg.Page), err)
+		}
 		return false, fmt.Errorf("open %s: %w", protect.Redact(r.cfg.Page), err)
 	}
 	r.emit(Event{Event: Status, Message: "opened " + protect.Redact(r.cfg.Page) + " in a new tab"})

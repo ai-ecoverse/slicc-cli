@@ -45,7 +45,7 @@ func cdpPorts(urls ...string) []uint16 {
 	return ports
 }
 
-func cdpBrowsers(ctx context.Context, seven string, extra, origins []string, pol *policy.Policy, hosts *policy.Hosts, logf func(string, ...any)) (*capcdp.Registry, error) {
+func cdpBrowsers(ctx context.Context, seven string, extra, origins []string, pol *policy.Policy, hosts *policy.Hosts, logf, status func(string, ...any)) (*capcdp.Registry, error) {
 	r := capcdp.NewRegistry(logf)
 	if err := r.Protect(origins); err != nil {
 		return nil, err
@@ -68,7 +68,12 @@ func cdpBrowsers(ctx context.Context, seven string, extra, origins []string, pol
 	add := func(raw string, isSeven bool) error {
 		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		if _, err := r.Add(pctx, raw, isSeven); err != nil {
+		_, err := r.Add(pctx, raw, isSeven)
+		if errors.Is(err, capcdp.ErrUnguarded) {
+			status("seven can't drive this browser through slicc: %v. The rest of the link works", err)
+			return nil
+		}
+		if err != nil {
 			return fmt.Errorf("browser %s: %w", raw, err)
 		}
 		return nil
@@ -87,6 +92,9 @@ func cdpBrowsers(ctx context.Context, seven string, extra, origins []string, pol
 }
 
 func followBrowsers(n *node.Node, r *capcdp.Registry, status func(string, ...any)) {
+	if r.Len() == 0 {
+		return
+	}
 	capcdp.Register(n, r)
 	ids := make([]string, 0, r.Len())
 	for _, b := range r.List() {

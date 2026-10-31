@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,9 @@ const (
 	BindingName  = "sliccLinkSend"
 	ReceiverName = "sliccLinkReceive"
 	SetupTimeout = 10 * time.Second
+	QuietEnv     = "SLICC_SEVEN_QUIET"
+	QuietTimeout = 15 * time.Second
+	NoSevenTab   = "still no seven tab. Open seven in this browser. If it's open and slicc can't see it, the browser hides it from debugging clients, so link it through seven's Link a device with slicc <join-url> follow"
 )
 
 type CDPOptions struct {
@@ -172,8 +176,11 @@ func (c *CDP) findTarget(ctx context.Context, sub *cdp.Subscription) (cdp.Target
 		}
 	}
 	c.opts.Status("waiting for a seven tab")
+	quiet := time.After(quietFor())
 	for {
 		select {
+		case <-quiet:
+			c.opts.Status("%s", NoSevenTab)
 		case ev, ok := <-sub.Events():
 			if !ok {
 				return cdp.TargetInfo{}, cl.Err()
@@ -191,6 +198,13 @@ func (c *CDP) findTarget(ctx context.Context, sub *cdp.Subscription) (cdp.Target
 			return cdp.TargetInfo{}, ctx.Err()
 		}
 	}
+}
+
+func quietFor() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv(QuietEnv)); err == nil && d > 0 {
+		return d
+	}
+	return QuietTimeout
 }
 
 func (c *CDP) serveTarget(ctx context.Context, sub *cdp.Subscription, t cdp.TargetInfo) error {
