@@ -94,9 +94,10 @@ func NormalizeCDPURL(raw string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid CDP URL %q", raw)
 	}
 	scheme := strings.ToLower(u.Scheme)
-	ws := ""
+	ws, path := "", ""
 	switch scheme {
 	case "http", "https":
+		path = endpointPath(u.EscapedPath())
 	case "ws":
 		scheme, ws = "http", u.Path
 	case "wss":
@@ -110,7 +111,17 @@ func NormalizeCDPURL(raw string) (string, string, error) {
 	if ws == "/" {
 		ws = ""
 	}
-	return scheme + "://" + u.Host, ws, nil
+	return scheme + "://" + u.Host + path, ws, nil
+}
+
+func endpointPath(p string) string {
+	p = strings.TrimRight(p, "/")
+	for _, route := range []string{"/json/version", "/json/list", "/json"} {
+		if strings.HasSuffix(p, route) {
+			return strings.TrimSuffix(p, route)
+		}
+	}
+	return p
 }
 
 func (o Options) withDefaults() Options {
@@ -229,7 +240,7 @@ func DiscoverEndpoints(ctx context.Context, o Options) ([]Endpoint, []error) {
 	wg.Wait()
 	for i, c := range cands {
 		if resErrs[i] != nil && c.source == SourceFlag {
-			errs = append(errs, fmt.Errorf("%s: %w", c.base, resErrs[i]))
+			errs = append(errs, fmt.Errorf("%s: %w", cdp.Redact(c.base), resErrs[i]))
 		}
 	}
 	return mergeEndpoints(cands, results), errs
@@ -262,7 +273,7 @@ func probeCandidate(ctx context.Context, client *http.Client, c candidate, o Opt
 	}
 	if c.wsPath != "" {
 		if u, perr := url.Parse(vi.WebSocketURL); perr != nil || u.Path != c.wsPath {
-			return nil, fmt.Errorf("stale %s: %s answers for another browser", ActivePortFile, c.base)
+			return nil, fmt.Errorf("stale %s: %s answers for another browser", ActivePortFile, cdp.Redact(c.base))
 		}
 	}
 	ep := endpointFromVersion(c, vi)
@@ -347,11 +358,11 @@ func getJSON(ctx context.Context, client *http.Client, u string, v any) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return cdp.RedactError(err, u)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s answered %s", u, resp.Status)
+		return fmt.Errorf("%s answered %s", cdp.Redact(u), resp.Status)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(v)
 }
@@ -399,7 +410,7 @@ func normalizedCDP(base string) string {
 	if err != nil || u.Scheme == "" {
 		return base
 	}
-	return strings.ToLower(u.Scheme) + "://" + endpointKey(base)
+	return strings.ToLower(u.Scheme) + "://" + endpointKey(base) + u.EscapedPath()
 }
 
 func sourceOrder(s Source) int {
