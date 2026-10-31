@@ -234,7 +234,7 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 		return nil, err
 	}
 	if len(ff.cdp) > 0 {
-		if r.cdp, err = cdpBrowsers(context.Background(), "", ff.cdp, nil, pol, ff.hosts.hosts, logf); err != nil {
+		if r.cdp, err = cdpBrowsers(context.Background(), "", ff.cdp, nil, pol, ff.hosts.hosts, logf, status); err != nil {
 			stopGuard()
 			return nil, err
 		}

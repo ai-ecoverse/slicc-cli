@@ -227,7 +227,7 @@ func registerCaps(lc *liveCaps, origins []string, logf func(string, ...any)) fun
 				order = append(order, b.ID)
 			}
 		}
-		reg, err := cdpBrowsers(ctx, seven, extra, origins, pol, nil, logf)
+		reg, err := cdpBrowsers(ctx, seven, extra, origins, pol, nil, logf, logf)
 		if err != nil {
 			closeMounts()
 			return flow.Caps{}, err

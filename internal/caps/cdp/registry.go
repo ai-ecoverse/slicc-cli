@@ -41,6 +41,7 @@ type entry struct {
 type Registry struct {
 	logf    func(format string, args ...any)
 	probe   func(ctx context.Context, raw string) (browser.Endpoint, error)
+	check   func(ctx context.Context, ep browser.Endpoint) error
 	onAdd   func(ctx context.Context, id string, hostports []string)
 	onCheck func(ctx context.Context, id string, hostports []string)
 
@@ -63,6 +64,7 @@ func NewRegistry(logf func(format string, args ...any)) *Registry {
 	return &Registry{
 		logf:  logf,
 		probe: probe,
+		check: checkGuard,
 		known: map[string]string{},
 		taken: map[string]bool{},
 		gone:  map[string]*entry{},
@@ -168,6 +170,9 @@ func (r *Registry) Add(ctx context.Context, raw string, seven bool) (link.Browse
 	r.mu.Unlock()
 	ep, err := r.probe(ctx, raw)
 	if err != nil {
+		return link.Browser{}, err
+	}
+	if err := r.check(ctx, ep); err != nil {
 		return link.Browser{}, err
 	}
 	r.mu.Lock()
