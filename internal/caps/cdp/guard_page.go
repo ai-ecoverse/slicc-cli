@@ -33,12 +33,11 @@ func (c *command) str(key string) string {
 }
 
 type pageVerdict struct {
-	forward  []byte
-	reply    []byte
-	history  *command
-	debugger *command
-	cmd      *command
-	wait     <-chan struct{}
+	forward []byte
+	reply   []byte
+	history *command
+	cmd     *command
+	wait    <-chan struct{}
 }
 
 func decodeObject(raw json.RawMessage) (map[string]any, bool) {
@@ -110,9 +109,6 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	}
 	if reply := g.answerLocally(c); reply != nil {
 		return pageVerdict{reply: reply}
-	}
-	if debuggerLifetimes[c.method] == debuggerDocument {
-		return pageVerdict{debugger: c}
 	}
 	return g.admitLocked(c)
 }
