@@ -142,14 +142,23 @@ func (e *protectEnv) evalJSONWithObserver(t *testing.T, expr string, out any) {
 		var state struct {
 			Done    bool `json:"done"`
 			Request struct {
-				TargetID string `json:"targetId"`
-				URL      string `json:"url"`
-				Delta    int    `json:"delta"`
+				TargetID      string   `json:"targetId"`
+				URL           string   `json:"url"`
+				Delta         int      `json:"delta"`
+				ScriptTargets []string `json:"scriptTargets"`
 			} `json:"request"`
 		}
 		e.p.eval("({ done: window.protectObserverDone, request: window.protectObserverRequest })", &state)
 		if state.Done {
 			break
+		}
+		if state.Request.ScriptTargets != nil {
+			scripts, err := json.Marshal(e.redirectScriptIDs(t, state.Request.ScriptTargets))
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.p.eval("delete window.protectObserverRequest; window.protectObserverNext("+string(scripts)+"); true", &value)
+			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		s, err := e.b.client.Attach(ctx, state.Request.TargetID)
