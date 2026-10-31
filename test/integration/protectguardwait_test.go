@@ -325,8 +325,17 @@ func TestCDPLetsAPausedServiceWorkerStartBeforeItsGuard(t *testing.T) {
 				{"Runtime.runIfWaitingForDebugger", map[string]any{}, "PSW"},
 				{"Debugger.enable", map[string]any{}, "PSW"},
 			})+")", &r)
-			if len(r.Out) != 3 || !r.Out[1].OK || r.Out[1].MS > 1500 || !r.Out[2].OK {
-				t.Errorf("a service worker paused until its debugger runs it, whose guard Chrome answers only after that: %+v, want runIfWaitingForDebugger answered at once and the guard ready after it", r.Out)
+			if len(r.Out) != 3 || !r.Out[1].OK || r.Out[1].MS > 1500 || !r.Out[2].refused() {
+				t.Errorf("a service worker paused until its debugger runs it, whose guard Chrome answers only after that: %+v, want runIfWaitingForDebugger answered at once and worker Debugger refused", r.Out)
+			}
+			for _, raw := range fake.received() {
+				var m struct {
+					Method string `json:"method"`
+				}
+				_ = json.Unmarshal([]byte(raw), &m)
+				if m.Method == "Debugger.enable" {
+					t.Error("worker Debugger.enable reached Chrome")
+				}
 			}
 		})
 	}
