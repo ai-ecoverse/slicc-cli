@@ -240,7 +240,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	}
 	if g.o.Loaded(p.Request.URL) && (p.ResourceType == "Document" || g.clientOwnedLocked(nt.target, p.NetworkID)) {
 		if p.ResourceType == "Document" {
-			if p.FrameID == nt.target || p.FrameID == "" {
+			if nt.documentLocks(p.FrameID) {
 				nt.historyLocked = true
 			}
 			send = append(send, g.blockChildLocked(nt.target, p.FrameID)...)
