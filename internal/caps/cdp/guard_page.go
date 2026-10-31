@@ -110,6 +110,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	g.noteClientRequestLocked(k, c)
 	g.noteContinueLocked(k, c)
 	g.noteCommitLocked(k, c)
+	g.noteDebuggerLocked(k, c)
 	if c.session != "" {
 		g.noteCastLocked(c)
 	}

@@ -1,7 +1,9 @@
 package integration
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -130,6 +132,59 @@ func redirectServer(t *testing.T, to map[string]string) *httptest.Server {
 	return srv
 }
 
+type redirectScriptID struct {
+	TargetID string `json:"targetId"`
+	ScriptID string `json:"scriptId"`
+	URL      string `json:"url"`
+}
+
+func (e *protectEnv) redirectScriptIDs(t *testing.T, targets []string) []redirectScriptID {
+	t.Helper()
+	out := []redirectScriptID{}
+	for _, target := range targets {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sub := e.b.client.Subscribe()
+		session, err := e.b.client.Attach(ctx, target)
+		if err != nil {
+			sub.Close()
+			cancel()
+			t.Fatal(err)
+		}
+		if err = session.Call(ctx, "Debugger.enable", nil, nil); err != nil {
+			_ = session.Detach(ctx)
+			sub.Close()
+			cancel()
+			t.Fatal(err)
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+	collect:
+		for {
+			select {
+			case event := <-sub.Events():
+				if event.SessionID != session.ID || event.Method != "Debugger.scriptParsed" {
+					continue
+				}
+				var script redirectScriptID
+				if json.Unmarshal(event.Params, &script) == nil && script.URL != "" {
+					script.TargetID = target
+					out = append(out, script)
+				}
+			case <-timer.C:
+				break collect
+			case <-ctx.Done():
+				t.Error("raw script-ID observer exceeded its bound")
+				break collect
+			}
+		}
+		timer.Stop()
+		_ = session.Call(ctx, "Debugger.disable", nil, nil)
+		_ = session.Detach(ctx)
+		sub.Close()
+		cancel()
+	}
+	return out
+}
+
 func TestCDPCutsProtectedRedirects(t *testing.T) {
 	b := launchBrowserOn(t, 0, "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1")
 	env := setupProtectOn(t, b)
@@ -249,7 +304,7 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 	})
 	t.Run("protected stylesheets and scripts can't be read", func(t *testing.T) {
 		var r redirectSeen
-		env.evalJSON(t, "linkTest.protect.redirectAssets("+jsArgs("chrome", hop+"/assets")+")", &r)
+		env.evalJSONWithObserver(t, "linkTest.protect.redirectAssets("+jsArgs("chrome", hop+"/assets")+")", &r)
 		for call, want := range map[string]int{"Page.getResourceContent": 12, "CSS.getStyleSheetText": 2, "Debugger.getScriptSource": 2, "Debugger.searchInContent": 2, "worker Debugger.getScriptSource": 2, "worker Debugger.searchInContent": 2, "shared Debugger.getScriptSource": 3, "nested Debugger.getScriptSource": 2} {
 			refused := 0
 			for _, got := range r.result(call) {
@@ -262,12 +317,14 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 			}
 		}
 		for _, kind := range []string{"worker", "nested"} {
-			lib := false
-			for _, got := range r.result(kind + " Debugger.getScriptSource") {
-				lib = lib || strings.Contains(got, "ordinary-lib-0033")
+			got := r.result(kind + " Debugger.getScriptSource")
+			if len(got) == 0 {
+				t.Errorf("no ordinary %s script-ID refusal was measured", kind)
 			}
-			if !lib {
-				t.Errorf("an ordinary %s import can't be read: %v", kind, r.result(kind+" Debugger.getScriptSource"))
+			for _, source := range got {
+				if !strings.Contains(source, "slicc: refused: ") {
+					t.Errorf("an ordinary %s import was readable: %s", kind, source)
+				}
 			}
 		}
 		own := false
@@ -284,7 +341,7 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 			redirectSeen
 			Log []string `json:"log"`
 		}
-		env.evalJSONWithin(t, "linkTest.protect.serviceWorkerImports("+jsArgs("chrome", hop+"/start")+")", &r, 60*time.Second)
+		env.evalJSONWithObserver(t, "linkTest.protect.serviceWorkerImports("+jsArgs("chrome", hop+"/start")+")", &r)
 		t.Logf("steps: %v", r.Log)
 		r.noMarkers(t)
 		if got := r.result("sw ready"); len(got) != 1 || !strings.Contains(got[0], `"result":"ready"`) {
@@ -300,8 +357,8 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 		if refused < 1 || !lib {
 			t.Errorf("the service worker's direct protected import refused %d times, ordinary import readable %v: %v", refused, lib, r.result("sw Debugger.getScriptSource"))
 		}
-		if got := r.result("early Debugger.enable"); len(got) != 1 || !strings.Contains(got[0], `"ok":true`) {
-			t.Errorf("an explicit attach to a running shared worker stalled: %v", got)
+		if got := r.result("early Debugger.enable"); len(got) != 1 || !strings.Contains(got[0], "slicc: refused: ") {
+			t.Errorf("an explicit attach to a running shared worker did not refuse Debugger.enable: %v", got)
 		}
 		sharedRefused := 0
 		for _, got := range r.result("shared Debugger.getScriptSource") {

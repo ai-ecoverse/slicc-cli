@@ -46,7 +46,7 @@ func TestCDPInheritedDocumentSequencing(t *testing.T) {
 		Styles  int        `json:"styles"`
 	}
 	env.evalJSON(t, "linkTest.protect.inheritedDocumentSequence('chrome-2')", &result)
-	if !result.Blank.OK || !result.Title.OK || !result.DOM.OK || !result.Shot.OK || result.MS >= 5000 || result.Scripts != 1 || result.Styles != 1 {
+	if !result.Blank.OK || !result.Title.OK || !result.DOM.OK || !result.Shot.OK || result.MS >= 5000 || result.Scripts != 0 || result.Styles != 1 {
 		t.Fatalf("inherited document sequence: %+v", result)
 	}
 	confirmed := 0

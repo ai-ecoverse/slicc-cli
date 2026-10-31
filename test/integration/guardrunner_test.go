@@ -29,6 +29,7 @@ const (
 )
 
 var guardExactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+var guardDraftRevision = regexp.MustCompile(`^git\+https://github\.com/ai-ecoverse/slicc-browsers\.git#([a-f0-9]{40})$`)
 
 func guardSetVersion(t *testing.T) string {
 	t.Helper()
@@ -44,8 +45,9 @@ func guardSetVersion(t *testing.T) string {
 		t.Fatalf("package.json: %v", err)
 	}
 	npm := pkg.DevDependencies[guardNPMPackage]
-	if !guardExactVersion.MatchString(npm) {
-		t.Fatalf("package.json pins %s at %q, want an exact x.y.z version", guardNPMPackage, npm)
+	draft := guardDraftRevision.FindStringSubmatch(npm)
+	if !guardExactVersion.MatchString(npm) && draft == nil {
+		t.Fatalf("package.json pins %s at %q, want an exact release or draft revision", guardNPMPackage, npm)
 	}
 	b, err = os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
@@ -60,6 +62,12 @@ func guardSetVersion(t *testing.T) string {
 	}
 	if len(gomod) != 1 {
 		t.Fatalf("go.mod requires %s %d times (%v), want once", guardGoModule, len(gomod), gomod)
+	}
+	if draft != nil {
+		if !strings.HasSuffix(gomod[0], "-"+draft[1][:12]) {
+			t.Fatalf("npm draft %s and Go draft %s name different revisions", draft[1], gomod[0])
+		}
+		return "0.0.0"
 	}
 	if gomod[0] != "v"+npm {
 		t.Fatalf("package.json pins %s@%s but go.mod requires %s %s; move both pins to the same release", guardNPMPackage, npm, guardGoModule, gomod[0])
@@ -382,6 +390,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	if _, err := os.Stat(filepath.Join(ext, "manifest.json")); err != nil {
 		t.Fatalf("slicc-shared-web's harness extension is missing; run npm ci: %v", err)
 	}
+	ext = stage1GuardFixture(t, ext)
 	fix := startGuardFixture(t)
 	srv := guardPageServer(t, pkg, fix.port)
 	fp := strconv.Itoa(fix.port)

@@ -302,6 +302,9 @@ func (g *guard) frameContentCheckLocked(c *command, target string) string {
 }
 
 func (g *guard) worldCheckLocked(c *command) string {
+	if reason := g.debuggerCheckLocked(c); reason != "" {
+		return reason
+	}
 	t := g.sessionTargetLocked(c.session)
 	if t != nil {
 		if reason := g.frameContentCheckLocked(c, t.id); reason != "" {
