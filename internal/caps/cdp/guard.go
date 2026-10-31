@@ -157,6 +157,8 @@ type guard struct {
 	maxWorlds          int
 	casting            map[string]bool
 	castCut            map[string]bool
+	debuggers          map[string]*debuggerState
+	debuggerReplies    map[callKey]debuggerReply
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -217,6 +219,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		commitMarks:        map[callKey]commitMark{},
 		casting:            map[string]bool{},
 		castCut:            map[string]bool{},
+		debuggers:          map[string]*debuggerState{},
+		debuggerReplies:    map[callKey]debuggerReply{},
 		maxWorlds:          maxWorlds,
 		bounds:             boundsFromEnv(),
 	}
