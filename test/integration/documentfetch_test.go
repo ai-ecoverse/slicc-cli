@@ -16,7 +16,8 @@ import (
 type documentBrowser struct {
 	url string
 
-	refuseAll bool
+	signal bool
+	attest bool
 
 	mu      sync.Mutex
 	fetches []string
@@ -28,9 +29,9 @@ func (f *documentBrowser) enabled() []string {
 	return append([]string(nil), f.fetches...)
 }
 
-func newDocumentBrowser(t *testing.T, refuseAll bool) *documentBrowser {
+func newDocumentBrowser(t *testing.T, signal, attest bool) *documentBrowser {
 	t.Helper()
-	f := &documentBrowser{refuseAll: refuseAll}
+	f := &documentBrowser{signal: signal, attest: attest}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"Browser": "Documents/1.0", "Protocol-Version": "1.3", "webSocketDebuggerUrl": "ws://" + r.Host + "/devtools/browser/x"})
@@ -93,8 +94,14 @@ func (f *documentBrowser) serve(w http.ResponseWriter, r *http.Request) {
 			f.mu.Lock()
 			f.fetches = append(f.fetches, string(m.Params))
 			f.mu.Unlock()
-			if f.refuseAll || !strings.Contains(string(m.Params), `"resourceType":"Document"`) {
+			switch {
+			case !strings.Contains(string(m.Params), `"resourceType":"Document"`):
 				failure = map[string]any{"code": -32000, "message": "this browser pauses documents only"}
+				if f.signal {
+					failure["data"] = "documents-only"
+				}
+			case f.attest:
+				result = map[string]any{"holdsDocuments": true}
 			}
 		case "Page.getNavigationHistory":
 			result = map[string]any{"currentIndex": 0, "entries": []any{map[string]any{"id": 0, "url": url, "userTypedURL": url, "title": "ordinary", "transitionType": "link"}}}
@@ -118,21 +125,27 @@ func (f *documentBrowser) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func TestTheGuardFallsBackToPausingDocuments(t *testing.T) {
+func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
+	const locked = "slicc can't keep seven's origin out of this target"
 	for _, c := range []struct {
-		name      string
-		refuseAll bool
-		enables   int
-		value     string
-		refusal   string
+		name    string
+		signal  bool
+		attest  bool
+		method  string
+		enables int
+		value   string
+		refusal string
 	}{
-		{name: "a browser that pauses only documents is guarded", enables: 2, value: "answered"},
-		{name: "a browser that pauses nothing stays refused", refuseAll: true, enables: 2, refusal: "slicc can't keep seven's origin out of this target"},
+		{name: "a refusal without the signal gets no second try", enables: 1, refusal: locked},
+		{name: "an acknowledgment without the attestation stays refused", signal: true, enables: 2, refusal: locked},
+		{name: "a browser that says both is driven", signal: true, attest: true, enables: 2, value: "answered"},
+		{name: "a screenshot could show a frame", signal: true, attest: true, method: "Page.captureScreenshot", enables: 2, refusal: "shows slicc no frames"},
+		{name: "a PDF could show a frame", signal: true, attest: true, method: "Page.printToPDF", enables: 2, refusal: "shows slicc no frames"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			b := launchBrowser(t)
 			srv := pageServer(t)
-			fake := newDocumentBrowser(t, c.refuseAll)
+			fake := newDocumentBrowser(t, c.signal, c.attest)
 			env := &linkEnv{t: t, b: b, origin: srv.URL}
 			env.a = startAttach(t, "--cdp", b.endpoint, "--cdp-extra", fake.url, "--origin", srv.URL, "--name", "it-node")
 			env.p = b.openPage(t, srv.URL+"/index.html")
@@ -141,12 +154,15 @@ func TestTheGuardFallsBackToPausingDocuments(t *testing.T) {
 				Value string `json:"value"`
 				Error string `json:"error"`
 			}
-			env.p.eval("linkTest.cdp.ask('documents', 'tab')", &r)
+			env.p.eval("linkTest.cdp.ask("+jsArgs("documents", "tab", c.method)+")", &r)
 			if r.Value != c.value || !strings.Contains(r.Error, c.refusal) {
 				t.Fatalf("%+v", r)
 			}
 			enabled := fake.enabled()
-			if len(enabled) < c.enables || strings.Contains(enabled[0], "resourceType") || !strings.Contains(enabled[1], `"resourceType":"Document"`) {
+			if len(enabled) != c.enables || strings.Contains(enabled[0], "resourceType") {
+				t.Fatalf("Fetch.enable calls: %q", enabled)
+			}
+			if c.enables > 1 && !strings.Contains(enabled[1], `"resourceType":"Document"`) {
 				t.Fatalf("Fetch.enable calls: %q", enabled)
 			}
 		})
