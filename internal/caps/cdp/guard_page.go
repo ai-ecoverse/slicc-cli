@@ -33,10 +33,11 @@ func (c *command) str(key string) string {
 }
 
 type pageVerdict struct {
-	forward []byte
-	reply   []byte
-	history *command
-	cmd     *command
+	forward  []byte
+	reply    []byte
+	history  *command
+	debugger *command
+	cmd      *command
 }
 
 func decodeObject(raw json.RawMessage) (map[string]any, bool) {
@@ -99,6 +100,9 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 		}
 		return pageVerdict{history: c}
 	}
+	if debuggerLifetimes[c.method] == debuggerDocument {
+		return pageVerdict{debugger: c}
+	}
 	return g.admitLocked(c)
 }
 
@@ -110,6 +114,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	g.noteClientRequestLocked(k, c)
 	g.noteContinueLocked(k, c)
 	g.noteCommitLocked(k, c)
+	g.noteDebuggerLocked(k, c)
 	if c.session != "" {
 		g.noteCastLocked(c)
 	}

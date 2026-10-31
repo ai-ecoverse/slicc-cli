@@ -212,6 +212,28 @@ func (rl *relay) run() {
 	<-done
 }
 
+func (rl *relay) sendGuardVerdict(ctx context.Context, v browserVerdict) bool {
+	for _, msg := range v.send {
+		var command struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(msg, &command) == nil && debuggerDomain(command.Method) {
+			if !rl.writeDebugger(msg) {
+				return false
+			}
+		} else {
+			_ = rl.conn.Write(ctx, websocket.MessageText, msg)
+		}
+	}
+	for _, pause := range v.debuggerDeadlines {
+		rl.expireDebuggerLater(pause)
+	}
+	for _, pause := range v.debuggerReads {
+		go rl.verifyDebugger(pause)
+	}
+	return true
+}
+
 func (rl *relay) toPage() {
 	ctx := context.Background()
 	for {
@@ -231,8 +253,8 @@ func (rl *relay) toPage() {
 				}
 			})
 		}
-		for _, msg := range v.send {
-			_ = rl.conn.Write(ctx, websocket.MessageText, msg)
+		if !rl.sendGuardVerdict(ctx, v) {
+			return
 		}
 		for _, id := range v.hold {
 			rl.expireLater(id)
