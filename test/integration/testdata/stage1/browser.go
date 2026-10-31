@@ -2,6 +2,7 @@ package stage1
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,23 +20,25 @@ type Packet struct {
 }
 
 type Browser struct {
-	Server    *httptest.Server
-	Closed    chan struct{}
-	Resumes   chan string
-	mu        sync.Mutex
-	write     sync.Mutex
-	conn      *websocket.Conn
-	trace     []Packet
-	url       string
-	loader    string
-	convert   bool
-	Released  bool
-	HoldReads bool
+	Server        *httptest.Server
+	Closed        chan struct{}
+	Resumes       chan string
+	mu            sync.Mutex
+	write         sync.Mutex
+	conn          *websocket.Conn
+	trace         []Packet
+	url           string
+	loader        string
+	convert       bool
+	activeScript  string
+	activeContext int
+	Released      bool
+	HoldReads     bool
 }
 
 func NewBrowser(t *testing.T) *Browser {
 	t.Helper()
-	b := &Browser{Closed: make(chan struct{}), Resumes: make(chan string, 64), url: "https://ordinary.test/doc", loader: "generation"}
+	b := &Browser{Closed: make(chan struct{}), Resumes: make(chan string, 64), activeScript: "script", activeContext: 7, url: "https://ordinary.test/doc", loader: "generation"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"Browser": "Chrome/156.0.8078.80", "Protocol-Version": "1.3", "webSocketDebuggerUrl": "ws://" + r.Host + "/devtools/browser/stage1"})
@@ -148,14 +151,23 @@ func (b *Browser) answer(p Packet) (any, []map[string]any, bool) {
 }
 
 func (b *Browser) pause(reason string) map[string]any {
-	return map[string]any{"method": "Debugger.paused", "sessionId": "S", "params": map[string]any{"reason": reason, "callFrames": []any{map[string]any{"callFrameId": `{"injectedScriptId":7,"id":0}`, "location": map[string]any{"scriptId": "script", "lineNumber": 0, "columnNumber": 0}, "url": "https://ordinary.test/first.js", "scopeChain": []any{map[string]any{"type": "global", "object": map[string]any{"objectId": "1.7.1"}}}}}}}
+	return map[string]any{"method": "Debugger.paused", "sessionId": "S", "params": map[string]any{"reason": reason, "callFrames": []any{map[string]any{"callFrameId": fmt.Sprintf(`{"injectedScriptId":%d,"id":0}`, b.activeContext), "location": map[string]any{"scriptId": b.activeScript, "lineNumber": 0, "columnNumber": 0}, "url": "https://ordinary.test/first.js", "scopeChain": []any{map[string]any{"type": "global", "object": map[string]any{"objectId": fmt.Sprintf("1.%d.1", b.activeContext)}}}}}}}
 }
 
 func (b *Browser) Emit(t *testing.T, method string) {
 	t.Helper()
 	b.mu.Lock()
 	var event map[string]any
+	var before []map[string]any
 	switch method {
+	case "evaluate":
+		b.activeScript = "evaluate"
+		before = append(before, map[string]any{"method": "Debugger.scriptParsed", "sessionId": "S", "params": map[string]any{"scriptId": "evaluate", "executionContextId": 7, "url": "", "embedderName": ""}})
+		event = b.pause("instrumentation")
+	case "next-context":
+		b.activeScript, b.activeContext = "next-script", 8
+		before = append(before, map[string]any{"method": "Runtime.executionContextCreated", "sessionId": "S", "params": map[string]any{"context": map[string]any{"id": 8, "origin": "https://ordinary.test", "uniqueId": "next-context", "auxData": map[string]any{"isDefault": true, "frameId": "T"}}}}, map[string]any{"method": "Debugger.scriptParsed", "sessionId": "S", "params": map[string]any{"scriptId": "next-script", "executionContextId": 8, "url": "https://ordinary.test/next.js", "embedderName": "https://ordinary.test/next.js"}})
+		event = b.pause("instrumentation")
 	case "instrumentation":
 		event = b.pause(method)
 	case "normal":
@@ -174,9 +186,11 @@ func (b *Browser) Emit(t *testing.T, method string) {
 	b.mu.Unlock()
 	b.write.Lock()
 	defer b.write.Unlock()
-	data, _ := json.Marshal(event)
-	if err := conn.Write(t.Context(), websocket.MessageText, data); err != nil {
-		t.Fatal(err)
+	for _, packet := range append(before, event) {
+		data, _ := json.Marshal(packet)
+		if err := conn.Write(t.Context(), websocket.MessageText, data); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
