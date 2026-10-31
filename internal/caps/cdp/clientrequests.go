@@ -50,7 +50,7 @@ func (g *guard) clientRequestRuleLocked(c *command, id string) string {
 	}
 	nt := g.navTargets[s.target]
 	key := g.pauseLinks[requestKey{c.session, id}]
-	if nt == nil || nt.worker || nt.failed || !nt.done || key.request == "" || key.session != s.target {
+	if nt == nil || nt.worker || nt.failed || !nt.done || nt.documentsOnly || key.request == "" || key.session != s.target {
 		return refusedClientHop
 	}
 	if g.clientRequests[key] == nil && len(g.clientRequests) >= maxMarked {

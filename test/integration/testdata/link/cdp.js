@@ -272,6 +272,16 @@ export function cdpTest(getLink, describe) {
         await c.send('Target.closeTarget', { targetId });
         return { title, href, closed: await c.close() };
       }),
+    ask: (browser, targetId, method) =>
+      run(async () => {
+        const c = await CdpClient.open(getLink(), browser);
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        if (method) {
+          await c.send(method, {}, sessionId);
+          return { value: 'sent' };
+        }
+        return { value: await c.evaluate('1', sessionId) };
+      }),
     screenshot: (browser, size) =>
       run(async () => {
         const c = await CdpClient.open(getLink(), browser);

@@ -73,6 +73,7 @@ type navTarget struct {
 	confirm          *navTarget
 	confirming       bool
 	revision         int
+	documentsOnly    bool
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -167,7 +168,11 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 	nt.pending = len(calls)
 	out := make([][]byte, 0, len(calls))
 	for _, c := range calls {
-		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, step(c.method)))
+		answer := step(c.method)
+		if c.method == "Fetch.enable" {
+			answer = g.fetchStepLocked(nt, res.SessionID, answer)
+		}
+		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, answer))
 	}
 	if nt.confirm != nil {
 		out = append(out, g.confirmTargetLocked(nt)...)

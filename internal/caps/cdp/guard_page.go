@@ -256,7 +256,7 @@ func (g *guard) checkLocked(c *command) string {
 	if reason := g.errorPageCheckLocked(c); reason != "" {
 		return reason
 	}
-	if reason := g.conformanceLocked(c); reason != "" {
+	if reason := g.contentRuleLocked(c); reason != "" {
 		return reason
 	}
 	k := callKey{c.session, c.id}
