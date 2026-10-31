@@ -81,9 +81,6 @@ func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 	if v.history != nil {
 		v = rl.resolveHistory(v.history)
 	}
-	if v.debugger != nil {
-		v = rl.resolveDebugger(v.debugger)
-	}
 	if v.reply != nil {
 		if err := rl.writePage(v.reply); err != nil {
 			_ = rl.conn.CloseNow()

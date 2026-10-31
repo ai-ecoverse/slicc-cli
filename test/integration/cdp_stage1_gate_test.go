@@ -69,13 +69,13 @@ func Test675Stage1CurrentLiveIDsAndStaleCallFramesOnTheRealLinkGuard(t *testing.
 	if params["reason"] == "instrumentation" {
 		t.Fatal("the instrumentation pause was published")
 	}
-	source := stage1.Result(t, client.Call(t, "Debugger.getScriptSource", "S", map[string]any{"scriptId": "script"}))
-	if source["scriptSource"] != "globalThis.stage1Effect = 1" {
-		t.Fatal("wrong source after the current live check")
-	}
+	stage1.Refused(t, client.Call(t, "Debugger.getScriptSource", "S", map[string]any{"scriptId": "script"}))
 	stage1.Refused(t, client.Call(t, "Debugger.getScriptSource", "S", map[string]any{"scriptId": "unplaced"}))
 	frame := `{"injectedScriptId":7,"id":0}`
-	stage1.Result(t, client.Call(t, "Debugger.evaluateOnCallFrame", "S", map[string]any{"callFrameId": frame, "expression": "21*2", "returnByValue": true}))
+	stage1.Refused(t, client.Call(t, "Debugger.evaluateOnCallFrame", "S", map[string]any{"callFrameId": frame, "expression": "21*2", "returnByValue": true}))
+	if stage1Sent(browser, "Debugger.getScriptSource") != 0 || stage1Sent(browser, "Debugger.evaluateOnCallFrame") != 0 {
+		t.Fatal("a Stage2 method reached Chrome at the published pause")
+	}
 	before := stage1Sent(browser, "Debugger.evaluateOnCallFrame")
 	browser.Emit(t, "commit")
 	stage1.Result(t, client.Call(t, "Browser.getVersion", "", nil))

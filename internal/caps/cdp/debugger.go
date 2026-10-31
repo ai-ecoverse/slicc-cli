@@ -68,7 +68,6 @@ type debuggerReply struct {
 	state      *debuggerState
 	method     string
 	generation uint64
-	pause      *debuggerPause
 }
 
 func debuggerDomain(method string) bool {
@@ -94,7 +93,7 @@ func (g *guard) debuggerCheckLocked(c *command) string {
 		return ""
 	}
 	class := debuggerLifetimes[c.method]
-	if class == debuggerUnknown {
+	if class == debuggerUnknown || class == debuggerDocument {
 		return refusedLaterDocuments
 	}
 	if reason := g.debuggerAdmissionLocked(c); reason != "" {
@@ -112,15 +111,9 @@ func (g *guard) debuggerCheckLocked(c *command) string {
 	if s == nil || !s.enabled || s.generation != g.targets[s.target].documentRevision || s.full {
 		return refusedTarget
 	}
-	if class == debuggerDocument || class == debuggerControl {
+	if class == debuggerControl {
 		p := s.pause
 		if p == nil || !p.published || !g.debuggerContextsLocked(s, p) || p.generation != s.generation || !time.Now().Before(p.deadline) {
-			return refusedTarget
-		}
-		if c.method == "Debugger.getScriptSource" && !p.scripts[c.str("scriptId")] {
-			return refusedTarget
-		}
-		if c.method == "Debugger.evaluateOnCallFrame" && !p.frames[c.str("callFrameId")] {
 			return refusedTarget
 		}
 	}
@@ -140,7 +133,7 @@ func (g *guard) noteDebuggerLocked(k callKey, c *command) {
 		s = &debuggerState{owner: c.session, target: t.id, generation: t.documentRevision, scripts: map[string]debuggerScript{}, breakpoints: map[string]bool{}}
 		g.debuggers[c.session] = s
 	}
-	g.debuggerReplies[k] = debuggerReply{state: s, method: c.method, generation: s.generation, pause: s.pause}
+	g.debuggerReplies[k] = debuggerReply{state: s, method: c.method, generation: s.generation}
 	if c.method == "Debugger.resume" {
 		s.resuming = s.pause
 		s.pause = nil
@@ -175,8 +168,6 @@ func (g *guard) debuggerReplyLocked(k callKey, m *message) bool {
 		if m.Error == nil && json.Unmarshal(m.Result, &result) == nil && result.BreakpointID != "" {
 			s.breakpoints[result.BreakpointID] = true
 		}
-	case "Debugger.getScriptSource", "Debugger.evaluateOnCallFrame":
-		return s.pause == r.pause && r.pause != nil && r.pause.published && g.debuggerContextsLocked(s, r.pause) && time.Now().Before(r.pause.deadline) && g.debuggerAdmissionLocked(&command{session: s.owner}) == ""
 	}
 	return true
 }
@@ -517,22 +508,4 @@ func (rl *relay) expireDebuggerLater(p *debuggerPause) {
 			rl.writeDebugger(msg)
 		}
 	})
-}
-
-func (rl *relay) resolveDebugger(c *command) pageVerdict {
-	rl.g.mu.Lock()
-	s := rl.g.debuggers[c.session]
-	if s == nil || s.pause == nil {
-		rl.g.mu.Unlock()
-		return pageVerdict{reply: refusal(c.id, c.session, refusedTarget)}
-	}
-	p := s.pause
-	rl.g.mu.Unlock()
-	read := rl.debuggerRead(s)
-	rl.g.mu.Lock()
-	defer rl.g.mu.Unlock()
-	if rl.g.debuggers[c.session] != s || s.pause != p || !rl.g.debuggerTreeLocked(s, read) || rl.g.checkLocked(c) != "" {
-		return pageVerdict{reply: refusal(c.id, c.session, refusedTarget)}
-	}
-	return rl.g.admitLocked(c)
 }
