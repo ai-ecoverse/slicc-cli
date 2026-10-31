@@ -16,10 +16,9 @@ import (
 
 func narrowBrowser(t *testing.T, browserSession bool) string {
 	t.Helper()
-	var srv *httptest.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
-		ws := "ws" + strings.TrimPrefix(srv.URL, "http") + "/devtools/browser/x"
+		ws := "ws://" + r.Host + "/devtools/browser/x"
 		_ = json.NewEncoder(w).Encode(map[string]string{"Browser": "Narrow/1.0", "Protocol-Version": "1.3", "webSocketDebuggerUrl": ws})
 	})
 	mux.HandleFunc("/json/list", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`[]`)) })
@@ -62,7 +61,7 @@ func narrowBrowser(t *testing.T, browserSession bool) string {
 			}
 		}
 	})
-	srv = httptest.NewServer(mux)
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
