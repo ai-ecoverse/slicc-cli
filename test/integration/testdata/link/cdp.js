@@ -275,11 +275,11 @@ export function cdpTest(getLink, describe) {
     steps: (browser, targetId, steps) =>
       run(async () => {
         const c = await CdpClient.open(getLink(), browser);
-        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const attached = targetId ? await c.send('Target.attachToTarget', { targetId, flatten: true }) : {};
         const results = [];
-        for (const { method, params = {}, browserScope = false } of steps) {
+        for (const { method, params = {}, browserScope = false, session } of steps) {
           try {
-            const result = await c.send(method, params, browserScope ? undefined : sessionId);
+            const result = await c.send(method, params, session ?? (browserScope ? undefined : attached.sessionId));
             results.push({ value: result?.result?.value ?? 'sent' });
           } catch (error) {
             results.push({ error: error.message });

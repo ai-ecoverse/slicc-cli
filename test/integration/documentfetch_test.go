@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -16,8 +17,10 @@ import (
 type documentBrowser struct {
 	url string
 
-	signal bool
-	attest bool
+	signal     bool
+	attest     bool
+	delay      time.Duration
+	earlyPause bool
 
 	mu      sync.Mutex
 	fetches []string
@@ -66,6 +69,7 @@ func (f *documentBrowser) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	sessions := 0
 	guarded := ""
+	pausedDocument := map[string]any{"requestId": "paused-1", "networkId": "paused-1", "frameId": "some-other-frame", "resourceType": "Document", "request": map[string]any{"url": "https://vault.sliccy.ai/"}}
 	for {
 		_, data, err := c.Read(r.Context())
 		if err != nil {
@@ -112,12 +116,20 @@ func (f *documentBrowser) serve(w http.ResponseWriter, r *http.Request) {
 					failure["data"] = "documents-only"
 				}
 			case f.attest:
+				if f.earlyPause && !send(map[string]any{"method": "Fetch.requestPaused", "sessionId": m.SessionID, "params": pausedDocument}) {
+					return
+				}
+				time.Sleep(f.delay)
 				result = map[string]any{"holdsDocuments": true}
 				guarded = m.SessionID
 			}
+		case "Page.getLayoutMetrics":
+			evented := map[string]any{"sessionId": "evented", "waitingForDebugger": false, "targetInfo": map[string]any{"targetId": "tab", "type": "browser", "url": "", "title": ""}}
+			if !send(map[string]any{"method": "Target.attachedToTarget", "params": evented}) {
+				return
+			}
 		case "Page.reload":
-			paused := map[string]any{"requestId": "paused-1", "networkId": "paused-1", "frameId": "some-other-frame", "resourceType": "Document", "request": map[string]any{"url": "https://vault.sliccy.ai/"}}
-			if !send(map[string]any{"method": "Fetch.requestPaused", "sessionId": guarded, "params": paused}) {
+			if !send(map[string]any{"method": "Fetch.requestPaused", "sessionId": guarded, "params": pausedDocument}) {
 				return
 			}
 		case "Page.getNavigationHistory":
@@ -146,6 +158,7 @@ type documentStep struct {
 	Method       string         `json:"method"`
 	Params       map[string]any `json:"params,omitempty"`
 	BrowserScope bool           `json:"browserScope,omitempty"`
+	Session      string         `json:"session,omitempty"`
 }
 
 type documentResult struct {
@@ -157,11 +170,15 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 	const locked = "slicc can't keep seven's origin out of this target"
 	const notAllowed = "allows only the commands measured not to reach one"
 	const noSelector = "can't name a frame or an execution context"
+	const needsPage = "needs a page's session"
 	evaluate := documentStep{Method: "Runtime.evaluate", Params: map[string]any{"expression": "1", "returnByValue": true}}
 	for _, c := range []struct {
 		name    string
 		signal  bool
 		attest  bool
+		delay   time.Duration
+		early   bool
+		noTab   bool
 		steps   []documentStep
 		want    []documentResult
 		enables int
@@ -189,9 +206,47 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 		},
 		{
 			name: "a session that isn't a page gets browser commands only", signal: true, attest: true, enables: 2,
-			steps:  []documentStep{evaluate, {Method: "Page.captureScreenshot", BrowserScope: true}, {Method: "Runtime.getHeapUsage", BrowserScope: true}, {Method: "Browser.getVersion", BrowserScope: true}},
-			want:   []documentResult{{Value: "answered"}, {Error: notAllowed}, {Error: notAllowed}, {Value: "sent"}},
-			unseen: []string{"Page.captureScreenshot", "Runtime.getHeapUsage"},
+			steps:  []documentStep{evaluate, {Method: "Page.captureScreenshot", BrowserScope: true}, {Method: "Tracing.getCategories", BrowserScope: true}, {Method: "Browser.getVersion", BrowserScope: true}},
+			want:   []documentResult{{Value: "answered"}, {Error: needsPage}, {Error: notAllowed}, {Value: "sent"}},
+			unseen: []string{"Page.captureScreenshot", "Tracing.getCategories"},
+		},
+		{
+			name: "a content command needs a page session before any attach", signal: true, attest: true, noTab: true, enables: 0,
+			steps:  []documentStep{{Method: "Page.captureScreenshot", BrowserScope: true}, {Method: "Runtime.evaluate", Params: map[string]any{"expression": "1"}, BrowserScope: true}},
+			want:   []documentResult{{Error: needsPage}, {Error: needsPage}},
+			unseen: []string{"Page.captureScreenshot", "Runtime.evaluate"},
+		},
+		{
+			name: "a content command needs a page session during attestation", signal: true, attest: true, delay: 1500 * time.Millisecond, enables: 2,
+			steps:  []documentStep{{Method: "Page.captureScreenshot", BrowserScope: true}, {Method: "Slicc.action", BrowserScope: true}},
+			want:   []documentResult{{Error: needsPage}, {Error: needsPage}},
+			unseen: []string{"Page.captureScreenshot", "Slicc.action"},
+		},
+		{
+			name: "an attachment reported as a browser's gets no page commands", signal: true, attest: true, enables: 2,
+			steps:  []documentStep{{Method: "Page.getLayoutMetrics"}, {Method: "Security.enable", Session: "evented"}},
+			want:   []documentResult{{Value: "sent"}, {Error: notAllowed}},
+			unseen: []string{"Security.enable"},
+		},
+		{
+			name: "a client can't reconfigure a tab-wide hold", signal: true, attest: true, enables: 2,
+			steps: []documentStep{
+				{Method: "Fetch.disable"},
+				{Method: "Fetch.enable", Params: map[string]any{"patterns": []any{map[string]any{"urlPattern": "https://ordinary.test/*", "resourceType": "Document"}}}},
+				{Method: "Network.disable"},
+				{Method: "Network.setBypassServiceWorker", Params: map[string]any{"bypass": false}},
+				{Method: "Page.reload"},
+				evaluate,
+			},
+			want:    []documentResult{{Error: notAllowed}, {Error: notAllowed}, {Error: notAllowed}, {Error: notAllowed}, {Value: "sent"}, {Error: "history may restore a protected document"}},
+			reached: []string{"Fetch.failRequest"},
+			unseen:  []string{"Fetch.disable", "Network.disable"},
+		},
+		{
+			name: "a pause during attestation locks the tab too", signal: true, attest: true, early: true, enables: 2,
+			steps:   []documentStep{evaluate},
+			want:    []documentResult{{Error: "history may restore a protected document"}},
+			reached: []string{"Fetch.failRequest"},
 		},
 		{
 			name: "a paused protected document in any frame is failed and locks the tab", signal: true, attest: true, enables: 2,
@@ -204,6 +259,7 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 			b := launchBrowser(t)
 			srv := pageServer(t)
 			fake := newDocumentBrowser(t, c.signal, c.attest)
+			fake.delay, fake.earlyPause = c.delay, c.early
 			env := &linkEnv{t: t, b: b, origin: srv.URL}
 			env.a = startAttach(t, "--cdp", b.endpoint, "--cdp-extra", fake.url, "--origin", srv.URL, "--name", "it-node")
 			env.p = b.openPage(t, srv.URL+"/index.html")
@@ -212,7 +268,11 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 				Results []documentResult `json:"results"`
 				Error   string           `json:"error"`
 			}
-			env.p.eval("linkTest.cdp.steps("+jsArgs("documents", "tab", c.steps)+")", &r)
+			tab := "tab"
+			if c.noTab {
+				tab = ""
+			}
+			env.p.eval("linkTest.cdp.steps("+jsArgs("documents", tab, c.steps)+")", &r)
 			if r.Error != "" || len(r.Results) != len(c.want) {
 				t.Fatalf("%+v", r)
 			}
@@ -223,7 +283,7 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 				}
 			}
 			enabled := fake.enabled()
-			if len(enabled) != c.enables || strings.Contains(enabled[0], "resourceType") {
+			if len(enabled) != c.enables || c.enables > 0 && strings.Contains(enabled[0], "resourceType") {
 				t.Fatalf("Fetch.enable calls: %q", enabled)
 			}
 			if c.enables > 1 && !strings.Contains(enabled[1], `"resourceType":"Document"`) {

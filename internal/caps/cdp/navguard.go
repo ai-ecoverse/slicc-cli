@@ -74,6 +74,7 @@ type navTarget struct {
 	confirming       bool
 	revision         int
 	documentsOnly    bool
+	documentsAsked   bool
 }
 
 func (nt *navTarget) settle(failed bool) {
