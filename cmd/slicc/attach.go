@@ -187,7 +187,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		status("%v", err)
 		return 1
 	}
-	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, f.origins, pol, f.hosts.hosts, logf)
+	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, f.origins, pol, f.hosts.hosts, logf, status)
 	if err != nil {
 		status("%v", err)
 		return 1
