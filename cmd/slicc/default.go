@@ -26,6 +26,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
 	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
+	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 	"github.com/ai-ecoverse/slicc-cli/internal/jerk"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
@@ -377,7 +378,7 @@ func plainLine(e flow.Event) string {
 		if e.Role == flow.RoleExtra {
 			role = "extra browser"
 		}
-		return fmt.Sprintf("attached to %s at %s (%s)", named(e), e.CDP, role)
+		return fmt.Sprintf("attached to %s at %s (%s)", named(e), cdp.Redact(e.CDP), role)
 	case flow.Serving:
 		line := fmt.Sprintf("offering %s; policy: %s", strings.Join(e.Caps, ", "), e.Policy)
 		if e.Compute != "" {
@@ -418,7 +419,7 @@ func foreignLine(e flow.Event) string {
 	if e.OpenedTab != nil && *e.OpenedTab {
 		what = "opened a new seven tab"
 	}
-	return fmt.Sprintf("using %s at %s, which slicc didn't launch; %s. Use --browser or --cdp to choose another.", who, e.CDP, what)
+	return fmt.Sprintf("using %s at %s, which slicc didn't launch; %s. Use --browser or --cdp to choose another.", who, cdp.Redact(e.CDP), what)
 }
 
 func firstNonEmpty(s ...string) string {

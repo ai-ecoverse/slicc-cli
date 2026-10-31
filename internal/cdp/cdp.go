@@ -86,22 +86,23 @@ func Discover(ctx context.Context, endpoint string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	shown := Redact(u.String())
 	resp, err := endpointClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("cdp: discover %s: %w", u, err)
+		return "", fmt.Errorf("cdp: discover %s: %w", shown, RedactError(err, u.String()))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("cdp: discover %s: %s", u, resp.Status)
+		return "", fmt.Errorf("cdp: discover %s: %s", shown, resp.Status)
 	}
 	var info struct {
 		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return "", fmt.Errorf("cdp: discover %s: %w", u, err)
+		return "", fmt.Errorf("cdp: discover %s: %w", shown, err)
 	}
 	if info.WebSocketDebuggerURL == "" {
-		return "", fmt.Errorf("cdp: discover %s: no webSocketDebuggerUrl", u)
+		return "", fmt.Errorf("cdp: discover %s: no webSocketDebuggerUrl", shown)
 	}
 	return info.WebSocketDebuggerURL, nil
 }
@@ -116,7 +117,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 		_ = resp.Body.Close()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cdp: connect %s: %w", wsURL, err)
+		return nil, fmt.Errorf("cdp: connect %s: %w", Redact(wsURL), RedactError(err, wsURL))
 	}
 	conn.SetReadLimit(-1)
 	c := &Client{
