@@ -390,6 +390,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	if _, err := os.Stat(filepath.Join(ext, "manifest.json")); err != nil {
 		t.Fatalf("slicc-shared-web's harness extension is missing; run npm ci: %v", err)
 	}
+	ext = stage1GuardFixture(t, ext)
 	fix := startGuardFixture(t)
 	srv := guardPageServer(t, pkg, fix.port)
 	fp := strconv.Itoa(fix.port)
