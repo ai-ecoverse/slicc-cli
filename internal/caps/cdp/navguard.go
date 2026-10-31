@@ -99,6 +99,24 @@ func (g *guard) protectedRequestPatterns() []any {
 	return out
 }
 
+func (g *guard) documentRequestPatterns() []any {
+	var out []any
+	for _, pattern := range g.o.DocumentPatterns() {
+		out = append(out, map[string]any{"urlPattern": pattern, "requestStage": "Request", "resourceType": "Document"})
+	}
+	return out
+}
+
+func (g *guard) fetchStepLocked(session string, step func(m message) [][]byte) func(m message) [][]byte {
+	return func(m message) [][]byte {
+		if m.Error == nil {
+			return step(m)
+		}
+		g.logf("cdp: the browser pauses no requests but documents here: %s", m.Error)
+		return [][]byte{g.callbackLocked(session, "Fetch.enable", map[string]any{"patterns": g.documentRequestPatterns()}, step)}
+	}
+}
+
 func (g *guard) callbackLocked(sessionID, method string, params any, fn func(m message) [][]byte) []byte {
 	msg, c := g.newCallLocked(sessionID, method, params, false)
 	c.fn = fn
@@ -167,7 +185,11 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 	nt.pending = len(calls)
 	out := make([][]byte, 0, len(calls))
 	for _, c := range calls {
-		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, step(c.method)))
+		answer := step(c.method)
+		if c.method == "Fetch.enable" {
+			answer = g.fetchStepLocked(res.SessionID, answer)
+		}
+		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, answer))
 	}
 	if nt.confirm != nil {
 		out = append(out, g.confirmTargetLocked(nt)...)
