@@ -241,8 +241,7 @@ func (e *protectEnv) testExtensionFrame(t *testing.T) {
 		_ = s.Call(c, "Debugger.disable", nil, nil)
 	})
 	var r struct {
-		Evaluate     cdpOutcome `json:"evaluate"`
-		SetVariable  cdpOutcome `json:"setVariable"`
+		Enable       cdpOutcome `json:"enable"`
 		PausedFrames [][]string `json:"pausedFrames"`
 		Scripts      []struct {
 			URL       string `json:"url"`
@@ -258,10 +257,8 @@ func (e *protectEnv) testExtensionFrame(t *testing.T) {
 	if strings.Contains(string(b), "fake-value-0001") {
 		t.Errorf("the extension's secret reached seven: %s", b)
 	}
-	for name, o := range map[string]cdpOutcome{"Debugger.evaluateOnCallFrame": r.Evaluate, "Debugger.setVariableValue": r.SetVariable} {
-		if o.Error.Message != refusedWorld {
-			t.Errorf("%s on a frame in the extension's world: %+v", name, o)
-		}
+	if r.Enable.Error.Message != refusedWorld {
+		t.Errorf("Debugger.enable beside the extension's world: %+v", r.Enable)
 	}
 	for _, frames := range r.PausedFrames {
 		for _, id := range frames {
@@ -352,23 +349,13 @@ func (e *protectEnv) testExtensionStale(t *testing.T) {
 func (e *protectEnv) testExtensionBreakpoint(t *testing.T) {
 	target, _, _, _ := e.extensionPage(t, "breakpoint")
 	var r struct {
-		Regex  cdpOutcome `json:"regex"`
-		Hash   cdpOutcome `json:"hash"`
-		Blank  cdpOutcome `json:"blank"`
-		Page   cdpOutcome `json:"page"`
-		Plain  cdpOutcome `json:"plain"`
+		Enable cdpOutcome `json:"enable"`
 		Leak   string     `json:"leak"`
 		Paused int        `json:"paused"`
 	}
 	e.evalJSON(t, "linkTest.protect.extensionBreakpoint("+jsArgs("chrome", target, e.allowed+"/?n=breakpoint")+")", &r)
-	const want = "slicc: refused: a breakpoint condition that could run in a browser extension's world needs a url naming the page's own script"
-	for name, o := range map[string]cdpOutcome{"urlRegex": r.Regex, "scriptHash": r.Hash, "an empty url": r.Blank} {
-		if o.Error.Message != want {
-			t.Errorf("a conditional breakpoint by %s: %+v", name, o)
-		}
-	}
-	if !r.Page.OK || !r.Plain.OK {
-		t.Errorf("a conditional breakpoint on the page's own URL gave %+v, and a plain one by urlRegex %+v", r.Page, r.Plain)
+	if r.Enable.Error.Message != refusedWorld {
+		t.Errorf("Debugger.enable beside the extension's world: %+v", r.Enable)
 	}
 	if r.Leak != `{"sliccWorld":""}` {
 		t.Errorf("after a reload breakpoint conditions left %s in the page's DOM", r.Leak)

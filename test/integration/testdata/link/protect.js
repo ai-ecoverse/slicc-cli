@@ -1281,19 +1281,12 @@ export function protectTest(getLink, describe) {
         await c.send('Target.detachFromTarget', { sessionId });
         return out;
       }),
-    extensionBreakpoint: (browser, targetId, pageURL) =>
+    extensionBreakpoint: (browser, targetId) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
-        await c.send('Debugger.enable', {}, sessionId);
+        const enable = await outcome(c.send('Debugger.enable', {}, sessionId));
         await c.send('Page.enable', {}, sessionId);
-        const condition = (key) => `(document.documentElement.dataset.${key} = globalThis.sliccFixtureWorld?.secret ?? "none", false)`;
-        const out = {
-          regex: await outcome(c.send('Debugger.setBreakpointByUrl', { urlRegex: 'chrome-extension://.*', lineNumber: 2, condition: condition('regex') }, sessionId)),
-          hash: await outcome(c.send('Debugger.setBreakpointByUrl', { scriptHash: '0'.repeat(64), lineNumber: 2, condition: condition('hash') }, sessionId)),
-          blank: await outcome(c.send('Debugger.setBreakpointByUrl', { url: '', lineNumber: 0, condition: condition('blank') }, sessionId)),
-          page: await outcome(c.send('Debugger.setBreakpointByUrl', { url: pageURL, lineNumber: 0, condition: 'false' }, sessionId)),
-          plain: await outcome(c.send('Debugger.setBreakpointByUrl', { urlRegex: 'chrome-extension://.*', lineNumber: 1 }, sessionId)),
-        };
+        const out = { enable };
         const loaded = c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 20000);
         await c.send('Page.reload', {}, sessionId);
         await loaded;
@@ -1382,14 +1375,10 @@ export function protectTest(getLink, describe) {
           paused: events.filter((e) => e.method === 'Fetch.requestPaused').length,
         };
       }),
-    extensionFrame: (browser, targetId, callFrameId) =>
+    extensionFrame: (browser, targetId) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
-        await c.send('Debugger.enable', {}, sessionId);
-        const out = {
-          evaluate: await outcome(c.send('Debugger.evaluateOnCallFrame', { callFrameId, expression: 'globalThis.sliccFixtureWorld?.secret ?? null', returnByValue: true }, sessionId)),
-          setVariable: await outcome(c.send('Debugger.setVariableValue', { callFrameId, scopeNumber: 0, variableName: 'probe', newValue: { value: 1 } }, sessionId)),
-        };
+        const out = { enable: await outcome(c.send('Debugger.enable', {}, sessionId)) };
         await sleep(300);
         out.pausedFrames = c.events.filter((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId).map((e) => e.params.callFrames.map((f) => f.callFrameId));
         out.scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId).map((e) => ({ url: e.params.url, contextId: e.params.executionContextId }));
