@@ -13,8 +13,8 @@ const (
 )
 
 var pageDomains = commandSet(
-	"Page", "Runtime", "DOM", "DOMSnapshot", "DOMDebugger", "DOMStorage", "CSS", "Input", "Accessibility", "Network",
-	"Emulation", "Overlay", "Debugger", "HeapProfiler", "Profiler", "Console", "Log", "LayerTree", "Animation", "Audits",
+	"Page", "Runtime", "DOM", "DOMSnapshot", "DOMDebugger", "DOMStorage", "CSS", "Input", "Accessibility", "Emulation",
+	"Overlay", "Debugger", "HeapProfiler", "Profiler", "Console", "Log", "LayerTree", "Animation", "Audits",
 	"Media", "WebAudio", "Cast", "HeadlessExperimental", "IndexedDB", "CacheStorage", "ServiceWorker", "Performance",
 	"Inspector", "Memory", "Slicc",
 )
