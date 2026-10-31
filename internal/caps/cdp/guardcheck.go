@@ -19,6 +19,9 @@ const (
 var ErrUnguarded = errors.New("it has no browser session, so slicc can't watch its tabs or keep seven's origin out of them")
 
 func checkGuard(ctx context.Context, ep browser.Endpoint) error {
+	if ep.WSOnly {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, guardCheckTimeout)
 	defer cancel()
 	conn, _, err := dial(ctx, ep)

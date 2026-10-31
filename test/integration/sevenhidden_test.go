@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,6 +121,23 @@ func TestABrowserWithoutABrowserSessionIsNotOffered(t *testing.T) {
 	url := narrowBrowser(t, false)
 	lines := attachLines(t, isolatedEnv(t, "SLICC_DEBUG=1"), "--cdp", url)
 	seeLine(t, lines, "seven can't drive this browser through slicc")
+}
+
+func TestAWebSocketOnlyBrowserGetsNoSocketWhenItIsAdded(t *testing.T) {
+	var sockets atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/devtools/browser/x", func(w http.ResponseWriter, r *http.Request) {
+		sockets.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	ws := "ws" + strings.TrimPrefix(srv.URL, "http") + "/devtools/browser/x"
+	lines := attachLines(t, isolatedEnv(t, "SLICC_DEBUG=1"), "--signal", "stdio", "--cdp", ws)
+	seeLine(t, lines, "cdp: browser chromium is Chromium")
+	if n := sockets.Load(); n != 0 {
+		t.Fatalf("adding a wsOnly browser opened %d sockets", n)
+	}
 }
 
 func TestTheDefaultFlowExplainsABrowserThatWontOpenSeven(t *testing.T) {
