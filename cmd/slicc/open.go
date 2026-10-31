@@ -42,6 +42,9 @@ import (
 const (
 	openCommandEnv   = "SLICC_OPEN_COMMAND"
 	loopbackPortsEnv = "SLICC_LOOPBACK_PORTS"
+	pairingQuietEnv  = "SLICC_PAIRING_QUIET"
+	pairingQuiet     = 30 * time.Second
+	pairingUnheard   = "no browser has reached slicc yet. If seven is open in Safari or another WebKit browser, it can't: those block this computer's loopback from an https page. Use Chrome, Edge or Firefox, or link it through seven's Link a device with slicc <join-url> follow"
 )
 
 const openUsage = `usage: slicc open [flags]
@@ -505,7 +508,19 @@ func (r *openRun) pair() error {
 			r.status("opened the pairing URL in the default browser")
 		}
 	}
+	time.AfterFunc(pairingQuietFor(), func() {
+		if !r.ln.Heard() {
+			r.status("%s", pairingUnheard)
+		}
+	})
 	return nil
+}
+
+func pairingQuietFor() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv(pairingQuietEnv)); err == nil && d > 0 {
+		return d
+	}
+	return pairingQuiet
 }
 
 func (r *openRun) readStdin(stdin io.Reader) {
