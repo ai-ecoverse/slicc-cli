@@ -120,6 +120,10 @@ func (j *jsonLines) linkEvent(n *node.Node, mode string, res resourceSource, e n
 		j.emit(flow.Event{Event: flow.Linked, Mode: mode, Peer: e.Peer.Name, Tab: n.PeerOrigin(e.Link), Caps: n.Caps(), Policy: policySummary(n), Resources: res.of(n.Hello())})
 	case node.EventLinkDown:
 		if e.Link == nil {
+			if e.Err != nil {
+				retry := true
+				j.emit(flow.Event{Event: flow.Error, Mode: mode, Message: e.Err.Error(), Retryable: &retry})
+			}
 			return
 		}
 		ev := flow.Event{Event: flow.LinkLost, Mode: mode, Reason: e.Reason}

@@ -180,6 +180,44 @@ func TestAttachJSONReportsTheLinkLifecycle(t *testing.T) {
 	nativeFixture(t, "attach.ndjson", nativeEvents(t, f))
 }
 
+func TestAttachJSONReportsAnOfferItCannotAnswer(t *testing.T) {
+	b := launchBrowser(t)
+	srv := pageServer(t)
+	f := startFlow(t, os.Environ(), "attach", "--json", "--cdp", b.endpoint, "--origin", srv.URL, "--no-kernel")
+	f.next(t, "connecting")
+	p := b.openPage(t, srv.URL+"/index.html")
+	f.next(t, "connecting")
+	f.next(t, "linked")
+	var st struct {
+		Nonce string `json:"nonce"`
+	}
+	p.eval("linkTest.status()", &st)
+	var n any
+	p.eval(`globalThis.sliccLinkSend(JSON.stringify({t: 'offer', nonce: `+jsArgs(st.Nonce)+`, sdp: 'not an sdp'}))`, &n)
+	for {
+		e := f.nextAny(t)
+		if e.Event != "error" {
+			continue
+		}
+		var ev struct {
+			Message   string `json:"message"`
+			Retryable *bool  `json:"retryable"`
+			Mode      string `json:"mode"`
+		}
+		if json.Unmarshal([]byte(e.raw), &ev) != nil || ev.Message == "" || ev.Retryable == nil || !*ev.Retryable || ev.Mode != "cdp" {
+			t.Fatalf("error %s", e.raw)
+		}
+		break
+	}
+	if err := interrupt(f.cmd); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.rest(t); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	lastIsClosed(t, f)
+}
+
 func TestAttachJSONRefusesStdioSignalling(t *testing.T) {
 	_, errOut, code := slicc(t, "attach", "--json", "--signal", "stdio")
 	if code != 2 || !strings.Contains(errOut, "--json and --signal stdio don't go together") {
