@@ -253,7 +253,7 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 	}
 	if opts.notice != "" {
 		r.status("%s", opts.notice)
-		r.event(map[string]any{"schema": flow.Schema, "event": "mode", "mode": "loopback", "reason": "no-browser"})
+		r.event(map[string]any{"schema": flow.Schema, "event": flow.Mode, "mode": "loopback", "reason": "no-browser"})
 	}
 	if !r.f.noKernel {
 		r.f.kernelPort = kernelin.Pick(r.f.kernelPort, r.status)
@@ -566,7 +566,7 @@ func (r *openRun) printURL(u string) {
 		return
 	}
 	if r.opts.json {
-		r.event(map[string]any{"schema": flow.Schema, "event": "pairing", "url": u})
+		r.event(map[string]any{"schema": flow.Schema, "event": flow.Pairing, "url": u})
 		return
 	}
 	r.outMu.Lock()

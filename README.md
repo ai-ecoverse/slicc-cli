@@ -21,6 +21,7 @@
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
 | `slicc update [--check]` | replace this binary with the latest release (works now; see [Updates](#updates)) |
 | `slicc install jerk` | install slicc-jerk into slicc's data folder (works now; see [Companion tools](#companion-tools)) |
+| `slicc capabilities --json` | what this slicc offers a program that drives it: its commands, events and control ops (works now; see [Driving slicc from a program](#driving-slicc-from-a-program-slicc-capabilities)) |
 
 ## Install
 
@@ -294,7 +295,7 @@ Errors name the step that failed (`attestation identity: …`). A bundle from a 
 
 These checks come first, so `--check` refuses the same way and nothing asks GitHub.
 
-Release builds outside npm and app bundles print a notice on stderr when a newer release exists: ``slicc X is available (you have Y); run `slicc update` ``. A go-installed release says ``run `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest` `` instead. The notice comes from a cache (`<user cache dir>/slicc/update-check-seven.json`; six's Go follower uses `update-check.json`, see [Coming from SLICC six](#coming-from-slicc-six)), and a background check refreshes it at most once every 24 hours, so no run waits on the check for more than 2 seconds. `--version`, `update`, and any command line with `--help`, `-h` or `-help` print no notice.
+Release builds outside npm and app bundles print a notice on stderr when a newer release exists: ``slicc X is available (you have Y); run `slicc update` ``. A go-installed release says ``run `go install github.com/ai-ecoverse/slicc-cli/cmd/slicc@latest` `` instead. The notice comes from a cache (`<user cache dir>/slicc/update-check-seven.json`; six's Go follower uses `update-check.json`, see [Coming from SLICC six](#coming-from-slicc-six)), and a background check refreshes it at most once every 24 hours, so no run waits on the check for more than 2 seconds. `--version`, `capabilities`, `update`, and any command line with `--help`, `-h` or `-help` print no notice.
 
 ## Telemetry
 
@@ -302,7 +303,7 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 - `enter`, with the subcommand as `source`, from a fixed list (`abort`, `attach`, `browsers`, `follow`, `install`, `launch`, `open`, `pair`, `prompt`, `unpair`, `update`, `wait`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
 - `error`, for operational failures, from a fixed set of sources (`update`, `signal`, `link`, `browser`, `ssh`, `cdp`). Messages pass through go-optel's sanitizer, which strips URLs and paths.
 
-`--version`, and any command line with `--help`, `-h` or `-help` (such as `slicc update --help`), send nothing, and development builds never configure a client.
+`--version`, `capabilities`, and any command line with `--help`, `-h` or `-help` (such as `slicc update --help`), send nothing, and development builds never configure a client.
 
 ## Environment
 
@@ -322,6 +323,28 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 | `SLICC_LOOPBACK_PORTS` | test-only: `<first>-<last>`, the port range of the [loopback listener](#linking-seven-in-your-everyday-browser) instead of 17117-17126 |
 | `SLICC_LINK_URL` | inside seven only: the link facade's address, `tcp://127.0.0.1:<port>` (see [Inside seven](#inside-seven)) |
 | `SLICC_USER_DATA_DIR`, `XDG_STATE_HOME` | read, as SLICC six reads them, only to find six's Chrome profile (see [Using SLICC six's Chrome profile](#using-slicc-sixs-chrome-profile)) |
+
+## Driving slicc from a program: `slicc capabilities`
+
+```
+slicc capabilities [--json]
+```
+
+`slicc capabilities --json` is the handshake of a program that drives `slicc`, such as a native app: one JSON document on stdout, from the binary's own tables, so it describes exactly the `slicc` it came from. It reads no files, asks no network, sends no telemetry and prints no update notice, so it works the same inside an app bundle. Without `--json` it prints the version, the contract and a table of the commands.
+
+```
+{"schema":1,"version":"<slicc version>","contract":1,"commands":{"<name>":{"json":"document"|"events"|"none","vocabulary"?:"events"|"agent"}},"events":{"schema":1,"names":[…]},"agent":{"events":[…],"own":[…]},"control":{"v":1,"ops":["status",…]}}
+```
+
+- **`schema`:** the shape of this document, 1.
+- **`version`:** the version `slicc --version` prints.
+- **`contract`:** 1. It goes up only for a breaking change to a contract this document describes: a field or event that changes meaning or goes away. New commands, fields, events and ops leave it alone.
+- **`commands`:** every command, keyed by name: `default` for `slicc` with no command, `follow`, `prompt`, `watch`, `wait` and `abort` (also after a join URL), `attach`, `open`, `pair`, `unpair`, `tray`, `browsers`, `launch`, `update`, `install`, `capabilities`, `version` and `help`. `json` says what `--json` prints: `document` (one JSON value), `events` (NDJSON, one event a line) or `none` (no `--json`). An `events` command has `vocabulary`: `events` for lines with `schema` and `event` (see [The default](#the-default-slicc) and [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)), or `agent` for seven's agent events with `t` (see [`agent`](#agent-page-cap-agent-node--page)).
+- **`events`:** `schema`, the `schema` every `event` line carries, and `names`, every `event` a `vocabulary: "events"` command can print, sorted.
+- **`agent`:** `events`, the `t` of every agent event slicc knows, and `own`, the lines slicc itself adds to that stream (`settled`, see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)).
+- **`control`:** `v`, the version of the [control socket](#running-links-slicc-tray) protocol, and `ops`, the ops it answers.
+
+A program reads `contract` and the names it needs, and treats anything it doesn't know as absent: an older `slicc` lacks the newer commands, events and ops, and a newer one may have more. `TestCapabilitiesNameEveryCommandEventAndOp` fails when a command, an event or a control op is added to the code without appearing here, and keeps the document's fixture, [`test/integration/testdata/native/capabilities.json`](test/integration/testdata/native/capabilities.json), in step with the binary.
 
 ## The default: `slicc`
 
@@ -2152,7 +2175,7 @@ CI installs a pinned release: `go install github.com/ai-ecoverse/slicc-cli/cmd/s
 
 ## Development
 
-Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`. `npm run lint` runs the slicc lint tools, `gofmt`, `go mod tidy -diff`, `go vet` (also with `GOOS=darwin` and `GOOS=windows`, since CI tests on Linux only) and golangci-lint; `npm run lint:sh` runs shellcheck on `install.sh` and the scripts. `npm test` runs the integration tests in `test/integration/`, which build the binary and drive it; run `npm ci` first, since the [Inside seven](#inside-seven) tests need the pinned `@ai-ecoverse/slicc-kernel`. Unit tests stay next to the code and out of git (`npm run test:unit`). `go build` and `npm run build` link no version, so these binaries report `dev`. `npm run dist` cross-builds all six targets into `artifacts/release/` with `SHA256SUMS`, unsigned. `npm run npm:stage` then stages the npm packages into `dist/npm/`, and `npm run npm:check` packs them with `npm publish --dry-run`.
+Go 1.26 and Node ≥ 24 (for the lint tools). `npm run build` writes `bin/slicc`. `npm run lint` runs the slicc lint tools, `gofmt`, `go mod tidy -diff`, `go vet` (also with `GOOS=darwin` and `GOOS=windows`, since CI tests on Linux only) and golangci-lint; `npm run lint:sh` runs shellcheck on `install.sh` and the scripts. `npm test` runs the integration tests in `test/integration/`, which build the binary and drive it; run `npm ci` first, since the [Inside seven](#inside-seven) tests need the pinned `@ai-ecoverse/slicc-kernel`. Unit tests stay next to the code and out of git (`npm run test:unit`). `test/integration/testdata/native/` holds the fixtures of the contracts a native app relies on, each written by the integration test that checks it: run that test with `SLICC_FIXTURE_WRITE=1` to rewrite a fixture after a deliberate change, and commit the result. `go build` and `npm run build` link no version, so these binaries report `dev`. `npm run dist` cross-builds all six targets into `artifacts/release/` with `SHA256SUMS`, unsigned. `npm run npm:stage` then stages the npm packages into `dist/npm/`, and `npm run npm:check` packs them with `npm publish --dry-run`.
 
 **CI.** `.github/workflows/ci.yml` is one caller of [slicc-shared-web's pipeline](https://github.com/ai-ecoverse/slicc-shared-web#pipeline), pinned at the release of the `@ai-ecoverse/slicc-shared-web` devDependency, with `secrets: inherit`. On pull requests and in the merge queue it runs `lint` (`npm run lint` with golangci-lint, pinned in `ci.yml` and installed into `$RUNNER_TEMP`, then `npm run lint:sh`), then `npm test` on four Linux shards of the pool, then on a pull request the Claude and Codex reviews with this repo's `review-prompt`. The checks to require are `ci / integration` and `ci / review`. A push to `main` runs lint and the release (see [Releases](#releases)); it runs no tests, since what reaches `main` passed the merge queue. macOS and Windows aren't tested on pull requests or in the merge queue: lint vets both, and platform code needs a local run there. `.github/workflows/windows.yml` runs `TestWindowsArgs` on `windows-latest` on each push to `main`; it isn't a required check, and a red run there needs a follow-up pull request. **Test shards.** `npm test` runs `scripts/test-shard.mjs ci/4 -race -count=1 -timeout 15m -v ./test/integration/...`. On the pipeline's shard `SLICC_TEST_SHARD` (0 to 3) it runs that shard's share of the top-level tests; without it (a local run) it runs them all. The split is greedy by measured time: `test/integration/shard-times.json` holds each top-level test's seconds on `linux`, each test goes to the shard with the least time so far, a test without a time counts as the median, and the last shard runs everything the others don't, so a new test still runs. `go test` gets the pipeline's own `NODE_OPTIONS` back (without its shard preload and JUnit reporter) and none of its `SLICC_TEST_*` variables. The script writes each top-level test's result to the shard's JUnit report (`SLICC_TEST_JUNIT`), which the pipeline's `integration` check counts: it fails when no test ran or one failed. It also fails a shard that selects no tests or whose `go test -v` runs none, and, when a shard hits its `-timeout`, names the test that was running and how long the finished ones took. `node scripts/shard-times.mjs --run <CI run id>` refreshes the times from a finished run's `test (<n>)` logs (`linux=<log file>` reads local `go test -v` output instead); commit the result when tests get much slower or faster. `TestEachCIShardFitsItsTimeout` fails when a shard adds up to more than three quarters of its `-timeout`, or when `timeout-minutes` leaves less than 5 minutes past it: then raise `shards` in `ci.yml` and the count in `npm test` together. The [guard vectors](https://github.com/ai-ecoverse/slicc-browsers#guard-vectors) run on every shard; `SLICC_GUARD_VECTORS=0` skips them locally. On macOS they leave out the C9 vectors (extension worlds; the `C9.` prefix that `guardSkippedOn` in `guardrunner_test.go` returns for `darwin`): there their unguarded control hung in Chrome itself ([#344](https://github.com/ai-ecoverse/slicc-cli/issues/344)). `TestCDPGuardVectorsSkipC9OnlyOnMacOS` keeps the skip to macOS, and `TestCDPHidesExtensionWorlds` covers the extension-world guard everywhere. **Node:** CI runs Node 26: on Node 24.21.0, V8 crashed the WASI kernel harness (`TestWasi*`) about once in a hundred runs on Windows and occasionally on Linux.
 

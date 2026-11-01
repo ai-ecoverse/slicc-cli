@@ -27,6 +27,12 @@ const (
 	maxSockPath = 100
 )
 
+const V = version
+
+const OpStatus = "status"
+
+var Ops = []string{OpStatus}
+
 const (
 	StateWaiting      = "waiting"
 	StateDialing      = "dialing"
@@ -219,7 +225,7 @@ func (s *Server) answer(c net.Conn) {
 	switch {
 	case json.Unmarshal([]byte(line), &req) != nil || req.V != version:
 		out = map[string]any{"v": version, "error": "EPROTO"}
-	case req.Op == "status":
+	case req.Op == OpStatus:
 		out = s.h.Snapshot()
 	default:
 		out = map[string]any{"v": version, "error": "EINVAL"}
@@ -287,7 +293,7 @@ func Query(ctx context.Context, path string) (*Status, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(dl)
 	}
-	body, _ := json.Marshal(request{V: version, Op: "status"})
+	body, _ := json.Marshal(request{V: version, Op: OpStatus})
 	if _, err := c.Write(append(body, '\n')); err != nil {
 		return nil, err
 	}
