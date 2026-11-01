@@ -7,7 +7,9 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -292,5 +294,54 @@ func TestCapabilitiesWithoutJSONListTheCommands(t *testing.T) {
 	}
 	if _, errOut, code := slicc(t, "capabilities", "extra"); code != 2 || !strings.Contains(errOut, `unexpected argument "extra"`) {
 		t.Fatalf("code %d, stderr %q", code, errOut)
+	}
+}
+
+func TestCapabilitiesRunsBeforeAnythingElse(t *testing.T) {
+	var body []ast.Stmt
+	for _, f := range parseGoDir(t, filepath.Join("..", "..", "cmd", "slicc")) {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Name.Name != "run" || fd.Recv != nil || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if c, ok := n.(*ast.CallExpr); ok && exprString(c.Fun) == "companionsOnPath" {
+					body = fd.Body.List
+				}
+				return true
+			})
+		}
+	}
+	if len(body) == 0 {
+		t.Fatal("no func run in cmd/slicc that looks for companion tools")
+	}
+	first, ok := body[0].(*ast.IfStmt)
+	if !ok {
+		t.Fatal("run doesn't start with the capabilities dispatch")
+	}
+	var dispatches bool
+	ast.Inspect(first, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok && exprString(c.Fun) == "runCapabilities" {
+			dispatches = true
+		}
+		return true
+	})
+	if !dispatches {
+		t.Fatal("the first statement of run doesn't hand capabilities to runCapabilities")
+	}
+	cmd := exec.Command(binary, "capabilities", "--json")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	if runtime.GOOS == "windows" {
+		cmd.Env = append(cmd.Env, "SystemRoot="+os.Getenv("SystemRoot"))
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil || stderr.Len() != 0 {
+		t.Fatalf("%v, stderr %q", err, stderr.String())
+	}
+	_, want := readCapabilities(t)
+	if stdout.String() != want {
+		t.Fatalf("without a home: %q, want %q", stdout.String(), want)
 	}
 }

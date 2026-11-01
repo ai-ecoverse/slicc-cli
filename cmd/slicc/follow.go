@@ -495,11 +495,10 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 			r.lost(up, "slicc is exiting", "")
 			return 0, outcomeStop
 		case err := <-served:
+			r.lost(up, "", r.redactErr(err))
 			if err == nil {
-				r.lost(up, "", "")
 				return 0, r.after(up)
 			}
-			r.lost(up, "", r.f.Redact(err.Error()))
 			return r.failed(ctx, err, up)
 		case ev := <-r.events:
 			if ev.conn != conn {
@@ -546,6 +545,13 @@ func (r *followRun) drainEarlyDrop(ctx context.Context, served <-chan error) (in
 	case <-ctx.Done():
 		return 0, 0, false
 	}
+}
+
+func (r *followRun) redactErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return r.f.Redact(err.Error())
 }
 
 func (r *followRun) lost(up bool, reason, message string) {
