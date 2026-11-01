@@ -195,6 +195,17 @@ func (r *Registry) Add(ctx context.Context, raw string, seven bool) (link.Browse
 	return e.info, nil
 }
 
+func (r *Registry) IDOf(raw string) (string, bool) {
+	key, err := endpointKey(raw)
+	if err != nil {
+		return "", false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.known[key]
+	return id, ok
+}
+
 func (r *Registry) newIDLocked(kind string) string {
 	if !r.taken[kind] {
 		r.taken[kind] = true

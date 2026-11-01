@@ -218,14 +218,12 @@ func registerCaps(lc *liveCaps, origins []string, logf func(string, ...any)) fun
 			closeFS()
 		}
 		var seven string
-		var extra, order []string
+		var extra []string
 		for _, b := range browsers {
 			if b.Seven {
 				seven = b.CDP
-				order = append([]string{b.ID}, order...)
 			} else {
 				extra = append(extra, b.CDP)
-				order = append(order, b.ID)
 			}
 		}
 		reg, err := cdpBrowsers(ctx, seven, extra, origins, pol, nil, logf, logf)
@@ -239,9 +237,9 @@ func registerCaps(lc *liveCaps, origins []string, logf func(string, ...any)) fun
 			return flow.Caps{}, err
 		}
 		ids := map[string]string{}
-		for i, b := range reg.List() {
-			if i < len(order) {
-				ids[b.ID] = order[i]
+		for _, b := range browsers {
+			if id, ok := reg.IDOf(b.CDP); ok {
+				ids[id] = b.ID
 			}
 		}
 		wctx, cancel := context.WithCancel(ctx)
