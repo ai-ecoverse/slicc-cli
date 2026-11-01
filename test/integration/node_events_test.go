@@ -193,6 +193,45 @@ func (e *eventLog) waitFor(t *testing.T, kind node.EventKind, n int) node.Event 
 	}
 }
 
+type unansweredBye struct {
+	*pipeConn
+}
+
+func (c unansweredBye) Send(ctx context.Context, m signal.Message) error {
+	if m.T == signal.TypeBye {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.pipeConn.Send(ctx, m)
+}
+
+func TestServeExitsWhenByeGoesUnanswered(t *testing.T) {
+	n := node.New(node.Config{Name: "hung page node", Version: "test", Policy: policy.Local(0), Exit: true})
+	log := &eventLog{wake: make(chan struct{}, 1)}
+	unsubscribe := n.Subscribe(log.add)
+	defer unsubscribe()
+	conn := newPipeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := make(chan error, 1)
+	go func() { served <- n.Serve(ctx, unansweredBye{conn}) }()
+
+	conn.startPage(t, "nonce-1")
+	log.waitFor(t, node.EventLinked, 1)
+	cancel()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve still waiting on a bye nobody answered")
+	}
+	if down := log.waitFor(t, node.EventLinkDown, 1); down.Reason != "slicc is exiting" {
+		t.Fatalf("link-down %+v", down)
+	}
+}
+
 func TestNodeEvents(t *testing.T) {
 	echo := serveTCP(t, func(c net.Conn) { _, _ = io.Copy(c, c) })
 	host, port := hostPort(t, echo)
