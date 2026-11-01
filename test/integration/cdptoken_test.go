@@ -195,3 +195,17 @@ func TestABadEndpointKeepsItsTokenOutOfTheError(t *testing.T) {
 		}
 	}
 }
+
+func TestAbortNamesAnUnreachableEndpointOnce(t *testing.T) {
+	env := isolatedEnv(t)
+	for _, c := range []struct{ cdp, want string }{
+		{"http://127.0.0.1:1", `Get "http://127.0.0.1:1/json/version"`},
+		{"http://127.0.0.1:1/json/version", `Get "http://127.0.0.1:1/json/version"`},
+		{"http://127.0.0.1:1/" + cdpToken, `Get "http://127.0.0.1:1/json/version"`},
+	} {
+		r := runBin(t, env, binary, "abort", "--cdp", c.cdp)
+		if r.code == 0 || !strings.Contains(r.stderr, c.want) || strings.Count(r.stderr, "127.0.0.1:1") != 3 || strings.Contains(r.stderr, cdpToken) {
+			t.Fatalf("%s: %+v", c.cdp, r)
+		}
+	}
+}
