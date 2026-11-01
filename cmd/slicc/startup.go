@@ -16,6 +16,7 @@ import (
 var quietCommands = map[string]bool{
 	"--version": true, "-V": true, "version": true,
 	"--help": true, "-h": true, "help": true,
+	"capabilities": true,
 }
 
 func quiet(args []string) bool {

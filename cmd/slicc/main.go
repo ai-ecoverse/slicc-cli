@@ -38,6 +38,7 @@ usage:
   slicc launch              launch a browser with CDP in a separate SLICC profile
   slicc update [--check]    replace this binary with the latest release
   slicc install jerk        install slicc-jerk into slicc's data folder
+  slicc capabilities --json what this slicc offers a program that drives it
   slicc --version           print the version
   slicc --help              print this help
 ` + defaultHelp
@@ -69,6 +70,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runOpen(args[0], args[1:], os.Stdin, stdout, stderr)
 	case "unpair":
 		return runUnpair(args[1:], stdout, stderr)
+	case "capabilities":
+		return runCapabilities(args[1:], stdout, stderr)
 	case "tray":
 		return runTray(args[1:], stdout, stderr)
 	case "prompt", "watch", "wait", "abort":

@@ -3,6 +3,7 @@ package flow
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
@@ -31,12 +32,26 @@ const (
 	Closed      Kind = "closed"
 	Error       Kind = "error"
 	Pairing     Kind = "pairing"
+	Mode        Kind = "mode"
 
 	ForeignBrowser Kind = "foreign-browser"
 )
 
 var Public = map[Kind]bool{
 	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, BrowserSlow: true, Closed: true, Error: true, ForeignBrowser: true,
+}
+
+var Loopback = map[Kind]bool{Mode: true, Pairing: true}
+
+func Names() []string {
+	var out []string
+	for _, set := range []map[Kind]bool{Public, Loopback} {
+		for k := range set {
+			out = append(out, string(k))
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 const (

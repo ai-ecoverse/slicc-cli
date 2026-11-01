@@ -16,7 +16,9 @@ const (
 	settleLost
 )
 
-const settledLine = `{"t":"settled"}` + "\n"
+const agentSettled = "settled"
+
+const settledLine = `{"t":"` + agentSettled + `"}` + "\n"
 
 type settler struct {
 	quiet    time.Duration

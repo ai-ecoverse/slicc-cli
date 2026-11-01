@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "version": "1.2.3-test",
+  "contract": 1,
+  "commands": {
+    "abort": {
+      "json": "none"
+    },
+    "attach": {
+      "json": "none"
+    },
+    "browsers": {
+      "json": "document"
+    },
+    "capabilities": {
+      "json": "document"
+    },
+    "default": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "follow": {
+      "json": "none"
+    },
+    "help": {
+      "json": "none"
+    },
+    "install": {
+      "json": "none"
+    },
+    "launch": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "open": {
+      "json": "none"
+    },
+    "pair": {
+      "json": "none"
+    },
+    "prompt": {
+      "json": "events",
+      "vocabulary": "agent"
+    },
+    "tray": {
+      "json": "document"
+    },
+    "unpair": {
+      "json": "none"
+    },
+    "update": {
+      "json": "none"
+    },
+    "version": {
+      "json": "none"
+    },
+    "wait": {
+      "json": "events",
+      "vocabulary": "agent"
+    },
+    "watch": {
+      "json": "events",
+      "vocabulary": "agent"
+    }
+  },
+  "events": {
+    "schema": 1,
+    "names": [
+      "attached",
+      "browser-back",
+      "browser-gone",
+      "browser-slow",
+      "closed",
+      "detached",
+      "discovered",
+      "error",
+      "exited",
+      "foreign-browser",
+      "launched",
+      "link-lost",
+      "linked",
+      "mode",
+      "pairing"
+    ]
+  },
+  "agent": {
+    "events": [
+      "user",
+      "text",
+      "thinking",
+      "tool",
+      "tool-result",
+      "run",
+      "notice",
+      "error",
+      "end",
+      "delivered",
+      "busy"
+    ],
+    "own": [
+      "settled"
+    ]
+  },
+  "control": {
+    "v": 1,
+    "ops": [
+      "status"
+    ]
+  }
+}
