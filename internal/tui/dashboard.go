@@ -88,6 +88,9 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 	case flow.Serving:
 		d.caps, d.policy, d.compute = e.Caps, e.Policy, e.Compute
 		d.kernel, d.kernOff = "", ""
+		for i := range d.browsers {
+			d.browsers[i].gone, d.browsers[i].unlisted = false, false
+		}
 		d.setState(StateWaiting, now)
 	case flow.Connecting:
 		d.setState(StateConnecting, now)
@@ -120,11 +123,13 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 		d.count(e.Stream).dropped += e.Count
 	case flow.BrowserGone:
 		if e.Reason == flow.NoBrowserSession {
-			d.browser(e.Browser).unlisted = true
+			b := d.browser(e.Browser)
+			b.unlisted, b.gone = true, false
 			d.note(now, levelWarn, e.Name+" isn't listed for cdp: it has no browser session")
 			break
 		}
-		d.browser(e.Browser).gone = true
+		b := d.browser(e.Browser)
+		b.gone, b.unlisted = true, false
 		d.note(now, levelWarn, e.Name+" quit")
 	case flow.BrowserBack:
 		b := d.browser(e.Browser)
