@@ -44,7 +44,7 @@
     "@ai-ecoverse/slicc-browsers": "1.18.21",
     "@ai-ecoverse/slicc-cdp": "1.44.1",
     "@ai-ecoverse/slicc-kernel": "1.172.2",
-    "@ai-ecoverse/slicc-shared-web": "2.13.7",
+    "@ai-ecoverse/slicc-shared-web": "2.13.8",
     "@semantic-release/exec": "7.1.0",
     "lefthook": "2.2.2",
     "semantic-release": "25.0.9"
