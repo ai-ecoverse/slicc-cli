@@ -29,9 +29,13 @@ const (
 
 const V = version
 
-const OpStatus = "status"
+const (
+	OpStatus = "status"
+	OpDetach = "detach"
+	OpStop   = "stop"
+)
 
-var Ops = []string{OpStatus}
+var Ops = []string{OpStatus, OpDetach, OpStop}
 
 const (
 	StateWaiting      = "waiting"
@@ -60,14 +64,16 @@ type Status struct {
 	Code       string     `json:"code,omitempty"`
 	Error      string     `json:"error,omitempty"`
 	Offers     []string   `json:"offers"`
+	Ops        []string   `json:"ops,omitempty"`
 	Dials      int        `json:"dials"`
 	Links      int        `json:"links"`
 	LastLinked *time.Time `json:"lastLinked,omitempty"`
 }
 
 type Holder struct {
-	mu sync.Mutex
-	s  Status
+	mu  sync.Mutex
+	s   Status
+	ops map[string]func()
 }
 
 func NewHolder(mode, ver string) *Holder {
@@ -92,7 +98,28 @@ func (h *Holder) Snapshot() Status {
 	defer h.mu.Unlock()
 	s := h.s
 	s.Offers = append([]string{}, h.s.Offers...)
+	s.Ops = []string{OpStatus}
+	for _, op := range Ops {
+		if h.ops[op] != nil {
+			s.Ops = append(s.Ops, op)
+		}
+	}
 	return s
+}
+
+func (h *Holder) Handle(op string, f func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ops == nil {
+		h.ops = map[string]func(){}
+	}
+	h.ops[op] = f
+}
+
+func (h *Holder) handler(op string) func() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.ops[op]
 }
 
 type request struct {
@@ -222,16 +249,23 @@ func (s *Server) answer(c net.Conn) {
 	}
 	var req request
 	var out any
+	var act func()
 	switch {
 	case json.Unmarshal([]byte(line), &req) != nil || req.V != version:
 		out = map[string]any{"v": version, "error": "EPROTO"}
 	case req.Op == OpStatus:
 		out = s.h.Snapshot()
+	case s.h.handler(req.Op) != nil:
+		out, act = map[string]any{"v": version, "ok": true}, s.h.handler(req.Op)
 	default:
 		out = map[string]any{"v": version, "error": "EINVAL"}
 	}
 	body, _ := json.Marshal(out)
 	_, _ = c.Write(append(body, '\n'))
+	if act != nil {
+		_ = c.Close()
+		go act()
+	}
 }
 
 type Entry struct {
@@ -309,6 +343,37 @@ func Query(ctx context.Context, path string) (*Status, error) {
 		return nil, errors.New("sent a malformed status")
 	}
 	return &st, nil
+}
+
+type Reply struct {
+	V     int    `json:"v"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error"`
+}
+
+func Send(ctx context.Context, path, op string) (*Reply, error) {
+	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
+	defer cancel()
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "unix", path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = c.Close() }()
+	if dl, ok := ctx.Deadline(); ok {
+		_ = c.SetDeadline(dl)
+	}
+	body, _ := json.Marshal(request{V: version, Op: op})
+	_, _ = c.Write(append(body, '\n'))
+	line, err := bufio.NewReader(io.LimitReader(c, maxResponse)).ReadBytes('\n')
+	if err != nil {
+		return nil, err
+	}
+	var r Reply
+	if err := json.Unmarshal(line, &r); err != nil || r.V != version {
+		return nil, errors.New("sent a malformed reply")
+	}
+	return &r, nil
 }
 
 func Wipe(path string) (bool, error) {

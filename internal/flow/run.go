@@ -52,6 +52,7 @@ type Config struct {
 	Relink   <-chan Relink
 	Emit     func(Event)
 	Logf     func(format string, args ...any)
+	Keep     func() bool
 }
 
 type Relink struct {
@@ -549,6 +550,14 @@ func (r *run) cleanup() {
 	list := r.launched
 	r.launched = nil
 	r.mu.Unlock()
+	if r.cfg.Keep != nil && r.cfg.Keep() {
+		kept := []string{}
+		for _, l := range list {
+			kept = append(kept, l.id)
+		}
+		r.emit(Event{Event: Closed, Kept: kept})
+		return
+	}
 	var ids []string
 	var wg sync.WaitGroup
 	errs := make([]error, len(list))

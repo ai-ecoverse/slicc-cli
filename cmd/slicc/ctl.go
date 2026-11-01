@@ -3,8 +3,13 @@
 package main
 
 import (
+	"context"
+	"os"
+	ossignal "os/signal"
 	"strconv"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
@@ -12,8 +17,66 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 )
 
-func serveCtl(mode string, n *node.Node, kernelPort int, logf func(string, ...any)) (*ctl.Holder, func()) {
+type stopper struct {
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	detached atomic.Bool
+}
+
+func (s *stopper) set(cancel context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancel = cancel
+}
+
+func (s *stopper) stop() {
+	s.mu.Lock()
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *stopper) detach() {
+	s.detached.Store(true)
+	s.stop()
+}
+
+func (s *stopper) kept() bool { return s != nil && s.detached.Load() }
+
+func (s *stopper) register(h *ctl.Holder) {
+	if s == nil {
+		return
+	}
+	h.Handle(ctl.OpStop, s.stop)
+	h.Handle(ctl.OpDetach, s.detach)
+}
+
+func signalContext(parent context.Context, st *stopper, keepOnTerm bool) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	st.set(cancel)
+	ch := make(chan os.Signal, 1)
+	ossignal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		select {
+		case sig := <-ch:
+			if keepOnTerm && sig == syscall.SIGTERM {
+				st.detached.Store(true)
+			}
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, func() {
+		ossignal.Stop(ch)
+		cancel()
+	}
+}
+
+func serveCtl(mode string, n *node.Node, kernelPort int, st *stopper, logf func(string, ...any)) (*ctl.Holder, func()) {
 	h := ctl.NewHolder(mode, version)
+	st.register(h)
 	offers := nodeOffers(n.Hello(), kernelPort)
 	h.Update(func(s *ctl.Status) { s.Offers = offers })
 	srv, err := ctl.Serve(h)

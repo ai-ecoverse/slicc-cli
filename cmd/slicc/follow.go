@@ -10,10 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	ossignal "os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
@@ -165,7 +163,8 @@ func follow(joinURL string, args []string, stdout, stderr io.Writer) int {
 	if code >= 0 {
 		return code
 	}
-	ctx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	st := &stopper{}
+	ctx, stop := signalContext(context.Background(), st, false)
 	defer stop()
 	if f.signalOnly {
 		ctx, cancel := context.WithTimeout(ctx, f.timeout)
@@ -173,8 +172,8 @@ func follow(joinURL string, args []string, stdout, stderr io.Writer) int {
 		return signalOnlyRun(ctx, joinURL, stdout, stderr)
 	}
 	out := newJSONLines(stdout, f.json)
-	defer out.close()
-	r, err := newFollowRun(joinURL, f, stderr)
+	defer func() { out.end(st.kept()) }()
+	r, err := newFollowRun(joinURL, f, st, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "slicc follow: %v\n", err)
 		out.fail(strings.ReplaceAll(err.Error(), strings.TrimSpace(joinURL), "<join-url>"), "", false)
@@ -221,7 +220,7 @@ type followRun struct {
 	conn *tray.Conn
 }
 
-func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun, error) {
+func newFollowRun(joinURL string, ff followFlags, st *stopper, stderr io.Writer) (*followRun, error) {
 	status := func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) }
 	logf := func(string, ...any) {}
 	if os.Getenv("SLICC_DEBUG") != "" {
@@ -291,7 +290,7 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	}
 	r.node.Handle(capJoin, "join", r.handleJoin)
 	r.node.Handle(capJoin, "unlink", r.handleUnlink)
-	h, closeCtl := serveCtl("follow", r.node, 0, logf)
+	h, closeCtl := serveCtl("follow", r.node, 0, st, logf)
 	h.Update(func(s *ctl.Status) { s.Hub, s.Device, s.Seven = r.hub, r.device, r.certs.Leader(r.hub) })
 	r.ctl = h
 	closeRest := r.closeSSH
