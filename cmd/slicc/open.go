@@ -256,7 +256,7 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 	fail := func(err error) int {
 		r.status("%v", err)
 		r.emitEvent(flow.Event{Event: flow.Error, Message: err.Error()})
-		if opts.lifecycle {
+		if opts.json {
 			r.event(map[string]any{"schema": flow.Schema, "event": flow.Error, "message": err.Error(), "retryable": false})
 			r.event(map[string]any{"schema": flow.Schema, "event": flow.Closed, "browsers": []string{}})
 		}
@@ -325,7 +325,13 @@ func (r *openRun) dashEvent(e node.Event) {
 }
 
 func (r *openRun) linkEvent(e node.Event) {
-	if !r.opts.json || e.Link == nil {
+	if !r.opts.json {
+		return
+	}
+	if e.Link == nil {
+		if r.opts.lifecycle && e.Kind == node.EventLinkDown && e.Err != nil {
+			r.event(map[string]any{"schema": flow.Schema, "event": flow.Error, "mode": modeLoopback, "message": e.Err.Error(), "retryable": true})
+		}
 		return
 	}
 	base := map[string]any{"schema": flow.Schema, "mode": modeLoopback, "device": loopback.PeerFingerprint(e.Link)}

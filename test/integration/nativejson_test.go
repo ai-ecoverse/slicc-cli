@@ -354,3 +354,73 @@ func TestFollowJSONReportsATerminalFailure(t *testing.T) {
 		t.Fatalf("code %d, stderr %q", code, errOut)
 	}
 }
+
+func TestPairJSONReportsAnOfferItCannotAnswer(t *testing.T) {
+	b := launchBrowser(t)
+	srv := pageServer(t)
+	e := newLoopEnv(t)
+	f := startFlow(t, e.env, "pair", "--json", "--no-kernel", "--page", srv.URL+"/index.html?ports="+e.ports())
+	pe := f.next(t, "pairing")
+	var pairing struct {
+		URL string `json:"url"`
+	}
+	if json.Unmarshal([]byte(pe.raw), &pairing) != nil {
+		t.Fatal(pe.raw)
+	}
+	pr := parsePairing(t, pairing.URL)
+	p := b.openPage(t, pairing.URL)
+	if r := confirm(t, p, ""); !r.Linked {
+		t.Fatalf("pairing: %+v", r)
+	}
+	f.next(t, "connecting")
+	f.next(t, "linked")
+	var offer string
+	p.eval("linkTest.loopback.offerSdp()", &offer)
+	var bad []string
+	for _, line := range strings.Split(offer, "\r\n") {
+		if !strings.HasPrefix(line, "a=ice-ufrag") && !strings.HasPrefix(line, "a=ice-pwd") {
+			bad = append(bad, line)
+		}
+	}
+	host := fmt.Sprintf("127.0.0.1:%d", pr.port)
+	gateDo(t, pr.port, "POST", "/slicc/v1/signal", host, map[string]string{"Origin": srv.URL}, jsonBody(t, map[string]string{"offer": strings.Join(bad, "\r\n")}))
+	for {
+		ev := f.nextAny(t)
+		if ev.Event != "error" {
+			continue
+		}
+		var got struct {
+			Message   string `json:"message"`
+			Retryable *bool  `json:"retryable"`
+			Mode      string `json:"mode"`
+		}
+		if json.Unmarshal([]byte(ev.raw), &got) != nil || got.Message == "" || got.Retryable == nil || !*got.Retryable || got.Mode != "loopback" {
+			t.Fatalf("error %s", ev.raw)
+		}
+		break
+	}
+	if err := interrupt(f.cmd); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.rest(t); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	lastIsClosed(t, f)
+}
+
+func TestFallbackJSONEndsAFailedSetupWithErrorAndClosed(t *testing.T) {
+	e := newLoopEnv(t)
+	ln, err := net.Listen("tcp4", "127.0.0.1:"+strconv.Itoa(e.first))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	env := overrideEnv(e.env, map[string]string{"SLICC_LOOPBACK_PORTS": fmt.Sprintf("%d-%d", e.first, e.first)})
+	f := startFlow(t, env, "--json", "--no-kernel")
+	if code := f.rest(t); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if got := f.kinds(); !slices.Equal(got, []string{"discovered", "mode", "error", "closed"}) || !strings.Contains(f.seen[2].raw, `"retryable":false`) {
+		t.Fatalf("events %v, stderr %s", got, f.stderr.String())
+	}
+}

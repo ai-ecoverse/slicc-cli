@@ -395,6 +395,7 @@ slicc [--browser <id>]... [--cdp <url>]... [--page <url>] [--origin <origin>]...
 - **`--json` events** in this mode, with the shapes of the other modes plus `mode: "loopback"` and `device` (the page's certificate fingerprint):
   - `linked`: `peer?`, `caps` and `policy`, for each link that comes up;
   - `link-lost`: `reason?` or `message?`, for each one that goes;
+  - `error` with `message` and `retryable: false` when the loopback setup fails (no free port, say), then `closed`;
   - `closed`, with `browsers: []`, last, when slicc exits.
 - **Then** it serves loopback links with this run's `--page`, `--origin`, `--name`, `--allow`, `--deny`, `--expose-debug-port`, `--kernel-port`, `--no-kernel`, `--no-jerk`, `--mount` and compute flags, until `SIGINT` or `SIGTERM`.
 
