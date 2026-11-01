@@ -398,6 +398,35 @@ func TestDefaultAttachesToAnOpenSevenWithAnExtraBrowser(t *testing.T) {
 	}
 }
 
+func TestDefaultKeepsEachBrowsersIDPastOneWithoutABrowserSession(t *testing.T) {
+	const page = "https://test.sliccy.ai/"
+	seven := newFakeCDPBrowser(t, func(method string, _ json.RawMessage) (string, []string) {
+		if method == "Target.getTargets" {
+			return fmt.Sprintf(`{"targetInfos":[{"targetId":"seven","type":"page","url":%q}]}`, page), nil
+		}
+		return "{}", nil
+	})
+	unguarded := narrowBrowser(t, false)
+	second := newFakeCDPBrowser(t, func(string, json.RawMessage) (string, []string) { return "{}", nil })
+	id := func(url string) string { return "cdp:" + strings.TrimPrefix(url, "http://") }
+	f := startFlow(t, isolatedEnv(t), "--json", "--no-kernel", "--no-jerk", "--page", page,
+		"--cdp", seven.srv.URL, "--cdp", unguarded, "--cdp", second.srv.URL,
+		"--browser", id(seven.srv.URL), "--browser", id(unguarded), "--browser", id(second.srv.URL))
+	f.next(t, "discovered")
+	for _, want := range []string{seven.srv.URL, unguarded, second.srv.URL} {
+		if a := f.next(t, "attached"); a.Browser != id(want) {
+			t.Fatalf("attached %s", a.raw)
+		}
+	}
+	if g := f.next(t, "browser-gone"); g.Browser != id(unguarded) {
+		t.Fatalf("a browser that was never listed should be the one not on the list: %s", g.raw)
+	}
+	second.srv.Close()
+	if g := f.next(t, "browser-gone"); g.Browser != id(second.srv.URL) || g.Role != "extra" {
+		t.Fatalf("browser-gone %s", g.raw)
+	}
+}
+
 func TestDefaultRejectsBadInput(t *testing.T) {
 	env, _ := launchEnv(t)
 	for _, args := range [][]string{
