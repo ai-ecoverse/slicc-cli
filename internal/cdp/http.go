@@ -66,10 +66,12 @@ func RedactError(err error, raw string) error {
 	if perr != nil || strings.Trim(u.Path, "/") == "" {
 		return err
 	}
-	text := err.Error()
-	for _, secret := range []string{raw, u.EscapedPath()} {
-		text = strings.ReplaceAll(text, secret, Redact(raw))
+	shown := Redact(raw)
+	path := shown
+	if origin := u.Scheme + "://" + u.Host; u.Host != "" && strings.HasPrefix(shown, origin) {
+		path = strings.TrimPrefix(shown, origin)
 	}
+	text := strings.NewReplacer(raw, shown, u.EscapedPath(), path).Replace(err.Error())
 	if text == err.Error() {
 		return err
 	}
