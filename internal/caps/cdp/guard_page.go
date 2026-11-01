@@ -37,6 +37,7 @@ type pageVerdict struct {
 	reply   []byte
 	history *command
 	cmd     *command
+	wait    <-chan struct{}
 }
 
 func decodeObject(raw json.RawMessage) (map[string]any, bool) {
@@ -89,15 +90,25 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if c.method == "Slicc.action" && c.id < relayIDBase {
+		g.verifiesInput = true
+		return pageVerdict{reply: acknowledgement(c.id, c.session)}
+	}
 	if reason := g.checkLocked(c); reason != "" {
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
+	}
+	if gate := g.framesGateLocked(c.session); gate != nil {
+		return pageVerdict{wait: gate}
 	}
 	if c.method == "Page.navigateToHistoryEntry" {
 		if reason := g.historyRefusalLocked(c); reason != "" {
 			return pageVerdict{reply: refusal(c.id, c.session, reason)}
 		}
 		return pageVerdict{history: c}
+	}
+	if reply := g.answerLocally(c); reply != nil {
+		return pageVerdict{reply: reply}
 	}
 	return g.admitLocked(c)
 }
@@ -153,8 +164,12 @@ func (g *guard) afterHistory(c *command, res message, ok bool) pageVerdict {
 	if !found {
 		return pageVerdict{reply: refusal(c.id, c.session, "can't tell where the history entry leads")}
 	}
-	if g.sessionRefusedLocked(c.session) {
-		return pageVerdict{reply: refusal(c.id, c.session, refusedTarget)}
+	if reason := g.checkLocked(c); reason != "" {
+		g.logf("cdp: refused %s: %s", c.method, reason)
+		return pageVerdict{reply: refusal(c.id, c.session, reason)}
+	}
+	if gate := g.framesGateLocked(c.session); gate != nil {
+		return pageVerdict{wait: gate}
 	}
 	return g.admitLocked(c)
 }
@@ -256,7 +271,7 @@ func (g *guard) checkLocked(c *command) string {
 	if reason := g.errorPageCheckLocked(c); reason != "" {
 		return reason
 	}
-	if reason := g.conformanceLocked(c); reason != "" {
+	if reason := g.contentRuleLocked(c); reason != "" {
 		return reason
 	}
 	k := callKey{c.session, c.id}

@@ -88,6 +88,8 @@ type guard struct {
 	scheduleInitial func(*navTarget)
 
 	relaySession       string
+	documentsOnly      bool
+	verifiesInput      bool
 	lost               bool
 	targets            map[string]*target
 	tombstones         []string

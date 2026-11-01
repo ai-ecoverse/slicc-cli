@@ -73,6 +73,10 @@ type navTarget struct {
 	confirm          *navTarget
 	confirming       bool
 	revision         int
+	documentsOnly    bool
+	documentsAsked   bool
+	framesGate       chan struct{}
+	framesReads      int
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -167,7 +171,11 @@ func (g *guard) navAttachedLocked(nt *navTarget, m message) [][]byte {
 	nt.pending = len(calls)
 	out := make([][]byte, 0, len(calls))
 	for _, c := range calls {
-		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, step(c.method)))
+		answer := step(c.method)
+		if c.method == "Fetch.enable" {
+			answer = g.fetchStepLocked(nt, res.SessionID, answer)
+		}
+		out = append(out, g.callbackLocked(res.SessionID, c.method, c.params, answer))
 	}
 	if nt.confirm != nil {
 		out = append(out, g.confirmTargetLocked(nt)...)
@@ -186,9 +194,11 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 			nt.settle(false)
 			return nil
 		}
-		return [][]byte{g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(res message) [][]byte {
-			return g.initialHistoryLocked(nt, res)
-		})}
+		return g.readFramesLocked(nt, func() [][]byte {
+			return [][]byte{g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(res message) [][]byte {
+				return g.initialHistoryLocked(nt, res)
+			})}
+		})
 	}
 	return nil
 }
@@ -212,6 +222,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if nt.commits != before && g.o.Loaded(nt.errorURL) {
 		nt.failCommit = nt.commits
 	}
+	send = append(send, g.commitFramesLocked(nt, m)...)
 	if g.o.Loaded(nt.errorURL) && !slices.Contains(nt.failedURLs, nt.errorURL) {
 		nt.failedURLs = append(nt.failedURLs, nt.errorURL)
 		if len(nt.failedURLs) > maxFailed {
@@ -235,7 +246,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	}
 	if g.o.Loaded(p.Request.URL) && (p.ResourceType == "Document" || g.clientOwnedLocked(nt.target, p.NetworkID)) {
 		if p.ResourceType == "Document" {
-			if p.FrameID == nt.target || p.FrameID == "" {
+			if nt.documentLocks(p.FrameID) {
 				nt.historyLocked = true
 			}
 			send = append(send, g.blockChildLocked(nt.target, p.FrameID)...)
@@ -260,6 +271,7 @@ func (g *guard) navDetachedLocked(sessionID string) {
 	nt.session = ""
 	nt.settle(true)
 	nt.failed = true
+	nt.openFramesGate()
 	if nt.confirm != nil {
 		nt.confirm.settle(true)
 	}
@@ -305,6 +317,9 @@ func (g *guard) navWaitLocked(sessionID string) <-chan struct{} {
 	}
 	if nt.confirm != nil && !nt.confirm.done {
 		return nt.confirm.ready
+	}
+	if nt.framesGate != nil {
+		return nt.framesGate
 	}
 	return nil
 }

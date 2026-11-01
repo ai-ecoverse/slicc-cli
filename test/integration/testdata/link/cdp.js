@@ -272,6 +272,22 @@ export function cdpTest(getLink, describe) {
         await c.send('Target.closeTarget', { targetId });
         return { title, href, closed: await c.close() };
       }),
+    steps: (browser, targetId, steps) =>
+      run(async () => {
+        const c = await CdpClient.open(getLink(), browser);
+        const attached = targetId ? await c.send('Target.attachToTarget', { targetId, flatten: true }) : {};
+        const results = [];
+        for (const { method, params = {}, browserScope = false, session } of steps) {
+          try {
+            const result = await c.send(method, params, session ?? (browserScope ? undefined : attached.sessionId));
+            results.push({ value: result?.result?.value ?? 'sent' });
+          } catch (error) {
+            results.push({ error: error.message });
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return { results, transcript: c.messages.join('\n') };
+      }),
     screenshot: (browser, size) =>
       run(async () => {
         const c = await CdpClient.open(getLink(), browser);
