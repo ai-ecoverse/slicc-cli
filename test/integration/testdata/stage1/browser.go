@@ -34,6 +34,7 @@ type Browser struct {
 	activeContext int
 	Released      bool
 	HoldReads     bool
+	childURL      *string
 }
 
 func NewBrowser(t *testing.T) *Browser {
@@ -127,7 +128,15 @@ func (b *Browser) answer(p Packet) (any, []map[string]any, bool) {
 		if b.HoldReads {
 			return result, nil, true
 		}
-		result = map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "T", "url": b.url, "securityOrigin": "https://ordinary.test", "loaderId": b.loader}}}
+		tree := map[string]any{"frame": map[string]any{"id": "T", "url": b.url, "securityOrigin": "https://ordinary.test", "loaderId": b.loader}}
+		if b.childURL != nil {
+			origin := strings.TrimSuffix(*b.childURL, "/doc")
+			if origin == "" {
+				origin = "://"
+			}
+			tree["childFrames"] = []any{map[string]any{"frame": map[string]any{"id": "C", "parentId": "T", "url": *b.childURL, "securityOrigin": origin, "loaderId": "child-generation"}}}
+		}
+		result = map[string]any{"frameTree": tree}
 	case "Debugger.enable":
 		events = append(events, map[string]any{"method": "Debugger.scriptParsed", "sessionId": p.Session, "params": map[string]any{"scriptId": "script", "executionContextId": 7, "url": "https://ordinary.test/first.js"}})
 	case "Debugger.setInstrumentationBreakpoint":
@@ -198,6 +207,12 @@ func (b *Browser) Trace() []Packet {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]Packet(nil), b.trace...)
+}
+
+func (b *Browser) SetChild(url string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.childURL = &url
 }
 
 func (b *Browser) StallReads() {
