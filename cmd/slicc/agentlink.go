@@ -66,7 +66,7 @@ type localLinks struct {
 func newLocalLinks(ctx context.Context, cdpURL string, origins *signal.Origins, logf func(string, ...any)) (*localLinks, error) {
 	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	client, err := cdp.Dial(dctx, cdpURL)
+	client, _, err := dialCDP(dctx, cdpURL)
 	if err != nil {
 		return nil, err
 	}

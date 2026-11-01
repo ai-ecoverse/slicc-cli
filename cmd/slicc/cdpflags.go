@@ -33,6 +33,24 @@ func (s singleCDP) Set(v string) error {
 	return nil
 }
 
+func cdpTarget(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if strings.Contains(s, "://") {
+		return s, nil
+	}
+	base, _, err := browser.NormalizeCDPURL(s)
+	return base, err
+}
+
+func dialCDP(ctx context.Context, raw string) (*cdp.Client, string, error) {
+	target, err := cdpTarget(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	client, err := cdp.Dial(ctx, target)
+	return client, target, err
+}
+
 func cdpPorts(urls ...string) []uint16 {
 	var ports []uint16
 	for _, raw := range urls {

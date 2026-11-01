@@ -36,7 +36,8 @@ tab, sets up a WebRTC link with it (seven offers, slicc answers), and serves
 the link until interrupted. Status lines go to stderr.
 
 flags:
-  --cdp <url>          the browser's CDP endpoint: http://host:port or ws://...
+  --cdp <url>          the browser's CDP endpoint: http://host:port, ws://...,
+                       host:port or a bare port (on 127.0.0.1)
                        seven can drive this browser over the link (cdp)
   --cdp-extra <url>    also let seven drive this browser (repeatable)
   --origin <origin>    also accept seven on this origin (repeatable); the
@@ -245,11 +246,11 @@ func openSignal(ctx context.Context, f attachFlags, origins *signal.Origins, std
 	}
 	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	client, err := cdp.Dial(dctx, f.cdp)
+	client, target, err := dialCDP(dctx, f.cdp)
 	if err != nil {
 		return nil, nil, err
 	}
-	status("connected to %s", cdp.Redact(f.cdp))
+	status("connected to %s", cdp.Redact(target))
 	s := signal.NewCDP(signal.CDPOptions{Client: client, Origins: origins, Logf: logf, Status: status})
 	return s, func() { _ = s.Close(); _ = client.Close() }, nil
 }
