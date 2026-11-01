@@ -129,13 +129,13 @@ func TestAttachConnectsThroughADiscoveryRouteInItsEndpoint(t *testing.T) {
 		t.Run(strings.ReplaceAll(strings.Trim(route, "/"), "/", "-"), func(t *testing.T) {
 			url := narrowBrowserUnder(t, "/"+cdpToken, true)
 			lines := attachLines(t, isolatedEnv(t, "SLICC_DEBUG=1"), "--cdp", url+"/"+cdpToken+route)
-			seeLineHiding(t, lines, "connected to "+url, cdpToken)
-			seeLineHiding(t, lines, "cdp: browser narrow is", cdpToken)
+			seeLineHiding(t, lines, "connected to "+url)
+			seeLineHiding(t, lines, "cdp: browser narrow is")
 		})
 	}
 }
 
-func seeLineHiding(t *testing.T, lines <-chan string, want, secret string) {
+func seeLineHiding(t *testing.T, lines <-chan string, want string) {
 	t.Helper()
 	deadline := time.After(20 * time.Second)
 	for {
@@ -144,7 +144,7 @@ func seeLineHiding(t *testing.T, lines <-chan string, want, secret string) {
 			if !ok {
 				t.Fatalf("attach ended before %q", want)
 			}
-			if strings.Contains(line, secret) {
+			if strings.Contains(line, cdpToken) {
 				t.Fatalf("attach printed the token: %q", line)
 			}
 			if strings.Contains(line, want) {
@@ -207,5 +207,22 @@ func TestAbortNamesAnUnreachableEndpointOnce(t *testing.T) {
 		if r.code == 0 || !strings.Contains(r.stderr, c.want) || strings.Count(r.stderr, "127.0.0.1:1") != 3 || strings.Contains(r.stderr, cdpToken) {
 			t.Fatalf("%s: %+v", c.cdp, r)
 		}
+	}
+}
+
+func TestAttachSignalsOverTheFormsBrowsersTakes(t *testing.T) {
+	tokened := narrowBrowserUnder(t, "/"+cdpToken, true)
+	bare := narrowBrowserUnder(t, "", true)
+	_, port, _ := strings.Cut(strings.TrimPrefix(bare, "http://"), ":")
+	for name, c := range map[string]struct{ arg, shown string }{
+		"host-port":       {strings.TrimPrefix(tokened, "http://") + "/" + cdpToken, tokened + "/…"},
+		"host-port-route": {strings.TrimPrefix(tokened, "http://") + "/" + cdpToken + "/json/version", tokened + "/…"},
+		"bare-port":       {port, "http://127.0.0.1:" + port},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lines := attachLines(t, isolatedEnv(t, "SLICC_DEBUG=1"), "--cdp", c.arg)
+			seeLineHiding(t, lines, "connected to "+c.shown)
+			seeLineHiding(t, lines, "cdp: browser narrow is")
+		})
 	}
 }
