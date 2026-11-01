@@ -35,6 +35,8 @@ func (e *Error) Error() string {
 
 var ErrClosed = errors.New("cdp: connection closed")
 
+var errBadEndpoint = errors.New("cdp: the endpoint must be an http(s) or ws(s) URL")
+
 type Client struct {
 	conn    *websocket.Conn
 	writing chan struct{}
@@ -71,16 +73,17 @@ type outbound struct {
 func Discover(ctx context.Context, endpoint string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(endpoint))
 	if err != nil {
-		return "", fmt.Errorf("cdp: bad endpoint %q: %w", endpoint, err)
+		return "", errBadEndpoint
 	}
 	switch u.Scheme {
 	case "ws", "wss":
 		return u.String(), nil
 	case "http", "https":
 	default:
-		return "", fmt.Errorf("cdp: endpoint %q must be http(s) or ws(s)", endpoint)
+		return "", errBadEndpoint
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/json/version"
+	u.RawPath = EndpointPath(u.EscapedPath()) + "/json/version"
+	u.Path, _ = url.PathUnescape(u.RawPath)
 	u.RawQuery = ""
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

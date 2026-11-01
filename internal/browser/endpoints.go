@@ -91,37 +91,27 @@ func NormalizeCDPURL(raw string) (string, string, error) {
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" {
-		return "", "", fmt.Errorf("invalid CDP URL %q", raw)
+		return "", "", fmt.Errorf("invalid CDP URL: %s", cdp.Redact(s))
 	}
 	scheme := strings.ToLower(u.Scheme)
 	ws, path := "", ""
 	switch scheme {
 	case "http", "https":
-		path = endpointPath(u.EscapedPath())
+		path = cdp.EndpointPath(u.EscapedPath())
 	case "ws":
 		scheme, ws = "http", u.Path
 	case "wss":
 		scheme, ws = "https", u.Path
 	default:
-		return "", "", fmt.Errorf("invalid CDP URL %q: scheme %s", raw, u.Scheme)
+		return "", "", fmt.Errorf("invalid CDP URL: %s: scheme %s", cdp.Redact(s), u.Scheme)
 	}
 	if u.Port() == "" {
-		return "", "", fmt.Errorf("invalid CDP URL %q: no port", raw)
+		return "", "", fmt.Errorf("invalid CDP URL: %s: no port", cdp.Redact(s))
 	}
 	if ws == "/" {
 		ws = ""
 	}
 	return scheme + "://" + u.Host + path, ws, nil
-}
-
-func endpointPath(p string) string {
-	p = strings.TrimRight(p, "/")
-	for _, route := range []string{"/json/version", "/json/list", "/json"} {
-		if strings.HasSuffix(p, route) {
-			return strings.TrimSuffix(p, route)
-		}
-	}
-	return p
 }
 
 func (o Options) withDefaults() Options {

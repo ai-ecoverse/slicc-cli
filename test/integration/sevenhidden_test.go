@@ -17,13 +17,18 @@ import (
 
 func narrowBrowser(t *testing.T, browserSession bool) string {
 	t.Helper()
+	return narrowBrowserUnder(t, "", browserSession)
+}
+
+func narrowBrowserUnder(t *testing.T, path string, browserSession bool) string {
+	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
-		ws := "ws://" + r.Host + "/devtools/browser/x"
+	mux.HandleFunc(path+"/json/version", func(w http.ResponseWriter, r *http.Request) {
+		ws := "ws://" + r.Host + path + "/devtools/browser/x"
 		_ = json.NewEncoder(w).Encode(map[string]string{"Browser": "Narrow/1.0", "Protocol-Version": "1.3", "webSocketDebuggerUrl": ws})
 	})
-	mux.HandleFunc("/json/list", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`[]`)) })
-	mux.HandleFunc("/devtools/browser/x", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(path+"/json/list", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`[]`)) })
+	mux.HandleFunc(path+"/devtools/browser/x", func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
