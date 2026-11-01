@@ -309,6 +309,13 @@ func TestTUIDashboardSaysAnExtraWithoutABrowserSessionWasLeftOut(t *testing.T) {
 	if v := h.view(); !strings.Contains(v, "Narrow isn't listed for cdp: it has no browser session") || strings.Contains(v, "Narrow quit") {
 		t.Fatalf("after browser-gone:\n%s", v)
 	}
+	if v := h.view(); !strings.Contains(v, "extra cdp  unlisted") || strings.Contains(v, "gone") {
+		t.Fatalf("the unlisted extra reads as gone:\n%s", v)
+	}
+	ev(flow.Event{Event: flow.BrowserBack, Browser: "cdp:127.0.0.1:9333", Name: "Narrow", Role: flow.RoleExtra})
+	if v := h.view(); strings.Contains(v, "unlisted") {
+		t.Fatalf("after browser-back:\n%s", v)
+	}
 }
 
 func TestTUIDashboard(t *testing.T) {

@@ -23,6 +23,7 @@ type dashBrowser struct {
 	cdp      string
 	launched bool
 	gone     bool
+	unlisted bool
 }
 
 type streamCount struct {
@@ -118,14 +119,16 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 	case flow.Dropped:
 		d.count(e.Stream).dropped += e.Count
 	case flow.BrowserGone:
-		d.browser(e.Browser).gone = true
 		if e.Reason == flow.NoBrowserSession {
+			d.browser(e.Browser).unlisted = true
 			d.note(now, levelWarn, e.Name+" isn't listed for cdp: it has no browser session")
 			break
 		}
+		d.browser(e.Browser).gone = true
 		d.note(now, levelWarn, e.Name+" quit")
 	case flow.BrowserBack:
-		d.browser(e.Browser).gone = false
+		b := d.browser(e.Browser)
+		b.gone, b.unlisted = false, false
 		d.log(now, e.Name+" is back")
 	case flow.BrowserSlow:
 		d.log(now, flow.SlowLine(e.Name, e.Elapsed))
@@ -319,11 +322,15 @@ func (m Model) dashView() string {
 		mark := st.good.Render("●")
 		if br.gone {
 			mark = st.bad.Render("○")
+		} else if br.unlisted {
+			mark = st.warn.Render("○")
 		}
 		line := fmt.Sprintf("  %s %s%s  %s  %s  %s", mark, st.title.Render(br.name), strings.Repeat(" ", max(w-lipgloss.Width(br.name), 0)),
 			st.faint.Render(fmt.Sprintf("%-6s", shortVersion(br.version))), st.faint.Render(how+" · CDP "+hostPort(br.cdp)), role)
 		if br.gone {
 			line += "  " + st.bad.Render("gone")
+		} else if br.unlisted {
+			line += "  " + st.warn.Render("unlisted")
 		}
 		b = append(b, line)
 	}
