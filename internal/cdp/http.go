@@ -31,6 +31,16 @@ var endpointClient = EndpointClient(nil, 0)
 
 var publicRoutes = []string{"/json/version", "/json/list"}
 
+func EndpointPath(p string) string {
+	p = strings.TrimRight(p, "/")
+	for _, route := range []string{"/json/version", "/json/list", "/json"} {
+		if strings.HasSuffix(p, route) {
+			return strings.TrimSuffix(p, route)
+		}
+	}
+	return p
+}
+
 func Redact(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {

@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 )
 
 const cdpToken = "9f2c4e6a8b0d1f3e5a7c9e1b3d5f7a9c"
@@ -118,5 +121,77 @@ func TestAttachKeepsATokenOutOfItsConnectError(t *testing.T) {
 	r := runBin(t, isolatedEnv(t), binary, "attach", "--cdp", srv.URL+"/"+cdpToken)
 	if r.code != 1 || strings.Contains(r.stderr, cdpToken) || !strings.Contains(r.stderr, srv.Listener.Addr().String()) {
 		t.Fatalf("%+v", r)
+	}
+}
+
+func TestAttachConnectsThroughADiscoveryRouteInItsEndpoint(t *testing.T) {
+	for _, route := range []string{"/json/version", "/json/version/", "/json/list", "/json"} {
+		t.Run(strings.ReplaceAll(strings.Trim(route, "/"), "/", "-"), func(t *testing.T) {
+			url := narrowBrowserUnder(t, "/"+cdpToken, true)
+			lines := attachLines(t, isolatedEnv(t, "SLICC_DEBUG=1"), "--cdp", url+"/"+cdpToken+route)
+			seeLineHiding(t, lines, "connected to "+url, cdpToken)
+			seeLineHiding(t, lines, "cdp: browser narrow is", cdpToken)
+		})
+	}
+}
+
+func seeLineHiding(t *testing.T, lines <-chan string, want, secret string) {
+	t.Helper()
+	deadline := time.After(20 * time.Second)
+	for {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				t.Fatalf("attach ended before %q", want)
+			}
+			if strings.Contains(line, secret) {
+				t.Fatalf("attach printed the token: %q", line)
+			}
+			if strings.Contains(line, want) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("no line %q", want)
+		}
+	}
+}
+
+func TestDiscoverAsksTheSameRouteAsBrowserDiscovery(t *testing.T) {
+	const escaped = "/" + cdpToken + "%2Fmore"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != escaped+"/json/version" {
+			t.Errorf("asked for %s", r.URL.EscapedPath())
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"webSocketDebuggerUrl": "ws://" + r.Host + "/devtools/browser/x"})
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, route := range []string{"", "/", "/json/version", "/json/version/", "/json/list", "/json", "/json/version?x=1"} {
+		if ws, err := cdp.Discover(ctx, srv.URL+escaped+route); err != nil || !strings.HasSuffix(ws, "/devtools/browser/x") {
+			t.Fatalf("%q: %q, %v", route, ws, err)
+		}
+	}
+}
+
+func TestABadEndpointKeepsItsTokenOutOfTheError(t *testing.T) {
+	env := isolatedEnv(t)
+	for _, url := range []string{
+		"ftp://127.0.0.1:1/" + cdpToken,
+		"http://127.0.0.1:1/" + cdpToken + "%zz",
+		"http://example.invalid/" + cdpToken,
+	} {
+		for _, args := range [][]string{
+			{"attach", "--no-kernel", "--no-jerk", "--cdp", url},
+			{"attach", "--no-kernel", "--no-jerk", "--signal", "stdio", "--cdp", url},
+			{"browsers", "--cdp", url},
+			{"prompt", "--cdp", url, "hi"},
+		} {
+			if r := runBin(t, env, binary, args...); r.stdout+r.stderr == "" || strings.Contains(r.stdout+r.stderr, cdpToken) {
+				t.Fatalf("%q: %+v", args, r)
+			}
+		}
 	}
 }
