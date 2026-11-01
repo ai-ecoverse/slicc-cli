@@ -1,6 +1,6 @@
-{"line":["status","detach","stop"],"step":"status.ops"}
+{"line":["status","detach","stop","revoke"],"step":"status.ops"}
 {"line":{"v":1,"ok":true},"step":"stop"}
 {"line":{"browsers":[],"event":"closed","schema":1},"step":"closed after stop"}
-{"line":["status","detach","stop"],"step":"status.ops"}
+{"line":["status","detach","stop","revoke"],"step":"status.ops"}
 {"line":{"v":1,"ok":true},"step":"detach"}
 {"line":{"browsers":[],"event":"closed","kept":[],"schema":1},"step":"closed after detach"}

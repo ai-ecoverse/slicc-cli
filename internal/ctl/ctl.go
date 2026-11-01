@@ -33,9 +33,10 @@ const (
 	OpStatus = "status"
 	OpDetach = "detach"
 	OpStop   = "stop"
+	OpRevoke = "revoke"
 )
 
-var Ops = []string{OpStatus, OpDetach, OpStop}
+var Ops = []string{OpStatus, OpDetach, OpStop, OpRevoke}
 
 const (
 	StateWaiting      = "waiting"
@@ -65,15 +66,18 @@ type Status struct {
 	Error      string     `json:"error,omitempty"`
 	Offers     []string   `json:"offers"`
 	Ops        []string   `json:"ops,omitempty"`
+	Peers      []string   `json:"peers,omitempty"`
 	Dials      int        `json:"dials"`
 	Links      int        `json:"links"`
 	LastLinked *time.Time `json:"lastLinked,omitempty"`
 }
 
 type Holder struct {
-	mu  sync.Mutex
-	s   Status
-	ops map[string]func()
+	mu    sync.Mutex
+	s     Status
+	ops   map[string]func()
+	calls map[string]func(Request) map[string]any
+	peers func() []string
 }
 
 func NewHolder(mode, ver string) *Holder {
@@ -100,11 +104,35 @@ func (h *Holder) Snapshot() Status {
 	s.Offers = append([]string{}, h.s.Offers...)
 	s.Ops = []string{OpStatus}
 	for _, op := range Ops {
-		if h.ops[op] != nil {
+		if h.ops[op] != nil || h.calls[op] != nil {
 			s.Ops = append(s.Ops, op)
 		}
 	}
+	if h.peers != nil {
+		s.Peers = h.peers()
+	}
 	return s
+}
+
+func (h *Holder) Peers(f func() []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.peers = f
+}
+
+func (h *Holder) Answer(op string, f func(Request) map[string]any) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.calls == nil {
+		h.calls = map[string]func(Request) map[string]any{}
+	}
+	h.calls[op] = f
+}
+
+func (h *Holder) call(op string) func(Request) map[string]any {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls[op]
 }
 
 func (h *Holder) Handle(op string, f func()) {
@@ -122,9 +150,10 @@ func (h *Holder) handler(op string) func() {
 	return h.ops[op]
 }
 
-type request struct {
-	V  int    `json:"v"`
-	Op string `json:"op"`
+type Request struct {
+	V           int    `json:"v"`
+	Op          string `json:"op"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 type Server struct {
@@ -247,7 +276,7 @@ func (s *Server) answer(c net.Conn) {
 	if err != nil {
 		return
 	}
-	var req request
+	var req Request
 	var out any
 	var act func()
 	switch {
@@ -255,6 +284,10 @@ func (s *Server) answer(c net.Conn) {
 		out = map[string]any{"v": version, "error": "EPROTO"}
 	case req.Op == OpStatus:
 		out = s.h.Snapshot()
+	case s.h.call(req.Op) != nil:
+		res := s.h.call(req.Op)(req)
+		res["v"] = version
+		out = res
 	case s.h.handler(req.Op) != nil:
 		out, act = map[string]any{"v": version, "ok": true}, s.h.handler(req.Op)
 	default:
@@ -327,7 +360,7 @@ func Query(ctx context.Context, path string) (*Status, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(dl)
 	}
-	body, _ := json.Marshal(request{V: version, Op: OpStatus})
+	body, _ := json.Marshal(Request{V: version, Op: OpStatus})
 	if _, err := c.Write(append(body, '\n')); err != nil {
 		return nil, err
 	}
@@ -346,12 +379,18 @@ func Query(ctx context.Context, path string) (*Status, error) {
 }
 
 type Reply struct {
-	V     int    `json:"v"`
-	OK    bool   `json:"ok"`
-	Error string `json:"error"`
+	V      int    `json:"v"`
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
+	Closed bool   `json:"closed,omitempty"`
 }
 
 func Send(ctx context.Context, path, op string) (*Reply, error) {
+	return Call(ctx, path, Request{Op: op})
+}
+
+func Call(ctx context.Context, path string, req Request) (*Reply, error) {
+	req.V = version
 	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
 	defer cancel()
 	var d net.Dialer
@@ -363,7 +402,7 @@ func Send(ctx context.Context, path, op string) (*Reply, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(dl)
 	}
-	body, _ := json.Marshal(request{V: version, Op: op})
+	body, _ := json.Marshal(req)
 	_, _ = c.Write(append(body, '\n'))
 	line, err := bufio.NewReader(io.LimitReader(c, maxResponse)).ReadBytes('\n')
 	if err != nil {

@@ -50,7 +50,7 @@
       "json": "document"
     },
     "unpair": {
-      "json": "none"
+      "json": "document"
     },
     "update": {
       "json": "none"
@@ -112,7 +112,8 @@
     "ops": [
       "status",
       "detach",
-      "stop"
+      "stop",
+      "revoke"
     ]
   }
 }

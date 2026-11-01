@@ -1,0 +1,4 @@
+{"peers":[{"fingerprint":"<fingerprint>","firstSeen":"<time>","live":true,"node":"<node>","origin":"<origin>"}],"schema":1}
+{"closed":["<fingerprint>"],"removed":["<fingerprint>"],"schema":1}
+{"peers":[],"schema":1}
+{"closed":[],"removed":[],"schema":1}

@@ -513,8 +513,22 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	}
 	h, closeCtl := serveCtl(r.opts.mode, n, kernelPort, r.st, r.logf)
 	h.Update(func(s *ctl.Status) { s.Device = r.id.Fingerprint })
+	h.Peers(r.ln.Live)
+	h.Answer(ctl.OpRevoke, r.revoke)
 	unwatch := watchLocal(h, n, kernelPort)
 	return func() { unwatch(); closeCtl(); closeKernel(); closeMounts(); closeSSH() }, nil
+}
+
+func (r *openRun) revoke(req ctl.Request) map[string]any {
+	fp := loopback.NormalizeFingerprint(req.Fingerprint)
+	if fp == "" {
+		return map[string]any{"error": "EINVAL"}
+	}
+	closed := r.ln.Revoke(fp)
+	if closed {
+		r.status("unpaired %s; closed its link", loopback.ShortFingerprint(fp))
+	}
+	return map[string]any{"ok": true, "closed": closed}
 }
 
 func (r *openRun) mint() (string, error) {

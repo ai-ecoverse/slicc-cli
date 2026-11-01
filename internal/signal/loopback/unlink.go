@@ -2,6 +2,7 @@ package loopback
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
@@ -47,6 +48,28 @@ func (l *Listener) Unlink(s *link.Stream) {
 		}
 	}
 	_ = s.Link().Close()
+}
+
+func (l *Listener) Live() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, 0, len(l.live))
+	for fp := range l.live {
+		out = append(out, fp)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (l *Listener) Revoke(fp string) bool {
+	l.mu.Lock()
+	lk := l.live[fp]
+	l.mu.Unlock()
+	if lk == nil {
+		return false
+	}
+	_ = lk.Close()
+	return true
 }
 
 const sweepEvery = 5 * time.Second
