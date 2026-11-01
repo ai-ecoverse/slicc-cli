@@ -821,7 +821,7 @@ Only browsers the user named are listed: the one seven runs in, `--cdp` and `--c
       - each matching document, in any frame, waits for the node's answer, and one that gets no answer doesn't load;
       - the hold stays in place whatever any other session does, its interception, bypass and observation included, sessionless `Fetch` and `Network` commands too;
       - `Input` stays in the main document and never reaches a child frame;
-      - `Page.getFrameTree` lists every frame in the page, nested ones and those in closed shadow roots included, by address only, and neither it nor `DOM.getDocument`, at any `depth`, returns a frame's content;
+      - `Page.getFrameTree` and `DOM.getDocument` list child frames by address, and never return a child frame's content;
       - `Runtime.callFunctionOn` and `Runtime.getProperties`, on any object including one for a frame's window, `Accessibility` and the other allowed `DOM` helpers stay in the main document and never cross into a child frame;
       - `Runtime.evaluate` without a selector keeps the page's same-origin rules, and a context the browser reports for the main frame is one;
       - cookie answers carry truthful `domain` and partition data, cookie writes go to their explicit destination and not the active tab, and `Network.getCookies` has its standard scope and request and body correlation;
