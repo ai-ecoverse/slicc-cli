@@ -494,10 +494,85 @@ func (g *guard) expireDebugger(p *debuggerPause) []byte {
 	return g.resumeDebuggerLocked(p.state)
 }
 
-func (rl *relay) debuggerRead(s *debuggerState) message {
-	ctx, cancel := context.WithTimeout(context.Background(), debuggerReadLimit)
+func (g *guard) debuggerPlacementPending(p *debuggerPause, m message) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	s := p.state
+	if g.debuggers[s.owner] != s || s.pause != p || p.generation != s.generation || !time.Now().Before(p.deadline) || m.Error != nil || g.debuggerAdmissionLocked(&command{session: s.owner}) != "" || g.sessionRefusedLocked(s.owner) {
+		return false
+	}
+	var result struct {
+		FrameTree map[string]any `json:"frameTree"`
+	}
+	if json.Unmarshal(m.Result, &result) != nil {
+		return false
+	}
+	frame, _ := result.FrameTree["frame"].(map[string]any)
+	t := g.targets[s.target]
+	if frame["id"] != s.target || frame["loaderId"] != t.document || t.document == "" || t.documentRevision != s.generation {
+		return false
+	}
+	return g.debuggerUnsettledTreeLocked(s.target, result.FrameTree)
+}
+
+func (g *guard) debuggerUnsettledTreeLocked(target string, tree map[string]any) bool {
+	pending := []map[string]any{tree}
+	waiting := false
+	for len(pending) != 0 {
+		node := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		f, _ := node["frame"].(map[string]any)
+		id, valid := f["id"].(string)
+		if !valid || id == "" {
+			return false
+		}
+		url, _ := f["url"].(string)
+		origin, _ := f["securityOrigin"].(string)
+		unreachable, _ := f["unreachableUrl"].(string)
+		if g.o.Loaded(url) || g.o.Loaded(origin) || unreachable != "" {
+			return false
+		}
+		ordinary := (protect.Scheme(url) == "http" || protect.Scheme(url) == "https") && (protect.Scheme(origin) == "http" || protect.Scheme(origin) == "https")
+		if !ordinary {
+			if f["id"] == target || (url != "" && url != "about:blank") || (origin != "" && origin != "://") {
+				return false
+			}
+			waiting = true
+		}
+		children, _ := node["childFrames"].([]any)
+		for _, child := range children {
+			child, ok := child.(map[string]any)
+			if !ok {
+				return false
+			}
+			pending = append(pending, child)
+		}
+	}
+	return waiting
+}
+
+func (g *guard) waitDebuggerPlacement(p *debuggerPause, read func() message, done <-chan struct{}) message {
+	answer := read()
+	for g.debuggerPlacementPending(p, answer) {
+		timer := time.NewTimer(min(25*time.Millisecond, time.Until(p.deadline)))
+		select {
+		case <-done:
+			timer.Stop()
+			return message{Error: json.RawMessage(`{"code":-32000}`)}
+		case <-timer.C:
+		}
+		if !time.Now().Before(p.deadline) {
+			return message{Error: json.RawMessage(`{"code":-32000}`)}
+		}
+		answer = read()
+	}
+	return answer
+}
+
+func (rl *relay) debuggerRead(p *debuggerPause) message {
+	ctx, cancel := context.WithTimeout(context.Background(), min(debuggerReadLimit, time.Until(p.deadline)))
 	defer cancel()
-	msg, call := rl.g.call(s.owner, "Page.getFrameTree", nil)
+	msg, call := rl.g.call(p.state.owner, "Page.getFrameTree", nil)
 	defer rl.g.cancel(call)
 	if rl.conn.Write(ctx, websocket.MessageText, msg) == nil {
 		select {
@@ -521,7 +596,7 @@ func (rl *relay) writeDebugger(msg []byte) bool {
 }
 
 func (rl *relay) verifyDebugger(p *debuggerPause) {
-	v := rl.g.publishDebugger(p, rl.debuggerRead(p.state))
+	v := rl.g.publishDebugger(p, rl.g.waitDebuggerPlacement(p, func() message { return rl.debuggerRead(p) }, rl.s.Done()))
 	for _, msg := range v.send {
 		rl.writeDebugger(msg)
 	}
