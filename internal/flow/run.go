@@ -373,7 +373,7 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 	if caps.Release != nil {
 		defer caps.Release()
 	}
-	defer r.watchBrowsers(lctx, caps.Live)()
+	defer r.watchBrowsers(lctx, caps.Live, caps.Unlisted)()
 	q := newQueue()
 	unsubscribe := n.Subscribe(q.push)
 	defer r.serveKernel(n)()
@@ -430,13 +430,14 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 }
 
 type Caps struct {
-	Release func()
-	Live    func() map[string]bool
+	Release  func()
+	Live     func() map[string]bool
+	Unlisted map[string]bool
 }
 
 const browserCheck = 2 * time.Second
 
-func (r *run) watchBrowsers(ctx context.Context, live func() map[string]bool) func() {
+func (r *run) watchBrowsers(ctx context.Context, live func() map[string]bool, unlisted map[string]bool) func() {
 	if live == nil {
 		return func() {}
 	}
@@ -453,7 +454,7 @@ func (r *run) watchBrowsers(ctx context.Context, live func() map[string]bool) fu
 				return
 			case <-t.C:
 			}
-			r.checkBrowsers(live(), gone)
+			r.checkBrowsers(live(), gone, unlisted)
 		}
 	}()
 	return func() {
@@ -462,12 +463,16 @@ func (r *run) watchBrowsers(ctx context.Context, live func() map[string]bool) fu
 	}
 }
 
-func (r *run) checkBrowsers(now, gone map[string]bool) {
+func (r *run) checkBrowsers(now, gone, unlisted map[string]bool) {
 	for _, b := range r.browsers {
 		switch {
 		case !now[b.ID] && !gone[b.ID]:
 			gone[b.ID] = true
-			r.emit(Event{Event: BrowserGone, Browser: b.ID, Name: b.Name, Role: roleOf(b)})
+			e := Event{Event: BrowserGone, Browser: b.ID, Name: b.Name, Role: roleOf(b)}
+			if unlisted[b.ID] {
+				e.Reason = NoBrowserSession
+			}
+			r.emit(e)
 		case now[b.ID] && gone[b.ID]:
 			delete(gone, b.ID)
 			r.emit(Event{Event: BrowserBack, Browser: b.ID, Name: b.Name, Role: roleOf(b)})
