@@ -89,6 +89,7 @@ type guard struct {
 
 	relaySession       string
 	documentsOnly      bool
+	verifiesInput      bool
 	lost               bool
 	targets            map[string]*target
 	tombstones         []string

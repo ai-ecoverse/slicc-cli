@@ -192,9 +192,11 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 			nt.settle(false)
 			return nil
 		}
-		return [][]byte{g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(res message) [][]byte {
-			return g.initialHistoryLocked(nt, res)
-		})}
+		return g.readFramesLocked(nt, func() [][]byte {
+			return [][]byte{g.callbackLocked(nt.session, "Page.getNavigationHistory", nil, func(res message) [][]byte {
+				return g.initialHistoryLocked(nt, res)
+			})}
+		})
 	}
 	return nil
 }

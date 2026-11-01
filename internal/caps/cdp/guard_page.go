@@ -89,6 +89,10 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if c.method == "Slicc.action" && c.id < relayIDBase {
+		g.verifiesInput = true
+		return pageVerdict{reply: acknowledgement(c.id, c.session)}
+	}
 	if reason := g.checkLocked(c); reason != "" {
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
@@ -98,6 +102,9 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 			return pageVerdict{reply: refusal(c.id, c.session, reason)}
 		}
 		return pageVerdict{history: c}
+	}
+	if reply := g.answerLocally(c); reply != nil {
+		return pageVerdict{reply: reply}
 	}
 	return g.admitLocked(c)
 }

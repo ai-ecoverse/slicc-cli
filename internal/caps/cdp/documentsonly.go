@@ -2,13 +2,14 @@ package cdp
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
 const (
 	documentsOnlySignal       = "documents-only"
-	refusedDocumentsCommand   = "this browser shows slicc no frames, so slicc allows only the commands measured not to reach one; read the page with Runtime.evaluate instead"
-	refusedDocumentsSelection = "this browser shows slicc no frames, so a command can't name a frame or an execution context here"
+	refusedDocumentsCommand   = "slicc can't see inside this browser's frames, so it allows only the commands measured not to reach one; read the page with Runtime.evaluate instead"
+	refusedDocumentsSelection = "slicc can't see inside this browser's frames, so a command can't name a frame or an execution context here"
 	refusedNeedsPage          = "this command needs a page's session; attach to a tab with Target.attachToTarget and send it there"
 )
 
@@ -16,19 +17,20 @@ var pageDomains = commandSet(
 	"Page", "Runtime", "DOM", "DOMSnapshot", "DOMDebugger", "DOMStorage", "CSS", "Input", "Accessibility", "Emulation",
 	"Overlay", "Debugger", "HeapProfiler", "Profiler", "Console", "Log", "LayerTree", "Animation", "Audits",
 	"Media", "WebAudio", "Cast", "HeadlessExperimental", "IndexedDB", "CacheStorage", "ServiceWorker", "Performance",
-	"Inspector", "Memory", "Slicc",
+	"Inspector",
 )
 
 var documentsPageCommands = commandSet(
 	"Page.enable", "Page.disable", "Page.setLifecycleEventsEnabled", "Page.navigate", "Page.reload", "Page.stopLoading",
 	"Page.getNavigationHistory", "Page.navigateToHistoryEntry", "Page.getFrameTree", "Page.getLayoutMetrics",
+	"Page.createIsolatedWorld",
 	"Runtime.enable", "Runtime.disable", "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.getProperties",
 	"Runtime.releaseObject", "Runtime.releaseObjectGroup", "Runtime.runIfWaitingForDebugger",
 	"DOM.enable", "DOM.disable", "DOM.getDocument", "DOM.querySelector", "DOM.querySelectorAll", "DOM.describeNode",
 	"DOM.resolveNode", "DOM.requestNode", "DOM.getBoxModel", "DOM.getContentQuads", "DOM.focus",
 	"Accessibility.enable", "Accessibility.disable", "Accessibility.getFullAXTree",
 	"Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Input.insertText",
-	"Network.enable", "Network.getCookies", "Network.getAllCookies",
+	"Fetch.enable", "Fetch.disable", "Network.setBypassServiceWorker", "Network.enable", "Network.getCookies", "Network.getAllCookies",
 	"Network.setCookie", "Network.setCookies", "Network.deleteCookies",
 	"Log.enable", "Log.disable", "Security.enable", "Security.disable", "Performance.enable", "Performance.disable",
 	"Inspector.enable", "Inspector.disable", "Browser.getWindowForTarget",
@@ -63,6 +65,71 @@ func holdsDocuments(raw json.RawMessage) bool {
 		HoldsDocuments bool `json:"holdsDocuments"`
 	}
 	return json.Unmarshal(raw, &r) == nil && r.HoldsDocuments
+}
+
+func guardFetch(c *command) bool {
+	patterns, _ := c.params["patterns"].([]any)
+	if len(patterns) != 1 {
+		return false
+	}
+	p, _ := patterns[0].(map[string]any)
+	return len(p) == 3 && p["urlPattern"] == "*" && p["resourceType"] == "Document" && p["requestStage"] == "Request"
+}
+
+func acknowledgement(id int64, session string) []byte {
+	m := map[string]any{"id": id, "result": map[string]any{}}
+	if session != "" {
+		m["sessionId"] = session
+	}
+	return encode(m)
+}
+
+func (g *guard) answerLocally(c *command) []byte {
+	if !g.documentsPageLocked(c.session) {
+		return nil
+	}
+	if strings.HasPrefix(c.method, "Fetch.") || c.method == "Network.setBypassServiceWorker" || (g.verifiesInput && strings.HasPrefix(c.method, "Input.")) {
+		return acknowledgement(c.id, c.session)
+	}
+	return nil
+}
+
+func framesProtected(o interface{ Loaded(string) bool }, raw json.RawMessage) bool {
+	type tree struct {
+		Frame struct {
+			URL string `json:"url"`
+		} `json:"frame"`
+		ChildFrames []tree `json:"childFrames"`
+	}
+	var r struct {
+		FrameTree *tree `json:"frameTree"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.FrameTree == nil {
+		return true
+	}
+	var walk func(t tree) bool
+	walk = func(t tree) bool {
+		for _, child := range t.ChildFrames {
+			if o.Loaded(child.Frame.URL) || walk(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(*r.FrameTree)
+}
+
+func (g *guard) readFramesLocked(nt *navTarget, next func() [][]byte) [][]byte {
+	if !nt.documentsOnly {
+		return next()
+	}
+	return [][]byte{g.callbackLocked(nt.session, "Page.getFrameTree", nil, func(m message) [][]byte {
+		if m.Error != nil || framesProtected(g.o, m.Result) {
+			g.logf("cdp: a target holds a protected frame, or wouldn't list its frames target=%s", nt.target)
+			nt.historyLocked = true
+		}
+		return next()
+	})}
 }
 
 func (g *guard) documentRequestPatterns() []any {
@@ -132,13 +199,40 @@ func (g *guard) documentsOnlyRuleLocked(c *command) string {
 		}
 		return refusedDocumentsCommand
 	}
-	if !documentsPageCommands[c.method] {
+	if !documentsPageCommands[c.method] || (c.method == "Fetch.enable" && !guardFetch(c)) || (c.method == "Network.setBypassServiceWorker" && c.params["bypass"] != true) {
 		return refusedDocumentsCommand
 	}
+	target := g.sessions[c.session].target
 	for _, selector := range documentsSelectors {
-		if _, named := c.params[selector]; named {
+		if value, named := c.params[selector]; named && !g.mainContextLocked(target, selector, value) {
 			return refusedDocumentsSelection
 		}
 	}
 	return ""
+}
+
+func (g *guard) mainContextLocked(target, selector string, value any) bool {
+	if selector == "frameId" {
+		return value == target
+	}
+	shown := g.shown[target]
+	if shown == nil {
+		return false
+	}
+	for id, context := range shown.contexts {
+		if context.frame != target {
+			continue
+		}
+		switch selector {
+		case "uniqueContextId":
+			if value == context.unique && context.unique != "" {
+				return true
+			}
+		case "contextId", "executionContextId":
+			if n, ok := value.(json.Number); ok && n.String() == strconv.FormatInt(id, 10) {
+				return true
+			}
+		}
+	}
+	return false
 }

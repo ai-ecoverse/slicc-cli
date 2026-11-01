@@ -280,7 +280,7 @@ export function cdpTest(getLink, describe) {
         for (const { method, params = {}, browserScope = false, session } of steps) {
           try {
             const result = await c.send(method, params, session ?? (browserScope ? undefined : attached.sessionId));
-            results.push({ value: result?.result?.value ?? 'sent' });
+            results.push({ value: result?.result?.value ?? 'sent', raw: JSON.stringify(result) });
           } catch (error) {
             results.push({ error: error.message });
           }
