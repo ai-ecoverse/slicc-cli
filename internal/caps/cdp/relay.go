@@ -112,7 +112,7 @@ func dial(ctx context.Context, ep browser.Endpoint) (*websocket.Conn, Opened, er
 		_ = resp.Body.Close()
 	}
 	if err != nil {
-		return nil, opened, fmt.Errorf("connect %s: %w", ep.CDP, err)
+		return nil, opened, fmt.Errorf("connect %s: %w", cdpclient.Redact(ep.CDP), cdpclient.RedactError(err, wsURL))
 	}
 	conn.SetReadLimit(MaxMessage)
 	if ep.WSOnly {
@@ -126,23 +126,24 @@ func dial(ctx context.Context, ep browser.Endpoint) (*websocket.Conn, Opened, er
 
 func fetchVersion(ctx context.Context, base string) (versionInfo, error) {
 	var vi versionInfo
+	shown := cdpclient.Redact(base + "/json/version")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/json/version", nil)
 	if err != nil {
 		return vi, err
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return vi, fmt.Errorf("%s/json/version: %w", base, err)
+		return vi, fmt.Errorf("%s: %w", shown, cdpclient.RedactError(err, base))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return vi, fmt.Errorf("%s/json/version: %s", base, resp.Status)
+		return vi, fmt.Errorf("%s: %s", shown, resp.Status)
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&vi); err != nil {
-		return vi, fmt.Errorf("%s/json/version: %w", base, err)
+		return vi, fmt.Errorf("%s: %w", shown, err)
 	}
 	if vi.WebSocketURL == "" {
-		return vi, fmt.Errorf("%s/json/version: no webSocketDebuggerUrl", base)
+		return vi, fmt.Errorf("%s: no webSocketDebuggerUrl", shown)
 	}
 	return vi, nil
 }

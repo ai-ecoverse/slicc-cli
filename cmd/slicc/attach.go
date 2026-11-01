@@ -249,7 +249,7 @@ func openSignal(ctx context.Context, f attachFlags, origins *signal.Origins, std
 	if err != nil {
 		return nil, nil, err
 	}
-	status("connected to %s", f.cdp)
+	status("connected to %s", cdp.Redact(f.cdp))
 	s := signal.NewCDP(signal.CDPOptions{Client: client, Origins: origins, Logf: logf, Status: status})
 	return s, func() { _ = s.Close(); _ = client.Close() }, nil
 }

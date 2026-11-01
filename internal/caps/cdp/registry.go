@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	cdpclient "github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -184,7 +185,7 @@ func (r *Registry) Add(ctx context.Context, raw string, seven bool) (link.Browse
 	if onAdd != nil {
 		onAdd(ctx, id, endpointHostPorts(key, ep))
 	}
-	r.logf("cdp: browser %s is %s at %s", id, ep.Name, ep.CDP)
+	r.logf("cdp: browser %s is %s at %s", id, ep.Name, cdpclient.Redact(ep.CDP))
 	r.changed()
 	return e.info, nil
 }
@@ -362,7 +363,7 @@ var kindProducts = map[string]string{
 	"chromium":       "chromium",
 }
 
-var productName = regexp.MustCompile(`^([^/]+)/`)
+var productName = regexp.MustCompile(`^([^/(]+)`)
 
 func kindOf(ep browser.Endpoint) string {
 	if ep.Browser != "" {

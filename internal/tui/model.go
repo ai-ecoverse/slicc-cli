@@ -277,6 +277,7 @@ func (m Model) profileList(e browser.Entry) []string {
 
 func hostPort(cdp string) string {
 	s := strings.TrimPrefix(strings.TrimPrefix(cdp, "http://"), "https://")
+	s, _, _ = strings.Cut(s, "/")
 	if h, p, ok := strings.Cut(s, ":"); ok && (h == "127.0.0.1" || h == "localhost") {
 		return ":" + p
 	}

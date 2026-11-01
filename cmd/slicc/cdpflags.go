@@ -11,6 +11,7 @@ import (
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 	capcdp "github.com/ai-ecoverse/slicc-cli/internal/caps/cdp"
+	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 )
@@ -69,7 +70,7 @@ func cdpBrowsers(ctx context.Context, seven string, extra, origins []string, pol
 		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if _, err := r.Add(pctx, raw, isSeven); err != nil {
-			return fmt.Errorf("browser %s: %w", raw, err)
+			return fmt.Errorf("browser %s: %w", cdp.Redact(raw), err)
 		}
 		return nil
 	}

@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
 )
 
 const browsersUsage = `usage: slicc browsers [--json] [--cdp <url>]... [--no-bundle-scan]
@@ -110,7 +111,7 @@ func entryState(e browser.Entry) string {
 
 func entryWhere(e browser.Entry) string {
 	if e.Kind == browser.KindEndpoint {
-		return e.Endpoint.CDP
+		return cdp.Redact(e.Endpoint.CDP)
 	}
 	if e.Installed.Via != "" {
 		return e.Installed.Via + " " + e.Installed.Package
