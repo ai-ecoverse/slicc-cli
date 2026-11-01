@@ -75,6 +75,8 @@ type navTarget struct {
 	revision         int
 	documentsOnly    bool
 	documentsAsked   bool
+	framesGate       chan struct{}
+	framesReads      int
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -220,6 +222,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if nt.commits != before && g.o.Loaded(nt.errorURL) {
 		nt.failCommit = nt.commits
 	}
+	send = append(send, g.commitFramesLocked(nt, before)...)
 	if g.o.Loaded(nt.errorURL) && !slices.Contains(nt.failedURLs, nt.errorURL) {
 		nt.failedURLs = append(nt.failedURLs, nt.errorURL)
 		if len(nt.failedURLs) > maxFailed {
@@ -268,6 +271,7 @@ func (g *guard) navDetachedLocked(sessionID string) {
 	nt.session = ""
 	nt.settle(true)
 	nt.failed = true
+	nt.openFramesGate()
 	if nt.confirm != nil {
 		nt.confirm.settle(true)
 	}
@@ -313,6 +317,9 @@ func (g *guard) navWaitLocked(sessionID string) <-chan struct{} {
 	}
 	if nt.confirm != nil && !nt.confirm.done {
 		return nt.confirm.ready
+	}
+	if nt.framesGate != nil {
+		return nt.framesGate
 	}
 	return nil
 }

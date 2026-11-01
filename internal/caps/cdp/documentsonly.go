@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
+	framesWait                = 10 * time.Second
 	documentsOnlySignal       = "documents-only"
 	refusedDocumentsCommand   = "slicc can't see inside this browser's frames, so it allows only the commands measured not to reach one; read the page with Runtime.evaluate instead"
 	refusedDocumentsSelection = "slicc can't see inside this browser's frames, so a command can't name a frame or an execution context here"
@@ -91,32 +93,46 @@ func (g *guard) answerLocally(c *command) []byte {
 	if strings.HasPrefix(c.method, "Fetch.") || c.method == "Network.setBypassServiceWorker" || (g.verifiesInput && strings.HasPrefix(c.method, "Input.")) {
 		return acknowledgement(c.id, c.session)
 	}
+	if c.method == "Page.createIsolatedWorld" {
+		delete(c.params, "grantUniveralAccess")
+	}
 	return nil
 }
 
-func framesProtected(o interface{ Loaded(string) bool }, raw json.RawMessage) bool {
-	type tree struct {
-		Frame struct {
-			URL string `json:"url"`
-		} `json:"frame"`
-		ChildFrames []tree `json:"childFrames"`
-	}
-	var r struct {
-		FrameTree *tree `json:"frameTree"`
-	}
-	if json.Unmarshal(raw, &r) != nil || r.FrameTree == nil {
-		return true
-	}
-	var walk func(t tree) bool
-	walk = func(t tree) bool {
-		for _, child := range t.ChildFrames {
-			if o.Loaded(child.Frame.URL) || walk(child) {
-				return true
-			}
-		}
+type frameEvidence struct {
+	Frame *struct {
+		URL            *string `json:"url"`
+		SecurityOrigin *string `json:"securityOrigin"`
+		UnreachableURL *string `json:"unreachableUrl"`
+	} `json:"frame"`
+	ChildFrames []*frameEvidence `json:"childFrames"`
+}
+
+func (g *guard) framesCleanLocked(t *frameEvidence) bool {
+	if t == nil || t.Frame == nil || t.Frame.URL == nil || t.Frame.SecurityOrigin == nil || *t.Frame.URL == "" || *t.Frame.SecurityOrigin == "" {
 		return false
 	}
-	return walk(*r.FrameTree)
+	if g.o.Loaded(*t.Frame.URL) || g.o.Loaded(*t.Frame.SecurityOrigin) || (t.Frame.UnreachableURL != nil && g.o.Loaded(*t.Frame.UnreachableURL)) {
+		return false
+	}
+	for _, child := range t.ChildFrames {
+		if !g.framesCleanLocked(child) {
+			return false
+		}
+	}
+	return true
+}
+
+func (g *guard) frameTreeCleanLocked(m message) bool {
+	var r struct {
+		FrameTree *frameEvidence `json:"frameTree"`
+	}
+	return m.Error == nil && json.Unmarshal(m.Result, &r) == nil && g.framesCleanLocked(r.FrameTree)
+}
+
+func (g *guard) lockFramesLocked(nt *navTarget) {
+	g.logf("cdp: a target holds a protected frame, or wouldn't list its frames target=%s", nt.target)
+	nt.historyLocked = true
 }
 
 func (g *guard) readFramesLocked(nt *navTarget, next func() [][]byte) [][]byte {
@@ -124,12 +140,51 @@ func (g *guard) readFramesLocked(nt *navTarget, next func() [][]byte) [][]byte {
 		return next()
 	}
 	return [][]byte{g.callbackLocked(nt.session, "Page.getFrameTree", nil, func(m message) [][]byte {
-		if m.Error != nil || framesProtected(g.o, m.Result) {
-			g.logf("cdp: a target holds a protected frame, or wouldn't list its frames target=%s", nt.target)
-			nt.historyLocked = true
+		if !g.frameTreeCleanLocked(m) {
+			g.lockFramesLocked(nt)
 		}
 		return next()
 	})}
+}
+
+func (g *guard) commitFramesLocked(nt *navTarget, before int) [][]byte {
+	if nt.commits == before || !nt.documentsOnly {
+		return nil
+	}
+	return g.rereadFramesLocked(nt)
+}
+
+func (g *guard) rereadFramesLocked(nt *navTarget) [][]byte {
+	if nt.framesGate == nil {
+		gate := make(chan struct{})
+		nt.framesGate = gate
+		time.AfterFunc(framesWait, func() {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			if nt.framesGate == gate {
+				g.lockFramesLocked(nt)
+				nt.openFramesGate()
+			}
+		})
+	}
+	nt.framesReads++
+	return [][]byte{g.callbackLocked(nt.session, "Page.getFrameTree", nil, func(m message) [][]byte {
+		if !g.frameTreeCleanLocked(m) {
+			g.lockFramesLocked(nt)
+		}
+		if nt.framesReads--; nt.framesReads <= 0 {
+			nt.openFramesGate()
+		}
+		return nil
+	})}
+}
+
+func (nt *navTarget) openFramesGate() {
+	if nt.framesGate != nil {
+		close(nt.framesGate)
+		nt.framesGate = nil
+	}
+	nt.framesReads = 0
 }
 
 func (g *guard) documentRequestPatterns() []any {

@@ -280,12 +280,13 @@ export function cdpTest(getLink, describe) {
         for (const { method, params = {}, browserScope = false, session } of steps) {
           try {
             const result = await c.send(method, params, session ?? (browserScope ? undefined : attached.sessionId));
-            results.push({ value: result?.result?.value ?? 'sent', raw: JSON.stringify(result) });
+            results.push({ value: result?.result?.value ?? 'sent' });
           } catch (error) {
             results.push({ error: error.message });
           }
         }
-        return { results };
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return { results, transcript: c.messages.join('\n') };
       }),
     screenshot: (browser, size) =>
       run(async () => {
