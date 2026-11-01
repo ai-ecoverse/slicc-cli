@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
@@ -179,6 +180,8 @@ func byeReason(ctx context.Context) string {
 	return "slicc is exiting"
 }
 
+const byeTimeout = 2 * time.Second
+
 func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 	var cur *current
 	closeCur := func(reason string, bye bool) {
@@ -187,7 +190,9 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		}
 		cur.setReason(reason)
 		if bye {
-			_ = conn.Send(context.Background(), signal.Message{T: signal.TypeBye, Nonce: cur.nonce, Reason: reason})
+			sctx, cancel := context.WithTimeout(context.Background(), byeTimeout)
+			_ = conn.Send(sctx, signal.Message{T: signal.TypeBye, Nonce: cur.nonce, Reason: reason})
+			cancel()
 		}
 		_ = cur.l.Close()
 		<-cur.watched
