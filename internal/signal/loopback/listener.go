@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
@@ -52,6 +53,7 @@ type Listener struct {
 	lns    []net.Listener
 	tokens tokens
 	rate   limiter
+	heard  atomic.Bool
 
 	mu      sync.Mutex
 	conns   map[string]*peerConn
@@ -253,7 +255,10 @@ func (l *Listener) origin(r *http.Request) string {
 	return vals[0]
 }
 
+func (l *Listener) Heard() bool { return l.heard.Load() }
+
 func (l *Listener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	l.heard.Store(true)
 	if !l.hostOK(r.Host) || (r.RequestURI != PairPath && r.RequestURI != SignalPath) {
 		l.cfg.Logf("loopback: refused %s: host or path", r.Method)
 		forbid(w, r, "")
