@@ -34,6 +34,8 @@ const (
 	Pairing     Kind = "pairing"
 	Mode        Kind = "mode"
 
+	Reconnecting Kind = "reconnecting"
+
 	ForeignBrowser Kind = "foreign-browser"
 )
 
@@ -43,9 +45,11 @@ var Public = map[Kind]bool{
 
 var Loopback = map[Kind]bool{Mode: true, Pairing: true}
 
+var Lifecycle = map[Kind]bool{Connecting: true, Reconnecting: true}
+
 func Names() []string {
 	var out []string
-	for _, set := range []map[Kind]bool{Public, Loopback} {
+	for _, set := range []map[Kind]bool{Public, Loopback, Lifecycle} {
 		for k := range set {
 			out = append(out, string(k))
 		}
@@ -89,6 +93,13 @@ type Event struct {
 	OpenedTab    *bool           `json:"openedTab,omitempty"`
 	Elapsed      int             `json:"elapsed,omitempty"`
 	URL          string          `json:"url,omitempty"`
+	Mode         string          `json:"mode,omitempty"`
+	Attempt      int             `json:"attempt,omitempty"`
+	RetryAt      *time.Time      `json:"retryAt,omitempty"`
+	Wait         int64           `json:"wait,omitempty"`
+	Code         string          `json:"code,omitempty"`
+	Retryable    *bool           `json:"retryable,omitempty"`
+	Resources    *Resources      `json:"resources,omitempty"`
 	Time         time.Time       `json:"-"`
 }
 

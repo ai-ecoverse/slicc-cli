@@ -86,6 +86,7 @@ func parseLaunch(args []string, stdout, stderr io.Writer) (launchFlags, int, boo
 }
 
 type launchEvent struct {
+	Schema       int    `json:"schema"`
 	Event        string `json:"event"`
 	ID           string `json:"id,omitempty"`
 	Name         string `json:"name,omitempty"`
@@ -108,6 +109,7 @@ type launchOut struct {
 
 func (o launchOut) event(e launchEvent) {
 	if o.json {
+		e.Schema = flow.Schema
 		b, _ := json.Marshal(e)
 		fmt.Fprintf(o.stdout, "%s\n", b)
 	}

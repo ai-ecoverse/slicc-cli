@@ -44,6 +44,9 @@ usage:
 ` + defaultHelp
 
 func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "capabilities" {
+		return runCapabilities(args[1:], stdout, stderr)
+	}
 	companionsOnPath()
 	defer startup(args, stderr)()
 	if isDefault(args) {
@@ -70,8 +73,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runOpen(args[0], args[1:], os.Stdin, stdout, stderr)
 	case "unpair":
 		return runUnpair(args[1:], stdout, stderr)
-	case "capabilities":
-		return runCapabilities(args[1:], stdout, stderr)
 	case "tray":
 		return runTray(args[1:], stdout, stderr)
 	case "prompt", "watch", "wait", "abort":

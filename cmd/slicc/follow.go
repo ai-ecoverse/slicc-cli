@@ -25,6 +25,7 @@ import (
 	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
 	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
+	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
@@ -58,6 +59,7 @@ flags:
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
 ` + exposeUsage + `  --name <name>        the name and host this link shows in seven
+  --json               NDJSON events on stdout (see README.md)
   --cdp <url>          let seven drive this browser over the link (cdp,
                        repeatable); seven gets full control of it, except
                        tabs, cookies and storage on sliccy.ai and the
@@ -85,6 +87,7 @@ type followFlags struct {
 	mounts     stringList
 	jerk       bool
 	jerkSeal   bool
+	json       bool
 }
 
 func joinCommand(args []string, stdout, stderr io.Writer) int {
@@ -125,6 +128,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.BoolVar(&f.jerk, "jerk", false, "")
 	fs.BoolVar(&f.jerkSeal, "jerk-seal", false, "")
 	fs.BoolVar(&f.signalOnly, "signal-only", false, "")
+	fs.BoolVar(&f.json, "json", false, "")
 	fs.DurationVar(&f.timeout, "timeout", defaultSignalOnlyTimeout, "")
 	f.compute.register(fs)
 	if err := fs.Parse(args); err != nil {
@@ -137,6 +141,10 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "slicc follow: unexpected arguments\n\n%s", followUsage)
+		return f, 2
+	}
+	if f.json && f.signalOnly {
+		fmt.Fprintf(stderr, "slicc follow: --json and --signal-only don't go together\n")
 		return f, 2
 	}
 	if err := f.compute.validate(); err != nil {
@@ -164,12 +172,16 @@ func follow(joinURL string, args []string, stdout, stderr io.Writer) int {
 		defer cancel()
 		return signalOnlyRun(ctx, joinURL, stdout, stderr)
 	}
+	out := newJSONLines(stdout, f.json)
+	defer out.close()
 	r, err := newFollowRun(joinURL, f, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "slicc follow: %v\n", err)
+		out.fail(strings.ReplaceAll(err.Error(), strings.TrimSpace(joinURL), "<join-url>"), "", false)
 		return 1
 	}
 	defer r.closeSSH()
+	r.out = out
 	return r.run(ctx)
 }
 
@@ -200,6 +212,10 @@ type followRun struct {
 	closeSSH func()
 	ctl      *ctl.Holder
 	device   string
+	out      *jsonLines
+	res      resourceSource
+	reason   string
+	code     string
 
 	mu   sync.Mutex
 	conn *tray.Conn
@@ -266,7 +282,9 @@ func newFollowRun(joinURL string, ff followFlags, stderr io.Writer) (*followRun,
 	if ff.jerk || ff.jerkSeal {
 		serveJerk(r.node, ff.jerkSeal, true, status)
 	}
-	closeMounts := serveMounts(r.node, hostfs.Load(ff.mounts, status), status)
+	mounts, rejected := hostfs.LoadAll(ff.mounts, status)
+	r.res = resourceSource{mounts: mounts, rejected: rejected, sftp: ff.compute.sftpOn()}
+	closeMounts := serveMounts(r.node, mounts, status)
 	r.closeSSH = func() { stopGuard(); closeMounts(); closeSSH() }
 	if r.cdp != nil {
 		followBrowsers(r.node, r.cdp, status)
@@ -406,6 +424,7 @@ func (r *followRun) unlink(name string) int {
 	_ = r.certs.Delete(r.hub)
 	r.ctl.Update(func(s *ctl.Status) { s.State, s.Code, s.RetryAt = ctl.StateStopped, "UNLINKED", nil })
 	r.status("unlinked by %s", name)
+	r.out.emit(flow.Event{Event: flow.LinkLost, Mode: modeTray, Reason: "unlinked by " + name, Code: "UNLINKED"})
 	return 0
 }
 
@@ -426,6 +445,7 @@ func (r *followRun) run(ctx context.Context) int {
 	for {
 		r.ctl.Update(func(s *ctl.Status) { s.State, s.RetryAt = ctl.StateDialing, nil; s.Dials++ })
 		r.status("connecting to the tray hub")
+		r.out.emit(flow.Event{Event: flow.Connecting, Mode: modeTray, Attempt: attempt})
 		code, outcome := r.once(ctx)
 		if outcome == outcomeStop {
 			return code
@@ -439,6 +459,8 @@ func (r *followRun) run(ctx context.Context) int {
 		at := time.Now().Add(wait).UTC()
 		r.ctl.Update(func(s *ctl.Status) { s.State, s.Attempt, s.RetryAt = ctl.StateReconnecting, attempt, &at })
 		r.status("reconnecting in %s", wait.Round(100*time.Millisecond))
+		r.out.emit(reconnectingEvent(attempt, at, wait, r.reason, r.code))
+		r.reason, r.code = "", ""
 		select {
 		case <-ctx.Done():
 			return 0
@@ -470,8 +492,10 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 		select {
 		case <-ctx.Done():
 			_ = stopServing(cancel, served)
+			r.lost(up, "slicc is exiting", "")
 			return 0, outcomeStop
 		case err := <-served:
+			r.lost(up, "", r.redactErr(err))
 			if err == nil {
 				return 0, r.after(up)
 			}
@@ -490,6 +514,7 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 					s.LastLinked = &now
 				})
 				r.status("linked to %s", ev.name)
+				r.out.emit(flow.Event{Event: flow.Linked, Mode: modeTray, Peer: ev.name, Caps: r.node.Caps(), Policy: policySummary(r.node), Resources: r.res.of(r.node.Hello())})
 			case evDown:
 				if !up {
 					if code, outcome, ok := r.drainEarlyDrop(ctx, served); ok {
@@ -497,6 +522,7 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 					}
 				}
 				_ = stopServing(cancel, served)
+				r.lost(up, "", "")
 				return 0, r.after(up)
 			case evUnlink:
 				_ = stopServing(cancel, served)
@@ -518,6 +544,19 @@ func (r *followRun) drainEarlyDrop(ctx context.Context, served <-chan error) (in
 		return 0, 0, false
 	case <-ctx.Done():
 		return 0, 0, false
+	}
+}
+
+func (r *followRun) redactErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return r.f.Redact(err.Error())
+}
+
+func (r *followRun) lost(up bool, reason, message string) {
+	if up {
+		r.out.emit(flow.Event{Event: flow.LinkLost, Mode: modeTray, Reason: reason, Message: message})
 	}
 }
 
@@ -550,9 +589,13 @@ func (r *followRun) failed(ctx context.Context, err error, up bool) (int, follow
 	if msg, ok := fatalFollowCodes[code]; ok {
 		r.ctl.Update(func(s *ctl.Status) { s.State, s.RetryAt = ctl.StateStopped, nil })
 		r.status("%s (%s)", msg, code)
+		r.out.fail(msg, code, false)
 		return 1, outcomeStop
 	}
-	r.status("%s", r.f.Redact(err.Error()))
+	msg := r.f.Redact(err.Error())
+	r.status("%s", msg)
+	r.out.fail(msg, code, true)
+	r.reason, r.code = msg, code
 	return 0, r.after(up)
 }
 

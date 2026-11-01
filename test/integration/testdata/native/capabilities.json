@@ -7,7 +7,8 @@
       "json": "none"
     },
     "attach": {
-      "json": "none"
+      "json": "events",
+      "vocabulary": "events"
     },
     "browsers": {
       "json": "document"
@@ -20,7 +21,8 @@
       "vocabulary": "events"
     },
     "follow": {
-      "json": "none"
+      "json": "events",
+      "vocabulary": "events"
     },
     "help": {
       "json": "none"
@@ -33,10 +35,12 @@
       "vocabulary": "events"
     },
     "open": {
-      "json": "none"
+      "json": "events",
+      "vocabulary": "events"
     },
     "pair": {
-      "json": "none"
+      "json": "events",
+      "vocabulary": "events"
     },
     "prompt": {
       "json": "events",
@@ -71,6 +75,7 @@
       "browser-gone",
       "browser-slow",
       "closed",
+      "connecting",
       "detached",
       "discovered",
       "error",
@@ -80,7 +85,8 @@
       "link-lost",
       "linked",
       "mode",
-      "pairing"
+      "pairing",
+      "reconnecting"
     ]
   },
   "agent": {

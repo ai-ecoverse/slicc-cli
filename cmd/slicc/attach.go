@@ -24,6 +24,7 @@ import (
 	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
+	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 	"github.com/ai-ecoverse/slicc-cli/internal/signal"
@@ -46,6 +47,8 @@ flags:
                        NDJSON on stdin and stdout for a harness that relays
                        them itself; --cdp is then optional
   --name <name>        the name and host this link shows in seven
+  --json               NDJSON events on stdout (see README.md); not with
+                       --signal stdio
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
 ` + exposeUsage + `  --kernel-port <n>    serve http://<port>.kernel.localhost on this local
@@ -89,6 +92,7 @@ type attachFlags struct {
 	noKernel   bool
 	mounts     stringList
 	noJerk     bool
+	json       bool
 }
 
 func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
@@ -115,6 +119,7 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	fs.BoolVar(&f.noKernel, "no-kernel", false, "")
 	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
+	fs.BoolVar(&f.json, "json", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stderr, attachUsage)
@@ -140,6 +145,9 @@ func parseAttach(args []string, stderr io.Writer) (attachFlags, int) {
 	switch {
 	case f.signal != "cdp" && f.signal != "stdio":
 		fmt.Fprintf(stderr, "slicc attach: --signal must be cdp or stdio\n")
+		return f, 2
+	case f.json && f.signal == "stdio":
+		fmt.Fprintf(stderr, "slicc attach: --json and --signal stdio don't go together: stdout carries the setup messages\n")
 		return f, 2
 	case f.signal == "cdp" && f.cdp == "":
 		fmt.Fprintf(stderr, "slicc attach: --cdp is required\n\n%s", attachUsage)
@@ -167,31 +175,37 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if os.Getenv("SLICC_DEBUG") != "" {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
+	out := newJSONLines(stdout, f.json)
+	defer out.close()
+	fail := func(err error, code int) int {
+		status("%v", err)
+		out.fail(err.Error(), "", false)
+		return code
+	}
 	if !f.noKernel {
 		f.kernelPort = kernelin.Pick(f.kernelPort, status)
 	}
 	origins, err := signal.NewOrigins(f.origins)
 	if err != nil {
-		status("%v", err)
-		return 2
+		return fail(err, 2)
 	}
 	ctx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if f.signal == "cdp" {
+		out.emit(flow.Event{Event: flow.Connecting, Mode: modeCDP})
+	}
 	conn, closer, err := openSignal(ctx, f, origins, stdin, stdout, status, logf)
 	if err != nil {
-		status("%v", err)
-		return 1
+		return fail(err, 1)
 	}
 	defer closer()
 	pol := policy.Local(kernelPolicyPort(f)).With(f.allow, f.deny)
 	if err := browser.Guard(ctx, pol, browser.Options{Status: status}, cdpPorts(append([]string{f.cdp}, f.extra...)...), f.expose, logf); err != nil {
-		status("%v", err)
-		return 1
+		return fail(err, 1)
 	}
 	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, f.origins, pol, f.hosts.hosts, logf, status)
 	if err != nil {
-		status("%v", err)
-		return 1
+		return fail(err, 1)
 	}
 	n := node.New(node.Config{Name: f.name, Host: f.name, Version: version, Mode: "local", Policy: pol, Hosts: f.hosts.hosts, Exit: true, Logf: logf, Status: status})
 	tcp.Register(n)
@@ -204,11 +218,11 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	closeSSH, err := f.compute.serve(n, status)
 	if err != nil {
-		status("%v", err)
-		return 1
+		return fail(err, 1)
 	}
 	defer closeSSH()
-	defer serveMounts(n, hostfs.Load(f.mounts, status), status)()
+	mounts, rejected := hostfs.LoadAll(f.mounts, status)
+	defer serveMounts(n, mounts, status)()
 	serveBrowsers(ctx, n, browsers)
 	kernelPort := f.kernelPort
 	if f.noKernel {
@@ -219,6 +233,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	h, closeCtl := serveCtl("attach", n, kernelPort, logf)
 	defer closeCtl()
 	defer watchLocal(h, n, kernelPort)()
+	defer out.watchLinks(n, modeCDP, resourceSource{mounts: mounts, rejected: rejected, sftp: f.compute.sftpOn(), kernelPort: kernelPort})()
 	if !f.noKernel {
 		kern := kernelin.New(kernelin.Config{Port: f.kernelPort, Logf: logf, Status: status})
 		defer func() { _ = kern.Close() }()
@@ -229,8 +244,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		})
 	}
 	if err := n.Serve(ctx, conn); err != nil && ctx.Err() == nil {
-		status("%v", err)
-		return 1
+		return fail(err, 1)
 	}
 	return 0
 }

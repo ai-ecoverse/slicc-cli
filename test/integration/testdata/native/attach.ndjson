@@ -1,0 +1,5 @@
+{"event":"connecting","mode":"cdp","schema":1}
+{"event":"connecting","mode":"cdp","schema":1}
+{"caps":["net","http","credentialed","ws","udp","fs","cdp"],"event":"linked","mode":"cdp","peer":"link test page","policy":"every public address, this machine, and the local network","resources":{"browsers":[{"id":"chrome","name":"<name>","owned":false,"role":"seven"}],"compute":{"sftp":false,"ssh":false},"jerk":{"offered":false,"seal":false},"mounts":[{"name":"proj","path":"<proj>","readOnly":true}],"network":{"exit":true,"policy":"every public address, this machine, and the local network"},"rejectedMounts":[{"path":"<missing>","reason":"not-a-folder"}]},"schema":1,"tab":"<origin>"}
+{"event":"link-lost","mode":"cdp","reason":"slicc is exiting","schema":1}
+{"browsers":[],"event":"closed","schema":1}

@@ -22,6 +22,7 @@ import (
 )
 
 type launchEvent struct {
+	Schema       int    `json:"schema"`
 	Event        string `json:"event"`
 	ID           string `json:"id"`
 	PID          int    `json:"pid"`
@@ -168,6 +169,9 @@ func (l *launched) next(t *testing.T) launchEvent {
 	}()
 	select {
 	case e := <-ch:
+		if e.Event != "" && e.Schema != 1 {
+			t.Fatalf("slicc launch event %+v without schema 1", e)
+		}
 		return e
 	case <-time.After(60 * time.Second):
 		t.Fatalf("no event from slicc launch; stderr %s", l.stderr.String())
@@ -378,7 +382,7 @@ func TestLaunchRejectsBadInput(t *testing.T) {
 		t.Errorf("code %d stderr %q", code, errOut)
 	}
 	out, _, code := runWithEnv(t, env, "launch", "--json", "--browser", "no-such-browser")
-	if code != 1 || !strings.Contains(out, `"event":"error"`) || !strings.Contains(out, "no-such-browser") {
+	if code != 1 || !strings.HasPrefix(out, `{"schema":1,"event":"error"`) || !strings.Contains(out, "no-such-browser") {
 		t.Errorf("code %d stdout %q", code, out)
 	}
 }

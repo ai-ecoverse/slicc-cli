@@ -66,6 +66,8 @@ flags:
                        its origin is accepted too
   --origin <origin>    also accept seven on this origin (repeatable)
   --name <name>        the name and host this link shows in seven
+  --json               NDJSON events on stdout, the pairing URL among them
+                       (see README.md)
   --allow <rule>       allow CIDR or CIDR:port (repeatable, comma-separated)
   --deny <rule>        deny CIDR or CIDR:port (repeatable, comma-separated)
 ` + exposeUsage + `  --kernel-port <n>    serve http://<port>.kernel.localhost on this local
@@ -92,16 +94,18 @@ type openFlags struct {
 	compute    computeFlags
 	hosts      hostsFlag
 	loaded     []hostfs.Mount
+	json       bool
 }
 
 type openOptions struct {
-	mode   string
-	open   bool
-	json   bool
-	notice string
-	ctx    context.Context
-	emit   func(flow.Event)
-	renew  <-chan struct{}
+	mode      string
+	open      bool
+	json      bool
+	lifecycle bool
+	notice    string
+	ctx       context.Context
+	emit      func(flow.Event)
+	renew     <-chan struct{}
 }
 
 func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags, int) {
@@ -127,6 +131,7 @@ func parseOpen(verb string, args []string, stdout, stderr io.Writer) (openFlags,
 	fs.Var(&f.mounts, "mount", "")
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
 	fs.Var(&f.hosts, "hosts", "")
+	fs.BoolVar(&f.json, "json", false, "")
 	f.compute.register(fs)
 	var six string
 	registerSix(fs, &six)
@@ -223,6 +228,8 @@ type openRun struct {
 	pol    *policy.Policy
 	host   string
 	token  string
+	res    resourceSource
+	closed bool
 }
 
 func runOpen(verb string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -230,7 +237,7 @@ func runOpen(verb string, args []string, stdin io.Reader, stdout, stderr io.Writ
 	if code >= 0 {
 		return code
 	}
-	return serveOpen(f, openOptions{mode: verb, open: verb == "open"}, stdin, stdout, stderr)
+	return serveOpen(f, openOptions{mode: verb, open: verb == "open", json: f.json, lifecycle: f.json}, stdin, stdout, stderr)
 }
 
 func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -249,6 +256,10 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 	fail := func(err error) int {
 		r.status("%v", err)
 		r.emitEvent(flow.Event{Event: flow.Error, Message: err.Error()})
+		if opts.json {
+			r.event(map[string]any{"schema": flow.Schema, "event": flow.Error, "message": err.Error(), "retryable": false})
+			r.event(map[string]any{"schema": flow.Schema, "event": flow.Closed, "browsers": []string{}})
+		}
 		return 1
 	}
 	if opts.notice != "" {
@@ -314,11 +325,22 @@ func (r *openRun) dashEvent(e node.Event) {
 }
 
 func (r *openRun) linkEvent(e node.Event) {
-	if !r.opts.json || e.Link == nil {
+	if !r.opts.json {
 		return
 	}
-	base := map[string]any{"schema": flow.Schema, "mode": "loopback", "device": loopback.PeerFingerprint(e.Link)}
+	if e.Link == nil {
+		if r.opts.lifecycle && e.Kind == node.EventLinkDown && e.Err != nil {
+			r.event(map[string]any{"schema": flow.Schema, "event": flow.Error, "mode": modeLoopback, "message": e.Err.Error(), "retryable": true})
+		}
+		return
+	}
+	base := map[string]any{"schema": flow.Schema, "mode": modeLoopback, "device": loopback.PeerFingerprint(e.Link)}
 	switch e.Kind {
+	case node.EventConnecting:
+		if !r.opts.lifecycle {
+			return
+		}
+		base = map[string]any{"schema": flow.Schema, "event": flow.Connecting, "mode": modeLoopback}
 	case node.EventLinked:
 		base["event"] = flow.Linked
 		if e.Peer.Name != "" {
@@ -326,6 +348,7 @@ func (r *openRun) linkEvent(e node.Event) {
 		}
 		base["caps"] = r.node.Caps()
 		base["policy"] = r.pol.Summary()
+		base["resources"] = r.res.of(r.node.Hello())
 	case node.EventLinkDown:
 		base["event"] = flow.LinkLost
 		if e.Reason != "" {
@@ -421,9 +444,15 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	mounts := r.f.loaded
+	mounts, rejected := r.f.loaded, []hostfs.Rejected{}
 	if mounts == nil {
-		mounts = hostfs.Load(r.f.mounts, r.status)
+		mounts, rejected = hostfs.LoadAll(r.f.mounts, r.status)
+	} else if r.opts.json {
+		_, rejected = hostfs.LoadAll(r.f.mounts, nil)
+	}
+	r.res = resourceSource{mounts: mounts, rejected: rejected, sftp: r.f.compute.sftpOn()}
+	if !r.f.noKernel {
+		r.res.kernelPort = r.f.kernelPort
 	}
 	closeMounts := serveMounts(n, mounts, r.status)
 	closeKernel := func() {}
@@ -557,7 +586,11 @@ func (r *openRun) event(e map[string]any) {
 	b, _ := json.Marshal(e)
 	r.outMu.Lock()
 	defer r.outMu.Unlock()
+	if r.closed {
+		return
+	}
 	fmt.Fprintf(r.stdout, "%s\n", b)
+	r.closed = fmt.Sprint(e["event"]) == string(flow.Closed)
 }
 
 func (r *openRun) printURL(u string) {

@@ -1,0 +1,3 @@
+{"event":"connecting","mode":"tray","schema":1}
+{"code":"TRAY_EXPIRED","event":"error","message":"seven's tray has expired; get a new join URL from seven","retryable":false,"schema":1}
+{"browsers":[],"event":"closed","schema":1}

@@ -1,0 +1,8 @@
+{"event":"connecting","mode":"tray","schema":1}
+{"caps":["net","http","credentialed","ws","udp","fs","join"],"event":"linked","mode":"tray","peer":"link test page","policy":"every public address","resources":{"browsers":[],"compute":{"sftp":false,"ssh":false},"jerk":{"offered":false,"seal":false},"mounts":[{"name":"proj","path":"<proj>","readOnly":true}],"network":{"exit":true,"policy":"every public address"},"rejectedMounts":[{"path":"<missing>","reason":"not-a-folder"}]},"schema":1}
+{"event":"link-lost","mode":"tray","schema":1}
+{"attempt":1,"event":"reconnecting","retryAt":"<time>","schema":1,"wait":"<ms>"}
+{"attempt":1,"event":"connecting","mode":"tray","schema":1}
+{"caps":["net","http","credentialed","ws","udp","fs","join"],"event":"linked","mode":"tray","peer":"link test page","policy":"every public address","resources":{"browsers":[],"compute":{"sftp":false,"ssh":false},"jerk":{"offered":false,"seal":false},"mounts":[{"name":"proj","path":"<proj>","readOnly":true}],"network":{"exit":true,"policy":"every public address"},"rejectedMounts":[{"path":"<missing>","reason":"not-a-folder"}]},"schema":1}
+{"event":"link-lost","mode":"tray","reason":"slicc is exiting","schema":1}
+{"browsers":[],"event":"closed","schema":1}
