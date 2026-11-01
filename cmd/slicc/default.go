@@ -65,7 +65,8 @@ flags for slicc with no command:
                       port instead of 80
   --no-kernel         don't serve <port>.kernel.localhost at all
   --keep-browsers     on SIGTERM, leave the browsers this run launched
-                      running (as the control socket's detach does)
+                      running (as the control socket's detach does); not
+                      in the dashboard: needs --plain, --yes or --json
   --no-fallback       never fall back to the default browser: launch an
                       installed browser in a new SLICC profile as before,
                       or exit when nothing can host seven
@@ -286,6 +287,10 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	interactive := !f.json && !f.plain && !f.yes && len(f.browsers) == 0 && f.six == nil && isTerminal(os.Stdin) && isTerminal(stdout)
+	if interactive && f.keep {
+		fmt.Fprintf(stderr, "slicc: --keep-browsers needs --plain, --yes or --json: the dashboard closes the browsers it launched when it quits\n")
+		return 2
+	}
 	logf := func(string, ...any) {}
 	if os.Getenv("SLICC_DEBUG") != "" && !interactive {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
