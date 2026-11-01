@@ -47,14 +47,13 @@ type commandInfo struct {
 }
 
 var commandTable = map[string]commandInfo{
-	"default": {JSON: jsonEvents, Vocabulary: vocabularyEvents},
-	"attach":  {JSON: jsonNone},
-	"open":    {JSON: jsonNone},
-	"pair":    {JSON: jsonNone},
-	"unpair":  {JSON: jsonNone},
-	"follow":  {JSON: jsonNone},
-	"tray":    {JSON: jsonDocument},
-
+	"default":      {JSON: jsonEvents, Vocabulary: vocabularyEvents},
+	"attach":       {JSON: jsonNone},
+	"open":         {JSON: jsonNone},
+	"pair":         {JSON: jsonNone},
+	"unpair":       {JSON: jsonNone},
+	"follow":       {JSON: jsonNone},
+	"tray":         {JSON: jsonDocument},
 	"prompt":       {JSON: jsonEvents, Vocabulary: vocabularyAgent},
 	"watch":        {JSON: jsonEvents, Vocabulary: vocabularyAgent},
 	"wait":         {JSON: jsonEvents, Vocabulary: vocabularyAgent},
