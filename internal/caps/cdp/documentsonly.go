@@ -147,30 +147,62 @@ func (g *guard) readFramesLocked(nt *navTarget, next func() [][]byte) [][]byte {
 	})}
 }
 
-func (g *guard) commitFramesLocked(nt *navTarget, before int) [][]byte {
-	if nt.commits == before || !nt.documentsOnly {
+func (g *guard) commitFramesLocked(nt *navTarget, m *message) [][]byte {
+	if m.Method != "Page.frameNavigated" || !nt.documentsOnly {
 		return nil
 	}
 	return g.rereadFramesLocked(nt)
 }
 
+func (g *guard) framesGateLocked(id string) <-chan struct{} {
+	s := g.sessions[id]
+	if s == nil {
+		return nil
+	}
+	nt := g.navTargets[s.target]
+	if nt == nil || nt.framesGate == nil {
+		return nil
+	}
+	return nt.framesGate
+}
+
+func (g *guard) plainErrorLocked(m *message, data []byte) []byte {
+	if m.Error == nil || !g.documentsOnly {
+		return data
+	}
+	var e struct {
+		Code    json.Number `json:"code"`
+		Message string      `json:"message"`
+	}
+	_ = json.Unmarshal(m.Error, &e)
+	out := map[string]any{"id": *m.ID, "error": map[string]any{"code": e.Code, "message": e.Message}}
+	if m.SessionID != "" {
+		out["sessionId"] = m.SessionID
+	}
+	return encode(out)
+}
+
 func (g *guard) rereadFramesLocked(nt *navTarget) [][]byte {
 	if nt.framesGate == nil {
-		gate := make(chan struct{})
-		nt.framesGate = gate
+		fresh := make(chan struct{})
+		nt.framesGate = fresh
 		time.AfterFunc(framesWait, func() {
 			g.mu.Lock()
 			defer g.mu.Unlock()
-			if nt.framesGate == gate {
+			if nt.framesGate == fresh {
 				g.lockFramesLocked(nt)
 				nt.openFramesGate()
 			}
 		})
 	}
+	gate := nt.framesGate
 	nt.framesReads++
 	return [][]byte{g.callbackLocked(nt.session, "Page.getFrameTree", nil, func(m message) [][]byte {
 		if !g.frameTreeCleanLocked(m) {
 			g.lockFramesLocked(nt)
+		}
+		if nt.framesGate != gate {
+			return nil
 		}
 		if nt.framesReads--; nt.framesReads <= 0 {
 			nt.openFramesGate()

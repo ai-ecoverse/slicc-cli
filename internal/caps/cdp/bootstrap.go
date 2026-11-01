@@ -78,8 +78,19 @@ func (rl *relay) checkPage(data []byte) ([]byte, bool) {
 
 func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 	v := rl.g.fromCommand(c, id, ok)
-	if v.history != nil {
-		v = rl.resolveHistory(v.history)
+	for {
+		if v.history != nil {
+			v = rl.resolveHistory(v.history)
+		}
+		if v.wait == nil {
+			break
+		}
+		select {
+		case <-v.wait:
+		case <-rl.s.Done():
+			return nil, false
+		}
+		v = rl.g.fromCommand(c, id, ok)
 	}
 	if v.reply != nil {
 		if err := rl.writePage(v.reply); err != nil {

@@ -25,11 +25,51 @@ type documentBrowser struct {
 	childFrame string
 	firstTree  string
 	nextTree   string
+	trees      []treeReply
+	lookup     string
+	commits    int
+	treeDiag   bool
 
 	mu      sync.Mutex
 	fetches []string
 	methods map[string]int
 	worlds  []string
+	waiting int
+	raced   []string
+}
+
+type treeReply struct {
+	raw   string
+	delay time.Duration
+}
+
+func (f *documentBrowser) racedCommands() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.raced...)
+}
+
+func (f *documentBrowser) committed() {
+	f.mu.Lock()
+	f.waiting++
+	f.mu.Unlock()
+}
+
+func (f *documentBrowser) answered() {
+	f.mu.Lock()
+	f.waiting--
+	f.mu.Unlock()
+}
+
+func (f *documentBrowser) nextReply() (treeReply, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.trees) == 0 {
+		return treeReply{}, false
+	}
+	reply := f.trees[0]
+	f.trees = f.trees[1:]
+	return reply, true
 }
 
 func (f *documentBrowser) saw(method string) bool {
@@ -57,6 +97,10 @@ func (f *documentBrowser) enabled() []string {
 }
 
 const protectedAddress = "https://vault.sliccy.ai/callback?code=TOKEN-1"
+
+const cleanTree = `{"frameTree":{"frame":{"id":"tab","url":"https://ordinary.test/","securityOrigin":"https://ordinary.test"}}}`
+
+const dirtyTree = `{"frameTree":{"frame":{"id":"tab","url":"https://ordinary.test/","securityOrigin":"https://ordinary.test"},"childFrames":[{"frame":{"id":"c","url":"` + protectedAddress + `","securityOrigin":"https://vault.sliccy.ai"}}]}}`
 
 func (f *documentBrowser) treeAnswer(restored bool) string {
 	if restored {
@@ -128,6 +172,9 @@ func (f *documentBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		if m.Method == "Page.createIsolatedWorld" {
 			f.worlds = append(f.worlds, string(m.Params))
 		}
+		if f.waiting > 0 && (m.Method == "Runtime.evaluate" || m.Method == "Page.navigateToHistoryEntry") {
+			f.raced = append(f.raced, m.Method)
+		}
 		f.mu.Unlock()
 		result := map[string]any{}
 		var failure map[string]any
@@ -168,7 +215,17 @@ func (f *documentBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		case "Page.navigateToHistoryEntry":
 			restored = true
 			committed := map[string]any{"type": "Navigation", "frame": map[string]any{"id": "tab", "loaderId": "restored", "url": tabURL, "securityOrigin": "https://ordinary.test", "mimeType": "text/html"}}
-			if !send(map[string]any{"method": "Page.frameNavigated", "sessionId": guarded, "params": committed}) {
+			for n := 0; n < max(f.commits, 1); n++ {
+				f.committed()
+				if !send(map[string]any{"method": "Page.frameNavigated", "sessionId": guarded, "params": committed}) {
+					return
+				}
+			}
+		case "Page.stopLoading":
+			restored = true
+			f.committed()
+			child := map[string]any{"type": "Navigation", "frame": map[string]any{"id": "tab.1", "parentId": "tab", "loaderId": "child", "url": "https://frame.test/", "securityOrigin": "https://frame.test", "mimeType": "text/html"}}
+			if !send(map[string]any{"method": "Page.frameNavigated", "sessionId": guarded, "params": child}) {
 				return
 			}
 		case "DOM.getBoxModel":
@@ -194,8 +251,41 @@ func (f *documentBrowser) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case "Page.getNavigationHistory":
+			if f.lookup == "loss" && m.SessionID != guarded {
+				if !send(map[string]any{"method": "Target.detachedFromTarget", "sessionId": "browser", "params": map[string]any{"sessionId": guarded, "targetId": "tab"}}) {
+					return
+				}
+			}
+			if f.lookup == "commit" && m.SessionID != guarded {
+				f.lookup = ""
+				restored = true
+				f.committed()
+				committed := map[string]any{"type": "Navigation", "frame": map[string]any{"id": "tab", "loaderId": "looked", "url": tabURL, "securityOrigin": "https://ordinary.test", "mimeType": "text/html"}}
+				if !send(map[string]any{"method": "Page.frameNavigated", "sessionId": guarded, "params": committed}) {
+					return
+				}
+			}
 			result = map[string]any{"currentIndex": 0, "entries": []any{map[string]any{"id": 0, "url": tabURL, "userTypedURL": tabURL, "title": "ordinary", "transitionType": "link"}}}
 		case "Page.getFrameTree":
+			if f.treeDiag && m.SessionID != guarded {
+				failure = map[string]any{"code": -32000, "message": "no tree", "data": map[string]any{"value": protectedAddress}}
+				break
+			}
+			if restored && m.SessionID == guarded {
+				if reply, ok := f.nextReply(); ok {
+					if reply.raw == "silent" {
+						continue
+					}
+					id, session := m.ID, m.SessionID
+					go func() {
+						time.Sleep(reply.delay)
+						b, _ := json.Marshal(map[string]any{"id": id, "sessionId": session})
+						f.answered()
+						_ = c.Write(context.Background(), websocket.MessageText, append(b[:len(b)-1], []byte(`,"result":`+reply.raw+`}`)...))
+					}()
+					continue
+				}
+			}
 			if raw := f.treeAnswer(restored); raw != "" {
 				if raw == "error" {
 					failure = map[string]any{"code": -32000, "message": "no tree"}
@@ -272,6 +362,11 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 		hidden    string
 		once      []string
 		absent    string
+		trees     []treeReply
+		lookup    string
+		commits   int
+		treeDiag  bool
+		atomic    bool
 		steps     []documentStep
 		want      []documentResult
 		enables   int
@@ -408,6 +503,47 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 			absent:  "grantUniveralAccess",
 		},
 		{
+			name: "a commit during the history lookup holds the navigation", signal: true, attest: true, enables: 2, lookup: "commit",
+			trees:  []treeReply{{raw: cleanTree, delay: 400 * time.Millisecond}, {raw: cleanTree}},
+			steps:  []documentStep{{Method: "Page.navigateToHistoryEntry", Params: map[string]any{"entryId": 0}}},
+			want:   []documentResult{{Value: "sent"}},
+			atomic: true,
+		},
+		{
+			name: "a guard lost during the history lookup refuses the navigation", signal: true, attest: true, enables: 2, lookup: "loss",
+			steps:  []documentStep{{Method: "Page.navigateToHistoryEntry", Params: map[string]any{"entryId": 0}}},
+			want:   []documentResult{{Error: locked}},
+			unseen: []string{"Page.navigateToHistoryEntry"},
+		},
+		{
+			name: "overlapping commits hold commands until the last tree answers", signal: true, attest: true, enables: 2, commits: 2,
+			trees:  []treeReply{{raw: cleanTree, delay: 100 * time.Millisecond}, {raw: dirtyTree, delay: 500 * time.Millisecond}},
+			steps:  []documentStep{{Method: "Page.navigateToHistoryEntry", Params: map[string]any{"entryId": 0}}, evaluate},
+			want:   []documentResult{{Value: "sent"}, {Error: locksTab}},
+			unseen: []string{"Runtime.evaluate"},
+			atomic: true,
+		},
+		{
+			name: "a tree that never answers locks", signal: true, attest: true, enables: 2,
+			trees:  []treeReply{{raw: "silent"}},
+			steps:  []documentStep{{Method: "Page.navigateToHistoryEntry", Params: map[string]any{"entryId": 0}}, evaluate},
+			want:   []documentResult{{Value: "sent"}, {Error: locksTab}},
+			unseen: []string{"Runtime.evaluate"},
+		},
+		{
+			name: "a child's commit rereads the frames", signal: true, attest: true, enables: 2,
+			trees:  []treeReply{{raw: dirtyTree, delay: 200 * time.Millisecond}},
+			steps:  []documentStep{{Method: "Page.stopLoading"}, evaluate},
+			want:   []documentResult{{Value: "sent"}, {Error: locksTab}},
+			unseen: []string{"Runtime.evaluate"},
+		},
+		{
+			name: "a browser's diagnostic error loses its data", signal: true, attest: true, enables: 2, child: protectedAddress, treeDiag: true,
+			steps:  []documentStep{{Method: "Page.getFrameTree"}},
+			want:   []documentResult{{Error: "no tree"}},
+			hidden: "TOKEN-1",
+		},
+		{
 			name: "an error that outlives a lock doesn't get through", signal: true, attest: true, enables: 2,
 			steps:  []documentStep{{Method: "DOM.getBoxModel", Params: map[string]any{"nodeId": 1}}},
 			want:   []documentResult{{Error: "while this command ran"}},
@@ -467,6 +603,7 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 			srv := pageServer(t)
 			fake := newDocumentBrowser(t, c.signal, c.attest)
 			fake.delay, fake.earlyPause, fake.childFrame, fake.firstTree, fake.nextTree = c.delay, c.early, c.child, c.firstTree, c.nextTree
+			fake.trees, fake.lookup, fake.commits, fake.treeDiag = c.trees, c.lookup, c.commits, c.treeDiag
 			env := &linkEnv{t: t, b: b, origin: srv.URL}
 			env.a = startAttach(t, "--cdp", b.endpoint, "--cdp-extra", fake.url, "--origin", srv.URL, "--name", "it-node")
 			env.p = b.openPage(t, srv.URL+"/index.html")
@@ -509,6 +646,9 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 				if fake.saw(method) {
 					t.Fatalf("the browser got %s", method)
 				}
+			}
+			if raced := fake.racedCommands(); c.atomic && len(raced) != 0 {
+				t.Fatalf("the browser got %v before the frame tree answered", raced)
 			}
 			if c.absent != "" && strings.Contains(strings.Join(fake.worldParams(), ""), c.absent) {
 				t.Fatalf("the browser got %s: %v", c.absent, fake.worldParams())
