@@ -346,6 +346,37 @@ slicc capabilities [--json]
 
 A program reads `contract` and the names it needs, and treats anything it doesn't know as absent: an older `slicc` lacks the newer commands, events and ops, and a newer one may have more. `TestCapabilitiesNameEveryCommandEventAndOp` fails when a command, an event or a control op is added to the code without appearing here, and keeps the document's fixture, [`test/integration/testdata/native/capabilities.json`](test/integration/testdata/native/capabilities.json), in step with the binary.
 
+### Lifecycle events: `--json` on `attach`, `open`, `pair` and `follow`
+
+With `--json`, `attach`, `open`, `pair` (and `--default-browser`, which is `open`) and `follow` print the NDJSON of [the default's `--json`](#the-default-slicc) on stdout: one event a line, each with `"schema": 1` and `event`, from the same vocabulary. stdout carries nothing else: `open` and `pair` put the pairing URL in a `pairing` event instead of a line of its own. Status lines stay on stderr, and so does every error, which also comes as an `error` event. Fields marked `?` are left out when empty. New fields and events may be added, and existing ones keep their meaning. Without `--json` nothing changes.
+
+- `connecting`: `mode`, `attempt?`. A dial or setup starts: for `attach`, the CDP connection (`mode` `cdp`), then each offer from seven; for `open` and `pair`, each offer (`loopback`); for `follow`, each dial of the tray hub (`tray`), with `attempt` from the first reconnect on, the `attempt` of the `reconnecting` before it.
+- `pairing`: `url`, on `open` and `pair`, for the first pairing URL and each new one (Enter on stdin). It is never a join URL. The pairing URL holds a one-time token and works as a secret for 10 minutes; it is printed by design, as without `--json`.
+- `linked`: `mode`, `peer?` (the name in seven's HELLO), `tab?` (the page's origin, for `attach`), `device?` (the page's certificate fingerprint, for `open` and `pair`), `caps`, `policy` (the summary), and `resources`, what this link offers, as seven sees it:
+  - `browsers`: `[{"id","name","role","owned"}]`, the browsers listed for `cdp` (`role` `seven` or `extra`; `owned` is `true` for a browser this run launched, so never on these commands); `[]` without `cdp`;
+  - `mounts`: `[{"name","path","readOnly"}]`, the folders shared over `fs`, with the resolved path on this machine;
+  - `rejectedMounts`: `[{"path","reason"}]`, the `--mount` folders left out, with `path` as given and `reason` `not-a-folder`, `fenced` (slicc never shares it, see [Host folders](#host-folders)), `invalid-name` or `name-taken`;
+  - `network`: `{"exit","policy"}`, whether `net` goes out from this machine, and the policy summary;
+  - `compute`: `{"ssh","sftp"}`;
+  - `jerk`: `{"offered","seal"}`, the `jerk` and `jerk-seal` caps;
+  - `kernelPort?`: the local port of [kernel services](#kernel-services), when they are on.
+- `link-lost`: `mode`, `reason?` when slicc or seven closed the link (`slicc is exiting`, seven's `bye` reason, `unlinked by <name>` with `code` `UNLINKED` on `follow`), or `message?` for a failure; `device?` on `open` and `pair`.
+- `reconnecting`: `attempt`, `retryAt` (RFC 3339, UTC), `wait` (milliseconds), `reason?` and `code?` (the failure that led here, and the hub's code), on `follow` before each new dial. These are the `attempt`, `retryAt` and `code` of [`slicc tray --json`](#running-links-slicc-tray).
+- `error`: `message`, `code?` (the hub's or seven's code, on `follow`) and `retryable`: `true` when slicc tries again by itself (`follow` reconnects), `false` when the run ends, with exit 1 (exit 2 for a bad `--origin` on `attach`).
+- `closed`: `browsers: []`, the last event of every run, also one that failed or was interrupted.
+
+Secrets stay out: no join URL, no tray token, and no `--cdp` path, since `resources` names browsers by id and errors are redacted as on stderr. Fixtures: [`attach.ndjson`](test/integration/testdata/native/attach.ndjson), [`pair.ndjson`](test/integration/testdata/native/pair.ndjson), [`follow.ndjson`](test/integration/testdata/native/follow.ndjson) and [`follow-error.ndjson`](test/integration/testdata/native/follow-error.ndjson), with values that change from run to run shown as `<…>`.
+
+```
+{"schema":1,"event":"connecting","mode":"tray"}
+{"schema":1,"event":"linked","mode":"tray","peer":"seven","caps":["net","http","credentialed","ws","udp","fs","join"],"policy":"every public address","resources":{"browsers":[],"mounts":[{"name":"proj","path":"/Users/me/proj","readOnly":true}],"rejectedMounts":[],"network":{"exit":true,"policy":"every public address"},"compute":{"ssh":false,"sftp":false},"jerk":{"offered":false,"seal":false}}}
+{"schema":1,"event":"link-lost","mode":"tray"}
+{"schema":1,"event":"reconnecting","attempt":1,"retryAt":"2026-05-02T10:00:01Z","wait":1043}
+{"schema":1,"event":"connecting","mode":"tray","attempt":1}
+{"schema":1,"event":"error","message":"seven's tray has expired; get a new join URL from seven","code":"TRAY_EXPIRED","retryable":false}
+{"schema":1,"event":"closed","browsers":[]}
+```
+
 ## The default: `slicc`
 
 ```
@@ -553,7 +584,7 @@ Plain output: the CDP HTTP URL on stdout, status lines on stderr. With `--json`,
 ```
 slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal cdp|stdio] [--name <name>] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp] [--kernel-port <n>] [--no-kernel]
-             [--mount <path>[:<name>][:ro]]...
+             [--mount <path>[:<name>][:ro]]... [--json]
 ```
 
 `attach` links a seven that is open in a running CDP browser and serves the link until it is interrupted (`SIGINT`, `SIGTERM`), or until stdin closes with `--signal stdio`. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics, pion's included. pion never writes to stderr itself.
@@ -574,6 +605,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - `--kernel-port`: the local port for [kernel services](#kernel-services) (1–65535, default `80`; with `80`, a spare port in 17180–17189 when `80` can't be bound).
 - `--no-kernel`: no kernel services; nothing listens.
 - `--no-jerk`: don't offer this machine's slicc-jerk (caps `jerk` and `jerk-seal`, see [`jerk`](#jerk-slicc-jerk-over-the-link)).
+- `--json`: NDJSON lifecycle events on stdout (see [Lifecycle events](#lifecycle-events---json-on-attach-open-pair-and-follow)). Not with `--signal stdio`, whose setup messages own stdout (exit 2).
 
 **Setup over CDP.**
 1. slicc picks the first page tab whose URL has an allowed origin. Until there is one it says `waiting for a seven tab` and watches for new tabs. After 15 s without one it says `still no seven tab` and what to do: a browser can hide seven's own tab from debugging clients, and then this setup can't work, so link through the tray ([Remote setup](#remote-setup-slicc-join-url-follow)). `SLICC_SEVEN_QUIET` (test-only, a Go duration) replaces the 15 s. A `Target.createTarget` refused by such a browser ends plain `slicc` with the same advice.
@@ -609,7 +641,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 ```
 slicc open [--page <url>] [--origin <origin>]... [--name <name>] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]...
            [--kernel-port <n>] [--no-kernel] [--no-jerk] [--mount <path>[:<name>][:ro]]...
-           [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
+           [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp] [--json]
 slicc pair [the same flags]
 slicc --default-browser [the same flags]
 slicc unpair [<fingerprint> | --all]
@@ -1155,7 +1187,7 @@ A command that can't start exits 127 with the reason on stderr.
 ```
 slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]... [--name <name>] [--cdp <url>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
-             [--mount <path>[:<name>][:ro]]... [--jerk] [--jerk-seal]
+             [--mount <path>[:<name>][:ro]]... [--jerk] [--jerk-seal] [--json]
 slicc - follow [flags]
 slicc @<file> follow [flags]
 ```
@@ -1169,6 +1201,7 @@ slicc @<file> follow [flags]
 - `--allow`, `--deny`: policy rules on top of the remote default (see [Network policy](#network-policy)). This machine's debugging ports stay denied on every address of it, whatever `--allow` says, `--allow 127.0.0.1/32` included.
 - `--expose-debug-port <port>`: let seven reach this one debugging port after all (repeatable), as for `attach`. The `--cdp` ports stay denied.
 - `--name`: the link's `name` and `host` in HELLO, as for `attach`.
+- `--json`: NDJSON lifecycle events on stdout (see [Lifecycle events](#lifecycle-events---json-on-attach-open-pair-and-follow)). Not with `--signal-only` (exit 2).
 - `--runner`, `--shell`, `--eval`, `--eval-quiet`, `--sftp`, `--no-sftp`: compute over SSH (cap `ssh`), exactly as for `attach`. `direct-tcpip` forwarding goes through the remote policy, so it reaches public addresses only unless `--allow` says otherwise. `--runner` works with or without `--exit`.
 - `--cdp <url>`: let seven drive this browser over the link (repeatable, in any form `slicc browsers --cdp` takes; each must answer when `follow` starts). See [`cdp`](#cdp-browser-control), and its warning: the seven on the other machine gets full control of every browser listed. No browser is `seven: true`. Without `--cdp`, `follow` doesn't offer `cdp`, and a `cdp` OPEN is refused with `EOPNOTSUPP`. Each browser's debugging port and its own endpoint addresses are [denied](#network-policy) to `tcp`, `http`, `ws`, `udp` and `ssh` forwarding.
 - `--mount <path>[:<name>][:ro]`: share this folder with the seven on the other machine (cap `fs`, repeatable); see [Host folders](#host-folders). It can read the folder, and change it unless `:ro`.

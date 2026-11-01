@@ -211,7 +211,7 @@ func emittedEvents(files []*ast.File, kinds map[string]string) map[string]bool {
 	return out
 }
 
-var dashboardOnly = []string{"serving", "connecting", "stream-open", "stream-close", "dropped", "status", "kernel"}
+var dashboardOnly = []string{"serving", "stream-open", "stream-close", "dropped", "status", "kernel"}
 
 func TestCapabilitiesNameEveryCommandEventAndOp(t *testing.T) {
 	c, out := readCapabilities(t)

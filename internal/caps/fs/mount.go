@@ -41,20 +41,41 @@ func ParseSpec(spec string) (path, name string, readonly bool) {
 	return rest, name, readonly
 }
 
+const (
+	RejectNotFolder = "not-a-folder"
+	RejectFenced    = "fenced"
+	RejectName      = "invalid-name"
+	RejectTaken     = "name-taken"
+)
+
+type Rejected struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
 func Load(specs []string, warn func(format string, args ...any)) []Mount {
+	mounts, _ := LoadAll(specs, warn)
+	return mounts
+}
+
+func LoadAll(specs []string, warn func(format string, args ...any)) ([]Mount, []Rejected) {
 	if warn == nil {
 		warn = func(string, ...any) {}
 	}
 	var mounts []Mount
+	rejected := []Rejected{}
+	reject := func(path, reason string) { rejected = append(rejected, Rejected{Path: path, Reason: reason}) }
 	for _, spec := range specs {
 		path, name, readonly := ParseSpec(spec)
 		root, err := rootOf(path)
 		if err != nil {
 			warn("--mount %s: not an existing folder, skipping", spec)
+			reject(path, RejectNotFolder)
 			continue
 		}
 		if Fenced(root) {
 			warn("--mount %s: slicc never shares this folder, which holds its own keys or a credential tool's files, skipping", spec)
+			reject(path, RejectFenced)
 			continue
 		}
 		if name == "" {
@@ -62,10 +83,12 @@ func Load(specs []string, warn func(format string, args ...any)) []Mount {
 		}
 		if !validName.MatchString(name) || name == "." || name == ".." {
 			warn("--mount %s: invalid name, skipping", spec)
+			reject(path, RejectName)
 			continue
 		}
 		if taken(mounts, name) {
 			warn("--mount %s: the name %s is taken, skipping", spec, name)
+			reject(path, RejectTaken)
 			continue
 		}
 		mounts = append(mounts, Mount{
@@ -82,7 +105,7 @@ func Load(specs []string, warn func(format string, args ...any)) []Mount {
 			},
 		})
 	}
-	return mounts
+	return mounts, rejected
 }
 
 func taken(mounts []Mount, name string) bool {
