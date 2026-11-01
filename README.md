@@ -342,7 +342,7 @@ slicc capabilities [--json]
 - **`contract`:** 1. It goes up only for a breaking change to a contract this document describes: a field or event that changes meaning or goes away. New commands, fields, events and ops leave it alone.
 - **`commands`:** every command, keyed by name: `default` for `slicc` with no command, `follow`, `prompt`, `watch`, `wait` and `abort` (also after a join URL), `attach`, `open`, `pair`, `unpair`, `tray`, `browsers`, `launch`, `update`, `install`, `capabilities`, `version` and `help`. `json` says what `--json` prints: `document` (one JSON value), `events` (NDJSON, one event a line) or `none` (no `--json`). An `events` command has `vocabulary`: `events` for lines with `schema` and `event` (see [The default](#the-default-slicc) and [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)), or `agent` for seven's agent events with `t` (see [`agent`](#agent-page-cap-agent-node--page)).
 - **`events`:** `schema`, the `schema` every `event` line carries, and `names`, every `event` a `vocabulary: "events"` command can print, sorted.
-- **`agent`:** `events`, the `t` of every agent event slicc knows, and `own`, the lines slicc itself adds to that stream (`settled`, see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)).
+- **`agent`:** `events`, the `t` of every agent event slicc knows, and `own`, the lines slicc itself adds to that stream (`settled`, `opened` and `reconnecting`, see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)).
 - **`control`:** `v`, the version of the [control socket](#running-links-slicc-tray) protocol, and `ops`, the ops it answers.
 
 A program reads `contract` and the names it needs, and treats anything it doesn't know as absent: an older `slicc` lacks the newer commands, events and ops, and a newer one may have more. `TestCapabilitiesNameEveryCommandEventAndOp` fails when a command, an event or a control op is added to the code without appearing here, and keeps the document's fixture, [`test/integration/testdata/native/capabilities.json`](test/integration/testdata/native/capabilities.json), in step with the binary. The control socket's exchange, `status`'s `ops`, the answers to `stop` and `detach` and the `closed` that follows, is in [`control.ndjson`](test/integration/testdata/native/control.ndjson).
@@ -1228,7 +1228,7 @@ HELLO from `follow`: `{ "v": 1, "role": "node", "name", "host", "version", "mode
 
 ```
 slicc <join-url> prompt [--allsettled <quiet>] [--steer | --reject] [--thinking] [--json] [--plain] [--abort-on-interrupt] <text>|@file|-
-slicc <join-url> watch [--thinking] [--json] [--plain]
+slicc <join-url> watch [--thinking] [--json] [--plain] [--since <entry-id>]
 slicc <join-url> wait [--allsettled <quiet>] [--timeout <limit>] [--json]
 slicc <join-url> abort
 slicc prompt --cdp <url> [--origin <origin>]... [flags] <text>|@file|-
@@ -1288,10 +1288,12 @@ These commands talk to seven's agent over a link that offers nothing to seven (`
   - `130` on Ctrl-C or `SIGTERM`.
 
 **`watch`** follows the agent until Ctrl-C or `SIGTERM`, then exits 0.
-- **Output:** `user` events go to stdout as `> <text>`, on one line. Assistant text goes to stdout as for `prompt`, and a line ends at each run's end. Everything else goes to stderr, as for `prompt`, plus `run ended: <reason>` for a run that didn't end with `stop`. `--json` prints the events instead.
+- **Output:** `user` events go to stdout as `> <text>`, on one line. Assistant text goes to stdout as for `prompt`, and a line ends at each run's end. Everything else goes to stderr, as for `prompt`, plus `run ended: <reason>` for a run that didn't end with `stop`. `--json` prints the events instead, with slicc's own lines among them (below).
 - **Status lines** on stderr: `slicc: watching <name>`, `slicc: lost the link to <name>; reconnecting`, and for the tray `<reason>; trying again in <wait>`.
 - **Reconnects:** when the stream ends or is reset, slicc opens a new `watch` on the same link. When the link goes, it sets up a new one, through the tray again or by waiting for seven over CDP. Waits start at 1 s, double up to 30 s with ±25 % jitter, and go back to 1 s once a stream opens.
 - **Resuming:** each new stream asks for `since`, the id of the last event slicc saw, so nothing still in the transcript is lost. Nothing is shown twice either. For `text` and `thinking`, slicc counts the bytes it has shown per entry and skips that many from the entry's replay. Any other entry is skipped when its id was already seen. `run` events have no id and aren't replayed. When seven answers `gap: true`, slicc prints `some events were missed`.
+- **`--since <entry-id>`:** the first stream asks for `since` with this id (any event's `id`), as [`agent`](#agent-page-cap-agent-node--page)'s `watch` does, so a program that kept the last id it saw resumes there across restarts of `slicc watch`. seven replays that entry when it's `text` or `thinking`, then every entry after it, or answers `gap: true` when it no longer has it. Later streams resume from the last event slicc saw, as above.
+- **slicc's own lines with `--json`**, which are slicc's and not seven's, like `prompt`'s and `wait`'s `{"t":"settled"}`: `{"t":"opened","head","gap"?,"busy"?}` first on every stream that opens, before seven's events on it, with `head`, `gap` and `busy` from seven's OPENED (so a `gap` shows on stdout, not only on stderr); and `{"t":"reconnecting","attempt","wait"}` before each new try, with `attempt` counting the tries since a stream last opened and `wait` in milliseconds. A reader that ignores unknown `t` values sees seven's events as before. `run` events still have no id. Fixture: [`watch.ndjson`](test/integration/testdata/native/watch.ndjson).
 - **Exit status:** `1` when the link can't be set up for good (a terminal tray failure, or the CDP connection closing), `2` for bad usage, `3` without permission.
 
 **`abort`** aborts the agent's current run. It prints `slicc: aborted the run`, or `slicc: nothing was running`, and exits 0. Otherwise it exits 1 on errors, 3 without permission and 130 on Ctrl-C.
@@ -1406,7 +1408,7 @@ PID   MODE    SEVEN           DEVICE     STATE                   OFFERS
 
 ```
 slicc <join-url> prompt [--allsettled <quiet>] [--steer | --reject] [--thinking] [--json] [--plain] <text>|@file|-
-slicc <join-url> watch [--thinking] [--json] [--plain]
+slicc <join-url> watch [--thinking] [--json] [--plain] [--since <entry-id>]
 slicc <join-url> wait [--allsettled <quiet>] [--timeout <limit>] [--json]
 slicc <join-url> abort
 slicc tray [--json]

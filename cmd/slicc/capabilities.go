@@ -69,7 +69,7 @@ var commandTable = map[string]commandInfo{
 
 var launchEvents = []string{"launched", "attached", "browser-slow", "error", "exited", "detached", "closed"}
 
-var agentOwn = []string{agentSettled}
+var agentOwn = []string{agentSettled, agentOpened, agentReconnecting}
 
 type capabilities struct {
 	Schema   int                    `json:"schema"`

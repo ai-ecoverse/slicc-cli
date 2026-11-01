@@ -16,7 +16,11 @@ const (
 	settleLost
 )
 
-const agentSettled = "settled"
+const (
+	agentSettled      = "settled"
+	agentOpened       = "opened"
+	agentReconnecting = "reconnecting"
+)
 
 const settledLine = `{"t":"` + agentSettled + `"}` + "\n"
 

@@ -1,0 +1,8 @@
+{"head":"t1","t":"opened"}
+{"delta":"Hello","id":"a1","t":"text"}
+{"call":"c1","id":"t1","name":"bash","summary":"ls","t":"tool"}
+{"attempt":1,"t":"reconnecting","wait":"<ms>"}
+{"head":"a2","t":"opened"}
+{"delta":"Bye","id":"a2","t":"text"}
+{"attempt":1,"t":"reconnecting","wait":"<ms>"}
+{"gap":true,"head":"","t":"opened"}
