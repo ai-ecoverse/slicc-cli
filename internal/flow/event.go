@@ -44,6 +44,8 @@ const (
 	RoleExtra = "extra"
 )
 
+const NoBrowserSession = "no-browser-session"
+
 type Event struct {
 	Schema       int             `json:"schema"`
 	Event        Kind            `json:"event"`

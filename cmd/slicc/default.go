@@ -19,6 +19,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	capcdp "github.com/ai-ecoverse/slicc-cli/internal/caps/cdp"
 	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
@@ -237,9 +238,12 @@ func registerCaps(lc *liveCaps, origins []string, logf func(string, ...any)) fun
 			return flow.Caps{}, err
 		}
 		ids := map[string]string{}
+		unlisted := map[string]bool{}
 		for _, b := range browsers {
 			if id, ok := reg.IDOf(b.CDP); ok {
 				ids[id] = b.ID
+			} else {
+				unlisted[b.ID] = true
 			}
 		}
 		wctx, cancel := context.WithCancel(ctx)
@@ -255,7 +259,7 @@ func registerCaps(lc *liveCaps, origins []string, logf func(string, ...any)) fun
 			}
 			return out
 		}
-		return flow.Caps{Release: func() { unwatch(); closeCtl(); cancel(); closeSSH(); closeMounts() }, Live: live}, nil
+		return flow.Caps{Release: func() { unwatch(); closeCtl(); cancel(); closeSSH(); closeMounts() }, Live: live, Unlisted: unlisted}, nil
 	}
 }
 
@@ -384,6 +388,9 @@ func plainLine(e flow.Event) string {
 		}
 		return line
 	case flow.BrowserGone:
+		if e.Reason == flow.NoBrowserSession {
+			return fmt.Sprintf("seven can't drive %s through slicc: %v. It isn't listed for cdp; the rest of the link works", e.Name, capcdp.ErrUnguarded)
+		}
 		return e.Name + " quit; it is no longer listed for cdp"
 	case flow.BrowserBack:
 		return e.Name + " is back and listed for cdp again"

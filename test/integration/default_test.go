@@ -418,12 +418,35 @@ func TestDefaultKeepsEachBrowsersIDPastOneWithoutABrowserSession(t *testing.T) {
 			t.Fatalf("attached %s", a.raw)
 		}
 	}
-	if g := f.next(t, "browser-gone"); g.Browser != id(unguarded) {
+	if g := f.next(t, "browser-gone"); g.Browser != id(unguarded) || g.Reason != "no-browser-session" {
 		t.Fatalf("a browser that was never listed should be the one not on the list: %s", g.raw)
 	}
 	second.srv.Close()
-	if g := f.next(t, "browser-gone"); g.Browser != id(second.srv.URL) || g.Role != "extra" {
+	if g := f.next(t, "browser-gone"); g.Browser != id(second.srv.URL) || g.Role != "extra" || g.Reason != "" {
 		t.Fatalf("browser-gone %s", g.raw)
+	}
+}
+
+func TestDefaultPlainSaysAnExtraWithoutABrowserSessionWasLeftOut(t *testing.T) {
+	const page = "https://test.sliccy.ai/"
+	seven := newFakeCDPBrowser(t, func(method string, _ json.RawMessage) (string, []string) {
+		if method == "Target.getTargets" {
+			return fmt.Sprintf(`{"targetInfos":[{"targetId":"seven","type":"page","url":%q}]}`, page), nil
+		}
+		return "{}", nil
+	})
+	unguarded := narrowBrowser(t, false)
+	second := newFakeCDPBrowser(t, func(string, json.RawMessage) (string, []string) { return "{}", nil })
+	id := func(url string) string { return "cdp:" + strings.TrimPrefix(url, "http://") }
+	f := startFlow(t, append(isolatedEnv(t), "NO_COLOR=1"), "--plain", "--no-kernel", "--no-jerk", "--page", page,
+		"--cdp", seven.srv.URL, "--cdp", unguarded, "--cdp", second.srv.URL,
+		"--browser", id(seven.srv.URL), "--browser", id(unguarded), "--browser", id(second.srv.URL))
+	f.waitStderr(t, "seven can't drive Narrow through slicc: it has no browser session")
+	second.srv.Close()
+	f.waitStderr(t, "quit; it is no longer listed for cdp")
+	out := f.stderr.String()
+	if strings.Contains(out, "Narrow quit") || strings.Count(out, "quit; it is no longer listed for cdp") != 1 {
+		t.Fatalf("stderr %q", out)
 	}
 }
 

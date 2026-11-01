@@ -299,6 +299,18 @@ func TestTUIProfileFlagIsTheDefault(t *testing.T) {
 	}
 }
 
+func TestTUIDashboardSaysAnExtraWithoutABrowserSessionWasLeftOut(t *testing.T) {
+	h := newTUI(t, "")
+	h.keys("down", "down", "enter")
+	ev := func(e flow.Event) { h.send(tui.EventMsg(e)) }
+	ev(flow.Event{Event: flow.Attached, Browser: "chrome", Name: "Google Chrome", Role: flow.RoleSeven, CDP: "http://127.0.0.1:50000"})
+	ev(flow.Event{Event: flow.Attached, Browser: "cdp:127.0.0.1:9333", Name: "Narrow", Role: flow.RoleExtra, CDP: "http://127.0.0.1:9333"})
+	ev(flow.Event{Event: flow.BrowserGone, Browser: "cdp:127.0.0.1:9333", Name: "Narrow", Role: flow.RoleExtra, Reason: flow.NoBrowserSession})
+	if v := h.view(); !strings.Contains(v, "Narrow isn't listed for cdp: it has no browser session") || strings.Contains(v, "Narrow quit") {
+		t.Fatalf("after browser-gone:\n%s", v)
+	}
+}
+
 func TestTUIDashboard(t *testing.T) {
 	h := newTUI(t, "")
 	h.send(tui.NoticeMsg("slicc 9.9.9 is available (you have 1.0.0); run `slicc update`"))

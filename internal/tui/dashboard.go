@@ -119,6 +119,10 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 		d.count(e.Stream).dropped += e.Count
 	case flow.BrowserGone:
 		d.browser(e.Browser).gone = true
+		if e.Reason == flow.NoBrowserSession {
+			d.note(now, levelWarn, e.Name+" isn't listed for cdp: it has no browser session")
+			break
+		}
 		d.note(now, levelWarn, e.Name+" quit")
 	case flow.BrowserBack:
 		d.browser(e.Browser).gone = false
