@@ -100,6 +100,7 @@ type Event struct {
 	Code         string          `json:"code,omitempty"`
 	Retryable    *bool           `json:"retryable,omitempty"`
 	Resources    *Resources      `json:"resources,omitempty"`
+	Kept         []string        `json:"-"`
 	Time         time.Time       `json:"-"`
 }
 
@@ -126,10 +127,18 @@ func (e Event) MarshalJSON() ([]byte, error) {
 		p.Browsers = nil
 		return json.Marshal(struct {
 			plain
-			Browsers []string `json:"browsers"`
-		}{p, closed})
+			Browsers []string  `json:"browsers"`
+			Kept     *[]string `json:"kept,omitempty"`
+		}{p, closed, keptList(e.Kept)})
 	}
 	return json.Marshal(p)
+}
+
+func keptList(kept []string) *[]string {
+	if kept == nil {
+		return nil
+	}
+	return &kept
 }
 
 func SlowLine(name string, elapsed int) string {

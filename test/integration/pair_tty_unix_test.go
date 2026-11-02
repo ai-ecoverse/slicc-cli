@@ -178,3 +178,21 @@ func TestDefaultBrowserRowPairsInTheDashboard(t *testing.T) {
 		t.Fatal("slicc did not exit after q")
 	}
 }
+
+func TestKeepBrowsersIsRefusedInTheDashboard(t *testing.T) {
+	e := newLoopEnv(t)
+	p := startTTY(t, e.env, "--keep-browsers", "--no-kernel")
+	select {
+	case err := <-p.done:
+		exit, ok := err.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 2 {
+			t.Fatalf("exit %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("slicc --keep-browsers started the dashboard")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if !strings.Contains(p.text(), "--keep-browsers needs --plain, --yes or --json") {
+		t.Fatalf("screen %q", p.text())
+	}
+}

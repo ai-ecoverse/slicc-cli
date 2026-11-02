@@ -50,7 +50,13 @@ func (j *jsonLines) fail(msg, code string, retryable bool) {
 	j.emit(flow.Event{Event: flow.Error, Message: msg, Code: code, Retryable: &retryable})
 }
 
-func (j *jsonLines) close() { j.emit(flow.Event{Event: flow.Closed}) }
+func (j *jsonLines) end(detached bool) {
+	e := flow.Event{Event: flow.Closed}
+	if detached {
+		e.Kept = []string{}
+	}
+	j.emit(e)
+}
 
 func reconnectingEvent(attempt int, at time.Time, wait time.Duration, reason, code string) flow.Event {
 	return flow.Event{Event: flow.Reconnecting, Attempt: attempt, RetryAt: &at, Wait: wait.Milliseconds(), Reason: reason, Code: code}

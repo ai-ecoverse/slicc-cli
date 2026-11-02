@@ -110,7 +110,9 @@
   "control": {
     "v": 1,
     "ops": [
-      "status"
+      "status",
+      "detach",
+      "stop"
     ]
   }
 }

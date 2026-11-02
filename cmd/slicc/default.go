@@ -10,10 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	ossignal "os/signal"
 	"strings"
 	"sync"
-	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
@@ -66,6 +64,9 @@ flags for slicc with no command:
   --kernel-port <n>   serve http://<port>.kernel.localhost on this local
                       port instead of 80
   --no-kernel         don't serve <port>.kernel.localhost at all
+  --keep-browsers     on SIGTERM, leave the browsers this run launched
+                      running (as the control socket's detach does); not
+                      in the dashboard: needs --plain, --yes or --json
   --no-fallback       never fall back to the default browser: launch an
                       installed browser in a new SLICC profile as before,
                       or exit when nothing can host seven
@@ -106,6 +107,7 @@ type defaultFlags struct {
 	noJerk     bool
 	open       bool
 	noFallback bool
+	keep       bool
 }
 
 func isDefault(args []string) bool {
@@ -143,6 +145,7 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 	fs.BoolVar(&f.noJerk, "no-jerk", false, "")
 	fs.BoolVar(&f.open, "open", false, "")
 	fs.BoolVar(&f.noFallback, "no-fallback", false, "")
+	fs.BoolVar(&f.keep, "keep-browsers", false, "")
 	fs.Bool("default-browser", false, "")
 	var six string
 	registerSix(fs, &six)
@@ -201,7 +204,7 @@ func (f *defaultFlags) parseProfile(stderr io.Writer) int {
 	return -1
 }
 
-func registerCaps(lc *liveCaps, origins []string, logf func(string, ...any)) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
+func registerCaps(lc *liveCaps, origins []string, st *stopper, logf func(string, ...any)) func(context.Context, *node.Node, *policy.Policy, []flow.Browser) (flow.Caps, error) {
 	return func(ctx context.Context, n *node.Node, pol *policy.Policy, browsers []flow.Browser) (flow.Caps, error) {
 		c := lc.snapshot()
 		tcp.Register(n)
@@ -248,7 +251,7 @@ func registerCaps(lc *liveCaps, origins []string, logf func(string, ...any)) fun
 		}
 		wctx, cancel := context.WithCancel(ctx)
 		serveBrowsers(wctx, n, reg)
-		h, closeCtl := serveCtl("default", n, c.kernel, logf)
+		h, closeCtl := serveCtl("default", n, c.kernel, st, logf)
 		unwatch := watchLocal(h, n, c.kernel)
 		live := func() map[string]bool {
 			out := map[string]bool{}
@@ -284,15 +287,20 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	interactive := !f.json && !f.plain && !f.yes && len(f.browsers) == 0 && f.six == nil && isTerminal(os.Stdin) && isTerminal(stdout)
+	if interactive && f.keep {
+		fmt.Fprintf(stderr, "slicc: --keep-browsers needs --plain, --yes or --json: the dashboard closes the browsers it launched when it quits\n")
+		return 2
+	}
 	logf := func(string, ...any) {}
 	if os.Getenv("SLICC_DEBUG") != "" && !interactive {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
 	mounts := hostfs.Load(f.mounts, func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) })
 	lc := newLiveCaps(f.compute, mounts, !f.noJerk, f.kernel)
+	st := &stopper{}
 	cfg := flow.Config{
 		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(lc, pageOrigins(f.page, f.origins), logf), Compute: f.compute.dashboard(), Logf: logf,
+		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(lc, pageOrigins(f.page, f.origins), st, logf), Keep: st.kept, Compute: f.compute.dashboard(), Logf: logf,
 	}
 	origins, _ := flow.PageOrigins(f.page, f.origins)
 	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
@@ -301,20 +309,20 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 		var pair pairFunc
 		if f.fallbackAllowed() {
 			pair = func(ctx context.Context, emit func(flow.Event), renew <-chan struct{}) int {
-				return servePairIn(ctx, f, mounts, emit, renew)
+				return servePairIn(ctx, f, mounts, st, emit, renew)
 			}
 		}
-		return runTUI(cfg, pair, lc, stdout, stderr)
+		return runTUI(cfg, pair, lc, st, stdout, stderr)
 	}
 	cfg.Chosen = len(f.browsers) > 0 || f.six != nil
-	return runPlain(cfg, f, mounts, stdout, stderr)
+	return runPlain(cfg, f, mounts, st, stdout, stderr)
 }
 
-func runPlain(cfg flow.Config, f defaultFlags, mounts []hostfs.Mount, stdout, stderr io.Writer) int {
+func runPlain(cfg flow.Config, f defaultFlags, mounts []hostfs.Mount, st *stopper, stdout, stderr io.Writer) int {
 	flushNotice(stderr)
 	out := plainOut{stdout: stdout, stderr: stderr, json: f.json}
 	cfg.Emit = out.event
-	ctx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signalContext(context.Background(), st, f.keep)
 	defer stop()
 	r := browser.Discover(ctx, cfg.Browser)
 	for _, err := range r.Errors {
@@ -323,7 +331,7 @@ func runPlain(cfg flow.Config, f defaultFlags, mounts []hostfs.Mount, stdout, st
 	out.event(flow.Event{Schema: flow.Schema, Event: flow.Discovered, Entries: r.Entries})
 	if f.fallbackAllowed() && flow.Fallback(cfg.Browser, r.Entries) {
 		stop()
-		return runFallback(f, mounts, stdout, stderr)
+		return runFallback(f, mounts, st, stdout, stderr)
 	}
 	var sel []browser.Entry
 	var err error
@@ -407,6 +415,9 @@ func plainLine(e flow.Event) string {
 	case flow.Error:
 		return "error: " + e.Message
 	case flow.Closed:
+		if len(e.Kept) > 0 {
+			return "detached; left " + strings.Join(e.Kept, ", ") + " running"
+		}
 		if len(e.Browsers) == 0 {
 			return "done"
 		}
@@ -459,9 +470,10 @@ type pairFunc func(ctx context.Context, emit func(flow.Event), renew <-chan stru
 
 var errPairFailed = errors.New("pairing seven in the default browser failed")
 
-func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, stdout, stderr io.Writer) int {
+func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, st *stopper, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	st.set(cancel)
 	var p *tea.Program
 	var started sync.WaitGroup
 	var failed error

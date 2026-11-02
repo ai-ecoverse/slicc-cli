@@ -10,9 +10,7 @@ import (
 	"io"
 	"net/url"
 	"os"
-	ossignal "os/signal"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
@@ -176,7 +174,8 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
 	out := newJSONLines(stdout, f.json)
-	defer out.close()
+	st := &stopper{}
+	defer func() { out.end(st.kept()) }()
 	fail := func(err error, code int) int {
 		status("%v", err)
 		out.fail(err.Error(), "", false)
@@ -189,7 +188,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(err, 2)
 	}
-	ctx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signalContext(context.Background(), st, false)
 	defer stop()
 	if f.signal == "cdp" {
 		out.emit(flow.Event{Event: flow.Connecting, Mode: modeCDP})
@@ -230,7 +229,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	} else {
 		n.OnHello(kernelin.Announce(kernelPort))
 	}
-	h, closeCtl := serveCtl("attach", n, kernelPort, logf)
+	h, closeCtl := serveCtl("attach", n, kernelPort, st, logf)
 	defer closeCtl()
 	defer watchLocal(h, n, kernelPort)()
 	defer out.watchLinks(n, modeCDP, resourceSource{mounts: mounts, rejected: rejected, sftp: f.compute.sftpOn(), kernelPort: kernelPort})()

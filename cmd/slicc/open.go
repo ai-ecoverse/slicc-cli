@@ -13,12 +13,10 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	ossignal "os/signal"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
@@ -102,6 +100,8 @@ type openOptions struct {
 	open      bool
 	json      bool
 	lifecycle bool
+	keep      bool
+	st        *stopper
 	notice    string
 	ctx       context.Context
 	emit      func(flow.Event)
@@ -230,6 +230,7 @@ type openRun struct {
 	token  string
 	res    resourceSource
 	closed bool
+	st     *stopper
 }
 
 func runOpen(verb string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -247,10 +248,20 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 	if os.Getenv("SLICC_DEBUG") != "" && opts.emit == nil {
 		r.logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
-	ctx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	r.st = opts.st
+	if r.st == nil {
+		r.st = &stopper{}
+	}
+	var ctx context.Context
+	var stop func()
 	if opts.emit != nil {
 		r.status = statusTo(opts.emit)
-		ctx, stop = context.WithCancel(opts.ctx)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(opts.ctx)
+		r.st.set(cancel)
+		stop = cancel
+	} else {
+		ctx, stop = signalContext(context.Background(), r.st, opts.keep)
 	}
 	defer stop()
 	fail := func(err error) int {
@@ -258,7 +269,7 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 		r.emitEvent(flow.Event{Event: flow.Error, Message: err.Error()})
 		if opts.json {
 			r.event(map[string]any{"schema": flow.Schema, "event": flow.Error, "message": err.Error(), "retryable": false})
-			r.event(map[string]any{"schema": flow.Schema, "event": flow.Closed, "browsers": []string{}})
+			r.closedEvent()
 		}
 		return 1
 	}
@@ -292,9 +303,17 @@ func serveOpen(f openFlags, opts openOptions, stdin io.Reader, stdout, stderr io
 		go r.readStdin(stdin)
 	}
 	_ = r.ln.Serve(ctx, r.node.Serve)
-	r.event(map[string]any{"schema": flow.Schema, "event": flow.Closed, "browsers": []string{}})
+	r.closedEvent()
 	r.emitEvent(flow.Event{Event: flow.Closed})
 	return 0
+}
+
+func (r *openRun) closedEvent() {
+	e := map[string]any{"schema": flow.Schema, "event": flow.Closed, "browsers": []string{}}
+	if r.st.kept() {
+		e["kept"] = []string{}
+	}
+	r.event(e)
 }
 
 func (r *openRun) emitEvent(e flow.Event) {
@@ -492,7 +511,7 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	if r.f.noKernel {
 		kernelPort = 0
 	}
-	h, closeCtl := serveCtl(r.opts.mode, n, kernelPort, r.logf)
+	h, closeCtl := serveCtl(r.opts.mode, n, kernelPort, r.st, r.logf)
 	h.Update(func(s *ctl.Status) { s.Device = r.id.Fingerprint })
 	unwatch := watchLocal(h, n, kernelPort)
 	return func() { unwatch(); closeCtl(); closeKernel(); closeMounts(); closeSSH() }, nil
