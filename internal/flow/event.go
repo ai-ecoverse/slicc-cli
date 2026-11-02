@@ -37,6 +37,8 @@ const (
 
 	Reconnecting Kind = "reconnecting"
 
+	Inventory Kind = "inventory"
+
 	ForeignBrowser Kind = "foreign-browser"
 )
 
@@ -48,9 +50,11 @@ var Loopback = map[Kind]bool{Mode: true, Pairing: true}
 
 var Lifecycle = map[Kind]bool{Connecting: true, Reconnecting: true}
 
+var Agents = map[Kind]bool{Inventory: true}
+
 func Names() []string {
 	var out []string
-	for _, set := range []map[Kind]bool{Public, Loopback, Lifecycle} {
+	for _, set := range []map[Kind]bool{Public, Loopback, Lifecycle, Agents} {
 		for k := range set {
 			out = append(out, string(k))
 		}

@@ -16,6 +16,9 @@ export const agent = {
   reportsBusy: true,
   scoops: new Set(),
   lastBusy: false,
+  inventory: null,
+  inventoryReset: null,
+  inventories: new Set(),
 };
 
 function busyNow() {
@@ -199,6 +202,21 @@ function onAbort(stream) {
   stream.end();
 }
 
+function onInventory(stream) {
+  if (agent.inventoryReset) return stream.reset(agent.inventoryReset);
+  if (!agent.inventory) return stream.reset('EINVAL: unknown op');
+  stream.accept(agent.inventory);
+  if (!stream.open.watch) return stream.end();
+  const w = sink(stream, false);
+  agent.inventories.add(w);
+  stream.done.then(() => agent.inventories.delete(w), () => agent.inventories.delete(w));
+  (async () => {
+    try {
+      while (await stream.read());
+    } catch {}
+  })();
+}
+
 export function onAgent(stream) {
   agent.opens.push({ ...stream.open, text: undefined, textLength: stream.open?.text?.length });
   if (!agent.allow) return stream.reset('EACCES');
@@ -209,6 +227,8 @@ export function onAgent(stream) {
       return onWatch(stream);
     case 'abort':
       return onAbort(stream);
+    case 'inventory':
+      return onInventory(stream);
     default:
       return stream.reset('EINVAL: unknown op');
   }
@@ -245,6 +265,18 @@ export const agentTest = {
     if (release) release('released');
     return Boolean(release);
   },
+  inventory(snapshot, reset = null) {
+    agent.inventoryReset = reset;
+    agent.inventory = snapshot;
+    if (snapshot) for (const w of agent.inventories) w.send({ t: 'inventory', ...snapshot });
+    return agent.inventories.size;
+  },
+  resetInventories(reason = 'ECONNRESET') {
+    const n = agent.inventories.size;
+    for (const w of agent.inventories) w.stream.reset(reason);
+    agent.inventories.clear();
+    return n;
+  },
   resetWatches(reason = 'ECONNRESET') {
     const n = agent.watches.size;
     for (const w of agent.watches) w.stream.reset(reason);
@@ -262,6 +294,7 @@ export const agentTest = {
       held: Boolean(agent.hold),
       scoops: agent.scoops.size,
       log: agent.log.length,
+      inventories: agent.inventories.size,
     };
   },
 };

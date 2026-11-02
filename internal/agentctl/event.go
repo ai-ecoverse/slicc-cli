@@ -38,7 +38,7 @@ const (
 	EventBusy       = "busy"
 )
 
-var Events = []string{EventUser, EventText, EventThinking, EventTool, EventToolResult, EventRun, EventNotice, EventError, EventEnd, EventDelivered, EventBusy}
+var Events = []string{EventUser, EventText, EventThinking, EventTool, EventToolResult, EventRun, EventNotice, EventError, EventEnd, EventDelivered, EventBusy, EventInventory}
 
 const (
 	EndStop    = "stop"
