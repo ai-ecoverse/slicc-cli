@@ -22,7 +22,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 )
 
-const sixBusy = "six's Chrome is using this profile; close it, or use --browser/--profile to pick another"
+const sixBusy = "six's Chrome is using this profile, and slicc can't reach its debugging port; close it, or use --browser/--profile to pick another"
 
 func sixRootIn(h fakeHome) string {
 	switch runtime.GOOS {
@@ -633,6 +633,46 @@ func TestSixBusyOrMissingProfileIsRefused(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestSixWithAStaleActivePortAttachesThroughItsProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the process table here is ps output")
+	}
+	h := newFakeHome(t)
+	six := newFakeCDP(t, "Chrome/156.0.8078.48", sevenPages())
+	other := newFakeCDP(t, "Chrome/156.0.8078.48", nil)
+	dir := filepath.Join(sixRootIn(h), "browser-coding-agent-chrome")
+	makeSixTree(t, dir, staleActivePort(t))
+	holdSixLock(t, dir, os.Getpid())
+	before := snapshotTree(t, dir)
+	ps := func(lines ...string) func(context.Context) ([]byte, error) {
+		return func(context.Context) ([]byte, error) { return []byte(strings.Join(lines, "\n") + "\n"), nil }
+	}
+	chrome := "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+	owner := fmt.Sprintf("4242 %s --remote-debugging-port=%d --user-data-dir=%s --no-first-run", chrome, six.port, dir)
+	helper := fmt.Sprintf("4243 %s --type=renderer --user-data-dir=%s --remote-debugging-port=%d", chrome, dir, six.port)
+	stranger := fmt.Sprintf("4244 %s --remote-debugging-port=%d --user-data-dir=%s", chrome, other.port, filepath.Join(h.root, "elsewhere"))
+
+	ctx := context.Background()
+	o := h.options()
+	o.Processes = ps(stranger, helper, owner)
+	ep, err := browser.ProbeSix(ctx, o, dir)
+	if err != nil || ep == nil || ep.CDP != six.URL || !ep.Six || !ep.SevenOpen {
+		t.Fatalf("six's Chrome answers on its command line's port: %+v %v", ep, err)
+	}
+
+	o.Processes = ps(stranger)
+	if ep, err := browser.ProbeSix(ctx, o, dir); ep != nil || !errors.Is(err, browser.ErrSixBusy) {
+		t.Fatalf("another profile's port isn't six's: %+v %v", ep, err)
+	}
+
+	six.Close()
+	o.Processes = ps(owner)
+	if ep, err := browser.ProbeSix(ctx, o, dir); ep != nil || !errors.Is(err, browser.ErrSixBusy) {
+		t.Fatalf("nothing answers: %+v %v", ep, err)
+	}
+	requireSameTree(t, "after the probes", before, snapshotTree(t, dir))
 }
 
 func TestBrowsersListsSixsChromeLastAndOnlyProfileSixUsesIt(t *testing.T) {
