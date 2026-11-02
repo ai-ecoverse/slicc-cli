@@ -2,6 +2,8 @@ package screen
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -56,41 +58,46 @@ func (s State) MarshalJSON() ([]byte, error) {
 type Audit func(event, reason, scope, session string) error
 
 type Broker struct {
-	mu             sync.Mutex
-	writeMu        sync.Mutex
-	generation     atomic.Uint64
-	enabled        atomic.Bool
-	authorized     func() bool
-	grantSeq       Counter
-	l              *link.Link
-	linkID         string
-	lastSession    *string
-	binding        *Binding
-	scope          string
-	limits         Limits
-	frameSeq       Counter
-	stateSeq       Counter
-	state          State
-	wake           chan struct{}
-	active         *link.Stream
-	streamReady    bool
-	openBudget     tokenBudget
-	stopPending    bool
-	pendingGrant   bool
-	pendingStopped bool
-	resourceLogged bool
-	revoke         func(string)
-	nativeRevoke   func(Revocation)
-	waitStop       func(context.Context) error
-	audit          Audit
-	closed         atomic.Bool
-	frameAt        time.Time
-	lastImage      time.Time
-	byteAt         time.Time
-	tokens         float64
-	fps            int
-	maxWidth       int
-	maxHeight      int
+	mu                   sync.Mutex
+	writeMu              sync.Mutex
+	generation           atomic.Uint64
+	enabled              atomic.Bool
+	authorized           func() bool
+	grantSeq             Counter
+	l                    *link.Link
+	linkID               string
+	lastSession          *string
+	binding              *Binding
+	scope                string
+	limits               Limits
+	frameSeq             Counter
+	stateSeq             Counter
+	state                State
+	wake                 chan struct{}
+	active               *link.Stream
+	streamReady          bool
+	openBudget           tokenBudget
+	stopPending          bool
+	pendingGrant         bool
+	pendingStopped       bool
+	resourceLogged       bool
+	revoke               func(string)
+	nativeRevoke         func(Revocation) <-chan struct{}
+	nativeStop           func(Revocation) <-chan struct{}
+	waitStop             func(context.Context, <-chan struct{}) error
+	onLinked             func(*link.Link)
+	registrationRequired bool
+	registeredID         string
+	registrationReady    chan struct{}
+	audit                Audit
+	closed               atomic.Bool
+	frameAt              time.Time
+	lastImage            time.Time
+	byteAt               time.Time
+	tokens               float64
+	fps                  int
+	maxWidth             int
+	maxHeight            int
 }
 
 func NewBroker(audit Audit, revoke func(string)) *Broker {
@@ -104,8 +111,12 @@ func (b *Broker) Register(n *node.Node) {
 		switch e.Kind {
 		case node.EventConnecting:
 			b.Attach(e.Link)
+		case node.EventLinked:
+			if b.onLinked != nil {
+				go b.onLinked(e.Link)
+			}
 		case node.EventLinkDown:
-			b.Revoke("link-lost")
+			b.revokeLink(e.Link, "link-lost")
 		}
 	})
 }
@@ -116,6 +127,15 @@ func (b *Broker) Attach(l *link.Link) {
 		b.mu.Unlock()
 		return
 	}
+	if b.registrationReady != nil {
+		select {
+		case <-b.registrationReady:
+		default:
+			close(b.registrationReady)
+		}
+	}
+	b.registrationReady = make(chan struct{})
+	b.registeredID = ""
 	b.l = l
 	b.linkID = ID(16)
 	b.lastSession = nil
@@ -123,7 +143,7 @@ func (b *Broker) Attach(l *link.Link) {
 	b.stateSeq = "0"
 	b.grantSeq = "0"
 	b.mu.Unlock()
-	l.OnScreenLimit(func() { b.Revoke("resource-limit") })
+	l.OnScreenLimit(func() { b.revokeLink(l, "resource-limit") })
 	go func() {
 		select {
 		case <-l.Ready():
@@ -148,28 +168,9 @@ func (b *Broker) Grant(binding Binding, scope string, limits Limits) error {
 		return ErrProtocol
 	}
 	b.mu.Lock()
-	if b.closed.Load() || b.l == nil || b.binding != nil || b.pendingGrant || binding.Link != b.linkID {
+	if e := b.admitGrantLocked(binding); e != nil {
 		b.mu.Unlock()
-		return ErrStale
-	}
-	if !b.l.ScreenAllowed() {
-		b.mu.Unlock()
-		return ErrAccess
-	}
-	peer, ok := b.l.PeerHello()
-	if !ok || !peer.HasCap(PageCap) {
-		b.mu.Unlock()
-		return ErrAccess
-	}
-	next, _ := binding.GrantEpoch.Value()
-	old, _ := b.grantSeq.Value()
-	if next <= old || (b.lastSession != nil && *b.lastSession == binding.Session) {
-		b.mu.Unlock()
-		return ErrStale
-	}
-	if b.audit == nil {
-		b.mu.Unlock()
-		return ErrAudit
+		return e
 	}
 	b.pendingGrant = true
 	b.pendingStopped = false
@@ -182,7 +183,7 @@ func (b *Broker) Grant(binding Binding, scope string, limits Limits) error {
 	if auditErr != nil {
 		return ErrAudit
 	}
-	if b.closed.Load() || b.l != link || b.binding != nil || b.generation.Load() != generation || (b.authorized != nil && !b.authorized()) {
+	if b.closed.Load() || b.l != link || b.binding != nil || b.stopPending || link.Err() != nil || b.generation.Load() != generation || (b.authorized != nil && !b.authorized()) {
 		return ErrAccess
 	}
 	b.enabled.Store(true)
@@ -207,6 +208,31 @@ func (b *Broker) Grant(binding Binding, scope string, limits Limits) error {
 			b.Revoke("audit")
 		}
 	}()
+	return nil
+}
+
+func (b *Broker) admitGrantLocked(binding Binding) error {
+	if b.closed.Load() || b.l == nil || b.binding != nil || b.pendingGrant || b.stopPending || binding.Link != b.linkID || b.l.Err() != nil {
+		return ErrStale
+	}
+	if b.registrationRequired && b.registeredID != b.linkID {
+		return ErrAccess
+	}
+	if !b.l.ScreenAllowed() {
+		return ErrAccess
+	}
+	peer, ok := b.l.PeerHello()
+	if !ok || !peer.HasCap(PageCap) {
+		return ErrAccess
+	}
+	next, _ := binding.GrantEpoch.Value()
+	old, _ := b.grantSeq.Value()
+	if next <= old || (b.lastSession != nil && *b.lastSession == binding.Session) {
+		return ErrStale
+	}
+	if b.audit == nil {
+		return ErrAudit
+	}
 	return nil
 }
 
@@ -241,9 +267,11 @@ func (b *Broker) publishLocked(reason string) bool {
 func (b *Broker) Revoke(reason string) { b.revokeExpected(reason, nil, false) }
 
 type stopExpectation struct {
-	link    *link.Link
-	id      string
-	session *string
+	link     *link.Link
+	id       string
+	session  *string
+	ack      <-chan struct{}
+	linkOnly bool
 }
 type Revocation struct {
 	Reason  string
@@ -283,9 +311,7 @@ func (b *Broker) revokeExpected(reason string, expected *stopExpectation, forceN
 	if b.l != nil {
 		b.publishLocked(reason)
 	}
-	if (had || forceNative) && b.nativeRevoke != nil {
-		b.nativeRevoke(Revocation{reason, b.linkID, b.lastSession})
-	}
+	b.notifyRevokeLocked(reason, expected, had, pending, forceNative)
 	f := b.revoke
 	audit := b.audit
 	b.mu.Unlock()
@@ -308,9 +334,25 @@ func (b *Broker) revokeExpected(reason string, expected *stopExpectation, forceN
 	return true
 }
 
+func (b *Broker) notifyRevokeLocked(reason string, expected *stopExpectation, had, pending, forceNative bool) {
+	r := Revocation{reason, b.linkID, b.lastSession}
+	if expected != nil && !expected.linkOnly && b.nativeStop != nil {
+		expected.ack = b.nativeStop(r)
+	} else if (had || pending || forceNative || (b.registrationRequired && b.l != nil)) && b.nativeRevoke != nil {
+		ack := b.nativeRevoke(r)
+		if expected != nil {
+			expected.ack = ack
+		}
+	}
+
+}
+
 func (b *Broker) matchesStopLocked(expected *stopExpectation) bool {
 	if b.l != expected.link || b.linkID != expected.id {
 		return false
+	}
+	if expected.linkOnly {
+		return true
 	}
 	if expected.session == nil || b.lastSession == nil {
 		return expected.session == nil && b.lastSession == nil
@@ -464,13 +506,14 @@ func (b *Broker) handleStop(s *link.Stream) {
 	b.stopPending = true
 	defer func() { b.mu.Lock(); b.stopPending = false; b.mu.Unlock() }()
 	b.mu.Unlock()
-	if !b.revokeExpected("stopped", &stopExpectation{s.Link(), o.Link, o.Session}, false) {
+	expected := &stopExpectation{link: s.Link(), id: o.Link, session: o.Session}
+	if !b.revokeExpected("stopped", expected, true) {
 		_ = s.Reset("ESTALE")
 		return
 	}
 	if b.waitStop != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-		e := b.waitStop(ctx)
+		e := b.waitStop(ctx, expected.ack)
 		cancel()
 		if e != nil {
 			_ = s.Reset("ECONNRESET")
@@ -580,4 +623,83 @@ func (b *Broker) checkImageLease() {
 
 func validGrantShape(b Binding, scope string, l Limits) bool {
 	return b.Valid() && l.Valid() && (scope == "window" || scope == "display")
+}
+
+type linkRegistration struct {
+	link        *link.Link
+	id          string
+	fingerprint string
+}
+
+func (b *Broker) registrationSnapshot(l *link.Link) (*linkRegistration, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed.Load() || b.l != l || l == nil || l.Err() != nil {
+		return nil, ErrStale
+	}
+	cert := l.PeerConnection().SCTP().Transport().GetRemoteCertificate()
+	if len(cert) == 0 {
+		return nil, ErrAccess
+	}
+	sum := sha256.Sum256(cert)
+	return &linkRegistration{l, b.linkID, hex.EncodeToString(sum[:])}, nil
+}
+func (b *Broker) registrationCurrent(r *linkRegistration) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.registrationCurrentLocked(r)
+}
+func (b *Broker) registrationCurrentLocked(r *linkRegistration) bool {
+	return r != nil && !b.closed.Load() && b.l == r.link && b.linkID == r.id && r.link.Err() == nil
+}
+func (b *Broker) completeRegistration(r *linkRegistration) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.registrationCurrentLocked(r) {
+		return false
+	}
+	b.registeredID = r.id
+	select {
+	case <-b.registrationReady:
+	default:
+		close(b.registrationReady)
+	}
+	return true
+}
+func (b *Broker) awaitRegistration(ctx context.Context, id string, stop <-chan struct{}) error {
+	b.mu.Lock()
+	if !b.registrationRequired {
+		b.mu.Unlock()
+		return nil
+	}
+	if b.l == nil || b.linkID != id {
+		b.mu.Unlock()
+		return ErrStale
+	}
+	ready := b.registrationReady
+	b.mu.Unlock()
+	select {
+	case <-ready:
+	case <-stop:
+		return ErrAccess
+	case <-ctx.Done():
+		return ErrAccess
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed.Load() || b.linkID != id || b.registeredID != id {
+		return ErrStale
+	}
+	return nil
+}
+
+func (b *Broker) revokeLink(l *link.Link, reason string) {
+	b.mu.Lock()
+	if b.l != l || l == nil {
+		b.mu.Unlock()
+		return
+	}
+	id := b.linkID
+	b.mu.Unlock()
+	b.revokeExpected(reason, &stopExpectation{link: l, id: id, linkOnly: true}, true)
 }

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,7 +74,7 @@ func screenLinksWith(t *testing.T, b *nativeScreen.Broker, register func(*node.N
 		t.Fatal(e)
 	}
 	<-gathered
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	send := func(_ context.Context, m signal.Message) error {
 		if m.T == signal.TypeAnswer {
@@ -84,12 +85,24 @@ func screenLinksWith(t *testing.T, b *nativeScreen.Broker, register func(*node.N
 		}
 		return nil
 	}
-	native, e := link.Answer(ctx, api, signal.Message{T: signal.TypeOffer, Nonce: "screen-fixture", SDP: pc.LocalDescription().SDP}, send, n.Options())
-	if e != nil {
-		t.Fatal(e)
+	links := make(chan *link.Link, 1)
+	n.Subscribe(func(event node.Event) {
+		if event.Kind == node.EventConnecting {
+			links <- event.Link
+		}
+	})
+	conn := &screenNodeSignal{messages: make(chan signal.Message, 1), send: send}
+	done := make(chan struct{})
+	go func() { defer close(done); _ = n.Serve(ctx, conn) }()
+	t.Cleanup(func() { cancel(); <-done })
+	conn.messages <- signal.Message{T: signal.TypeOffer, Nonce: "screen-fixture", SDP: pc.LocalDescription().SDP}
+	var native *link.Link
+	select {
+	case native = <-links:
+	case <-ctx.Done():
+		t.Fatal("no node link")
 	}
 	t.Cleanup(func() { b.Close(); _ = native.Close() })
-	b.Attach(native)
 	select {
 	case <-native.Ready():
 	case <-ctx.Done():
@@ -97,6 +110,23 @@ func screenLinksWith(t *testing.T, b *nativeScreen.Broker, register func(*node.N
 	}
 	return page, states
 }
+
+type screenNodeSignal struct {
+	messages chan signal.Message
+	send     func(context.Context, signal.Message) error
+}
+
+func (c *screenNodeSignal) Recv(ctx context.Context) (signal.Message, error) {
+	select {
+	case m := <-c.messages:
+		return m, nil
+	case <-ctx.Done():
+		return signal.Message{}, ctx.Err()
+	}
+}
+func (c *screenNodeSignal) Send(ctx context.Context, m signal.Message) error { return c.send(ctx, m) }
+func (c *screenNodeSignal) Close() error                                     { return nil }
+
 func screenState(t *testing.T, ch <-chan nativeScreen.State, active bool) nativeScreen.State {
 	t.Helper()
 	timer := time.NewTimer(3 * time.Second)
@@ -350,6 +380,8 @@ type screenApp struct {
 	frames     *net.UnixConn
 	launch     string
 	connection string
+	revokes    chan map[string]json.RawMessage
+	links      chan map[string]json.RawMessage
 	messages   chan map[string]json.RawMessage
 	quit       chan struct{}
 }
@@ -371,7 +403,10 @@ func (a *screenApp) reply(fields map[string]any) bool {
 func newScreenApp(t *testing.T) (*nativeScreen.Client, *screenApp) {
 	return newScreenAppAcknowledging(t, true)
 }
-func newScreenAppAcknowledging(t *testing.T, acknowledge bool) (*nativeScreen.Client, *screenApp) {
+func newScreenAppAcknowledging(t *testing.T, acknowledge bool, audits ...nativeScreen.Audit) (*nativeScreen.Client, *screenApp) {
+	return newScreenAppVerified(t, acknowledge, func(*net.UnixConn, nativeScreen.Peer) error { return nil }, audits...)
+}
+func newScreenAppVerified(t *testing.T, acknowledge bool, verify nativeScreen.Verifier, audits ...nativeScreen.Audit) (*nativeScreen.Client, *screenApp) {
 	t.Helper()
 	dir, e := os.MkdirTemp("", "screen-ipc-")
 	if e != nil {
@@ -379,7 +414,7 @@ func newScreenAppAcknowledging(t *testing.T, acknowledge bool) (*nativeScreen.Cl
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	bootstrap := nativeScreen.Bootstrap{V: 1, Launch: nativeScreen.ID(32), Challenge: nativeScreen.ID(32), SafetyPath: filepath.Join(dir, "s"), FramesPath: filepath.Join(dir, "f"), ParentAuditToken: (nativeScreen.Peer{}).Encoded()}
-	a := &screenApp{launch: bootstrap.Launch, connection: nativeScreen.ID(32), messages: make(chan map[string]json.RawMessage, 16), quit: make(chan struct{})}
+	a := &screenApp{launch: bootstrap.Launch, connection: nativeScreen.ID(32), messages: make(chan map[string]json.RawMessage, 16), links: make(chan map[string]json.RawMessage, 16), revokes: make(chan map[string]json.RawMessage, 16), quit: make(chan struct{})}
 	sl, e := net.ListenUnix("unix", &net.UnixAddr{Name: bootstrap.SafetyPath, Net: "unix"})
 	if e != nil {
 		t.Fatal(e)
@@ -462,6 +497,12 @@ func newScreenAppAcknowledging(t *testing.T, acknowledge bool) (*nativeScreen.Cl
 			var kind string
 			_ = json.Unmarshal(message["type"], &kind)
 			switch kind {
+			case "link":
+				select {
+				case a.links <- message:
+				default:
+					return
+				}
 			case "heartbeat":
 				seq++
 				var echo string
@@ -470,6 +511,11 @@ func newScreenAppAcknowledging(t *testing.T, acknowledge bool) (*nativeScreen.Cl
 					return
 				}
 			case "revoke":
+				select {
+				case a.revokes <- message:
+				default:
+					return
+				}
 				if !acknowledge {
 					select {
 					case a.messages <- message:
@@ -494,7 +540,11 @@ func newScreenAppAcknowledging(t *testing.T, acknowledge bool) (*nativeScreen.Cl
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	c, e := nativeScreen.Connect(ctx, bootstrap, func(*net.UnixConn, nativeScreen.Peer) error { return nil }, func(string, string, string, string) error { return nil })
+	audit := nativeScreen.Audit(func(string, string, string, string) error { return nil })
+	if len(audits) > 0 {
+		audit = audits[0]
+	}
+	c, e := nativeScreen.Connect(ctx, bootstrap, verify, audit)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -969,5 +1019,270 @@ func TestScreenMissingNativeRevokeAckExpiresDespiteHeartbeats(t *testing.T) {
 	fresh.GrantEpoch = "2"
 	if !errors.Is(b.Grant(fresh, "window", nativeScreen.DefaultLimits()), nativeScreen.ErrAccess) {
 		t.Fatal("expired native association admitted a later grant")
+	}
+}
+
+func TestSecondReadDisabledStopRequiresNativeAck(t *testing.T) {
+	c, a := newScreenAppAcknowledging(t, false)
+	b := c.Broker()
+	page, states := screenLinks(t, b)
+	initial := screenState(t, states, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	s, e := page.Open(ctx, nativeScreen.Stop{Kind: "screen-stop", V: 1, Link: initial.Link, Session: nil}, link.OpenOptions{Shared: true})
+	if e == nil {
+		_ = s.CloseWrite()
+		select {
+		case m := <-a.messages:
+			t.Logf("native message: %s", m["type"])
+		default:
+			t.Log("no native revoke queued")
+		}
+		t.Fatal("Stop reported success without native invalidation confirmation")
+	}
+}
+
+func TestScreenDisabledStopWaitsForItsNativeInvalidation(t *testing.T) {
+	c, a := newScreenAppAcknowledging(t, false)
+	page, states := screenLinks(t, c.Broker())
+	initial := screenState(t, states, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, e := page.Open(ctx, nativeScreen.Stop{Kind: "screen-stop", V: 1, Link: initial.Link}, link.OpenOptions{Shared: true})
+		result <- e
+	}()
+	select {
+	case request := <-a.revokes:
+		var id string
+		if json.Unmarshal(request["request"], &id) != nil || id == "" {
+			t.Fatal("uncorrelated native stop")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no native revoke queued")
+	}
+	select {
+	case e := <-result:
+		if e == nil {
+			t.Fatal("disabled Stop succeeded without native acknowledgement")
+		}
+	case <-ctx.Done():
+		t.Fatal("unconfirmed Stop had no deadline")
+	}
+	if c.Authenticated() {
+		t.Fatal("unconfirmed disabled Stop retained native association")
+	}
+}
+func TestScreenPendingGrantStopWaitsForNativeInvalidation(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	c, a := newScreenAppAcknowledging(t, true, func(event, _, _, _ string) error {
+		if event == "grant-intent" {
+			close(entered)
+			<-release
+		}
+		return nil
+	})
+	b := c.Broker()
+	page, states := screenLinks(t, b)
+	initial := screenState(t, states, false)
+	binding := screenBinding(b)
+	a.send(t, map[string]any{"type": "grant", "request": nativeScreen.ID(16), "binding": binding, "scope": "window", "limits": nativeScreen.DefaultLimits()})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("no pending grant intent")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	type opened struct {
+		stream *link.Stream
+		err    error
+	}
+	result := make(chan opened, 1)
+	go func() {
+		s, e := page.Open(ctx, nativeScreen.Stop{Kind: "screen-stop", V: 1, Link: initial.Link}, link.OpenOptions{Shared: true})
+		result <- opened{s, e}
+	}()
+	select {
+	case <-a.revokes:
+	case <-time.After(time.Second):
+		t.Fatal("pending native authority was not invalidated")
+	}
+	select {
+	case r := <-result:
+		if r.err == nil {
+			t.Fatal("Stop accepted before pending-grant reader could process native acknowledgement")
+		}
+		t.Fatal(r.err)
+	default:
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case r := <-result:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		_ = r.stream.CloseWrite()
+	case <-ctx.Done():
+		t.Fatal("confirmed pending Stop did not finish")
+	}
+	if len(b.Snapshot().Caps) != 0 {
+		t.Fatal("pending grant resurrected stopped authority")
+	}
+}
+func TestScreenAuditStartupPrunesWithoutAnEvent(t *testing.T) {
+	root := t.TempDir()
+	broker, app := filepath.Join(root, "broker"), filepath.Join(root, "app")
+	for _, dir := range []string{broker, app} {
+		if e := os.Mkdir(dir, 0700); e != nil {
+			t.Fatal(e)
+		}
+	}
+	paths := []string{filepath.Join(broker, "broker-20000101-old.jsonl"), filepath.Join(app, "app-20000101-old.jsonl")}
+	for _, p := range paths {
+		if e := os.WriteFile(p, []byte("PRIVATE_EXPIRED_METADATA_SENTINEL"), 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e := nativeScreen.NewJournal(broker, app); e != nil {
+		t.Fatal(e)
+	}
+	for _, p := range paths {
+		if _, e := os.Stat(p); !errors.Is(e, os.ErrNotExist) {
+			t.Fatal("expired metadata survived startup without Record", e)
+		}
+	}
+}
+func TestScreenAuditMaintenancePrunesWhileIdle(t *testing.T) {
+	root := t.TempDir()
+	broker, app := filepath.Join(root, "broker"), filepath.Join(root, "app")
+	journal, e := nativeScreen.NewJournal(broker, app)
+	if e != nil {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	failed := make(chan struct{}, 1)
+	journal.Maintain(ctx, 10*time.Millisecond, func() { failed <- struct{}{} })
+	old := filepath.Join(broker, "broker-20000101-idle.jsonl")
+	if e = os.WriteFile(old, nil, 0600); e != nil {
+		t.Fatal(e)
+	}
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-failed:
+			t.Fatal("idle cleanup failed")
+		case <-deadline.C:
+			t.Fatal("idle journal retained expired metadata")
+		case <-ticker.C:
+			if _, e = os.Stat(old); errors.Is(e, os.ErrNotExist) {
+				return
+			}
+		}
+	}
+}
+
+func TestScreenReplacementNeverRegistersMixedRecipient(t *testing.T) {
+	var block atomic.Bool
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	c, a := newScreenAppVerified(t, true, func(*net.UnixConn, nativeScreen.Peer) error {
+		if block.CompareAndSwap(true, false) {
+			close(entered)
+			<-release
+		}
+		return nil
+	})
+	block.Store(true)
+	b := c.Broker()
+	_, oldStates := screenLinks(t, b)
+	old := screenState(t, oldStates, false)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("registration verifier boundary not reached")
+	}
+	page, currentStates := screenLinks(t, b)
+	current := screenState(t, currentStates, false)
+	if current.Link == old.Link {
+		t.Fatal("replacement reused link identity")
+	}
+	fresh := screenBinding(b)
+	if !errors.Is(b.Grant(fresh, "window", nativeScreen.DefaultLimits()), nativeScreen.ErrAccess) {
+		t.Fatal("grant admitted before registration completed")
+	}
+	once.Do(func() { close(release) })
+	params, e := page.PeerConnection().SCTP().Transport().GetLocalParameters()
+	if e != nil {
+		t.Fatal(e)
+	}
+	expected := ""
+	for _, fp := range params.Fingerprints {
+		if fp.Algorithm == "sha-256" {
+			expected = strings.ReplaceAll(strings.ToLower(fp.Value), ":", "")
+		}
+	}
+	if expected == "" {
+		t.Fatal("missing test peer fingerprint")
+	}
+	select {
+	case message := <-a.links:
+		var id string
+		var recipient struct {
+			Fingerprint string `json:"fingerprint"`
+		}
+		if json.Unmarshal(message["link"], &id) != nil || json.Unmarshal(message["recipient"], &recipient) != nil {
+			t.Fatal("invalid registration")
+		}
+		if id != current.Link || recipient.Fingerprint != expected {
+			t.Fatal("stale or mixed native recipient registration", id, recipient.Fingerprint)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement registration not delivered")
+	}
+}
+
+func TestScreenSourceChangesRequireFreshSessionAndSequence(t *testing.T) {
+	b := nativeScreen.NewBroker(func(string, string, string, string) error { return nil }, nil)
+	_, states := screenLinks(t, b)
+	screenState(t, states, false)
+	binding := screenBinding(b)
+	if e := b.Grant(binding, "window", nativeScreen.DefaultLimits()); e != nil {
+		t.Fatal(e)
+	}
+	screenState(t, states, true)
+	body := screenJPEG(t)
+	frame := nativeScreen.Frame{Type: "frame", V: 1, Binding: binding, Seq: "19", Captured: "1", Width: 2, Height: 2, Codec: "jpeg"}
+	if e := b.Frame(frame, body); e != nil {
+		t.Fatal(e)
+	}
+	b.Revoke("source-changed")
+	screenState(t, states, false)
+	binding.GrantEpoch = "2"
+	binding.SourceEpoch = "2"
+	binding.ProtectionEpoch = "2"
+	if !errors.Is(b.Grant(binding, "window", nativeScreen.DefaultLimits()), nativeScreen.ErrStale) {
+		t.Fatal("source revision reused stopped session")
+	}
+	binding.Session = nativeScreen.ID(16)
+	binding.Source = nativeScreen.ID(16)
+	if e := b.Grant(binding, "window", nativeScreen.DefaultLimits()); e != nil {
+		t.Fatal(e)
+	}
+	frame.Binding = binding
+	frame.Seq = "1"
+	if e := b.Frame(frame, body); e != nil {
+		t.Fatal("fresh session did not restart frame sequence", e)
+	}
+	if !errors.Is(b.Frame(frame, body), nativeScreen.ErrStale) {
+		t.Fatal("fresh session accepted duplicate frame sequence")
 	}
 }

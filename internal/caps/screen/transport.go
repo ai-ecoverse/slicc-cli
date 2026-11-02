@@ -2,9 +2,7 @@ package screen
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -95,21 +93,22 @@ type evidence struct {
 	Hosts      []hostEvidence `json:"hosts"`
 }
 type safety struct {
-	Type       string     `json:"type"`
-	V          int        `json:"v"`
-	Launch     string     `json:"launch"`
-	Connection string     `json:"connection"`
-	Seq        Counter    `json:"seq,omitempty"`
-	Echo       Counter    `json:"echo,omitempty"`
-	Link       *string    `json:"link,omitempty"`
-	Session    *string    `json:"session,omitempty"`
-	Recipient  *recipient `json:"recipient,omitempty"`
-	Evidence   *evidence  `json:"browserEvidence,omitempty"`
-	Request    string     `json:"request,omitempty"`
-	Binding    *Binding   `json:"binding,omitempty"`
-	Scope      string     `json:"scope,omitempty"`
-	Limits     *Limits    `json:"limits,omitempty"`
-	Reason     string     `json:"reason,omitempty"`
+	registration *linkRegistration
+	Type         string     `json:"type"`
+	V            int        `json:"v"`
+	Launch       string     `json:"launch"`
+	Connection   string     `json:"connection"`
+	Seq          Counter    `json:"seq,omitempty"`
+	Echo         Counter    `json:"echo,omitempty"`
+	Link         *string    `json:"link,omitempty"`
+	Session      *string    `json:"session,omitempty"`
+	Recipient    *recipient `json:"recipient,omitempty"`
+	Evidence     *evidence  `json:"browserEvidence,omitempty"`
+	Request      string     `json:"request,omitempty"`
+	Binding      *Binding   `json:"binding,omitempty"`
+	Scope        string     `json:"scope,omitempty"`
+	Limits       *Limits    `json:"limits,omitempty"`
+	Reason       string     `json:"reason,omitempty"`
 }
 
 func (m safety) MarshalJSON() ([]byte, error) {
@@ -137,6 +136,7 @@ func (m safety) MarshalJSON() ([]byte, error) {
 }
 
 type Client struct {
+	writeRecord   func(net.Conn, any, []byte, time.Duration) error
 	verifyGate    chan struct{}
 	authUntil     time.Time
 	broker        *Broker
@@ -155,6 +155,7 @@ type Client struct {
 	echoed        Counter
 	health        time.Time
 	echoAt        time.Time
+	stopAck       <-chan struct{}
 	revokeUntil   time.Time
 	revokeID      string
 	revokeAck     chan struct{}
@@ -205,11 +206,7 @@ func start(ctx context.Context, n *node.Node, audit Audit, open func() (*os.File
 		return nil, e
 	}
 	c.broker.Register(n)
-	n.Subscribe(func(e node.Event) {
-		if e.Kind == node.EventLinked {
-			go c.registerLink(e.Link)
-		}
-	})
+
 	return c, nil
 }
 func Connect(ctx context.Context, b Bootstrap, verify Verifier, audit Audit) (*Client, error) {
@@ -224,7 +221,10 @@ func connect(ctx context.Context, b Bootstrap, verify Verifier, audit Audit, dea
 	c := &Client{verifyGate: make(chan struct{}, 1), authUntil: deadline, bootstrap: b, peer: peer, verify: verify, write: make(chan safety, 16), stop: make(chan struct{}), sent: "0", received: "0", echoed: "0", ready: make(chan struct{})}
 	c.broker = NewBroker(audit, nil)
 	c.broker.nativeRevoke = c.revokeBound
-	c.broker.waitStop = c.waitStop
+	c.broker.nativeStop = c.stopBound
+	c.broker.waitStop = c.waitRevocation
+	c.broker.onLinked = c.registerLink
+	c.broker.registrationRequired = true
 	c.broker.authorized = c.authorized
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -349,11 +349,28 @@ func (c *Client) writer(ctx context.Context) {
 	}
 }
 func (c *Client) send(m safety) error {
-	if e := c.verifyPeer(c.safety); e != nil {
+	if m.Type == "link" && !c.broker.registrationCurrent(m.registration) {
+		return nil
+	}
+	if c.verifyPeer(c.safety) != nil {
 		return ErrAccess
 	}
-	return WriteRecord(c.safety, m, nil, time.Second)
+	if m.Type == "link" && !c.broker.registrationCurrent(m.registration) {
+		return nil
+	}
+	write := c.writeRecord
+	if write == nil {
+		write = WriteRecord
+	}
+	if e := write(c.safety, m, nil, time.Second); e != nil {
+		return e
+	}
+	if m.Type == "link" && !c.broker.completeRegistration(m.registration) {
+		return ErrStale
+	}
+	return nil
 }
+
 func (c *Client) reader() {
 	var budget tokenBudget
 	for {
@@ -427,26 +444,7 @@ func (c *Client) handle(m safety) bool {
 	case "heartbeat":
 		return c.heartbeat(m)
 	case "grant":
-		select {
-		case <-c.ready:
-		default:
-			return false
-		}
-		if !validID(m.Request, 16) || m.Binding == nil || m.Limits == nil {
-			return false
-		}
-		if e := c.broker.Grant(*m.Binding, m.Scope, *m.Limits); e != nil {
-			reason := "peer-untrusted"
-			if errors.Is(e, ErrAudit) {
-				reason = "audit"
-			}
-			c.revoke(reason)
-			return true
-		}
-		reply := c.base("granted")
-		reply.Request = m.Request
-		reply.Binding = m.Binding
-		return c.queue(reply)
+		return c.handleGrant(m)
 	case "revoke":
 		if !validID(m.Request, 16) || (m.Reason == "active" || !validReason(m.Reason)) || !c.current(m.Link, m.Session) {
 			return false
@@ -477,6 +475,35 @@ func (c *Client) handle(m safety) bool {
 	}
 	return false
 }
+func (c *Client) handleGrant(m safety) bool {
+	select {
+	case <-c.ready:
+	default:
+		return false
+	}
+	if !validID(m.Request, 16) || m.Binding == nil || m.Limits == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	admission := c.broker.awaitRegistration(ctx, m.Binding.Link, c.stop)
+	cancel()
+	if admission == nil {
+		admission = c.broker.Grant(*m.Binding, m.Scope, *m.Limits)
+	}
+	if e := admission; e != nil {
+		reason := "peer-untrusted"
+		if errors.Is(e, ErrAudit) {
+			reason = "audit"
+		}
+		c.revoke(reason)
+		return true
+	}
+	reply := c.base("granted")
+	reply.Request = m.Request
+	reply.Binding = m.Binding
+	return c.queue(reply)
+}
+
 func validReason(s string) bool {
 	for _, r := range []string{"active", "awaiting-consent", "paused", "stopped", "source-changed", "protection", "permission", "indicator", "shortcut", "audit", "peer-untrusted", "peer-lost", "link-lost", "lease-expired", "stalled", "resource-limit", "incompatible"} {
 		if s == r {
@@ -506,10 +533,10 @@ func (c *Client) current(l, s *string) bool {
 func (c *Client) revoke(reason string) {
 	c.broker.revokeExpected(reason, nil, true)
 }
-func (c *Client) revokeBound(r Revocation) {
+func (c *Client) revokeBound(r Revocation) <-chan struct{} {
 	select {
 	case <-c.stop:
-		return
+		return nil
 	default:
 	}
 	m := c.base("revoke")
@@ -525,8 +552,9 @@ func (c *Client) revokeBound(r Revocation) {
 		select {
 		case <-c.revokeAck:
 		default:
+			ack := c.revokeAck
 			c.mu.Unlock()
-			return
+			return ack
 		}
 	}
 	c.revokeID = m.Request
@@ -541,7 +569,33 @@ func (c *Client) revokeBound(r Revocation) {
 	default:
 		go c.Close()
 	}
+	return ack
 }
+func (c *Client) stopBound(r Revocation) <-chan struct{} {
+	done := make(chan struct{})
+	c.mu.Lock()
+	prior := c.revokeAck
+	c.stopAck = done
+	c.mu.Unlock()
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	go c.completeStop(r, prior, done, deadline)
+	return done
+}
+func (c *Client) completeStop(r Revocation, prior <-chan struct{}, done chan struct{}, deadline time.Time) {
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	if c.waitRevocation(ctx, prior) != nil {
+		c.Close()
+		return
+	}
+	ack := c.revokeBound(r)
+	if c.waitRevocation(ctx, ack) != nil {
+		c.Close()
+		return
+	}
+	close(done)
+}
+
 func (c *Client) revokeDeadline(ack <-chan struct{}, until time.Time) {
 	timer := time.NewTimer(time.Until(until))
 	defer timer.Stop()
@@ -565,6 +619,13 @@ func (c *Client) authorized() bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stopAck != nil {
+		select {
+		case <-c.stopAck:
+		default:
+			return false
+		}
+	}
 	if c.revokeAck == nil {
 		return true
 	}
@@ -578,8 +639,23 @@ func (c *Client) authorized() bool {
 
 func (c *Client) waitStop(ctx context.Context) error {
 	c.mu.Lock()
-	ack := c.revokeAck
+	var ack <-chan struct{} = c.revokeAck
+	if c.stopAck != nil {
+		select {
+		case <-c.stopAck:
+		default:
+			ack = c.stopAck
+		}
+	}
 	c.mu.Unlock()
+	return c.waitRevocation(ctx, ack)
+}
+func (c *Client) waitRevocation(ctx context.Context, ack <-chan struct{}) error {
+	select {
+	case <-c.stop:
+		return ErrAccess
+	default:
+	}
 	if ack == nil {
 		return nil
 	}
@@ -639,24 +715,32 @@ func (c *Client) images() {
 }
 
 func (c *Client) registerLink(l *link.Link) {
+	r, e := c.broker.registrationSnapshot(l)
+	if errors.Is(e, ErrStale) {
+		return
+	}
+	if e != nil {
+		c.Close()
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 	if c.waitStop(ctx) != nil {
 		c.Close()
 		return
 	}
-	cert := l.PeerConnection().SCTP().Transport().GetRemoteCertificate()
-	if len(cert) == 0 {
-		c.Close()
-		return
+	c.queueRegistration(r)
+}
+func (c *Client) queueRegistration(r *linkRegistration) bool {
+	if !c.broker.registrationCurrent(r) {
+		return false
 	}
-	sum := sha256.Sum256(cert)
 	m := c.base("link")
-	id := c.broker.LinkID()
-	m.Link = &id
-	m.Recipient = &recipient{Fingerprint: hex.EncodeToString(sum[:]), Setup: "hub"}
+	m.registration = r
+	m.Link = &r.id
+	m.Recipient = &recipient{Fingerprint: r.fingerprint, Setup: "hub"}
 	m.Evidence = &evidence{Location: "unknown", Provenance: "unresolved", Hosts: []hostEvidence{}}
-	c.queue(m)
+	return c.queue(m)
 }
 
 func (c *Client) healthy() bool {

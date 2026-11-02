@@ -1,6 +1,7 @@
 package screen
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,10 +31,11 @@ type auditIO struct {
 	open    func(string, int, fs.FileMode) (auditFile, error)
 	readDir func(string) ([]fs.DirEntry, error)
 	remove  func(string) error
+	tryLock func(*os.File) (bool, error)
 }
 
 func diskAuditIO() auditIO {
-	return auditIO{os.MkdirAll, os.Lstat, os.Stat, func(p string, f int, m fs.FileMode) (auditFile, error) { return os.OpenFile(p, f, m) }, os.ReadDir, os.Remove}
+	return auditIO{os.MkdirAll, os.Lstat, os.Stat, func(p string, f int, m fs.FileMode) (auditFile, error) { return os.OpenFile(p, f, m) }, os.ReadDir, os.Remove, flock.TryLock}
 }
 
 type Journal struct {
@@ -62,58 +64,94 @@ func newJournal(dir, companion string, ops auditIO) (*Journal, error) {
 		}
 	}
 	day := time.Now().UTC().Format("20060102")
-	return &Journal{io: ops, dir: dir, companion: companion, day: day, file: "broker-" + day + "-" + ID(16) + ".jsonl"}, nil
+	j := &Journal{io: ops, dir: dir, companion: companion, day: day, file: "broker-" + day + "-" + ID(16) + ".jsonl"}
+	if e := j.Cleanup(); e != nil && !errors.Is(e, errAuditBusy) {
+		return nil, e
+	}
+	return j, nil
 }
 func (j *Journal) Record(event, reason, scope, session string) error {
 	if (event != "grant" && event != "grant-intent" && event != "stop" && event != "refusal") || !validReason(reason) || (scope != "" && scope != "window" && scope != "display") || (session != "" && !validID(session, 16)) {
 		return ErrProtocol
 	}
+	return j.withQuota(func() error {
+		day := time.Now().UTC().Format("20060102")
+		if day != j.day {
+			j.day = day
+			j.file = "broker-" + day + "-" + ID(16) + ".jsonl"
+		}
+		row := struct {
+			Minute  string `json:"minute"`
+			Event   string `json:"event"`
+			Reason  string `json:"reason"`
+			Scope   string `json:"scope,omitempty"`
+			Session string `json:"session,omitempty"`
+		}{time.Now().UTC().Truncate(time.Minute).Format(time.RFC3339), event, reason, scope, session}
+		data, _ := json.Marshal(row)
+		data = append(data, '\n')
+		if e := j.rotate(int64(len(data))); e != nil {
+			return e
+		}
+		f, e := privateFileUsing(filepath.Join(j.dir, j.file), j.io)
+		if e != nil {
+			return e
+		}
+		defer func() { _ = f.Close() }()
+		if _, e = f.Seek(0, 2); e != nil {
+			return ErrAccess
+		}
+		if e = writeFull(f, data); e != nil {
+			return ErrAccess
+		}
+		if e = f.Sync(); e != nil {
+			return ErrAccess
+		}
+		return nil
+	})
+}
+
+var errAuditBusy = errors.New("EAGAIN")
+
+func (j *Journal) withQuota(work func() error) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	day := time.Now().UTC().Format("20060102")
-	if day != j.day {
-		j.day = day
-		j.file = "broker-" + day + "-" + ID(16) + ".jsonl"
-	}
-	lockpath := filepath.Join(j.companion, "quota.lock")
-	lock, e := privateFile(lockpath)
+	lock, e := privateFile(filepath.Join(j.companion, "quota.lock"))
 	if e != nil {
 		return e
 	}
 	defer func() { _ = lock.Close() }()
-	ok, e := flock.TryLock(lock)
-	if e != nil || !ok {
+	ok, e := j.io.tryLock(lock)
+	if e != nil {
 		return ErrAccess
+	}
+	if !ok {
+		return errAuditBusy
 	}
 	defer flock.Unlock(lock)
-	row := struct {
-		Minute  string `json:"minute"`
-		Event   string `json:"event"`
-		Reason  string `json:"reason"`
-		Scope   string `json:"scope,omitempty"`
-		Session string `json:"session,omitempty"`
-	}{time.Now().UTC().Truncate(time.Minute).Format(time.RFC3339), event, reason, scope, session}
-	data, _ := json.Marshal(row)
-	data = append(data, '\n')
-	if e = j.rotate(int64(len(data))); e != nil {
-		return e
-	}
-	f, e := privateFileUsing(filepath.Join(j.dir, j.file), j.io)
-	if e != nil {
-		return e
-	}
-	defer func() { _ = f.Close() }()
-	if _, e = f.Seek(0, 2); e != nil {
-		return ErrAccess
-	}
-	if e = writeFull(f, data); e != nil {
-		return ErrAccess
-	}
-	if e = f.Sync(); e != nil {
-		return ErrAccess
-	}
-	return nil
+	return work()
 }
+func (j *Journal) Cleanup() error { return j.withQuota(func() error { return j.rotate(0) }) }
+func (j *Journal) Maintain(ctx context.Context, interval time.Duration, onFailure func()) {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if e := j.Cleanup(); e != nil && !errors.Is(e, errAuditBusy) {
+					onFailure()
+					return
+				}
+			}
+		}
+	}()
+}
+
 func privateFile(path string) (*os.File, error) {
 	f, e := privateFileUsing(path, diskAuditIO())
 	if e != nil {

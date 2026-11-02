@@ -719,8 +719,9 @@ func (ff followFlags) screenProviderUsing(r *followRun, journalFactory func() (*
 			return errors.New("native screen peer is untrusted or unavailable")
 		}
 		r.native = native
+		cancelMaintenance := maintainScreenJournal(journal, native, 5*time.Minute)
 		closePrevious := r.closeSSH
-		r.closeSSH = func() { native.Close(); closePrevious() }
+		r.closeSSH = func() { native.Close(); cancelMaintenance(); closePrevious() }
 	}
 
 	return nil
@@ -731,4 +732,10 @@ func screenLostReason(l interface{ Err() error }) string {
 		return link.ScreenAbuseReason
 	}
 	return ""
+}
+
+func maintainScreenJournal(journal *screen.Journal, native nativeScreenProvider, interval time.Duration) context.CancelFunc {
+	ctx, cancel := context.WithCancel(context.Background())
+	journal.Maintain(ctx, interval, func() { native.Broker().Revoke("audit"); native.Close() })
+	return cancel
 }
