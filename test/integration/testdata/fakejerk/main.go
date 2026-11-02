@@ -102,7 +102,7 @@ func verb(p, rest string) int {
 
 func drop(p string) int {
 	if gate := os.Getenv("FAKEJERK_DROP_GATE"); gate != "" {
-		client := &http.Client{Timeout: 20 * time.Second}
+		client := &http.Client{Timeout: 90 * time.Second}
 		resp, err := client.Post(gate, "text/plain", strings.NewReader(p))
 		if err != nil {
 			return 4

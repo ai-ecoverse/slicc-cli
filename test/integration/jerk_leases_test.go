@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -455,6 +456,31 @@ func TestFollowJSONPrintsCredentialEvents(t *testing.T) {
 }
 
 func TestJerkConcurrentLinkAndHostUnseal(t *testing.T) {
+	var fx controlLog
+	for _, row := range []struct {
+		name    string
+		timeout bool
+	}{
+		{name: "completed while waiting"},
+		{name: "wait deadline exhausted", timeout: true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			var answer map[string]any
+			if row.timeout {
+				answer = waitingUnsealDeadline(t)
+			} else {
+				answer = concurrentUnseal(t)
+			}
+			fx.add(t, row.name, answer)
+		})
+	}
+	if !t.Failed() {
+		nativeFixture(t, "unseal-race.ndjson", fx.buf.Bytes())
+	}
+}
+
+func concurrentUnseal(t *testing.T) map[string]any {
+	t.Helper()
 	first := make(chan chan bool, 2)
 	stop := make(chan struct{})
 	var drops atomic.Int32
@@ -490,6 +516,7 @@ func TestJerkConcurrentLinkAndHostUnseal(t *testing.T) {
 	c := &leaseCtl{t: t, path: ctlSocket(t, e.a.cmd.Process.Pid)}
 	host := make(chan map[string]any, 1)
 	go func() { host <- c.call(map[string]any{"op": "unseal", "leaseId": "jerk-minted-1"}) }()
+	var answer map[string]any
 	var releaseHost chan bool
 	select {
 	case releaseHost = <-first:
@@ -505,8 +532,8 @@ func TestJerkConcurrentLinkAndHostUnseal(t *testing.T) {
 		releaseHost <- false
 	}
 	select {
-	case answer := <-host:
-		if answer["error"] != "ENOENT" {
+	case answer = <-host:
+		if answer["ok"] != true || answer["revoked"] != true || answer["upstream"] != true {
 			t.Errorf("host did not observe the completed link unseal: %v", answer)
 		}
 	case <-time.After(15 * time.Second):
@@ -524,4 +551,57 @@ func TestJerkConcurrentLinkAndHostUnseal(t *testing.T) {
 	if events := credentialEvents(e.a); len(events) != 2 || events[1]["op"] != "unseal" || events[1]["by"] != "seven" {
 		t.Error("seven's unseal event was lost or duplicated")
 	}
+	return answer
+}
+
+func waitingUnsealDeadline(t *testing.T) map[string]any {
+	t.Helper()
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	gate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+			_, _ = w.Write([]byte(`{"message":"dropped","revoked":true}`))
+		case <-r.Context().Done():
+		}
+	}))
+	defer gate.Close()
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	t.Setenv("FAKEJERK_DROP_GATE", gate.URL)
+	log := filepath.Join(t.TempDir(), "jerk.log")
+	t.Setenv("FAKEJERK_LOG", log)
+	j := &jerk.Jerk{Path: filepath.Join(fakeJerkDir(t), exeName("jerk"))}
+	var s *capjerk.Server
+	events := make(chan node.Credential, 4)
+	e := setupInProcess(t, policy.Local(), func(n *node.Node) {
+		s = capjerk.Register(n, capjerk.Options{Jerk: j, Seal: true, Notify: func(c node.Credential) { events <- c }})
+	})
+	seal(t, e.p, "minted")
+	e.p.eval(`globalThis.unsealRace = linkTest.jerk({op:'unseal',provider:'minted',lease_id:'jerk-minted-1'}); true`, nil)
+	select {
+	case <-entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("link drop never reached the gate")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	out := s.Unseal(ctx, "jerk-minted-1")
+	if out.Code != "EBUSY" {
+		t.Errorf("wait deadline result: %s", out.Code)
+	}
+	if len(s.Leases()) != 1 {
+		t.Error("timed-out waiter removed the lease")
+	}
+	unblock()
+	var result jerkRes
+	e.p.eval("unsealRace", &result)
+	if result.Reset != "" || result.last()["exit"] != 0.0 || len(s.Leases()) != 0 {
+		t.Error("link unseal did not complete after the waiter timed out")
+	}
+	if len(jerkCalls(t, log)) != 2 || len(events) != 2 {
+		t.Error("timed-out waiter duplicated a drop or lost an event")
+	}
+	return map[string]any{"v": 1, "ok": false, "error": out.Code}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sort"
-	"sync"
 	"time"
 
 	hostjerk "github.com/ai-ecoverse/slicc-cli/internal/jerk"
@@ -53,25 +52,29 @@ type UnsealResult struct {
 }
 
 type unsealState struct {
-	mu       sync.Mutex
+	gate     chan struct{}
+	provider string
 	users    int
 	outcomes map[string]hostjerk.Outcome
 	expires  time.Time
 }
 
-func (s *Server) lockUnseal(leaseID string) (*unsealState, func()) {
+func (s *Server) lockUnseal(ctx context.Context, leaseID string) (*unsealState, func(), bool) {
 	s.mu.Lock()
 	s.pruneLocked()
 	state := s.unsealing[leaseID]
 	if state == nil {
-		state = &unsealState{outcomes: map[string]hostjerk.Outcome{}}
+		state = &unsealState{gate: make(chan struct{}, 1), outcomes: map[string]hostjerk.Outcome{}}
+		state.gate <- struct{}{}
+		if l := s.leases[leaseID]; l != nil {
+			state.provider = l.Provider
+			state.expires = l.expires
+		}
 		s.unsealing[leaseID] = state
 	}
 	state.users++
 	s.mu.Unlock()
-	state.mu.Lock()
-	return state, func() {
-		state.mu.Unlock()
+	releaseUser := func() {
 		s.mu.Lock()
 		state.users--
 		if state.users == 0 && !state.expires.After(s.now()) {
@@ -79,6 +82,22 @@ func (s *Server) lockUnseal(leaseID string) (*unsealState, func()) {
 		}
 		s.mu.Unlock()
 	}
+	waited := false
+	select {
+	case <-state.gate:
+	default:
+		waited = true
+		select {
+		case <-state.gate:
+		case <-ctx.Done():
+			releaseUser()
+			return nil, nil, waited
+		}
+	}
+	return state, func() {
+		state.gate <- struct{}{}
+		releaseUser()
+	}, waited
 }
 
 func (s *Server) now() time.Time {
@@ -183,11 +202,24 @@ func (s *Server) SetSealing(on bool) {
 }
 
 func (s *Server) Unseal(ctx context.Context, leaseID string) UnsealResult {
+	ctx, cancel := context.WithTimeout(ctx, min(s.o.Timeout, hostjerk.Timeout))
+	defer cancel()
 	if !hostjerk.ValidLeaseID(leaseID) || !Allowed(s.o.GOOS, leaseID) {
 		return UnsealResult{Code: "EPROTO"}
 	}
-	state, release := s.lockUnseal(leaseID)
+	state, release, waited := s.lockUnseal(ctx, leaseID)
+	if state == nil {
+		return UnsealResult{Code: "EBUSY"}
+	}
 	defer release()
+	if waited {
+		if out, ok := state.outcomes[state.provider]; ok {
+			return UnsealResult{Upstream: out.Result.Revoked}
+		}
+	}
+	if ctx.Err() != nil {
+		return UnsealResult{Code: "EBUSY"}
+	}
 	s.mu.Lock()
 	s.pruneLocked()
 	l := s.leases[leaseID]
@@ -195,18 +227,17 @@ func (s *Server) Unseal(ctx context.Context, leaseID string) UnsealResult {
 		s.mu.Unlock()
 		return UnsealResult{Code: "ENOENT"}
 	}
-	delete(s.leases, leaseID)
 	s.mu.Unlock()
 	call := hostjerk.Call{Args: []string{l.Provider, "drop", "--lease", "--via-link"}, Env: []string{"FNOX_LEASE_ID=" + leaseID}, Timeout: s.o.Timeout}
 	out := s.o.Jerk.Run(ctx, l.Provider, call)
 	s.o.Logf("jerk: unseal %s (host): exit %d", l.Provider, out.Result.Exit)
 	if out.Died || out.TimedOut || out.Result.Exit != 0 {
-		s.restore(l)
 		return UnsealResult{Code: "EIO", Exit: out.Result.Exit}
 	}
 	state.outcomes[l.Provider] = out
 	s.mu.Lock()
 	state.expires = l.expires
+	delete(s.leases, leaseID)
 	s.mu.Unlock()
 	s.notify(node.Credential{Op: OpRevoked, Provider: l.Provider, LeaseID: leaseID, ExpiresAt: l.ExpiresAt, By: ByHost, Upstream: out.Result.Revoked})
 	n := &notice{provider: l.Provider, leaseID: leaseID, expires: l.expires, sent: map[*link.Link]bool{}}
@@ -221,14 +252,6 @@ func (s *Server) Unseal(ctx context.Context, leaseID string) UnsealResult {
 		go s.deliver(k)
 	}
 	return UnsealResult{Upstream: out.Result.Revoked}
-}
-
-func (s *Server) restore(l *LeaseInfo) {
-	s.mu.Lock()
-	if _, taken := s.leases[l.LeaseID]; !taken {
-		s.leases[l.LeaseID] = l
-	}
-	s.mu.Unlock()
 }
 
 func (s *Server) Attach(l *link.Link) {

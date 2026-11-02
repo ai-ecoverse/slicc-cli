@@ -367,7 +367,10 @@ func (s *Server) exec(ctx context.Context, op, p string, call hostjerk.Call) hos
 		return j.LeaseCall(ctx, p, call)
 	case "unseal":
 		leaseID := strings.TrimPrefix(call.Env[0], "FNOX_LEASE_ID=")
-		state, release := s.lockUnseal(leaseID)
+		state, release, _ := s.lockUnseal(ctx, leaseID)
+		if state == nil {
+			return hostjerk.Outcome{Died: true, Result: hostjerk.Result{Exit: 1, Provider: p, Message: "unseal canceled"}}
+		}
 		defer release()
 		if out, ok := state.outcomes[p]; ok {
 			if call.Started != nil {
