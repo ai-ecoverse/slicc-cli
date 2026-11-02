@@ -353,8 +353,8 @@ func (s *Server) run(st *link.Stream, req open, call hostjerk.Call) {
 		return
 	}
 	if out.Lease != nil {
-		write(leaseEvent{Event: "lease", Lease: out.Lease})
 		s.record(p, out.Lease)
+		write(leaseEvent{Event: "lease", Lease: out.Lease})
 	}
 	write(resultEvent{Event: "result", Result: out.Result})
 	_ = st.CloseWrite()
