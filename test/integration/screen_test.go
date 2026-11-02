@@ -36,6 +36,8 @@ func screenLinks(t *testing.T, b *nativeScreen.Broker) (*link.Link, <-chan nativ
 func screenLinksWith(t *testing.T, b *nativeScreen.Broker, register func(*node.Node)) (*link.Link, <-chan nativeScreen.State) {
 	t.Helper()
 	states := make(chan nativeScreen.State, 16)
+	initialState := make(chan struct{})
+	var initialStateOnce sync.Once
 	api := link.NewAPI(link.APIOptions{Loopback: true})
 	pc, e := api.NewPeerConnection(webrtc.Configuration{})
 	if e != nil {
@@ -50,6 +52,7 @@ func screenLinksWith(t *testing.T, b *nativeScreen.Broker, register func(*node.N
 		}
 		select {
 		case states <- state:
+			initialStateOnce.Do(func() { close(initialState) })
 		default:
 			t.Error("unbounded state")
 		}
@@ -107,6 +110,13 @@ func screenLinksWith(t *testing.T, b *nativeScreen.Broker, register func(*node.N
 	case <-native.Ready():
 	case <-ctx.Done():
 		t.Fatal("screen link not ready")
+	}
+	select {
+	case <-initialState:
+	case <-native.Done():
+		t.Fatal("screen link closed before initial state", native.Err())
+	case <-ctx.Done():
+		t.Fatal("screen link did not publish initial state", ctx.Err())
 	}
 	return page, states
 }
