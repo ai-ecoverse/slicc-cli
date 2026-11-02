@@ -40,7 +40,8 @@ flags:
                        seven can drive this browser over the link (cdp)
   --cdp-extra <url>    also let seven drive this browser (repeatable)
   --origin <origin>    also accept seven on this origin (repeatable); the
-                       default is https://<label>.sliccy.ai, except www
+                       default is https://<label>.sliccy.ai, except service
+                       hosts such as vault
   --signal cdp|stdio   carry the setup messages over CDP (default), or as
                        NDJSON on stdin and stdout for a harness that relays
                        them itself; --cdp is then optional
