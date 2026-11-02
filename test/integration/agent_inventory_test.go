@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const inventoryOne = `{v: 1, instance: {id: 'pL4vT2nQ8sK1mX6zR0bYcA', name: 'seven on sliccy.test'}, seq: 4, changedAt: 1767268800000, reportedAt: Date.now() - 2000, counts: {running: 1, queued: 0, waiting: 0, error: 0, idle: 1}, agents: [{id: 'hR7cZ2mVq9LwX4eN1sKj0A', kind: 'cone', status: 'running', queued: 1, provider: 'anthropic', model: 'claude-opus-4-6', since: Date.now() - 65000}, {id: 'x3Lk9aQeV2bN0cR5tY8uWg', kind: 'scoop', parent: 'hR7cZ2mVq9LwX4eN1sKj0A', status: 'idle', queued: 0, provider: 'azure', since: Date.now() - 4000, later: 'kept'}]}`
+const inventoryOne = `(() => { const now = Date.now(); return {v: 1, instance: {id: 'pL4vT2nQ8sK1mX6zR0bYcA', name: 'seven on sliccy.test'}, seq: 4, changedAt: 1767268800000, reportedAt: now - 2000, counts: {running: 1, queued: 0, waiting: 0, error: 0, idle: 1}, agents: [{id: 'hR7cZ2mVq9LwX4eN1sKj0A', kind: 'cone', status: 'running', queued: 1, provider: 'anthropic', model: 'claude-opus-4-6', since: now - 65000}, {id: 'x3Lk9aQeV2bN0cR5tY8uWg', kind: 'scoop', parent: 'hR7cZ2mVq9LwX4eN1sKj0A', status: 'idle', queued: 0, provider: 'azure', since: now - 4000, later: 'kept'}]}; })()`
 
 const inventoryTwo = `{v: 1, instance: {id: 'pL4vT2nQ8sK1mX6zR0bYcA'}, seq: 5, changedAt: 1767268801000, reportedAt: 1767268802000, counts: {running: 0, queued: 0, waiting: 0, error: 1, idle: 0}, agents: [{id: 'hR7cZ2mVq9LwX4eN1sKj0A', kind: 'cone', status: 'error', queued: 0, since: 1767268801000}]}`
 
@@ -37,7 +37,11 @@ func inventoryOpens(st agentState) []agentOpen {
 
 func TestAgentsPrintsOneSnapshotAsATable(t *testing.T) {
 	s := newLocalSeven(t)
-	s.p.agentDo("inventory(" + inventoryOne + ")")
+	s.p.agentDo(`inventory((() => {
+		let now = globalThis.Date.now();
+		const Date = {now: () => now++};
+		return ` + inventoryOne + `;
+	})())`)
 	pr := s.run(t, nil, "agents")
 	if code := pr.wait(t, 60*time.Second); code != 0 {
 		t.Fatalf("exit %d", code)
