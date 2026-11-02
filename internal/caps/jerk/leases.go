@@ -260,6 +260,11 @@ func (s *Server) Attach(l *link.Link) {
 	case <-l.Done():
 		return
 	}
+	select {
+	case <-l.HelloSent():
+	case <-l.Done():
+		return
+	}
 	h, _ := l.PeerHello()
 	if !h.HasCap(RevokeCap) {
 		return
