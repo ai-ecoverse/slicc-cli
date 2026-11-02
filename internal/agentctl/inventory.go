@@ -18,6 +18,10 @@ const EventInventory = "inventory"
 
 var ErrNoInventory = errors.New("this seven doesn't report its agents; update it")
 
+type UnavailableError struct{ Message string }
+
+func (e *UnavailableError) Error() string { return e.Message }
+
 var Statuses = []string{"running", "queued", "waiting", "error", "idle"}
 
 type InventoryAgent struct {
@@ -82,7 +86,7 @@ func inventoryErr(err error) error {
 	case code == "EOPNOTSUPP" && (msg == "" || strings.Contains(msg, "no inventory")):
 		return ErrNoInventory
 	case code == "EOPNOTSUPP":
-		return errors.New(msg)
+		return &UnavailableError{Message: msg}
 	}
 	return mapErr(err)
 }

@@ -1332,7 +1332,7 @@ slicc agents --signal stdio [--watch] [--json]
 - **The link:** as for `watch` (see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)): a control-only link (`caps: []`) through the tray or over CDP, the same 1-minute wait for HELLO, and `--signal stdio` as there.
 - **Permission:** the `agent` cap, as for `watch`. Without it, slicc says `this seven doesn't allow remote control from this device; turn it on in seven's Linked devices` and exits 3.
 - **A seven that doesn't know it:** slicc says `this seven doesn't report its agents; update it` and exits 1.
-- **A tab without the agent** (seven still starting, or a follower tab): slicc prints seven's reason, such as `the agent is not running`, and exits 1.
+- **A tab without the agent** (seven still starting, or a follower tab): slicc prints seven's reason, such as `the agent is not running`, and exits 1. With `--watch` it keeps trying, as on a lost stream, and says so before each try: `slicc: <reason>; trying again` on stderr, or with `--json` `{"schema":1,"event":"error","message":"<reason>","retryable":true}` on stdout.
 - **Without `--watch`:** one snapshot, then exit 0.
 - **With `--watch`:** a new snapshot each time one comes from seven, until Ctrl-C or `SIGTERM`, then exit 0. Status lines, reconnects and their waits are those of `watch`. Every new stream starts with a whole snapshot, so nothing is resumed.
 - **Output:** a header line, then one row per agent, the cone first, with the first 8 characters of each id (the whole id is in `--json`), and `provider/model`, or `provider` alone when seven leaves the model out:

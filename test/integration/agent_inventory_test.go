@@ -191,3 +191,24 @@ func TestAgentsUsage(t *testing.T) {
 		t.Fatalf("code %d, stderr %q", code, errOut)
 	}
 }
+
+func TestAgentsWatchSaysWhenTheAgentIsNotRunning(t *testing.T) {
+	s := newLocalSeven(t)
+	s.p.agentDo("inventory(null, 'EOPNOTSUPP: the agent is not running')")
+	j := s.run(t, nil, "agents", "--watch", "--json")
+	j.waitFor(t, j.stdout, `{"schema":1,"event":"error","message":"the agent is not running","retryable":true}`, 30*time.Second)
+	j.waitFor(t, j.stdout, `"event":"reconnecting"`, 30*time.Second)
+	text := s.run(t, nil, "agents", "--watch")
+	text.waitFor(t, text.stderr, "slicc: the agent is not running; trying again", 30*time.Second)
+	s.p.agentDo("inventory(" + inventoryTwo + ")")
+	j.waitFor(t, j.stdout, `"event":"inventory"`, 30*time.Second)
+	text.waitFor(t, text.stdout, "1 error", 30*time.Second)
+	for _, pr := range []*agentProc{j, text} {
+		if err := interrupt(pr.cmd); err != nil {
+			t.Fatal(err)
+		}
+		if code := pr.wait(t, 30*time.Second); code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+	}
+}

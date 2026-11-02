@@ -15,7 +15,7 @@ import (
 
 const agentsUsage = `usage: slicc <join-url> agents [--watch] [--json]
        slicc agents --cdp <url> [--origin <origin>]... [--watch] [--json]
-       slicc agents --signal stdio [--watch]
+       slicc agents --signal stdio [--watch] [--json]
 
 List seven's agents: the cone its tab shows and that cone's live scoops, with
 their status, queue and model. It's read-only, and nothing in it carries a
@@ -70,6 +70,20 @@ func (p *inventoryPrinter) reconnecting(attempt int, wait time.Duration) {
 
 var agentsLinks = func(ctx context.Context, f agentFlags, aio agentIO, status func(string, ...any)) (agentLinks, error) {
 	return f.links(ctx, aio, status)
+}
+
+func (p *inventoryPrinter) unavailable(err error) {
+	var ue *agentctl.UnavailableError
+	if !errors.As(err, &ue) {
+		return
+	}
+	if !p.f.json {
+		p.status("%s; trying again", agentctl.OneLineFull(ue.Message))
+		return
+	}
+	retryable := true
+	b, _ := flow.Event{Event: flow.Error, Message: ue.Message, Retryable: &retryable}.MarshalJSON()
+	_, _ = p.aio.stdout.Write(append(b, '\n'))
 }
 
 func agentsCommand(ctx context.Context, f agentFlags, aio agentIO) int {
@@ -162,6 +176,7 @@ func (w *agentsWatcher) onLink(ctx context.Context, l agentctl.Link) (int, bool)
 		if code, done := agentsRefused(w.p.aio, err); done {
 			return code, true
 		}
+		w.p.unavailable(err)
 		select {
 		case <-l.Done():
 			w.p.status("lost the link to %s; reconnecting", l.Name())
