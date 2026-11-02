@@ -41,6 +41,7 @@ const (
 	openCommandEnv   = "SLICC_OPEN_COMMAND"
 	loopbackPortsEnv = "SLICC_LOOPBACK_PORTS"
 	pairingQuietEnv  = "SLICC_PAIRING_QUIET"
+	answerDelayEnv   = "SLICC_LOOPBACK_ANSWER_DELAY"
 	pairingQuiet     = 30 * time.Second
 	pairingUnheard   = "no browser has reached slicc yet. If seven is open in Safari or another WebKit browser, it can't: those block this computer's loopback from an https page. Use Chrome, Edge or Firefox, or link it through seven's Link a device with slicc <join-url> follow"
 )
@@ -418,7 +419,7 @@ func (r *openRun) listen() error {
 	}
 	r.ln, err = loopback.Listen(loopback.Config{
 		Avoid: avoid, Identity: r.id, Peers: loopback.OpenPeers(dir), Origins: allowed, FirstPort: first, LastPort: last,
-		Name: r.host, NodeID: signal.NodeID(), Logf: r.logf, Status: r.status,
+		Name: r.host, NodeID: signal.NodeID(), Logf: r.logf, Status: r.status, AnswerDelay: answerDelay(),
 	})
 	if err != nil {
 		return err
@@ -576,6 +577,11 @@ func (r *openRun) pair() error {
 		}
 	})
 	return nil
+}
+
+func answerDelay() time.Duration {
+	d, _ := time.ParseDuration(os.Getenv(answerDelayEnv))
+	return d
 }
 
 func pairingQuietFor() time.Duration {

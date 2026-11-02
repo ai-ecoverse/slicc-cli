@@ -75,10 +75,16 @@ func (l *Listener) Revoke(fp string) bool {
 const sweepEvery = 5 * time.Second
 
 func (l *Listener) LinkUp(lk *link.Link) {
-	if fp := PeerFingerprint(lk); fp != "" {
-		l.mu.Lock()
-		l.live[fp] = lk
-		l.mu.Unlock()
+	fp := PeerFingerprint(lk)
+	if fp == "" {
+		return
+	}
+	l.mu.Lock()
+	l.live[fp] = lk
+	l.mu.Unlock()
+	if _, pinned := l.cfg.Peers.Origin(fp, l.nodeFingerprint()); !pinned {
+		l.cfg.Status("seven on %s was unpaired while it linked; closed its link", ShortFingerprint(fp))
+		go func() { _ = lk.Close() }()
 	}
 }
 

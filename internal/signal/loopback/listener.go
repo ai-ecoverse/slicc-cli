@@ -23,14 +23,15 @@ import (
 )
 
 const (
-	FirstPort     = 17117
-	LastPort      = 17126
-	PairPath      = "/slicc/v1/pair"
-	SignalPath    = "/slicc/v1/signal"
-	MaxBody       = 64 << 10
-	FragmentKey   = "slicc-pair"
-	AnswerTimeout = 10 * time.Second
-	maxDrain      = 4 * MaxBody
+	FirstPort      = 17117
+	LastPort       = 17126
+	PairPath       = "/slicc/v1/pair"
+	SignalPath     = "/slicc/v1/signal"
+	MaxBody        = 64 << 10
+	FragmentKey    = "slicc-pair"
+	AnswerTimeout  = 10 * time.Second
+	maxAnswerDelay = 5 * time.Second
+	maxDrain       = 4 * MaxBody
 )
 
 type Config struct {
@@ -43,6 +44,7 @@ type Config struct {
 	Name          string
 	NodeID        string
 	AnswerTimeout time.Duration
+	AnswerDelay   time.Duration
 	Logf          func(format string, args ...any)
 	Status        func(format string, args ...any)
 }
@@ -391,6 +393,9 @@ func (l *Listener) answer(w http.ResponseWriter, r *http.Request, origin, norm, 
 		c.busy--
 		l.mu.Unlock()
 	}()
+	if l.cfg.AnswerDelay > 0 {
+		time.Sleep(min(l.cfg.AnswerDelay, maxAnswerDelay))
+	}
 	sdp, err := c.offer(r.Context(), norm, offer, l.cfg.AnswerTimeout)
 	if err != nil {
 		l.cfg.Status("could not answer seven on %s (%s): %v", norm, ShortFingerprint(fp), err)

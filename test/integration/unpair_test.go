@@ -11,7 +11,7 @@ import (
 
 func unpairJSON(t *testing.T, env []string, args ...string) (map[string]any, string) {
 	t.Helper()
-	cmd := exec.Command(binary, append([]string{"unpair", "--json"}, args...)...)
+	cmd := exec.Command(binary, append([]string{"unpair"}, args...)...)
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -75,7 +75,7 @@ func TestUnpairJSONListsPeersAndClosesTheLiveLink(t *testing.T) {
 	enc := json.NewEncoder(&log)
 	enc.SetEscapeHTML(false)
 
-	list, _ := unpairJSON(t, e.env)
+	list, _ := unpairJSON(t, e.env, "--json")
 	peers, _ := list["peers"].([]any)
 	if len(peers) != 1 {
 		t.Fatalf("peers %v", list)
@@ -86,7 +86,7 @@ func TestUnpairJSONListsPeersAndClosesTheLiveLink(t *testing.T) {
 	}
 	_ = enc.Encode(normalizePeers(list, fp))
 
-	removed, stderr := unpairJSON(t, e.env, fp[:12])
+	removed, stderr := unpairJSON(t, e.env, fp[:12], "--json")
 	if r, _ := removed["removed"].([]any); len(r) != 1 || r[0] != fp {
 		t.Fatalf("removed %v", removed)
 	}
@@ -99,15 +99,73 @@ func TestUnpairJSONListsPeersAndClosesTheLiveLink(t *testing.T) {
 	}
 	p.waitFor("!linkTest.status().up", 20*time.Second)
 
-	after, _ := unpairJSON(t, e.env)
+	after, _ := unpairJSON(t, e.env, "--json")
 	if l, _ := after["peers"].([]any); len(l) != 0 {
 		t.Fatalf("peers after unpair %v", after)
 	}
 	_ = enc.Encode(after)
-	none, _ := unpairJSON(t, e.env, "--all")
+	none, _ := unpairJSON(t, e.env, "--json", "--all")
 	if r, _ := none["removed"].([]any); len(r) != 0 {
 		t.Fatalf("--all %v", none)
 	}
 	_ = enc.Encode(none)
 	nativeFixture(t, "unpair.ndjson", log.Bytes())
+}
+
+func TestUnpairClosesALinkThatComesUpAfterwards(t *testing.T) {
+	b := launchBrowser(t)
+	srv := pageServer(t)
+	e := newLoopEnv(t)
+	e.env = overrideEnv(e.env, map[string]string{"SLICC_LOOPBACK_ANSWER_DELAY": "3s"})
+	f := startFlow(t, e.env, "pair", "--json", "--no-kernel", "--page", srv.URL+"/index.html?ports="+e.ports())
+	pe := f.next(t, "pairing")
+	var pairing struct {
+		URL string `json:"url"`
+	}
+	if json.Unmarshal([]byte(pe.raw), &pairing) != nil {
+		t.Fatal(pe.raw)
+	}
+	p := b.openPage(t, pairing.URL)
+	if r := confirm(t, p, ""); !r.Linked {
+		t.Fatalf("pairing: %+v", r)
+	}
+	f.next(t, "connecting")
+	f.next(t, "linked")
+	var fp string
+	p.eval("linkTest.loopback.fingerprint()", &fp)
+	var closed map[string]any
+	p.eval("linkTest.loopback.close()", &closed)
+	f.next(t, "link-lost")
+	signalled := make(chan loopResult, 1)
+	go func() {
+		var r loopResult
+		p.eval("linkTest.loopback.signal()", &r)
+		signalled <- r
+	}()
+	time.Sleep(time.Second)
+	removed, _ := unpairJSON(t, e.env, fp, "--json")
+	if r, _ := removed["removed"].([]any); len(r) != 1 || r[0] != fp {
+		t.Fatalf("unpair %v", removed)
+	}
+	<-signalled
+	f.waitStderr(t, "was unpaired while it linked; closed its link")
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		var st struct {
+			Up bool `json:"up"`
+		}
+		p.eval("linkTest.status()", &st)
+		if !st.Up {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the link that came up after unpair stayed up")
+		}
+	}
+	time.Sleep(2 * time.Second)
+	var st struct {
+		Up bool `json:"up"`
+	}
+	if p.eval("linkTest.status()", &st); st.Up {
+		t.Fatal("the unpaired page linked again")
+	}
 }

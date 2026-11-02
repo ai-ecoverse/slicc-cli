@@ -55,15 +55,23 @@ func runUnpair(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(io.Discard)
 	all := fs.Bool("all", false, "")
 	asJSON := fs.Bool("json", false, "")
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprint(stdout, unpairUsage)
-			return 0
+	var named []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				fmt.Fprint(stdout, unpairUsage)
+				return 0
+			}
+			fmt.Fprintf(stderr, "slicc unpair: %v\n\n%s", err, unpairUsage)
+			return 2
 		}
-		fmt.Fprintf(stderr, "slicc unpair: %v\n\n%s", err, unpairUsage)
-		return 2
+		if fs.NArg() == 0 {
+			break
+		}
+		named = append(named, fs.Arg(0))
+		args = fs.Args()[1:]
 	}
-	if fs.NArg() > 1 || (*all && fs.NArg() > 0) {
+	if len(named) > 1 || (*all && len(named) > 0) {
 		fmt.Fprintf(stderr, "slicc unpair: name one fingerprint, or --all\n\n%s", unpairUsage)
 		return 2
 	}
@@ -87,8 +95,8 @@ func runUnpair(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "forgot %d paired sevens\n", len(gone))
 		printClosed(stderr, closed)
 		return 0
-	case fs.NArg() == 1:
-		return unpairOne(peers, fs.Arg(0), *asJSON, stdout, stderr)
+	case len(named) == 1:
+		return unpairOne(peers, named[0], *asJSON, stdout, stderr)
 	}
 	list, err := peers.List()
 	if err != nil {
