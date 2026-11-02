@@ -78,6 +78,8 @@ func (n *Node) Handle(capability, kind string, h link.Handler) {
 	n.handlers[kind] = h
 }
 
+func (n *Node) HandleKind(kind string, h link.Handler) { n.handlers[kind] = h }
+
 func (n *Node) Advertise(capability string) {
 	n.capsMu.Lock()
 	defer n.capsMu.Unlock()
@@ -272,9 +274,18 @@ func (n *Node) watch(c *current) {
 	<-l.Done()
 	n.origins.Delete(l)
 	e := Event{Kind: EventLinkDown, Link: l, Reason: c.getReason()}
-	if err := l.Err(); e.Reason == "" && err != nil && !errors.Is(err, link.ErrClosed) {
-		n.cfg.Status("link down: %v", err)
-		e.Err = err
-	}
+	n.annotateLinkDown(&e, l.Err())
 	n.emit(e)
+}
+
+func (n *Node) annotateLinkDown(e *Event, err error) {
+	if e.Reason == "" && err != nil && !errors.Is(err, link.ErrClosed) {
+		if err.Error() == link.ScreenAbuseReason {
+			n.cfg.Status("%s", link.ScreenAbuseReason)
+			e.Reason = link.ScreenAbuseReason
+		} else {
+			n.cfg.Status("link down: %v", err)
+			e.Err = err
+		}
+	}
 }

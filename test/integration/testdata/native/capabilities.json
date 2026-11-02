@@ -116,6 +116,10 @@
       "reconnecting"
     ]
   },
+  "screen": {
+    "v": 1,
+    "available": false
+  },
   "control": {
     "v": 1,
     "ops": [

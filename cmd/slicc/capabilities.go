@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/ai-ecoverse/slicc-cli/internal/caps/screen"
 	"io"
 	"slices"
 	"sort"
@@ -79,6 +80,7 @@ type capabilities struct {
 	Commands map[string]commandInfo `json:"commands"`
 	Events   capEvents              `json:"events"`
 	Agent    capAgent               `json:"agent"`
+	Screen   screen.Features        `json:"screen"`
 	Control  capControl             `json:"control"`
 }
 
@@ -102,6 +104,7 @@ func currentCapabilities() capabilities {
 	slices.Sort(names)
 	return capabilities{
 		Schema:   capabilitiesSchema,
+		Screen:   screen.Capabilities(),
 		Version:  version,
 		Contract: contractVersion,
 		Commands: commandTable,
