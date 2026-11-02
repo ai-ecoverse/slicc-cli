@@ -16,6 +16,7 @@
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)). `-` or `@<file>` in place of `<join-url>` reads it from stdin or a file, out of sight of `ps` |
 | `slicc <join-url> prompt <text>`, `watch`, `wait`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, wait until it has nothing left to do, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)) |
+| `slicc <join-url> agents [--watch] [--json]` | list seven's agents, the active cone and its live scoops, with their status, queue and model, once or as they change; `--cdp <url>` instead of a join URL links locally (see [Agent inventory](#agent-inventory-slicc-agents)) |
 | `slicc <join-url> prompt`, `watch`, `wait`, `abort` inside seven | the same commands from seven's kernel, as `@ai-ecoverse/wasi-slicc` (works now; see [Inside seven](#inside-seven)) |
 | `slicc tray [url \| rotate \| unlink <device> \| retry]` inside seven | this seven's tray: its state and devices, the join URL on request, rotate it, drop a device, reconnect (see [Inside seven](#inside-seven)) |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
@@ -340,7 +341,7 @@ slicc capabilities [--json]
 - **`schema`:** the shape of this document, 1.
 - **`version`:** the version `slicc --version` prints.
 - **`contract`:** 1. It goes up only for a breaking change to a contract this document describes: a field or event that changes meaning or goes away. New commands, fields, events and ops leave it alone.
-- **`commands`:** every command, keyed by name: `default` for `slicc` with no command, `follow`, `prompt`, `watch`, `wait` and `abort` (also after a join URL), `attach`, `open`, `pair`, `unpair`, `tray`, `browsers`, `launch`, `update`, `install`, `capabilities`, `version` and `help`. `json` says what `--json` prints: `document` (one JSON value), `events` (NDJSON, one event a line) or `none` (no `--json`). An `events` command has `vocabulary`: `events` for lines with `schema` and `event` (see [The default](#the-default-slicc) and [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)), or `agent` for seven's agent events with `t` (see [`agent`](#agent-page-cap-agent-node--page)).
+- **`commands`:** every command, keyed by name: `default` for `slicc` with no command, `follow`, `prompt`, `watch`, `wait`, `abort` and `agents` (also after a join URL), `attach`, `open`, `pair`, `unpair`, `tray`, `browsers`, `launch`, `update`, `install`, `capabilities`, `version` and `help`. `json` says what `--json` prints: `document` (one JSON value), `events` (NDJSON, one event a line) or `none` (no `--json`). An `events` command has `vocabulary`: `events` for lines with `schema` and `event` (see [The default](#the-default-slicc) and [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)), or `agent` for seven's agent events with `t` (see [`agent`](#agent-page-cap-agent-node--page)).
 - **`events`:** `schema`, the `schema` every `event` line carries, and `names`, every `event` a `vocabulary: "events"` command can print, sorted.
 - **`agent`:** `events`, the `t` of every agent event slicc knows, and `own`, the lines slicc itself adds to that stream (`settled`, `opened` and `reconnecting`, see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)).
 - **`control`:** `v`, the version of the [control socket](#running-links-slicc-tray) protocol, and `ops`, the ops it answers.
@@ -1318,6 +1319,37 @@ Otherwise, or with `--plain`, there are no escape codes:
 
 Summaries are one line of at most 200 characters. Escape sequences and control characters other than newline and tab are removed from everything seven sends before it's shown.
 
+## Agent inventory: `slicc agents`
+
+```
+slicc <join-url> agents [--watch] [--json]
+slicc agents --cdp <url> [--origin <origin>]... [--watch] [--json]
+slicc agents --signal stdio [--watch] [--json]
+```
+
+`slicc agents` lists one seven's agents: the cone its tab shows and that cone's live scoops, each with its status, its queue and its model. It's read-only. It sends nothing to the agent, and nothing it gets carries a prompt, transcript text, a tool's name or output, an agent's name or title, a path, a URL or a credential. Agents' ids are opaque (below), so they don't carry names either.
+
+- **The link:** as for `watch` (see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)): a control-only link (`caps: []`) through the tray or over CDP, the same 1-minute wait for HELLO, and `--signal stdio` as there.
+- **Permission:** the `agent` cap, as for `watch`. Without it, slicc says `this seven doesn't allow remote control from this device; turn it on in seven's Linked devices` and exits 3.
+- **A seven that doesn't know it:** slicc says `this seven doesn't report its agents; update it` and exits 1.
+- **Without `--watch`:** one snapshot, then exit 0.
+- **With `--watch`:** a new snapshot each time one comes from seven, until Ctrl-C or `SIGTERM`, then exit 0. Status lines, reconnects and their waits are those of `watch`. Every new stream starts with a whole snapshot, so nothing is resumed.
+- **Output:** a header line, then one row per agent, the cone first, with the first 8 characters of each id (the whole id is in `--json`), and `provider/model`, or `provider` alone when seven leaves the model out:
+
+  ```
+  seven on sliccy.com: 1 running, 1 waiting, 1 idle (reported 2s ago)
+  ID        KIND   PARENT    STATUS   QUEUED  MODEL                         SINCE
+  hR7cZ2mV  cone   -         waiting  0       anthropic/claude-opus-4-6     1m
+  x3Lk9aQe  scoop  hR7cZ2mV  running  1       anthropic/claude-sonnet-4-6   40s
+  T7wPq0zR  scoop  hR7cZ2mV  idle     0       azure                         3m
+  ```
+
+  With `--watch` on a terminal the table is redrawn in place. Otherwise each snapshot is printed in full, after a blank line. Everything seven sends is stripped of escape and control characters before it's shown.
+- **`--json`:** one line per snapshot, `{"schema":1,"event":"inventory",…,"receivedAt"}`, with every field of seven's snapshot (see [`inventory`](#511-agent-page-cap-agent-node--page-remote-control)) and `receivedAt`, when slicc got it (RFC 3339, UTC). With `--watch`, slicc's `{"schema":1,"event":"reconnecting","attempt","retryAt","wait"}` comes before each new try, as on `follow`. Fields seven adds later are passed through. Fixture: [`agents.ndjson`](test/integration/testdata/native/agents.ndjson).
+- **Stale data:** seven repeats its snapshot at least every 30 s on a `--watch` stream, with a new `reportedAt`, so a snapshot whose `reportedAt` is more than a minute old is stale. `changedAt` and `seq` say when the agents last changed.
+- **Exit status:** `0` as above; `1` for a seven that doesn't report its agents, for a link or stream that ends before the first snapshot without `--watch`, and when the link can't be set up for good; `2` for bad usage; `3` without permission; `130` on Ctrl-C without `--watch`.
+- **Inside seven** it isn't available yet (`slicc: agents isn't available inside seven`).
+
 ### `agent` (page cap `agent`), node → page
 
 - **Who may:** the node opens `agent` streams only to a page whose HELLO lists `agent`, and the page refuses them with `EACCES` otherwise.
@@ -1339,6 +1371,8 @@ Summaries are one line of at most 200 characters. Escape sequences and control c
 - **With `busy`** (`prompt --allsettled` and `wait`): OPENED says whether the agent has anything left to do, and a `busy` line follows each time that changes. An OPENED without `busy` means seven doesn't report it.
 
 **`abort`:** `OPEN { "kind": "agent", "op": "abort" }`, answered OPENED `{ "aborted": true | false }` (`false` when nothing was running), then END.
+
+**`inventory`:** `OPEN { "kind": "agent", "op": "inventory", "watch"?: true }`, answered OPENED with a snapshot of the agents (§5.11). Without `watch` the page sends END next. With it, a `{"t":"inventory",…}` line with a whole new snapshot follows each change. A seven that doesn't know the op answers `EINVAL` (from before it) or `EOPNOTSUPP`, and the node treats both as unsupported.
 
 **Events,** one JSON object per line:
 
@@ -1946,6 +1980,51 @@ slicc-node's hostfs ([its README, *Host folders*](https://github.com/ai-ecoverse
     - **Read-only status:** `busy` lines carry only the boolean and `why`. They never carry prompt text, tool arguments or output, and asking for `busy` changes nothing in the agent.
     - **Ordering:** a `run start` never comes before the `busy: true` that covers it, and the `busy: false` comes after the last `run end`.
     - **Computed** from the durable documents' subscriptions (the cone's and its scoops' `pi.live`, `ScoopWorkDoc.feeds` and the licks outbox), and a line goes out only when the value flips.
+- **`inventory`:** `OPEN { "kind": "agent", "op": "inventory", "watch"?: true }` on its own channel, for `slicc agents` and a native app that shows seven's agents. The page serves it through `remoteControl(connection).inventory()` from `@ai-ecoverse/slicc-agent/page`, which reads slicc-agent's owner-only inventory service.
+  - **OPENED:** one snapshot:
+
+    ```json
+    {
+      "v": 1,
+      "instance": { "id": "pL4vT2nQ8sK1mX6zR0bYcA", "name": "seven on sliccy.com" },
+      "seq": 42,
+      "changedAt": 1767268800000,
+      "reportedAt": 1767268802000,
+      "counts": { "running": 1, "queued": 0, "waiting": 1, "idle": 1, "error": 0 },
+      "agents": [
+        { "id": "hR7cZ2mVq9LwX4eN1sKj0A", "kind": "cone", "status": "waiting", "queued": 0, "provider": "anthropic", "model": "claude-opus-4-6", "since": 1767268740000 },
+        { "id": "x3Lk9aQeV2bN0cR5tY8uWg", "kind": "scoop", "parent": "hR7cZ2mVq9LwX4eN1sKj0A", "status": "running", "queued": 1, "provider": "anthropic", "model": "claude-sonnet-4-6", "since": 1767268760000 }
+      ]
+    }
+    ```
+
+  - **Without `watch`,** the page sends END after OPENED.
+  - **With `watch`,** each new snapshot follows as one DATA line, `{"t":"inventory", …}` with the same fields, until either side resets. Lines are always whole snapshots, never deltas.
+    - A line goes out only when something other than `reportedAt` changed, at most one every 250 ms (the page's throttle), and the latest state is always sent. slicc-agent builds a snapshot from the subscriptions that feed seven's transcript and monitor, and drops one whose content didn't change. It has no timers of its own.
+    - The page repeats the current snapshot at least every 30 s, with the same `seq` and `changedAt` and a new `reportedAt`. Its timer runs only while a `watch` stream is open.
+  - **Fields:**
+    - `v`: 1. A change that breaks a reader gets a new `v`.
+    - `instance.id`: seven's own id, 22 characters of base64url from 16 random bytes, minted once per seven profile by the page and kept in its storage. A new profile, or cleared storage, gets a new id (and new agent ids). It isn't derived from anything about the user, the device or the tray. `instance.name`, when present, is the `name` of seven's HELLO.
+    - `seq`: goes up by one with every new snapshot slicc-agent builds, within one run of seven's agent. It isn't kept: after a reload it starts again at 1. All streams of one seven see the same `seq` for the same snapshot while the agent runs. A `seq` lower than the last one seen means the agent restarted, and a client treats the stream as new.
+    - `changedAt`: when slicc-agent built this snapshot, in ms since the epoch, from the commit that changed it. `reportedAt`: when the page sent this line.
+    - `counts`: the number of agents in each status. They add up to the number of `agents`.
+    - `agents`: the cone, then its live scoops in the order seven lists them.
+      - `id`: an opaque id, 22 characters of base64url, such as `"hR7cZ2mVq9LwX4eN1sKj0A"`. The page makes it from slicc-agent's registry id with HMAC-SHA-256 under a random key it minted for this seven with `instance.id`, keeps in its storage and never sends, and takes the first 16 bytes. So it's the same for an agent across streams, reloads and restarts of that seven, and two sevens never share one. It carries nothing else: not the scoop's folder, which comes from the name the scoop was given, nor whether it's the first cone. Clients compare ids and don't read them.
+      - `kind`: `cone` or `scoop`. `parent`, for a scoop only: the opaque `id` of the agent that started it, the cone or another scoop.
+      - `status`, one of:
+        - `running`: it has a run, retries and approval waits included;
+        - `queued`: no run yet, and at least one input waits for it;
+        - `waiting`: no run and nothing queued, but work it waits for is pending: a scoop `wait` of the cone, a feed to the scoop, or a lick for it held in the agent's outbox (the same signals as `busy`);
+        - `error`: none of those, and its last turn ended in an error;
+        - `idle`: none of those.
+      - `queued`: how many inputs (prompts, follow-ups and licks) wait for it, 0 or more.
+      - `provider` and `model`: pi's `provider` and `modelId` for the agent's conversation, such as `anthropic` and `claude-sonnet-4-6`. `provider`, one of slicc-agent's provider ids, is always sent when the agent has a model. `model` may be absent: slicc-agent sends it only when pi's model catalog has that model for that provider, so a user-named deployment (Azure), a custom inference profile or an ARN is left out. Both are left out when the agent has no model. A change of model is a new snapshot.
+      - `since`: when the agent entered its `status`, in ms since the epoch, as slicc-agent saw it since it started.
+  - **Scope:** the cone the tab's agent shows, the same cone `watch` and `prompt` reach, and that cone's live scoops. Never other cones, frozen cones, other kernels' agents or guest seats. When the tab selects another cone, the next snapshot is that cone's.
+  - **Who may:** the `agent` cap, as for the other ops, and slicc-agent serves the inventory only on its owner seat. View and control seats and guests get none. Asking for it changes nothing in the agent.
+  - **Only the tab that runs the agent answers.** Any other page, a follower tab included, answers `EOPNOTSUPP: the agent is not running`.
+  - **Never sent,** in any field: agents' names, folders and titles (they come from chats), prompts, transcript text, tool names, arguments and output, error messages, role text, paths, URLs and base URLs, account names, endpoint registrations, anything from the vault, settings or MCP servers. The fields above are all there is, and new ones are added only under these rules.
+  - **Older sevens:** a page from before this op answers `EINVAL` (an unknown op), and a page whose slicc-agent has no inventory answers `EOPNOTSUPP`. The node treats both as `this seven doesn't report its agents`.
 - **Events:** one JSON object per line, mapped by slicc-agent from pi-durable's agent events (`watchEvents`) and handed to the page by `remoteControl(connection)` from `@ai-ecoverse/slicc-agent/page`.
   - `{"t":"user","id","text","delivered"}`;
   - `{"t":"text","id","delta"}`: assistant text as it streams;
