@@ -190,9 +190,6 @@ type journalFile struct {
 	at   time.Time
 }
 
-func journalFiles(dir string) ([]journalFile, error) {
-	return journalFilesUsing(dir, diskAuditIO())
-}
 func journalFilesUsing(dir string, ops auditIO) ([]journalFile, error) {
 	var files []journalFile
 	entries, e := ops.readDir(dir)

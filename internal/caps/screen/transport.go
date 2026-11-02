@@ -155,6 +155,7 @@ type Client struct {
 	echoed        Counter
 	health        time.Time
 	echoAt        time.Time
+	revokeUntil   time.Time
 	revokeID      string
 	revokeAck     chan struct{}
 	revokeMessage safety
@@ -224,7 +225,7 @@ func connect(ctx context.Context, b Bootstrap, verify Verifier, audit Audit, dea
 	c.broker = NewBroker(audit, nil)
 	c.broker.nativeRevoke = c.revokeBound
 	c.broker.waitStop = c.waitStop
-	c.broker.authorized = c.healthy
+	c.broker.authorized = c.authorized
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
@@ -465,7 +466,11 @@ func (c *Client) handle(m safety) bool {
 		}
 		select {
 		case <-c.revokeAck:
+			return true
 		default:
+			if time.Now().After(c.revokeUntil) {
+				return false
+			}
 			close(c.revokeAck)
 		}
 		return true
@@ -499,10 +504,14 @@ func (c *Client) current(l, s *string) bool {
 	return (s == nil && session == nil) || (s != nil && session != nil && *s == *session)
 }
 func (c *Client) revoke(reason string) {
-	s := c.broker.Snapshot()
-	c.revokeBound(Revocation{reason, s.Link, s.LastSession})
+	c.broker.revokeExpected(reason, nil, true)
 }
 func (c *Client) revokeBound(r Revocation) {
+	select {
+	case <-c.stop:
+		return
+	default:
+	}
 	m := c.base("revoke")
 	m.Request = ID(16)
 	m.Reason = r.Reason
@@ -512,19 +521,58 @@ func (c *Client) revokeBound(r Revocation) {
 	}
 	m.Session = r.Session
 	c.mu.Lock()
+	if c.revokeAck != nil {
+		select {
+		case <-c.revokeAck:
+		default:
+			c.mu.Unlock()
+			return
+		}
+	}
 	c.revokeID = m.Request
 	c.revokeMessage = m
 	c.revokeAck = make(chan struct{})
+	c.revokeUntil = time.Now().Add(1500 * time.Millisecond)
+	ack, until := c.revokeAck, c.revokeUntil
 	c.mu.Unlock()
-	select {
-	case <-c.stop:
-		return
-	default:
-	}
+	go c.revokeDeadline(ack, until)
 	select {
 	case c.write <- m:
 	default:
 		go c.Close()
+	}
+}
+func (c *Client) revokeDeadline(ack <-chan struct{}, until time.Time) {
+	timer := time.NewTimer(time.Until(until))
+	defer timer.Stop()
+	select {
+	case <-ack:
+		return
+	case <-c.stop:
+		return
+	case <-timer.C:
+	}
+	select {
+	case <-ack:
+		return
+	default:
+		c.Close()
+	}
+}
+func (c *Client) authorized() bool {
+	if !c.healthy() {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.revokeAck == nil {
+		return true
+	}
+	select {
+	case <-c.revokeAck:
+		return true
+	default:
+		return false
 	}
 }
 

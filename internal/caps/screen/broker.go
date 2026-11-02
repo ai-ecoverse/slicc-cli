@@ -238,7 +238,7 @@ func (b *Broker) publishLocked(reason string) bool {
 	}
 	return true
 }
-func (b *Broker) Revoke(reason string) { b.revokeExpected(reason, nil) }
+func (b *Broker) Revoke(reason string) { b.revokeExpected(reason, nil, false) }
 
 type stopExpectation struct {
 	link    *link.Link
@@ -251,7 +251,7 @@ type Revocation struct {
 	Session *string
 }
 
-func (b *Broker) revokeExpected(reason string, expected *stopExpectation) bool {
+func (b *Broker) revokeExpected(reason string, expected *stopExpectation, forceNative bool) bool {
 	if reason == "active" || !validReason(reason) {
 		reason = "peer-untrusted"
 	}
@@ -283,7 +283,7 @@ func (b *Broker) revokeExpected(reason string, expected *stopExpectation) bool {
 	if b.l != nil {
 		b.publishLocked(reason)
 	}
-	if had && b.nativeRevoke != nil {
+	if (had || forceNative) && b.nativeRevoke != nil {
 		b.nativeRevoke(Revocation{reason, b.linkID, b.lastSession})
 	}
 	f := b.revoke
@@ -464,7 +464,7 @@ func (b *Broker) handleStop(s *link.Stream) {
 	b.stopPending = true
 	defer func() { b.mu.Lock(); b.stopPending = false; b.mu.Unlock() }()
 	b.mu.Unlock()
-	if !b.revokeExpected("stopped", &stopExpectation{s.Link(), o.Link, o.Session}) {
+	if !b.revokeExpected("stopped", &stopExpectation{s.Link(), o.Link, o.Session}, false) {
 		_ = s.Reset("ESTALE")
 		return
 	}

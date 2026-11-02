@@ -369,6 +369,9 @@ func (a *screenApp) reply(fields map[string]any) bool {
 	return nativeScreen.WriteRecord(a.safety, fields, nil, time.Second) == nil
 }
 func newScreenApp(t *testing.T) (*nativeScreen.Client, *screenApp) {
+	return newScreenAppAcknowledging(t, true)
+}
+func newScreenAppAcknowledging(t *testing.T, acknowledge bool) (*nativeScreen.Client, *screenApp) {
 	t.Helper()
 	dir, e := os.MkdirTemp("", "screen-ipc-")
 	if e != nil {
@@ -467,6 +470,14 @@ func newScreenApp(t *testing.T) (*nativeScreen.Client, *screenApp) {
 					return
 				}
 			case "revoke":
+				if !acknowledge {
+					select {
+					case a.messages <- message:
+					default:
+						return
+					}
+					continue
+				}
 				var request string
 				_ = json.Unmarshal(message["request"], &request)
 				if !a.reply(map[string]any{"type": "revoked", "request": request, "link": message["link"], "session": message["session"]}) {
@@ -587,8 +598,8 @@ func TestScreenLargeFrameCreditsAndStopBeforeBlockedWriter(t *testing.T) {
 		t.Fatal("second record did not start", e)
 	}
 	select {
-	case <-done:
-		t.Fatal("multi-window writer finished without credit")
+	case e := <-done:
+		t.Fatalf("multi-window writer finished without credit: %v", e)
 	default:
 	}
 	start := time.Now()
@@ -600,7 +611,10 @@ func TestScreenLargeFrameCreditsAndStopBeforeBlockedWriter(t *testing.T) {
 		t.Fatal("stop did not remove effective cap")
 	}
 	select {
-	case <-done:
+	case e := <-done:
+		if e != nil {
+			t.Fatal(e)
+		}
 	case <-ctx.Done():
 		t.Fatal("blocked writer survived stop")
 	}
@@ -863,5 +877,97 @@ func TestScreenAssociationQuotaPreservesExistingStreams(t *testing.T) {
 	cancel()
 	for range 32 {
 		<-finished
+	}
+}
+
+func screenNativeMessage(t *testing.T, a *screenApp, kind string) {
+	t.Helper()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case message := <-a.messages:
+			var actual string
+			_ = json.Unmarshal(message["type"], &actual)
+			if actual == kind {
+				return
+			}
+		case <-timer.C:
+			t.Fatal("missing native message", kind)
+			return
+		}
+	}
+}
+func TestScreenRejectedGrantInvalidatesBeforeNativeAck(t *testing.T) {
+	c, a := newScreenAppAcknowledging(t, false)
+	b := c.Broker()
+	page, states := screenLinks(t, b)
+	screenState(t, states, false)
+	binding := screenBinding(b)
+	grant := func() {
+		a.send(t, map[string]any{"type": "grant", "request": nativeScreen.ID(16), "binding": binding, "scope": "window", "limits": nativeScreen.DefaultLimits()})
+	}
+	grant()
+	screenState(t, states, true)
+	screenNativeMessage(t, a, "granted")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stream, e := page.Open(ctx, nativeScreen.Open{Kind: "screen", V: 1, Binding: binding}, link.OpenOptions{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	_ = stream.CloseWrite()
+	grant()
+	screenNativeMessage(t, a, "revoke")
+	if len(b.Snapshot().Caps) != 0 {
+		t.Fatal("rejected grant left effective cap active before native acknowledgement")
+	}
+	frame := nativeScreen.Frame{Type: "frame", V: 1, Binding: binding, Seq: "1", Captured: "1", Width: 2, Height: 2, Codec: "jpeg"}
+	if !errors.Is(b.Frame(frame, screenJPEG(t)), nativeScreen.ErrAccess) {
+		t.Fatal("rejected grant kept frame forwarding")
+	}
+	select {
+	case <-stream.Done():
+	case <-ctx.Done():
+		t.Fatal("rejected grant retained screen stream")
+	}
+	var reset *link.ResetError
+	if !errors.As(stream.Err(), &reset) || reset.Code != "EACCES" {
+		t.Fatal("wrong screen revocation", stream.Err())
+	}
+}
+func TestScreenMissingNativeRevokeAckExpiresDespiteHeartbeats(t *testing.T) {
+	c, a := newScreenAppAcknowledging(t, false)
+	b := c.Broker()
+	_, states := screenLinks(t, b)
+	screenState(t, states, false)
+	binding := screenBinding(b)
+	a.send(t, map[string]any{"type": "grant", "request": nativeScreen.ID(16), "binding": binding, "scope": "window", "limits": nativeScreen.DefaultLimits()})
+	screenState(t, states, true)
+	screenNativeMessage(t, a, "granted")
+	b.Revoke("resource-limit")
+	screenNativeMessage(t, a, "revoke")
+	<-time.After(time.Second)
+	if !c.Authenticated() {
+		t.Fatal("heartbeats stopped before acknowledgement deadline")
+	}
+	<-time.After(time.Second)
+	if c.Authenticated() {
+		t.Fatal("heartbeating app survived missing native revoke acknowledgement")
+	}
+	select {
+	case <-a.quit:
+	case <-time.After(time.Second):
+		t.Fatal("revoke timeout left native safety lane open")
+	}
+	_ = a.frames.SetReadDeadline(time.Now().Add(time.Second))
+	var one [1]byte
+	if _, e := a.frames.Read(one[:]); !errors.Is(e, io.EOF) {
+		t.Fatal("revoke timeout left native frame lane open", e)
+	}
+	fresh := screenBinding(b)
+	fresh.GrantEpoch = "2"
+	if !errors.Is(b.Grant(fresh, "window", nativeScreen.DefaultLimits()), nativeScreen.ErrAccess) {
+		t.Fatal("expired native association admitted a later grant")
 	}
 }
