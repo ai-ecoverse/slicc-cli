@@ -74,6 +74,8 @@ func serveLeases(h *ctl.Holder, s *capjerk.Server) {
 		r := s.Unseal(context.Background(), req.LeaseID)
 		switch r.Code {
 		case "":
+		case "EBUSY":
+			return map[string]any{"ok": false, "error": r.Code}
 		case "EIO":
 			return map[string]any{"ok": false, "error": r.Code, "exit": r.Exit}
 		default:
