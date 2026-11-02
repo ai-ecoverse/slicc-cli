@@ -36,6 +36,7 @@ type agentFlags struct {
 	reject           bool
 	abortOnInterrupt bool
 	settle           bool
+	since            string
 	quiet            time.Duration
 	timeout          time.Duration
 	args             []string
@@ -87,6 +88,9 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 	}
 	if verb == "wait" {
 		fs.DurationVar(&f.timeout, "timeout", 0, "")
+	}
+	if verb == "watch" {
+		fs.StringVar(&f.since, "since", "", "")
 	}
 	if verb == "prompt" {
 		fs.BoolVar(&f.steer, "steer", false, "")

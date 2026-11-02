@@ -1,8 +1,11 @@
 package integration
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"net"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -86,8 +89,8 @@ func TestWatchJSONAndThinking(t *testing.T) {
 	s.p.eval(`(linkTest.agent.resetWatches(), linkTest.agent.emit([{t: 'text', id: 'a1', delta: 'lo'}]))`, &n)
 	s.p.waitWatches(t, 2)
 	w.waitFor(t, w.stdout, `"lo"`, 30*time.Second)
-	want := `{"t":"thinking","id":"k1","delta":"hm"}` + "\n" + `{"t":"text","id":"a1","delta":"Hel"}` + "\n" + `{"delta":"lo","id":"a1","t":"text"}` + "\n"
-	if got := w.stdout.String(); got != want {
+	want := `{"t":"opened","head":""}` + "\n" + `{"t":"thinking","id":"k1","delta":"hm"}` + "\n" + `{"t":"text","id":"a1","delta":"Hel"}` + "\n" + `{"t":"reconnecting","attempt":1,"wait":<ms>}` + "\n" + `{"t":"opened","head":"a1"}` + "\n" + `{"delta":"lo","id":"a1","t":"text"}` + "\n"
+	if got := regexp.MustCompile(`"wait":[0-9]+`).ReplaceAllString(w.stdout.String(), `"wait":<ms>`); got != want {
 		t.Fatalf("stdout %q, want %q", got, want)
 	}
 	if err := interrupt(w.cmd); err != nil {
@@ -182,4 +185,52 @@ func TestWatchOverTheTrayReconnects(t *testing.T) {
 		t.Fatalf("watch exit %d", code)
 	}
 	assertRedacted(t, w.stderr.String(), h, trays...)
+}
+
+func TestWatchJSONSinceOpenedAndReconnecting(t *testing.T) {
+	s := newLocalSeven(t)
+	s.p.agentDo(`emit([{t: 'user', id: 'u1', text: 'hi', delivered: 'run'}, {t: 'text', id: 'a1', delta: 'Hello'}, {t: 'tool', id: 't1', call: 'c1', name: 'bash', summary: 'ls'}])`)
+	w := s.run(t, nil, "watch", "--json", "--since", "a1")
+	st := s.p.waitWatches(t, 1)
+	if o := lastWatch(st); o.Since != "a1" {
+		t.Fatalf("first watch %+v", o)
+	}
+	w.waitFor(t, w.stdout, `"summary":"ls"`, 30*time.Second)
+	var n any
+	s.p.eval(`(linkTest.agent.resetWatches(), linkTest.agent.emit([{t: 'text', id: 'a2', delta: 'Bye'}]))`, &n)
+	st = s.p.waitWatches(t, 2)
+	if o := lastWatch(st); o.Since != "t1" {
+		t.Fatalf("resumed watch %+v", o)
+	}
+	w.waitFor(t, w.stdout, `"Bye"`, 30*time.Second)
+	s.p.eval(`(linkTest.agent.resetWatches(), linkTest.agent.clear())`, &n)
+	s.p.waitWatches(t, 3)
+	w.waitFor(t, w.stdout, `"gap":true`, 30*time.Second)
+	if err := interrupt(w.cmd); err != nil {
+		t.Fatal(err)
+	}
+	if code := w.wait(t, 30*time.Second); code != 0 {
+		t.Fatalf("watch exit %d", code)
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	for _, line := range strings.Split(strings.TrimSpace(w.stdout.String()), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("not JSON: %q", line)
+		}
+		if m["t"] == "reconnecting" {
+			if wait, _ := m["wait"].(float64); wait <= 0 || m["attempt"] != float64(1) {
+				t.Fatalf("reconnecting %q", line)
+			}
+			m["wait"] = "<ms>"
+		}
+		_ = enc.Encode(m)
+	}
+	got := out.String()
+	if !strings.HasPrefix(got, `{"head":"t1","t":"opened"}`+"\n") || strings.Count(got, `"t":"opened"`) != 3 || strings.Count(got, `"t":"reconnecting"`) != 2 {
+		t.Fatalf("stdout:\n%s", got)
+	}
+	nativeFixture(t, "watch.ndjson", out.Bytes())
 }

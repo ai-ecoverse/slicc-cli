@@ -104,7 +104,9 @@
       "busy"
     ],
     "own": [
-      "settled"
+      "settled",
+      "opened",
+      "reconnecting"
     ]
   },
   "control": {

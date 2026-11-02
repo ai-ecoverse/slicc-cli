@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -170,8 +171,9 @@ func TestWasiWatch(t *testing.T) {
 				opened(ev("head", "7"), "send", []any{ev("t", "text", "id", "a7.0", "delta", "Hello")}, "hold", true),
 			},
 			check: func(t *testing.T, r wasiResult) {
-				want := "{\"delta\":\"Hel\",\"id\":\"a7.0\",\"t\":\"text\"}\n{\"delta\":\"lo\",\"id\":\"a7.0\",\"t\":\"text\"}\n"
-				if r.Status != 130 || r.Stdout != want {
+				want := "{\"t\":\"opened\",\"head\":\"5\"}\n{\"delta\":\"Hel\",\"id\":\"a7.0\",\"t\":\"text\"}\n{\"t\":\"reconnecting\",\"attempt\":1,\"wait\":<ms>}\n{\"t\":\"opened\",\"head\":\"7\"}\n{\"delta\":\"lo\",\"id\":\"a7.0\",\"t\":\"text\"}\n"
+				got := regexp.MustCompile(`"wait":[0-9]+`).ReplaceAllString(r.Stdout, `"wait":<ms>`)
+				if r.Status != 130 || got != want {
 					t.Fatalf("exit %d, stdout %q, want %q", r.Status, r.Stdout, want)
 				}
 			}},

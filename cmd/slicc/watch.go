@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -9,7 +10,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/agentctl"
 )
 
-const watchUsage = `usage: slicc <join-url> watch [--plain] [--json] [--thinking]
+const watchUsage = `usage: slicc <join-url> watch [--plain] [--json] [--thinking] [--since <entry-id>]
 ` + watchSynopsis + `
 Follow seven's agent as it works, until Ctrl-C. Prompts and the assistant's
 text go to stdout; tool calls, results, notices and errors go to stderr,
@@ -19,7 +20,10 @@ without repeating any.
 
 flags:
   --thinking         also show the agent's thinking, on stderr
-  --json             print the raw NDJSON events on stdout instead
+  --since <id>       start after this transcript entry (an event's id)
+  --json             print the raw NDJSON events on stdout instead, after
+                     slicc's own opened line for each stream, and its
+                     reconnecting line before each new try
   --plain            no styling, even on a terminal
 ` + watchFlags + `
 Exit status: ` + watchExit
@@ -31,10 +35,12 @@ type watcher struct {
 	tracker *agentctl.Tracker
 	backoff time.Duration
 	opened  bool
+	attempt int
 }
 
 func runWatch(ctx context.Context, f agentFlags, aio agentIO) int {
 	w := &watcher{f: f, aio: aio, r: f.renderer(aio, true, true), tracker: agentctl.NewTracker(), backoff: followBackoffBase}
+	w.tracker.Resume(f.since)
 	links, err := f.links(ctx, aio, w.r.Status)
 	if err != nil {
 		return agentFail(aio, "watch", err)
@@ -91,6 +97,10 @@ func (w *watcher) sleep(ctx context.Context) bool {
 		w.backoff = min(w.backoff*2, followBackoffMax)
 	}
 	w.opened = false
+	w.attempt++
+	if w.f.json {
+		w.line(agentLine{T: agentReconnecting, Attempt: w.attempt, Wait: wait.Milliseconds()})
+	}
 	select {
 	case <-ctx.Done():
 		return false
@@ -107,7 +117,11 @@ func (w *watcher) once(ctx context.Context, l agentctl.Link) error {
 	defer func() { _ = st.Close() }()
 	w.opened = true
 	w.backoff = followBackoffBase
+	w.attempt = 0
 	w.tracker.Reconnected()
+	if w.f.json {
+		w.line(agentLine{T: agentOpened, Head: &st.Head, Gap: st.Gap, Busy: st.Busy})
+	}
 	if st.Gap {
 		w.r.Notice("some events were missed")
 	}
@@ -128,4 +142,18 @@ func (w *watcher) once(ctx context.Context, l agentctl.Link) error {
 		}
 		w.r.Render(e)
 	}
+}
+
+type agentLine struct {
+	T       string  `json:"t"`
+	Head    *string `json:"head,omitempty"`
+	Gap     bool    `json:"gap,omitempty"`
+	Busy    *bool   `json:"busy,omitempty"`
+	Attempt int     `json:"attempt,omitempty"`
+	Wait    int64   `json:"wait,omitempty"`
+}
+
+func (w *watcher) line(l agentLine) {
+	b, _ := json.Marshal(l)
+	_, _ = w.aio.stdout.Write(append(b, '\n'))
 }

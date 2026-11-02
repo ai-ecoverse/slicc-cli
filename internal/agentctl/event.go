@@ -73,6 +73,8 @@ func NewTracker() *Tracker {
 
 func (t *Tracker) Since() string { return t.last }
 
+func (t *Tracker) Resume(id string) { t.last = id }
+
 func (t *Tracker) Reconnected() { t.recv = map[string]int{} }
 
 func (t *Tracker) Filter(e Event) (Event, bool) {
