@@ -25,7 +25,7 @@ var (
 	sixNameRE = regexp.MustCompile("(?i)" + catalog.Profiles.SixProfilePattern)
 )
 
-var ErrSixBusy = errors.New("six's Chrome is using this profile; close it, or use --browser/--profile to pick another")
+var ErrSixBusy = errors.New("six's Chrome is using this profile, and slicc can't reach its debugging port; close it, or use --browser/--profile to pick another")
 
 var ErrSixDir = errors.New("that profile is SLICC six's Chrome profile, which slicc never prepares; use --profile six to use it in place")
 
@@ -289,18 +289,41 @@ func ProbeSix(ctx context.Context, o Options, dir string) (*Endpoint, error) {
 	if !lockHeld(dir) {
 		return nil, nil
 	}
-	port, ws, err := ReadActivePort(dir)
-	if err != nil {
-		return nil, ErrSixBusy
-	}
+	d := discoveryFor(o)
 	o = o.withDefaults()
-	c := candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), wsPath: ws, source: SourceActivePort, dir: dir, six: true}
-	ep, err := probeCandidate(ctx, o.httpClient(), c, o)
-	if err != nil || ep.WSOnly {
-		return nil, ErrSixBusy
+	client := o.httpClient()
+	for _, c := range sixCandidates(ctx, o, d, dir) {
+		ep, err := probeCandidate(ctx, client, c, o)
+		if err != nil || ep.WSOnly {
+			continue
+		}
+		ep.CDP = normalizedCDP(ep.CDP)
+		return ep, nil
 	}
-	ep.CDP = normalizedCDP(ep.CDP)
-	return ep, nil
+	return nil, ErrSixBusy
+}
+
+func sixCandidates(ctx context.Context, o Options, d discovery, dir string) []candidate {
+	var out []candidate
+	seen := map[string]bool{}
+	add := func(c candidate) {
+		key := endpointKey(c.base) + c.wsPath
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		c.dir, c.six = dir, true
+		out = append(out, c)
+	}
+	if port, ws, err := ReadActivePort(dir); err == nil {
+		add(candidate{base: "http://127.0.0.1:" + strconv.Itoa(port), wsPath: ws, source: SourceActivePort})
+	}
+	for _, c := range processCandidates(ctx, o, d, newSixMatcher(o.platform(runtime.GOOS), true)) {
+		if c.dir != "" && SameDir(c.dir, dir) {
+			add(c)
+		}
+	}
+	return out
 }
 
 var sixVersionRE = regexp.MustCompile(`^\d+(\.\d+){3}`)
