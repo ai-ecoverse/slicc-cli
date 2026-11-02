@@ -474,7 +474,7 @@ func TestJerkConcurrentLinkAndHostUnseal(t *testing.T) {
 			fx.add(t, row.name, answer)
 		})
 	}
-	if !t.Failed() {
+	if !t.Failed() && fx.buf.Len() > 0 {
 		nativeFixture(t, "unseal-race.ndjson", fx.buf.Bytes())
 	}
 }
