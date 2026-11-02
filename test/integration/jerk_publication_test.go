@@ -80,12 +80,25 @@ func TestJerkRecordsLeaseBeforePublication(t *testing.T) {
 
 func publicationPeer(t *testing.T, ctx context.Context, s *capjerk.Server) *link.Link {
 	t.Helper()
+	pair := publicationLinks(t, ctx, link.Options{
+		Hello: link.Hello{Name: "host", Caps: []string{capjerk.Cap, capjerk.SealCap}}, Handlers: map[string]link.Handler{capjerk.Kind: s.Handle},
+	}, link.Options{Hello: link.Hello{Name: "publication-test"}})
+	select {
+	case <-pair.page.Ready():
+	case <-ctx.Done():
+		t.Fatal("publication link did not become ready")
+	}
+	return pair.page
+}
+
+func publicationLinks(t *testing.T, ctx context.Context, nodeOptions, pageOptions link.Options) linkPair {
+	t.Helper()
 	api := link.NewAPI(link.APIOptions{Loopback: true})
 	pc, err := api.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := link.New(pc, link.RolePage, link.Options{Hello: link.Hello{Name: "publication-test"}})
+	page, err := link.New(pc, link.RolePage, pageOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,17 +125,123 @@ func publicationPeer(t *testing.T, ctx context.Context, s *capjerk.Server) *link
 		}
 		return nil
 	}
-	n, err := link.Answer(ctx, api, signal.Message{T: signal.TypeOffer, Nonce: "publication", SDP: pc.LocalDescription().SDP}, send, link.Options{
-		Hello: link.Hello{Name: "host", Caps: []string{capjerk.Cap, capjerk.SealCap}}, Handlers: map[string]link.Handler{capjerk.Kind: s.Handle},
-	})
+	n, err := link.Answer(ctx, api, signal.Message{T: signal.TypeOffer, Nonce: "publication", SDP: pc.LocalDescription().SDP}, send, nodeOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = n.Close() })
 	select {
-	case <-page.Ready():
+	case <-n.Ready():
 	case <-ctx.Done():
 		t.Fatal("publication link did not become ready")
 	}
-	return page
+	return linkPair{node: n, page: page}
+}
+
+type pausedHello struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h pausedHello) MarshalJSON() ([]byte, error) {
+	close(h.entered)
+	<-h.release
+	return []byte(`null`), nil
+}
+
+func TestJerkPendingNoticeWaitsForHello(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jerk")
+	if err := exec.Command("go", "build", "-o", path, "./testdata/fakejerk").Run(); err != nil {
+		t.Fatal("build fake jerk failed")
+	}
+	s := capjerk.New(capjerk.Options{Jerk: &jerk.Jerk{Path: path}, Seal: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	page := publicationPeer(t, ctx, s)
+	st, err := page.Open(ctx, map[string]any{"kind": "jerk", "op": "seal", "provider": "minted"}, link.OpenOptions{})
+	if err != nil {
+		t.Fatal("seal open failed")
+	}
+	_ = st.CloseWrite()
+	if _, err := io.Copy(io.Discard, st); err != nil {
+		t.Fatal("seal failed")
+	}
+	leases := s.Leases()
+	if len(leases) != 1 || s.Unseal(ctx, leases[0].LeaseID).Code != "" {
+		t.Fatal("could not queue a revoke notice")
+	}
+	_ = page.Close()
+	for _, mode := range []string{"jerk-revoke", "no-cap", "closed"} {
+		t.Run(mode, func(t *testing.T) {
+			capable := mode != "no-cap"
+			pause := pausedHello{entered: make(chan struct{}), release: make(chan struct{})}
+			var once sync.Once
+			release := func() { once.Do(func() { close(pause.release) }) }
+			defer release()
+			notices := make(chan struct{}, 2)
+			caps := []string{}
+			if capable {
+				caps = append(caps, capjerk.RevokeCap)
+			}
+			pair := publicationLinks(t, ctx, link.Options{Hello: link.Hello{Name: "host", Screen: pause}}, link.Options{
+				Hello: link.Hello{Name: "page", Caps: caps},
+				Handlers: map[string]link.Handler{capjerk.RevokeKind: func(st *link.Stream) {
+					if err := st.Accept(nil); err != nil {
+						return
+					}
+					notices <- struct{}{}
+					_ = st.CloseWrite()
+				}},
+			})
+			select {
+			case <-pause.entered:
+			case <-ctx.Done():
+				t.Fatal("node HELLO was not paused")
+			}
+			attached := make(chan struct{})
+			go func() { s.Attach(pair.node); close(attached) }()
+			select {
+			case <-pair.page.Done():
+				t.Fatal("pending notice reached the page before node HELLO")
+			case <-attached:
+				t.Fatal("notice attachment completed before node HELLO")
+			case <-time.After(250 * time.Millisecond):
+			}
+			if mode == "closed" {
+				_ = pair.node.Close()
+				select {
+				case <-attached:
+				case <-ctx.Done():
+					t.Fatal("notice attachment did not stop on disconnect")
+				}
+				return
+			}
+			release()
+			select {
+			case <-pair.page.Ready():
+			case <-ctx.Done():
+				t.Fatal("page did not receive node HELLO")
+			}
+			select {
+			case <-attached:
+			case <-ctx.Done():
+				t.Fatal("notice attachment did not finish")
+			}
+			if capable {
+				select {
+				case <-notices:
+				case <-ctx.Done():
+					t.Fatal("pending notice was not delivered")
+				}
+			} else {
+				select {
+				case <-notices:
+					t.Fatal("notice sent without page capability")
+				case <-time.After(250 * time.Millisecond):
+				}
+			}
+			_ = pair.node.Close()
+			_ = pair.page.Close()
+		})
+	}
 }

@@ -46,6 +46,7 @@ type Link struct {
 	peerHello *Hello
 	waiting   []*channel
 	helloCh   chan struct{}
+	sentHello chan struct{}
 	err       error
 	done      chan struct{}
 }
@@ -87,13 +88,14 @@ func New(pc *webrtc.PeerConnection, role Role, opts Options) (*Link, error) {
 		opts.Hello.Caps = []string{}
 	}
 	l := &Link{
-		pc:      pc,
-		role:    role,
-		opts:    opts,
-		streams: map[uint32]*Stream{},
-		helloCh: make(chan struct{}),
-		done:    make(chan struct{}),
-		nextID:  2,
+		pc:        pc,
+		role:      role,
+		opts:      opts,
+		streams:   map[uint32]*Stream{},
+		helloCh:   make(chan struct{}),
+		sentHello: make(chan struct{}),
+		done:      make(chan struct{}),
+		nextID:    2,
 	}
 	if role == RolePage {
 		l.nextID = 1
@@ -121,6 +123,8 @@ func (l *Link) Role() Role { return l.role }
 func (l *Link) Done() <-chan struct{} { return l.done }
 
 func (l *Link) Ready() <-chan struct{} { return l.helloCh }
+
+func (l *Link) HelloSent() <-chan struct{} { return l.sentHello }
 
 func (l *Link) onConnectionStateChange(st webrtc.PeerConnectionState) {
 	switch st {
@@ -256,6 +260,7 @@ func (l *Link) sendHello(ch *channel) {
 		l.fail(fmt.Errorf("link: send HELLO: %w", err))
 		return
 	}
+	close(l.sentHello)
 	time.AfterFunc(l.opts.HelloTimeout, func() {
 		select {
 		case <-l.helloCh:
