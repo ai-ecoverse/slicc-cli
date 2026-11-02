@@ -51,7 +51,7 @@ var commandTable = map[string]commandInfo{
 	"attach":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"open":         {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"pair":         {JSON: jsonEvents, Vocabulary: vocabularyEvents},
-	"unpair":       {JSON: jsonNone},
+	"unpair":       {JSON: jsonDocument},
 	"follow":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"tray":         {JSON: jsonDocument},
 	"prompt":       {JSON: jsonEvents, Vocabulary: vocabularyAgent},

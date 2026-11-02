@@ -68,7 +68,7 @@ func TestControlStopAndDetachEndALoopbackRun(t *testing.T) {
 		f.next(t, "pairing")
 		path := ctlSocket(t, f.cmd.Process.Pid)
 		st, err := ctl.Query(context.Background(), path)
-		if err != nil || !slices.Equal(st.Ops, []string{ctl.OpStatus, ctl.OpDetach, ctl.OpStop}) {
+		if err != nil || !slices.Equal(st.Ops, []string{ctl.OpStatus, ctl.OpDetach, ctl.OpStop, ctl.OpRevoke}) {
 			t.Fatalf("status %+v %v", st, err)
 		}
 		log.add(t, "status.ops", st.Ops)
@@ -76,7 +76,7 @@ func TestControlStopAndDetachEndALoopbackRun(t *testing.T) {
 			t.Fatalf("unknown op: %+v %v", r, err)
 		}
 		reply := rawCtl(t, path, op)
-		if reply != `{"v":1,"ok":true,"error":""}` {
+		if reply != `{"v":1,"ok":true}` {
 			t.Fatalf("%s: %s", op, reply)
 		}
 		log.add(t, op, json.RawMessage(`{"v":1,"ok":true}`))
