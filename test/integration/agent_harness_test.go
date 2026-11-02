@@ -78,18 +78,20 @@ type agentOpen struct {
 	Busy       bool   `json:"busy"`
 	Length     int    `json:"length"`
 	TextLength int    `json:"textLength"`
+	Watch      bool   `json:"watch"`
 }
 
 type agentState struct {
-	Allow   bool        `json:"allow"`
-	Busy    bool        `json:"busy"`
-	Opens   []agentOpen `json:"opens"`
-	Prompts []string    `json:"prompts"`
-	Aborts  int         `json:"aborts"`
-	Watches int         `json:"watches"`
-	Held    bool        `json:"held"`
-	Scoops  int         `json:"scoops"`
-	Log     int         `json:"log"`
+	Allow       bool        `json:"allow"`
+	Busy        bool        `json:"busy"`
+	Opens       []agentOpen `json:"opens"`
+	Prompts     []string    `json:"prompts"`
+	Aborts      int         `json:"aborts"`
+	Watches     int         `json:"watches"`
+	Held        bool        `json:"held"`
+	Scoops      int         `json:"scoops"`
+	Log         int         `json:"log"`
+	Inventories int         `json:"inventories"`
 }
 
 func (p *page) agent() agentState {

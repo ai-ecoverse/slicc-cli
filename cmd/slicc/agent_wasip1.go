@@ -59,3 +59,7 @@ func (fl facadeLinks) next(context.Context) (agentctl.Link, error) {
 }
 
 func (facadeLinks) close() {}
+
+const agentsUsage = ""
+
+func agentsCommand(context.Context, agentFlags, agentIO) int { return 2 }

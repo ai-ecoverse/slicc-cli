@@ -45,3 +45,11 @@ func linkCode(err error) (string, bool) {
 	}
 	return "", false
 }
+
+func linkMessage(err error) (string, bool) {
+	var re *link.ResetError
+	if errors.As(err, &re) && re.Remote {
+		return re.Message, true
+	}
+	return "", false
+}

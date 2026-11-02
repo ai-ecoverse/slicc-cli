@@ -6,6 +6,10 @@
     "abort": {
       "json": "none"
     },
+    "agents": {
+      "json": "events",
+      "vocabulary": "events"
+    },
     "attach": {
       "json": "events",
       "vocabulary": "events"
@@ -81,6 +85,7 @@
       "error",
       "exited",
       "foreign-browser",
+      "inventory",
       "launched",
       "link-lost",
       "linked",
@@ -101,7 +106,8 @@
       "error",
       "end",
       "delivered",
-      "busy"
+      "busy",
+      "inventory"
     ],
     "own": [
       "settled",

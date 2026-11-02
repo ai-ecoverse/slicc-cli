@@ -37,6 +37,7 @@ type agentFlags struct {
 	abortOnInterrupt bool
 	settle           bool
 	since            string
+	watch            bool
 	quiet            time.Duration
 	timeout          time.Duration
 	args             []string
@@ -61,6 +62,8 @@ func agentUsage(verb string) string {
 		return watchUsage
 	case "wait":
 		return waitUsage
+	case "agents":
+		return agentsUsage
 	default:
 		return abortUsage
 	}
@@ -76,29 +79,7 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 		fs.Var((*multi)(&f.origins), "origin", "")
 		fs.StringVar(&f.signal, "signal", "cdp", "")
 	}
-	if verb != "abort" {
-		fs.BoolVar(&f.json, "json", false, "")
-	}
-	if verb == "prompt" || verb == "watch" {
-		fs.BoolVar(&f.plain, "plain", false, "")
-		fs.BoolVar(&f.thinking, "thinking", false, "")
-	}
-	if verb == "prompt" || verb == "wait" {
-		fs.DurationVar(&f.quiet, "allsettled", 0, "")
-	}
-	if verb == "wait" {
-		fs.DurationVar(&f.timeout, "timeout", 0, "")
-	}
-	if verb == "watch" {
-		fs.StringVar(&f.since, "since", "", "")
-	}
-	if verb == "prompt" {
-		fs.BoolVar(&f.steer, "steer", false, "")
-		fs.BoolVar(&f.reject, "reject", false, "")
-		if interruptAborts {
-			fs.BoolVar(&f.abortOnInterrupt, "abort-on-interrupt", false, "")
-		}
-	}
+	f.verbFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(aio.stdout, usage)
@@ -130,6 +111,35 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 		return f, 2
 	}
 	return f, -1
+}
+
+func (f *agentFlags) verbFlags(fs *flag.FlagSet) {
+	if f.verb != "abort" {
+		fs.BoolVar(&f.json, "json", false, "")
+	}
+	if f.verb == "prompt" || f.verb == "watch" {
+		fs.BoolVar(&f.plain, "plain", false, "")
+		fs.BoolVar(&f.thinking, "thinking", false, "")
+	}
+	if f.verb == "prompt" || f.verb == "wait" {
+		fs.DurationVar(&f.quiet, "allsettled", 0, "")
+	}
+	if f.verb == "wait" {
+		fs.DurationVar(&f.timeout, "timeout", 0, "")
+	}
+	if f.verb == "watch" {
+		fs.StringVar(&f.since, "since", "", "")
+	}
+	if f.verb == "agents" {
+		fs.BoolVar(&f.watch, "watch", false, "")
+	}
+	if f.verb == "prompt" {
+		fs.BoolVar(&f.steer, "steer", false, "")
+		fs.BoolVar(&f.reject, "reject", false, "")
+		if interruptAborts {
+			fs.BoolVar(&f.abortOnInterrupt, "abort-on-interrupt", false, "")
+		}
+	}
 }
 
 func (f *agentFlags) checkDurations(aio agentIO) int {
@@ -242,6 +252,8 @@ func runAgent(verb, joinURL string, args []string, aio agentIO) int {
 		return runWatch(ctx, f, aio)
 	case "wait":
 		return runWait(ctx, f, aio)
+	case "agents":
+		return agentsCommand(ctx, f, aio)
 	default:
 		return runAbort(ctx, f, aio)
 	}
