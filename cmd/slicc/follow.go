@@ -18,6 +18,7 @@ import (
 	capcdp "github.com/ai-ecoverse/slicc-cli/internal/caps/cdp"
 	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
+	capjerk "github.com/ai-ecoverse/slicc-cli/internal/caps/jerk"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
 	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
@@ -181,6 +182,7 @@ func follow(joinURL string, args []string, stdout, stderr io.Writer) int {
 	}
 	defer r.closeSSH()
 	r.out = out
+	defer out.watchCredentials(r.node)()
 	return r.run(ctx)
 }
 
@@ -278,8 +280,9 @@ func newFollowRun(joinURL string, ff followFlags, st *stopper, stderr io.Writer)
 		stopGuard()
 		return nil, err
 	}
+	var js *capjerk.Server
 	if ff.jerk || ff.jerkSeal {
-		serveJerk(r.node, ff.jerkSeal, true, status)
+		js = serveJerk(r.node, ff.jerkSeal, true, status)
 	}
 	mounts, rejected := hostfs.LoadAll(ff.mounts, status)
 	r.res = resourceSource{mounts: mounts, rejected: rejected, sftp: ff.compute.sftpOn()}
@@ -291,6 +294,7 @@ func newFollowRun(joinURL string, ff followFlags, st *stopper, stderr io.Writer)
 	r.node.Handle(capJoin, "join", r.handleJoin)
 	r.node.Handle(capJoin, "unlink", r.handleUnlink)
 	h, closeCtl := serveCtl("follow", r.node, 0, st, logf)
+	serveLeases(h, js)
 	h.Update(func(s *ctl.Status) { s.Hub, s.Device, s.Seven = r.hub, r.device, r.certs.Leader(r.hub) })
 	r.ctl = h
 	closeRest := r.closeSSH

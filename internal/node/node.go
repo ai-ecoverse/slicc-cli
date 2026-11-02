@@ -32,6 +32,7 @@ type Config struct {
 
 type Node struct {
 	cfg        Config
+	capsMu     sync.RWMutex
 	caps       []string
 	handlers   map[string]link.Handler
 	sshHostKey string
@@ -78,9 +79,17 @@ func (n *Node) Handle(capability, kind string, h link.Handler) {
 }
 
 func (n *Node) Advertise(capability string) {
+	n.capsMu.Lock()
+	defer n.capsMu.Unlock()
 	if !slices.Contains(n.caps, capability) {
 		n.caps = append(n.caps, capability)
 	}
+}
+
+func (n *Node) Withdraw(capability string) {
+	n.capsMu.Lock()
+	defer n.capsMu.Unlock()
+	n.caps = slices.DeleteFunc(n.caps, func(c string) bool { return c == capability })
 }
 
 func (n *Node) OnHello(f func(*link.Hello)) { n.helloHooks = append(n.helloHooks, f) }
@@ -111,7 +120,11 @@ func (n *Node) PeerOrigin(l *link.Link) string {
 	return s
 }
 
-func (n *Node) Caps() []string { return slices.Clone(n.caps) }
+func (n *Node) Caps() []string {
+	n.capsMu.RLock()
+	defer n.capsMu.RUnlock()
+	return slices.Clone(n.caps)
+}
 
 func (n *Node) Hello() link.Hello {
 	h := link.Hello{
@@ -120,7 +133,7 @@ func (n *Node) Hello() link.Hello {
 		Version:    n.cfg.Version,
 		Mode:       n.cfg.Mode,
 		Node:       signal.NodeID(),
-		Caps:       slices.Clone(n.caps),
+		Caps:       n.Caps(),
 		Routes:     &link.Routes{Prefixes: slices.Clone(n.cfg.Prefixes), Exit: n.cfg.Exit},
 		SSHHostKey: n.sshHostKey,
 	}

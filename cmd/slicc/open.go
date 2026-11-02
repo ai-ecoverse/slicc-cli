@@ -341,11 +341,20 @@ func (r *openRun) dashEvent(e node.Event) {
 		r.emitEvent(flow.Event{Event: flow.StreamDone, Stream: e.Stream})
 	case node.EventDropped:
 		r.emitEvent(flow.Event{Event: flow.Dropped, Stream: e.Stream, Count: e.Count})
+	case node.EventCredential:
+		r.emitEvent(flow.CredentialEvent(e.Cred))
 	}
 }
 
 func (r *openRun) linkEvent(e node.Event) {
 	if !r.opts.json {
+		return
+	}
+	if e.Kind == node.EventCredential {
+		b, _ := json.Marshal(flow.CredentialEvent(e.Cred))
+		var m map[string]any
+		_ = json.Unmarshal(b, &m)
+		r.event(m)
 		return
 	}
 	if e.Link == nil {
@@ -457,9 +466,7 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	httpcap.Register(n)
 	wscap.Register(n)
 	udpcap.Register(n)
-	if !r.f.noJerk {
-		serveJerk(n, true, false, r.status)
-	}
+	js := localJerk(r.f.noJerk, n, r.status)
 	closeSSH, err := r.f.compute.serve(n, r.status)
 	if err != nil {
 		return nil, err
@@ -516,6 +523,7 @@ func (r *openRun) serveCaps(ctx context.Context) (func(), error) {
 	h.Update(func(s *ctl.Status) { s.Device = r.id.Fingerprint })
 	h.Peers(r.ln.Live)
 	h.Answer(ctl.OpRevoke, r.revoke)
+	serveLeases(h, js)
 	unwatch := watchLocal(h, n, kernelPort)
 	return func() { unwatch(); closeCtl(); closeKernel(); closeMounts(); closeSSH() }, nil
 }

@@ -212,9 +212,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	httpcap.Register(n)
 	wscap.Register(n)
 	udpcap.Register(n)
-	if !f.noJerk {
-		serveJerk(n, true, false, status)
-	}
+	js := localJerk(f.noJerk, n, status)
 	closeSSH, err := f.compute.serve(n, status)
 	if err != nil {
 		return fail(err, 1)
@@ -230,6 +228,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		n.OnHello(kernelin.Announce(kernelPort))
 	}
 	h, closeCtl := serveCtl("attach", n, kernelPort, st, logf)
+	serveLeases(h, js)
 	defer closeCtl()
 	defer watchLocal(h, n, kernelPort)()
 	defer out.watchLinks(n, modeCDP, resourceSource{mounts: mounts, rejected: rejected, sftp: f.compute.sftpOn(), kernelPort: kernelPort})()

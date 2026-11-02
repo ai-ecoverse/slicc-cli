@@ -33,6 +33,7 @@ const (
 	Error       Kind = "error"
 	Pairing     Kind = "pairing"
 	Mode        Kind = "mode"
+	Credential  Kind = "credential"
 
 	Reconnecting Kind = "reconnecting"
 
@@ -40,7 +41,7 @@ const (
 )
 
 var Public = map[Kind]bool{
-	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, BrowserSlow: true, Closed: true, Error: true, ForeignBrowser: true,
+	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, BrowserSlow: true, Closed: true, Error: true, ForeignBrowser: true, Credential: true,
 }
 
 var Loopback = map[Kind]bool{Mode: true, Pairing: true}
@@ -100,6 +101,12 @@ type Event struct {
 	Code         string          `json:"code,omitempty"`
 	Retryable    *bool           `json:"retryable,omitempty"`
 	Resources    *Resources      `json:"resources,omitempty"`
+	Op           string          `json:"op,omitempty"`
+	Provider     string          `json:"provider,omitempty"`
+	LeaseID      string          `json:"leaseId,omitempty"`
+	ExpiresAt    string          `json:"expiresAt,omitempty"`
+	By           string          `json:"by,omitempty"`
+	Upstream     *bool           `json:"upstream,omitempty"`
 	Kept         []string        `json:"-"`
 	Time         time.Time       `json:"-"`
 }

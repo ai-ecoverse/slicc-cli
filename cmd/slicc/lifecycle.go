@@ -118,8 +118,21 @@ func (j *jsonLines) watchLinks(n *node.Node, mode string, res resourceSource) fu
 	return n.Subscribe(func(e node.Event) { j.linkEvent(n, mode, res, e) })
 }
 
+func (j *jsonLines) watchCredentials(n *node.Node) func() {
+	if j == nil || !j.on {
+		return func() {}
+	}
+	return n.Subscribe(func(e node.Event) {
+		if e.Kind == node.EventCredential {
+			j.emit(flow.CredentialEvent(e.Cred))
+		}
+	})
+}
+
 func (j *jsonLines) linkEvent(n *node.Node, mode string, res resourceSource, e node.Event) {
 	switch e.Kind {
+	case node.EventCredential:
+		j.emit(flow.CredentialEvent(e.Cred))
 	case node.EventConnecting:
 		j.emit(flow.Event{Event: flow.Connecting, Mode: mode})
 	case node.EventLinked:

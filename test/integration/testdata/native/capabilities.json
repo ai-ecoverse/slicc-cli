@@ -76,6 +76,7 @@
       "browser-slow",
       "closed",
       "connecting",
+      "credential",
       "detached",
       "discovered",
       "error",
@@ -115,7 +116,11 @@
       "status",
       "detach",
       "stop",
-      "revoke"
+      "revoke",
+      "leases",
+      "unseal",
+      "seal-off",
+      "seal-on"
     ]
   }
 }

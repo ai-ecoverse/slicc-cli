@@ -90,10 +90,26 @@ func verb(p, rest string) int {
 		fmt.Printf(`{"credentials":{"GH_TOKEN":"gho_secret_%[1]s","GITHUB_TOKEN":"gho_secret_%[1]s"},"expires_at":%q,"lease_id":"jerk-%[1]s-1"}`+"\n", p, exp)
 		fmt.Println(`{"user":"octocat","scopes":["repo"]}`)
 	case rest == "drop --lease --via-link":
-		fmt.Println(`{"message":"dropped ` + os.Getenv("FNOX_LEASE_ID") + `"}`)
+		return drop(p)
 	default:
 		fmt.Fprintln(os.Stderr, "jerk: unknown "+rest)
 		return 2
+	}
+	return 0
+}
+
+func drop(p string) int {
+	msg := `"message":"dropped ` + os.Getenv("FNOX_LEASE_ID") + `"`
+	switch p {
+	case "dropfail":
+		fmt.Println(`{"message":"the provider's drop failed"}`)
+		return 4
+	case "github":
+		fmt.Println(`{` + msg + `,"revoked":false}`)
+	case "minted":
+		fmt.Println(`{` + msg + `,"revoked":true}`)
+	default:
+		fmt.Println(`{` + msg + `}`)
 	}
 	return 0
 }

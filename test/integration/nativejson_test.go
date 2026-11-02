@@ -15,11 +15,12 @@ import (
 )
 
 var nativePlaceholders = map[string]string{
-	"url":     "<pairing-url>",
-	"device":  "<fingerprint>",
-	"tab":     "<origin>",
-	"retryAt": "<time>",
-	"wait":    "<ms>",
+	"url":       "<pairing-url>",
+	"device":    "<fingerprint>",
+	"tab":       "<origin>",
+	"retryAt":   "<time>",
+	"wait":      "<ms>",
+	"expiresAt": "<time>",
 }
 
 func normalizeEvent(t *testing.T, raw string) map[string]any {

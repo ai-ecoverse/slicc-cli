@@ -538,8 +538,14 @@ func (r *run) pump(q *queue, n *node.Node, pol *policy.Policy) {
 			r.emit(Event{Event: StreamDone, Stream: ev.Stream})
 		case node.EventDropped:
 			r.emit(Event{Event: Dropped, Stream: ev.Stream, Count: ev.Count})
+		case node.EventCredential:
+			r.emit(CredentialEvent(ev.Cred))
 		}
 	}
+}
+
+func CredentialEvent(c *node.Credential) Event {
+	return Event{Event: Credential, Op: c.Op, Provider: c.Provider, LeaseID: c.LeaseID, ExpiresAt: c.ExpiresAt, By: c.By, Upstream: c.Upstream}
 }
 
 func (r *run) cleanup() {

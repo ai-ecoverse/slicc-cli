@@ -8,6 +8,7 @@ import { fsTest } from './fs-test.js';
 import { agentTest, onAgent } from './agent.js';
 import { wsTest } from './ws.js';
 import { udpTest } from './udp.js';
+import { onJerkRevoked, recordLeases, revokeTest } from './revoke.js';
 import { LoopbackError, backoff, certificateFingerprint, loadCertificate, pair as loopbackPair, post as loopbackPost, signal as loopbackSignal, takePairing, unlink as loopbackUnlink } from './loopback.js';
 
 const params = new URLSearchParams(location.search);
@@ -80,13 +81,13 @@ function teardown() {
 }
 
 function pageCaps() {
-  const caps = ['browsers', 'mounts', 'agent'];
+  const caps = ['browsers', 'mounts', 'agent', 'jerk-revoke'];
   if (kernelIn) caps.push('kernel-in');
   return caps;
 }
 
-function pageHandlers() {
-  const handlers = { browsers: onBrowsers, mounts: onMounts, agent: onAgent };
+function pageHandlers(ref) {
+  const handlers = { browsers: onBrowsers, mounts: onMounts, agent: onAgent, 'jerk-revoked': onJerkRevoked(ref) };
   if (kernelIn) handlers.kernel = onKernel;
   return handlers;
 }
@@ -99,7 +100,9 @@ async function setup(nonce, node) {
   state.hellos += 1;
   const pc = new RTCPeerConnection();
   const caps = pageCaps().filter((c) => c !== 'agent' || agentTest.state().allow);
-  const link = new Link(pc, { hello: { name: 'link test page', caps }, handlers: pageHandlers() });
+  const ref = {};
+  const link = new Link(pc, { hello: { name: 'link test page', caps }, handlers: pageHandlers(ref) });
+  ref.link = link;
   entry.pc = pc;
   entry.link = link;
   state.entries.set(key, entry);
@@ -241,7 +244,9 @@ async function loopbackLink(run) {
   certificate ??= await loadCertificate();
   const pc = new RTCPeerConnection({ certificates: [certificate] });
   const caps = pageCaps().filter((c) => c !== 'agent' || agentTest.state().allow);
-  const link = new Link(pc, { hello: { name: 'link test page', caps }, handlers: pageHandlers() });
+  const ref = {};
+  const link = new Link(pc, { hello: { name: 'link test page', caps }, handlers: pageHandlers(ref) });
+  ref.link = link;
   let info;
   try {
     info = await run(pc);
@@ -520,7 +525,9 @@ globalThis.linkTest = {
       stream.end();
       const text = new TextDecoder().decode(await stream.readAll());
       await stream.done;
-      return { opened: stream.opened, events: text.split('\n').filter(Boolean).map((l) => JSON.parse(l)) };
+      const events = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      recordLeases(open, events, state.current?.hello?.node ?? null);
+      return { opened: stream.opened, events };
     } catch (error) {
       return describe(error);
     }
@@ -546,6 +553,7 @@ globalThis.linkTest = {
     }));
   },
   agent: agentTest,
+  revoke: revokeTest,
   loopback: loopbackTest,
   frameEvents: (opts) => measureFrameEvents(() => state.link, opts),
   dailyFrames: (opts) => measureOrdinaryBesideProtected(() => state.link, opts),

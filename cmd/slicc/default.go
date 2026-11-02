@@ -20,6 +20,7 @@ import (
 	capcdp "github.com/ai-ecoverse/slicc-cli/internal/caps/cdp"
 	hostfs "github.com/ai-ecoverse/slicc-cli/internal/caps/fs"
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
+	capjerk "github.com/ai-ecoverse/slicc-cli/internal/caps/jerk"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/kernelin"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
@@ -212,8 +213,9 @@ func registerCaps(lc *liveCaps, origins []string, st *stopper, logf func(string,
 		httpcap.Register(n)
 		wscap.Register(n)
 		udpcap.Register(n)
+		var js *capjerk.Server
 		if c.jerk {
-			serveJerk(n, true, false, logf)
+			js = serveJerk(n, true, false, logf)
 		}
 		srv, closeFS := shareMounts(n, c.mounts, logf)
 		lc.setFS(nil, srv)
@@ -252,6 +254,7 @@ func registerCaps(lc *liveCaps, origins []string, st *stopper, logf func(string,
 		wctx, cancel := context.WithCancel(ctx)
 		serveBrowsers(wctx, n, reg)
 		h, closeCtl := serveCtl("default", n, c.kernel, st, logf)
+		serveLeases(h, js)
 		unwatch := watchLocal(h, n, c.kernel)
 		live := func() map[string]bool {
 			out := map[string]bool{}

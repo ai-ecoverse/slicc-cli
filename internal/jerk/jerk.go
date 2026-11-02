@@ -52,6 +52,7 @@ type Result struct {
 	Env       []string         `json:"env,omitempty"`
 	Message   string           `json:"message"`
 	Items     []map[string]any `json:"items,omitempty"`
+	Revoked   *bool            `json:"-"`
 }
 
 type Outcome struct {
@@ -348,6 +349,10 @@ func object(out *Outcome, obj map[string]json.RawMessage, progress func(string))
 	}
 	if s := strs(obj["env"]); s != nil {
 		r.Env = s
+	}
+	var revoked bool
+	if v, ok := obj["revoked"]; ok && json.Unmarshal(v, &revoked) == nil {
+		r.Revoked = &revoked
 	}
 }
 
