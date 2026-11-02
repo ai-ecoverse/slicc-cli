@@ -252,6 +252,14 @@ func TestJerkLeasesFromTheHost(t *testing.T) {
 		t.Fatalf("refused notice %+v", n)
 	}
 	e.a.waitStderr(t, "jerk: revoke notice gitlab:", 10*time.Second)
+	before := len(credentialEvents(e.a))
+	if r := e.p.jerk(t, map[string]any{"op": "unseal", "provider": "github", "lease_id": "jerk-gitlab-1"}); r.Reset != "" || r.last()["exit"] != 0.0 {
+		t.Fatalf("unseal of gitlab's lease id as github %+v", r)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := len(credentialEvents(e.a)); got != before {
+		t.Fatalf("an unseal under another provider printed a credential event: %v", credentialEvents(e.a)[before:])
+	}
 	e.p.eval("linkTest.revoke.mode('accept')", nil)
 	relink(e)
 	again := waitNotices(t, e.p, 6)[3:]

@@ -77,13 +77,19 @@ func (s *Server) record(provider string, l *hostjerk.Lease) {
 
 func (s *Server) forget(provider, leaseID string, upstream *bool) {
 	s.mu.Lock()
-	expires := ""
+	expires, matched := "", false
 	if l := s.leases[leaseID]; l != nil && l.Provider == provider {
-		expires = l.ExpiresAt
+		expires, matched = l.ExpiresAt, true
 		delete(s.leases, leaseID)
 	}
-	delete(s.pending, leaseID)
+	if n := s.pending[leaseID]; n != nil && n.provider == provider {
+		matched = true
+		delete(s.pending, leaseID)
+	}
 	s.mu.Unlock()
+	if !matched {
+		return
+	}
 	s.notify(node.Credential{Op: OpUnseal, Provider: provider, LeaseID: leaseID, ExpiresAt: expires, By: BySeven, Upstream: upstream})
 }
 
