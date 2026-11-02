@@ -374,7 +374,6 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 	if caps.Release != nil {
 		defer caps.Release()
 	}
-	defer r.watchBrowsers(lctx, caps.Live, caps.Unlisted)()
 	q := newQueue()
 	unsubscribe := n.Subscribe(q.push)
 	defer r.serveKernel(n)()
@@ -403,6 +402,7 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 		Status:  func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) },
 	})
 	r.emit(Event{Event: Serving, Caps: n.Caps(), Policy: pol.Summary(), Compute: r.cfg.Compute})
+	defer r.watchBrowsers(lctx, caps.Live, caps.Unlisted)()
 	err = n.Serve(lctx, sig)
 	stop(nil)
 	<-watched
