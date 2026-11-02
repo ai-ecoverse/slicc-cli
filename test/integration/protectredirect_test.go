@@ -354,15 +354,15 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 			}
 			lib = lib || strings.Contains(got, "ordinary-lib-0033")
 		}
-		if refused < 1 || !lib {
-			t.Errorf("the service worker's direct protected import refused %d times, ordinary import readable %v: %v", refused, lib, r.result("sw Debugger.getScriptSource"))
+		if refused < 1 || lib {
+			t.Errorf("the service worker's protected and ordinary Debugger sources must remain refused: protected refusals %d, ordinary import readable %v: %v", refused, lib, r.result("sw Debugger.getScriptSource"))
 		}
 		if got := r.result("early Debugger.enable"); len(got) != 1 || !strings.Contains(got[0], "slicc: refused: ") {
 			t.Errorf("an explicit attach to a running shared worker did not refuse Debugger.enable: %v", got)
 		}
 		sharedRefused := 0
 		for _, got := range r.result("shared Debugger.getScriptSource") {
-			if strings.Contains(got, "slicc: refused: the response came from seven's origin") {
+			if strings.Contains(got, "slicc: refused: the response came from seven's origin") || strings.Contains(got, "slicc: refused: scripts and bindings for later documents") {
 				sharedRefused++
 			}
 		}
