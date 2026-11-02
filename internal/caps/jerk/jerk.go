@@ -48,14 +48,15 @@ type Options struct {
 }
 
 type Server struct {
-	o        Options
-	n        *node.Node
-	mu       sync.Mutex
-	creating map[*link.Link]bool
-	leases   map[string]*LeaseInfo
-	pending  map[string]*notice
-	links    map[*link.Link]bool
-	sealOff  bool
+	o         Options
+	n         *node.Node
+	mu        sync.Mutex
+	unsealing map[string]*unsealState
+	creating  map[*link.Link]bool
+	leases    map[string]*LeaseInfo
+	pending   map[string]*notice
+	links     map[*link.Link]bool
+	sealOff   bool
 }
 
 type open struct {
@@ -112,7 +113,7 @@ func New(o Options) *Server {
 	if o.GOOS == "" {
 		o.GOOS = runtime.GOOS
 	}
-	return &Server{o: o, creating: map[*link.Link]bool{}, leases: map[string]*LeaseInfo{}, pending: map[string]*notice{}, links: map[*link.Link]bool{}}
+	return &Server{o: o, unsealing: map[string]*unsealState{}, creating: map[*link.Link]bool{}, leases: map[string]*LeaseInfo{}, pending: map[string]*notice{}, links: map[*link.Link]bool{}}
 }
 
 func (s *Server) Handle(st *link.Stream) {
@@ -356,9 +357,6 @@ func (s *Server) run(st *link.Stream, req open, call hostjerk.Call) {
 		s.record(p, out.Lease)
 	}
 	write(resultEvent{Event: "result", Result: out.Result})
-	if req.Op == "unseal" && out.Result.Exit == 0 {
-		s.forget(p, *req.LeaseID, out.Result.Revoked)
-	}
 	_ = st.CloseWrite()
 }
 
@@ -368,8 +366,26 @@ func (s *Server) exec(ctx context.Context, op, p string, call hostjerk.Call) hos
 	case "seal":
 		return j.LeaseCall(ctx, p, call)
 	case "unseal":
+		leaseID := strings.TrimPrefix(call.Env[0], "FNOX_LEASE_ID=")
+		state, release := s.lockUnseal(leaseID)
+		defer release()
+		if out, ok := state.outcomes[p]; ok {
+			if call.Started != nil {
+				call.Started()
+			}
+			return out
+		}
+		s.mu.Lock()
+		if l := s.leases[leaseID]; l != nil && l.Provider == p {
+			state.expires = l.expires
+		}
+		s.mu.Unlock()
 		out := j.Run(ctx, p, call)
 		out.Lease = nil
+		if !out.Died && !out.TimedOut && out.Result.Exit == 0 {
+			s.forget(p, leaseID, out.Result.Revoked)
+			state.outcomes[p] = out
+		}
 		return out
 	}
 	out := j.Run(ctx, p, call)

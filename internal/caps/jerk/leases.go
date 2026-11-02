@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"sync"
 	"time"
 
 	hostjerk "github.com/ai-ecoverse/slicc-cli/internal/jerk"
@@ -51,6 +52,35 @@ type UnsealResult struct {
 	Upstream *bool
 }
 
+type unsealState struct {
+	mu       sync.Mutex
+	users    int
+	outcomes map[string]hostjerk.Outcome
+	expires  time.Time
+}
+
+func (s *Server) lockUnseal(leaseID string) (*unsealState, func()) {
+	s.mu.Lock()
+	s.pruneLocked()
+	state := s.unsealing[leaseID]
+	if state == nil {
+		state = &unsealState{outcomes: map[string]hostjerk.Outcome{}}
+		s.unsealing[leaseID] = state
+	}
+	state.users++
+	s.mu.Unlock()
+	state.mu.Lock()
+	return state, func() {
+		state.mu.Unlock()
+		s.mu.Lock()
+		state.users--
+		if state.users == 0 && !state.expires.After(s.now()) {
+			delete(s.unsealing, leaseID)
+		}
+		s.mu.Unlock()
+	}
+}
+
 func (s *Server) now() time.Time {
 	if s.o.Now != nil {
 		return s.o.Now()
@@ -70,6 +100,9 @@ func (s *Server) record(provider string, l *hostjerk.Lease) {
 	}
 	exp, _ := time.Parse(time.RFC3339, l.ExpiresAt)
 	s.mu.Lock()
+	if state := s.unsealing[l.LeaseID]; state != nil && state.users == 0 {
+		delete(s.unsealing, l.LeaseID)
+	}
 	s.leases[l.LeaseID] = &LeaseInfo{Provider: provider, LeaseID: l.LeaseID, ExpiresAt: l.ExpiresAt, SealedAt: s.now().UTC(), expires: exp}
 	s.mu.Unlock()
 	s.notify(node.Credential{Op: OpSeal, Provider: provider, LeaseID: l.LeaseID, ExpiresAt: l.ExpiresAt, By: BySeven})
@@ -95,6 +128,11 @@ func (s *Server) forget(provider, leaseID string, upstream *bool) {
 
 func (s *Server) pruneLocked() {
 	now := s.now()
+	for id, state := range s.unsealing {
+		if state.users == 0 && !state.expires.After(now) {
+			delete(s.unsealing, id)
+		}
+	}
 	for id, l := range s.leases {
 		if !l.expires.After(now) {
 			delete(s.leases, id)
@@ -148,6 +186,8 @@ func (s *Server) Unseal(ctx context.Context, leaseID string) UnsealResult {
 	if !hostjerk.ValidLeaseID(leaseID) || !Allowed(s.o.GOOS, leaseID) {
 		return UnsealResult{Code: "EPROTO"}
 	}
+	state, release := s.lockUnseal(leaseID)
+	defer release()
 	s.mu.Lock()
 	s.pruneLocked()
 	l := s.leases[leaseID]
@@ -164,6 +204,10 @@ func (s *Server) Unseal(ctx context.Context, leaseID string) UnsealResult {
 		s.restore(l)
 		return UnsealResult{Code: "EIO", Exit: out.Result.Exit}
 	}
+	state.outcomes[l.Provider] = out
+	s.mu.Lock()
+	state.expires = l.expires
+	s.mu.Unlock()
 	s.notify(node.Credential{Op: OpRevoked, Provider: l.Provider, LeaseID: leaseID, ExpiresAt: l.ExpiresAt, By: ByHost, Upstream: out.Result.Revoked})
 	n := &notice{provider: l.Provider, leaseID: leaseID, expires: l.expires, sent: map[*link.Link]bool{}}
 	s.mu.Lock()

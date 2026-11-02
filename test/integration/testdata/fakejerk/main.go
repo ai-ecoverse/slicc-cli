@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,6 +101,19 @@ func verb(p, rest string) int {
 }
 
 func drop(p string) int {
+	if gate := os.Getenv("FAKEJERK_DROP_GATE"); gate != "" {
+		client := &http.Client{Timeout: 20 * time.Second}
+		resp, err := client.Post(gate, "text/plain", strings.NewReader(p))
+		if err != nil {
+			return 4
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, _ = io.Copy(os.Stdout, resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return 4
+		}
+		return 0
+	}
 	msg := `"message":"dropped ` + os.Getenv("FNOX_LEASE_ID") + `"`
 	switch p {
 	case "dropfail":

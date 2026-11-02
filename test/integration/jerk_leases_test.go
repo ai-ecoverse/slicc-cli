@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -448,5 +451,77 @@ func TestFollowJSONPrintsCredentialEvents(t *testing.T) {
 	}
 	if strings.Contains(fp.stderr.String(), leaseSentinel) {
 		t.Fatalf("a credential in follow's output:\n%s", fp.stderr.String())
+	}
+}
+
+func TestJerkConcurrentLinkAndHostUnseal(t *testing.T) {
+	first := make(chan chan bool, 2)
+	stop := make(chan struct{})
+	var drops atomic.Int32
+	gate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if drops.Add(1) > 2 {
+			_, _ = w.Write([]byte(`{"message":"already dropped"}`))
+			return
+		}
+		release := make(chan bool, 1)
+		first <- release
+		select {
+		case ok := <-release:
+			if !ok {
+				w.WriteHeader(http.StatusConflict)
+			}
+			_, _ = w.Write([]byte(`{"message":"dropped","revoked":true}`))
+		case <-r.Context().Done():
+		case <-stop:
+		}
+	}))
+	defer func() { close(stop); gate.Close() }()
+	log := filepath.Join(t.TempDir(), "jerk.log")
+	e := setupLinkEnv(t, false, jerkEnv(fakeJerkDir(t), log, "FAKEJERK_DROP_GATE="+gate.URL), "--json")
+	seal(t, e.p, "minted")
+	waitCredential(t, e.a, 1)
+	e.p.eval(`globalThis.unsealRace = linkTest.jerk({op:'unseal',provider:'minted',lease_id:'jerk-minted-1'}); true`, nil)
+	var releaseLink chan bool
+	select {
+	case releaseLink = <-first:
+	case <-time.After(15 * time.Second):
+		t.Fatal("link drop never reached the gate")
+	}
+	c := &leaseCtl{t: t, path: ctlSocket(t, e.a.cmd.Process.Pid)}
+	host := make(chan map[string]any, 1)
+	go func() { host <- c.call(map[string]any{"op": "unseal", "leaseId": "jerk-minted-1"}) }()
+	var releaseHost chan bool
+	select {
+	case releaseHost = <-first:
+	case <-time.After(time.Second):
+	}
+	releaseLink <- true
+	var result jerkRes
+	e.p.eval("unsealRace", &result)
+	if result.Reset != "" || result.last()["exit"] != 0.0 {
+		t.Fatal("link unseal failed")
+	}
+	if releaseHost != nil {
+		releaseHost <- false
+	}
+	select {
+	case answer := <-host:
+		if answer["error"] != "ENOENT" {
+			t.Errorf("host did not observe the completed link unseal: %v", answer)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("host unseal did not finish")
+	}
+	if len(listed(c.call(map[string]any{"op": "leases"}))) != 0 {
+		t.Error("a dropped lease was restored")
+	}
+	if r := e.p.jerk(t, map[string]any{"op": "unseal", "provider": "minted", "lease_id": "jerk-minted-1"}); r.Reset != "" || r.last()["exit"] != 0.0 {
+		t.Error("repeated link unseal did not retain the successful result")
+	}
+	if calls := jerkCalls(t, log); len(calls) != 2 {
+		t.Errorf("jerk ran %d times, want one seal and one drop", len(calls))
+	}
+	if events := credentialEvents(e.a); len(events) != 2 || events[1]["op"] != "unseal" || events[1]["by"] != "seven" {
+		t.Error("seven's unseal event was lost or duplicated")
 	}
 }
