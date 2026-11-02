@@ -388,6 +388,7 @@ type attachProc struct {
 	stderr *syncBuffer
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
+	out    *syncBuffer
 }
 
 func startAttach(t *testing.T, args ...string) *attachProc {
@@ -409,6 +410,9 @@ func startAttachEnv(t *testing.T, stdio bool, env []string, args ...string) *att
 		if a.stdout, err = cmd.StdoutPipe(); err != nil {
 			t.Fatal(err)
 		}
+	} else {
+		a.out = &syncBuffer{}
+		cmd.Stdout = a.out
 	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

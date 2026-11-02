@@ -3,9 +3,12 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
+	"time"
 
 	capjerk "github.com/ai-ecoverse/slicc-cli/internal/caps/jerk"
+	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/fence"
 	"github.com/ai-ecoverse/slicc-cli/internal/jerk"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
@@ -28,7 +31,9 @@ func jerkDirs() []string {
 	return nil
 }
 
-func serveJerk(n *node.Node, seal, explicit bool, status func(string, ...any)) {
+const unsealWithin = 75 * time.Second
+
+func serveJerk(n *node.Node, seal, explicit bool, status func(string, ...any)) *capjerk.Server {
 	j, old := jerk.Find(jerkDirs()...)
 	if j == nil {
 		switch {
@@ -37,12 +42,53 @@ func serveJerk(n *node.Node, seal, explicit bool, status func(string, ...any)) {
 		case explicit:
 			status("jerk: no slicc-jerk %s or later on PATH or in slicc's data folder; not offering it", jerk.MinVersion)
 		}
-		return
+		return nil
 	}
-	capjerk.Register(n, capjerk.Options{Jerk: j, Seal: seal})
+	s := capjerk.Register(n, capjerk.Options{Jerk: j, Seal: seal})
 	caps := "jerk"
 	if seal {
 		caps = "jerk, jerk-seal"
 	}
 	status("jerk: offering slicc-jerk %s (%s)", j.Version, caps)
+	if !seal {
+		return nil
+	}
+	return s
+}
+
+func localJerk(off bool, n *node.Node, status func(string, ...any)) *capjerk.Server {
+	if off {
+		return nil
+	}
+	return serveJerk(n, true, false, status)
+}
+
+func serveLeases(h *ctl.Holder, s *capjerk.Server) {
+	if h == nil || s == nil {
+		return
+	}
+	h.Answer(ctl.OpLeases, func(ctl.Request) map[string]any {
+		return map[string]any{"sealing": s.Sealing(), "leases": s.Leases()}
+	})
+	h.AnswerWithin(ctl.OpUnseal, unsealWithin, func(req ctl.Request) map[string]any {
+		r := s.Unseal(context.Background(), req.LeaseID)
+		switch r.Code {
+		case "":
+		case "EIO":
+			return map[string]any{"ok": false, "error": r.Code, "exit": r.Exit}
+		default:
+			return map[string]any{"error": r.Code}
+		}
+		out := map[string]any{"ok": true, "revoked": true}
+		if r.Upstream != nil {
+			out["upstream"] = *r.Upstream
+		}
+		return out
+	})
+	for op, on := range map[string]bool{ctl.OpSealOff: false, ctl.OpSealOn: true} {
+		h.Answer(op, func(ctl.Request) map[string]any {
+			s.SetSealing(on)
+			return map[string]any{"ok": true, "sealing": on}
+		})
+	}
 }

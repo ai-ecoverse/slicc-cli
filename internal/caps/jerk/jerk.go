@@ -42,12 +42,20 @@ type Options struct {
 	Timeout       time.Duration
 	Logf          func(format string, args ...any)
 	GOOS          string
+	Notify        func(node.Credential)
+	Now           func() time.Time
+	NoticeTimeout time.Duration
 }
 
 type Server struct {
 	o        Options
+	n        *node.Node
 	mu       sync.Mutex
 	creating map[*link.Link]bool
+	leases   map[string]*LeaseInfo
+	pending  map[string]*notice
+	links    map[*link.Link]bool
+	sealOff  bool
 }
 
 type open struct {
@@ -73,10 +81,19 @@ func Register(n *node.Node, o Options) *Server {
 	if o.Origin == nil {
 		o.Origin = n.PeerOrigin
 	}
+	if o.Notify == nil {
+		o.Notify = n.Credential
+	}
 	s := New(o)
+	s.n = n
 	n.Handle(Cap, Kind, s.Handle)
 	if o.Seal {
 		n.Advertise(SealCap)
+		n.Subscribe(func(e node.Event) {
+			if e.Kind == node.EventLinked && e.Link != nil {
+				go s.Attach(e.Link)
+			}
+		})
 	}
 	n.OnHello(func(h *link.Hello) { h.Jerk = &link.Jerk{Version: o.Jerk.Version} })
 	return s
@@ -95,7 +112,7 @@ func New(o Options) *Server {
 	if o.GOOS == "" {
 		o.GOOS = runtime.GOOS
 	}
-	return &Server{o: o, creating: map[*link.Link]bool{}}
+	return &Server{o: o, creating: map[*link.Link]bool{}, leases: map[string]*LeaseInfo{}, pending: map[string]*notice{}, links: map[*link.Link]bool{}}
 }
 
 func (s *Server) Handle(st *link.Stream) {
@@ -227,6 +244,9 @@ func (s *Server) seal(req open) (hostjerk.Call, error) {
 	if !s.o.Seal {
 		return hostjerk.Call{}, errors.New("EACCES: this node doesn't offer jerk-seal")
 	}
+	if req.Op == "seal" && !s.Sealing() {
+		return hostjerk.Call{}, errors.New(SealRefused)
+	}
 	p, err := provider(req)
 	if err != nil {
 		return hostjerk.Call{}, err
@@ -333,8 +353,12 @@ func (s *Server) run(st *link.Stream, req open, call hostjerk.Call) {
 	}
 	if out.Lease != nil {
 		write(leaseEvent{Event: "lease", Lease: out.Lease})
+		s.record(p, out.Lease)
 	}
 	write(resultEvent{Event: "result", Result: out.Result})
+	if req.Op == "unseal" && out.Result.Exit == 0 {
+		s.forget(p, *req.LeaseID, out.Result.Revoked)
+	}
 	_ = st.CloseWrite()
 }
 

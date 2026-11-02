@@ -15,7 +15,17 @@ const (
 	EventStreamOpen  EventKind = "stream-open"
 	EventStreamClose EventKind = "stream-close"
 	EventDropped     EventKind = "dropped"
+	EventCredential  EventKind = "credential"
 )
+
+type Credential struct {
+	Op        string
+	Provider  string
+	LeaseID   string
+	ExpiresAt string
+	By        string
+	Upstream  *bool
+}
 
 type Event struct {
 	Kind   EventKind
@@ -25,6 +35,7 @@ type Event struct {
 	Reason string
 	Count  int
 	Err    error
+	Cred   *Credential
 }
 
 type subscribers struct {
@@ -98,3 +109,5 @@ func (n *Node) counted(kind string, h link.Handler) link.Handler {
 		h(s)
 	}
 }
+
+func (n *Node) Credential(c Credential) { n.emit(Event{Kind: EventCredential, Cred: &c}) }

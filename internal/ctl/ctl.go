@@ -30,13 +30,17 @@ const (
 const V = version
 
 const (
-	OpStatus = "status"
-	OpDetach = "detach"
-	OpStop   = "stop"
-	OpRevoke = "revoke"
+	OpStatus  = "status"
+	OpDetach  = "detach"
+	OpStop    = "stop"
+	OpRevoke  = "revoke"
+	OpLeases  = "leases"
+	OpUnseal  = "unseal"
+	OpSealOff = "seal-off"
+	OpSealOn  = "seal-on"
 )
 
-var Ops = []string{OpStatus, OpDetach, OpStop, OpRevoke}
+var Ops = []string{OpStatus, OpDetach, OpStop, OpRevoke, OpLeases, OpUnseal, OpSealOff, OpSealOn}
 
 const (
 	StateWaiting      = "waiting"
@@ -77,6 +81,7 @@ type Holder struct {
 	s     Status
 	ops   map[string]func()
 	calls map[string]func(Request) map[string]any
+	slow  map[string]time.Duration
 	peers func() []string
 }
 
@@ -129,6 +134,22 @@ func (h *Holder) Answer(op string, f func(Request) map[string]any) {
 	h.calls[op] = f
 }
 
+func (h *Holder) AnswerWithin(op string, d time.Duration, f func(Request) map[string]any) {
+	h.Answer(op, f)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.slow == nil {
+		h.slow = map[string]time.Duration{}
+	}
+	h.slow[op] = d
+}
+
+func (h *Holder) within(op string) time.Duration {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.slow[op]
+}
+
 func (h *Holder) call(op string) func(Request) map[string]any {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -154,6 +175,7 @@ type Request struct {
 	V           int    `json:"v"`
 	Op          string `json:"op"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+	LeaseID     string `json:"leaseId,omitempty"`
 }
 
 type Server struct {
@@ -285,6 +307,9 @@ func (s *Server) answer(c net.Conn) {
 	case req.Op == OpStatus:
 		out = s.h.Snapshot()
 	case s.h.call(req.Op) != nil:
+		if d := s.h.within(req.Op); d > 0 {
+			_ = c.SetDeadline(time.Now().Add(d))
+		}
 		res := s.h.call(req.Op)(req)
 		res["v"] = version
 		out = res

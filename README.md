@@ -364,9 +364,10 @@ With `--json`, `attach`, `open`, `pair` (and `--default-browser`, which is `open
 - `link-lost`: `mode`, `reason?` when slicc or seven closed the link (`slicc is exiting`, seven's `bye` reason, `unlinked by <name>` with `code` `UNLINKED` on `follow`), or `message?` for a failure; `device?` on `open` and `pair`.
 - `reconnecting`: `attempt`, `retryAt` (RFC 3339, UTC), `wait` (milliseconds), `reason?` and `code?` (the failure that led here, and the hub's code), on `follow` before each new dial. These are the `attempt`, `retryAt` and `code` of [`slicc tray --json`](#running-links-slicc-tray).
 - `error`: `message`, `code?` (the hub's or seven's code, on `follow`), `mode?`, and `retryable`: `true` when slicc goes on by itself (`follow` reconnects, and an offer from seven that slicc can't answer leaves the run waiting for the next one), `false` when the run ends, with exit 1 (exit 2 for a bad `--origin` on `attach`).
+- `credential`: `op`, `provider`, `leaseId`, `expiresAt?`, `by`, `upstream?`, for each credential lease this process serves over [`jerk`](#jerk-slicc-jerk-over-the-link): `op` `seal` (`by` `seven`) once a lease has gone to seven, `unseal` (`by` `seven`) once seven's `unseal` has dropped one, and `revoked` (`by` `host`) once the control socket's `unseal` has dropped one. `upstream` is `true` when jerk revoked the token at the provider and `false` when it didn't (a token jerk only read lives on there until it expires); it is left out when jerk doesn't say, as with a slicc-jerk older than 1.4.0. Never a credential, a scope or a rule.
 - `closed`: `browsers: []`, the last event of every run, also one that failed or was interrupted, and `kept: []` after the control socket's `detach`.
 
-Secrets stay out: no join URL, no tray token, and no `--cdp` path, since `resources` names browsers by id and errors are redacted as on stderr. Fixtures: [`attach.ndjson`](test/integration/testdata/native/attach.ndjson), [`pair.ndjson`](test/integration/testdata/native/pair.ndjson), [`follow.ndjson`](test/integration/testdata/native/follow.ndjson) and [`follow-error.ndjson`](test/integration/testdata/native/follow-error.ndjson), with values that change from run to run shown as `<…>`.
+Secrets stay out: no join URL, no tray token, and no `--cdp` path, since `resources` names browsers by id and errors are redacted as on stderr. Fixtures: [`attach.ndjson`](test/integration/testdata/native/attach.ndjson), [`credential.ndjson`](test/integration/testdata/native/credential.ndjson), [`pair.ndjson`](test/integration/testdata/native/pair.ndjson), [`follow.ndjson`](test/integration/testdata/native/follow.ndjson) and [`follow-error.ndjson`](test/integration/testdata/native/follow-error.ndjson), with values that change from run to run shown as `<…>`.
 
 ```
 {"schema":1,"event":"connecting","mode":"tray"}
@@ -457,6 +458,7 @@ The cdp list follows the browsers: an extra that stops answering is taken off th
 - `browser-slow`: `browser`, `name`, `role`, `elapsed` (seconds). A browser slicc launched hasn't written its `DevToolsActivePort` yet, every 10 s from 10 s on (see [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)). The dashboard and plain mode show it as `<name> is still starting (slow disk?), <n> s so far`.
 - `closed`: `browsers`, the ids slicc closed (always a list), and `kept` after a detach (the control socket's `detach`, or `SIGTERM` with `--keep-browsers`): the ids of the browsers this run launched and left running, with `browsers` `[]`. It is the last event of every run that got past choosing its browsers.
 - `error`: `message`, and `browser?` when closing that browser failed. A setup error ends the run with exit 1.
+- `credential`: `op`, `provider`, `leaseId`, `expiresAt?`, `by`, `upstream?`, as on [`attach`](#lifecycle-events---json-on-attach-open-pair-and-follow), for each credential lease this run seals, unseals or revokes over `jerk`.
 - `mode`: `mode` (`loopback`) and `reason` (`no-browser`), when the run [falls back](#the-default-slicc) to the default browser. Then come `pairing`, `linked` and `link-lost` events (each `linked` and `link-lost` with `mode` and `device`, the page's fingerprint), and `closed` with `browsers: []`.
 - `pairing`: `url`, a pairing URL, after `mode`.
 
@@ -831,6 +833,12 @@ Link spec §5.14 (J1). slicc-jerk (`jerk`, [Companion tools](#companion-tools)) 
 - `ECONNRESET`: jerk couldn't start, died of a signal, or exited with a code above 5.
 
 A page RESET or a closed link kills the jerk it started.
+
+**The host's say over leases.** A process that offers `jerk-seal` keeps, in memory, the leases it has sealed into seven: provider, lease id, expiry and when, never the credentials. Its [control socket](#running-links-slicc-tray) answers four more ops, and its `--json` prints a `credential` event for each seal, unseal and revoke ([Lifecycle events](#lifecycle-events---json-on-attach-open-pair-and-follow)). Fixture: [`credential.ndjson`](test/integration/testdata/native/credential.ndjson).
+- `{ "v": 1, "op": "leases" }` → `{ "v": 1, "sealing": true, "leases": [{ "provider", "leaseId", "expiresAt", "sealedAt" }] }`, the live leases this process served. Expired ones drop out, and so does one seven unsealed.
+- `{ "v": 1, "op": "unseal", "leaseId" }` revokes one: slicc runs the drop that seven's `unseal` runs, with no link request, and answers `{ "v": 1, "ok": true, "revoked": true, "upstream"?: true | false }` once jerk has dropped it. Then it tells seven to forget it ([§5.14](#514-jerk-caps-jerk-and-jerk-seal-page--node-j1)). A missing or malformed `leaseId` is `EPROTO`, and a lease this process didn't serve, or has already dropped, is `ENOENT`. If jerk fails, the answer is `{ "v": 1, "ok": false, "error": "EIO", "exit": <n> }` and the lease stays listed.
+- `{ "v": 1, "op": "seal-off" }` → `{ "v": 1, "ok": true, "sealing": false }` stops issuing: every later `seal` on this process is `RESET EACCES: the host turned off sealing on this slicc`, and HELLO leaves out `jerk-seal` from the next link on. Live leases stay, and `unseal` still works. `{ "v": 1, "op": "seal-on" }` undoes it, answered with `"sealing": true`. Neither changes what the flags allow: `follow` without `--jerk-seal` has none of these ops.
+- **After a restart:** the list lives only as long as the process, so a lease served by a `slicc` that has since exited can't be revoked through slicc. jerk's own drop still works on the host, as the same user: `FNOX_LEASE_ID=<lease id> jerk <provider> drop --lease`. Seven keeps such a lease until it expires.
 
 **Windows:** from 1.35.0 through 1.49.34, values sent over the link could reach npm's `jerk.cmd` launcher through cmd.exe, which could expand or run them. Fixed in 1.49.35 (2026-10-30): slicc runs jerk's own `jerk.exe`, and on Windows hosts refuses `% & | ^ < > ! " ( )` and non-ASCII in values bound for jerk. Upgrade to 1.49.35 or later.
 
@@ -1399,6 +1407,7 @@ PID   MODE    SEVEN           DEVICE     STATE                   OFFERS
   - `{ "v": 1, "op": "stop" }`: exactly what `SIGTERM` does. The process says `bye` to seven, closes the browsers this run launched, and exits 0; `closed.browsers` lists them with `--json`.
   - `{ "v": 1, "op": "detach" }`: the process says `bye` to seven, stops the link, and leaves every browser running, the ones it launched too; with `--json`, `closed` has `browsers: []` and `kept`, the ids of the launched browsers left running (`[]` on `attach`, `open`, `pair` and `follow`, which launch none). A kept browser is found again by the next run: its `DevToolsActivePort` in its SLICC profile leads discovery to it with its seven tab open, and the next `slicc` attaches to it (`attached` with no `launched`) and links that tab.
   - `{ "v": 1, "op": "revoke", "fingerprint": "<page-fp>" }`, on `open`, `pair` and the default-browser mode: close the link with that page, if any, and answer `{ "v": 1, "ok": true, "closed"?: true }` once it has. `slicc unpair` sends it (see [Linking seven in your everyday browser](#linking-seven-in-your-everyday-browser)). A missing fingerprint is `EINVAL`.
+  - `{ "v": 1, "op": "leases" }`, `{ "v": 1, "op": "unseal", "leaseId" }`, `{ "v": 1, "op": "seal-off" }` and `{ "v": 1, "op": "seal-on" }`, on a process that offers `jerk-seal`: list, revoke and stop issuing credential leases (see [`jerk`](#jerk-slicc-jerk-over-the-link)). `unseal` answers once jerk is done, within 75 s.
   - `stop` and `detach` are answered `{ "v": 1, "ok": true }` before the process acts. A process that doesn't know an op answers `{ "v": 1, "error": "EINVAL" }`, and a line that isn't a request of version 1 gets `EPROTO`.
   - Signals don't change: `SIGINT` and `SIGTERM` still stop, except that `slicc --keep-browsers` makes `SIGTERM` detach.
 - **Stale sockets:** liveness comes from connecting, not from the PID, so a reused PID can't fool `slicc tray`. A socket that refuses a connection is stale, and `slicc tray` removes it and says so on stderr, as `screen -wipe` does.
@@ -1684,7 +1693,7 @@ Page-opened streams are odd and node-opened streams even, never 0, and never reu
 - **`caps`:** what this side accepts OPENs for.
   - node: `net` (`tcp` and `resolve`), `http`, `ws` ([§5.15](#515-ws-cap-ws-page--node-websockets-for-kernel-programs)), `udp` ([§5.12](#512-udp-cap-udp-page--node)), `ssh`, `cdp`, `fs`, `join`, `jerk` and `jerk-seal` ([§5.14](#514-jerk-caps-jerk-and-jerk-seal-page--node-j1)).
   - node, without a kind: `credentialed` ([§5.13](#513-credentialed-node-cap-http-streams-that-carry-a-value)), a promise about how the node handles `http` streams.
-  - page: `kernel-in` ([§5.4](#54-kernel-page-cap-kernel-in-node--page)).
+  - page: `kernel-in` ([§5.4](#54-kernel-page-cap-kernel-in-node--page)) and `jerk-revoke` ([§5.14](#514-jerk-caps-jerk-and-jerk-seal-page--node-j1)).
 - **`routes`** (node only): the prefixes it offers as specific routes, plus `exit: true` when it's willing to be a default exit.
 - **`policy`:** for display only; the node enforces it ([§6](#6-policy-node)).
 - **`kernel`** (local node only, with kernel services): the port of the node's kernel listener ([§5.9](#59-kernel-listener-on-the-node-local-only)).
@@ -2059,7 +2068,7 @@ HELLO adds `"jerk": { "version": "1.0.0" }` next to `caps`.
 | RESET | when | in-kernel jerk exits |
 |---|---|---|
 | `EPROTO` | bad OPEN: unknown op, missing field, unknown param | 1 |
-| `EACCES` | the op isn't allowed over J1 (the table above); a remote link lacks `--jerk` or `--jerk-seal`; or `seal`/`unseal` came through the kernel facade | 2 |
+| `EACCES` | the op isn't allowed over J1 (the table above); a remote link lacks `--jerk` or `--jerk-seal`; `seal`/`unseal` came through the kernel facade; or a `seal` after the host's `seal-off` (`EACCES: the host turned off sealing on this slicc`) | 2 |
 | `EBUSY` | a `create` is already in flight on this link (at most one at a time) | 1 |
 | `ETIMEDOUT` | `create` ran past the provider `timeout` plus 30 s | 3 |
 | `ECONNRESET` | host jerk died, or the link dropped | 1 |
@@ -2075,6 +2084,16 @@ HELLO adds `"jerk": { "version": "1.0.0" }` next to `caps`.
   - results keep `provider`, `user`, `scopes`, `expires_at`, `env`, `message` (and `items`);
   - list rows keep `provider`, `name`, `source`, `requires`, `cli`, `user`, `scopes`, `expires_at`, `env`, `id`, as strings, booleans or string lists.
   - Everything else is dropped, including any masked token.
+
+**Host revoke and `seal-off` (node → page):** the host can revoke a lease seven holds and stop new ones, through the node's control socket ([`jerk`](#jerk-slicc-jerk-over-the-link)). Preventing future issuance and revoking what was issued are separate ops.
+- **The lease list:** a node that offers `jerk-seal` remembers, in memory and for as long as the process runs, each lease it sent: provider, `lease_id` and `expires_at`, never the credentials.
+- **Revoke:** the host's `unseal` runs `FNOX_LEASE_ID=<lease_id> jerk <provider> drop --lease --via-link` on the node, with no link request. Once jerk exits 0, the node tells seven.
+- **The notice:** to a page that lists the page cap `jerk-revoke`, the node sends `OPEN { "kind": "jerk-revoked", "provider": "github", "lease_id": "jerk-github-…", "by": "host" }` on the control channel. It carries no credential, scope or rule text. The page answers OPENED `{}`, then END, and the node sends END.
+  - **Delivery:** the node sends each notice once on every link that is up and on each later link of this process whose page lists the cap, until the lease's `expires_at`. A RESET, or no answer within 10 s, is logged (`jerk: revoke notice <provider>: …`) and the notice waits for the next link. Repeats are harmless.
+  - **No notice** after seven's own `unseal`, since seven asked.
+- **The page's obligation:** the page acts only on a notice from the node that created that lease. Otherwise any linked device with the cap could make seven forget another host's credential. When it seals a lease, the page keeps the per-process `node` id from the HELLO of the link the `lease` event came in on. It forgets the lease only when the HELLO `node` of the link the notice comes in on is that same id, and the `provider` and `lease_id` match. A notice from any other node, or for a `lease_id` it doesn't know, is answered OPENED `{}` and changes nothing.
+- **`seal-off`:** every later `seal` on that process is `RESET EACCES: the host turned off sealing on this slicc`, and HELLO leaves out `jerk-seal` from the next link on. A link already up keeps the cap in its HELLO and gets the RESET. Live leases stay, and `unseal` (seven's and the host's) still works. `seal-on` undoes it.
+- **A node without the list** (an older slicc, or a process that has since exited) never sends a notice. The host can still run jerk's drop itself, and seven then keeps the dead credential until it expires.
 
 **The agent-vs-user rule:**
 - The caller of J1 may be the agent. So J1 only starts things a human must finish (`create`), moves tokens into a store the agent can't read (`seal`), or undoes what jerk minted (`unseal`).
