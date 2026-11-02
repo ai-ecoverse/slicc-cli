@@ -26,10 +26,12 @@ func TestNPMPublishRecoversTransparencyLogConflicts(t *testing.T) {
 		{"retry", "npm error TLOG_CREATE_ENTRY_ERROR", "", 1, 2, 2, false, true},
 		{"http409", "sigstore transparency log answered 409", "", 1, 2, 2, false, true},
 		{"http409first", "409 Conflict from Rekor", "after", 1, 1, 2, false, true},
+		{"conflictAfter404", "TLOG_CREATE_ENTRY_ERROR", "afterRetry", 2, 2, 3, false, true},
 		{"exhausted", "TLOG_CREATE_ENTRY_ERROR", "", 3, 3, 4, false, false},
 		{"wrongVersion", "TLOG_CREATE_ENTRY_ERROR", "wrong", 3, 3, 4, false, false},
-		{"otherError", "npm error E403 forbidden", "after", 1, 1, 1, false, false},
-		{"other409", "npm error E409 package version conflict", "after", 1, 1, 1, false, false},
+		{"otherErrorPublished", "npm error E403 forbidden", "after", 1, 1, 2, false, true},
+		{"otherError", "npm error E403 forbidden", "", 1, 1, 2, false, false},
+		{"other409", "npm error E409 package version conflict", "", 1, 1, 2, false, false},
 		{"dryRun", "TLOG_CREATE_ENTRY_ERROR", "after", 1, 1, 0, true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -53,13 +55,13 @@ const attempts = existsSync(state) ? Number(readFileSync(state, 'utf8')) : 0;
 if (args[0] === '--version') console.log('11.5.1');
 else if (args[0] === 'view') {
   const visible = ` + string(visible) + `;
-  if (visible === 'always' || (attempts > 0 && visible === 'after')) console.log('1.58.1');
+  if (visible === 'always' || (attempts > 0 && visible === 'after') || (attempts > 1 && visible === 'afterRetry')) console.log('1.58.1');
   else if (visible === 'wrong') console.log('1.57.2');
   else process.exit(1);
 } else if (args[0] === 'publish') {
   writeFileSync(state, String(attempts + 1));
   if (attempts < ` + strconv.Itoa(c.failures) + `) {
-    console.error(` + string(message) + `);
+    console.error(attempts > 0 && ` + string(visible) + ` === 'afterRetry' ? 'npm error E403 EPUBLISHCONFLICT You cannot publish over the previously published versions' : ` + string(message) + `);
     process.exit(1);
   }
   console.log('published fixture');

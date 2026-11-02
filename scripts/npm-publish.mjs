@@ -48,14 +48,15 @@ async function publishPackage(pkg, args) {
     if (res.stdout) process.stdout.write(res.stdout);
     if (res.stderr) process.stderr.write(res.stderr);
     if (res.status === 0) return;
+    if (dryRun) fail(`npm publish ${pkg.name}@${pkg.version} failed`);
+    if (published(pkg.name, pkg.version)) {
+      process.stdout.write(`${pkg.name}@${pkg.version} is published after the publish error\n`);
+      return;
+    }
     const output = `${res.stdout ?? ''}\n${res.stderr ?? ''}`;
     const conflict = /TLOG_CREATE_ENTRY_ERROR/i.test(output)
       || (/\b409\b/.test(output) && /transparency\s+log|sigstore|rekor/i.test(output));
-    if (dryRun || !conflict) fail(`npm publish ${pkg.name}@${pkg.version} failed`);
-    if (published(pkg.name, pkg.version)) {
-      process.stdout.write(`${pkg.name}@${pkg.version} is published after the transparency log conflict\n`);
-      return;
-    }
+    if (!conflict) fail(`npm publish ${pkg.name}@${pkg.version} failed`);
     if (attempt === 3) fail(`npm publish ${pkg.name}@${pkg.version} failed after ${attempt} attempts`);
     const delay = 5000 * 2 ** (attempt - 1);
     process.stdout.write(`retrying npm publish ${pkg.name}@${pkg.version} in ${delay / 1000} s after the transparency log conflict\n`);
