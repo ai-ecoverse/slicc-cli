@@ -20,6 +20,7 @@ import (
 	httpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/http"
 	capjerk "github.com/ai-ecoverse/slicc-cli/internal/caps/jerk"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/resolve"
+	"github.com/ai-ecoverse/slicc-cli/internal/caps/screen"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/tcp"
 	udpcap "github.com/ai-ecoverse/slicc-cli/internal/caps/udp"
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
@@ -52,6 +53,7 @@ stdin, and with @<file> from the first line of that file, so it stays out of
 the command line, where ps shows it to every user of this machine.
 
 flags:
+  --native-screen      native app view provider through inherited private bootstrap (off by default)
   --exit               offer this machine's network to seven (tcp, resolve,
                        http, ws and udp streams) under the remote policy:
                        public addresses only
@@ -73,20 +75,21 @@ machine can read, and unless :ro, change the folders listed.
 ` + debugPortsHelp
 
 type followFlags struct {
-	exit       bool
-	name       string
-	allow      policy.Rules
-	deny       policy.Rules
-	expose     policy.Ports
-	signalOnly bool
-	timeout    time.Duration
-	compute    computeFlags
-	hosts      hostsFlag
-	cdp        stringList
-	mounts     stringList
-	jerk       bool
-	jerkSeal   bool
-	json       bool
+	exit         bool
+	nativeScreen bool
+	name         string
+	allow        policy.Rules
+	deny         policy.Rules
+	expose       policy.Ports
+	signalOnly   bool
+	timeout      time.Duration
+	compute      computeFlags
+	hosts        hostsFlag
+	cdp          stringList
+	mounts       stringList
+	jerk         bool
+	jerkSeal     bool
+	json         bool
 }
 
 func joinCommand(args []string, stdout, stderr io.Writer) int {
@@ -117,6 +120,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs := flag.NewFlagSet("follow", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&f.exit, "exit", false, "")
+	fs.BoolVar(&f.nativeScreen, "native-screen", false, "")
 	fs.StringVar(&f.name, "name", "", "")
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
@@ -195,9 +199,10 @@ const (
 )
 
 type followEvent struct {
-	kind followEventKind
-	name string
-	conn *tray.Conn
+	reason string
+	kind   followEventKind
+	name   string
+	conn   *tray.Conn
 }
 
 type followRun struct {
@@ -207,6 +212,7 @@ type followRun struct {
 	state    *tray.JoinState
 	certs    *tray.Certs
 	node     *node.Node
+	native   nativeScreenProvider
 	cdp      *capcdp.Registry
 	status   func(format string, a ...any)
 	events   chan followEvent
@@ -223,6 +229,19 @@ type followRun struct {
 }
 
 func newFollowRun(joinURL string, ff followFlags, st *stopper, stderr io.Writer) (*followRun, error) {
+	return newFollowRunUsing(joinURL, ff, st, stderr, defaultFollowRuntime())
+}
+
+type followRuntime struct {
+	guard  func(context.Context, *policy.Policy, browser.Options, []uint16, []uint16, func(string, ...any)) error
+	screen func(followFlags, *followRun) error
+}
+
+func defaultFollowRuntime() followRuntime {
+	return followRuntime{browser.Guard, func(flags followFlags, r *followRun) error { return flags.screenProvider(r) }}
+}
+
+func newFollowRunUsing(joinURL string, ff followFlags, st *stopper, stderr io.Writer, runtime followRuntime) (*followRun, error) {
 	status := func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) }
 	logf := func(string, ...any) {}
 	if os.Getenv("SLICC_DEBUG") != "" {
@@ -246,7 +265,7 @@ func newFollowRun(joinURL string, ff followFlags, st *stopper, stderr io.Writer)
 	}
 	pol := policy.Remote().With(ff.allow, ff.deny)
 	guardCtx, stopGuard := context.WithCancel(context.Background())
-	if err := browser.Guard(guardCtx, pol, browser.Options{Status: status}, cdpPorts(ff.cdp...), ff.expose, logf); err != nil {
+	if err := runtime.guard(guardCtx, pol, browser.Options{Status: status}, cdpPorts(ff.cdp...), ff.expose, logf); err != nil {
 		stopGuard()
 		return nil, err
 	}
@@ -288,6 +307,9 @@ func newFollowRun(joinURL string, ff followFlags, st *stopper, stderr io.Writer)
 	r.res = resourceSource{mounts: mounts, rejected: rejected, sftp: ff.compute.sftpOn()}
 	closeMounts := serveMounts(r.node, mounts, status)
 	r.closeSSH = func() { stopGuard(); closeMounts(); closeSSH() }
+	if e := runtime.screen(ff, r); e != nil {
+		return nil, e
+	}
 	if r.cdp != nil {
 		followBrowsers(r.node, r.cdp, status)
 	}
@@ -297,6 +319,12 @@ func newFollowRun(joinURL string, ff followFlags, st *stopper, stderr io.Writer)
 	serveLeases(h, js)
 	h.Update(func(s *ctl.Status) { s.Hub, s.Device, s.Seven = r.hub, r.device, r.certs.Leader(r.hub) })
 	r.ctl = h
+	if r.native != nil {
+		h.Screen(func() ctl.ScreenStatus {
+			s := r.native.Broker().Snapshot()
+			return ctl.ScreenStatus{V: 1, Available: true, ProviderAuthenticated: r.native.Authenticated(), Granted: len(s.Caps) > 0, Reason: s.Reason}
+		})
+	}
 	closeRest := r.closeSSH
 	r.closeSSH = func() { closeCtl(); closeRest() }
 	return r, nil
@@ -352,7 +380,8 @@ func (r *followRun) currentConn() *tray.Conn {
 	return r.conn
 }
 
-func (r *followRun) onLink(l *link.Link) {
+func (r *followRun) onLink(l *link.Link) { r.onLinkWithin(l, followSetupTimeout) }
+func (r *followRun) onLinkWithin(l *link.Link, timeout time.Duration) {
 	conn := r.currentConn()
 	if conn == nil {
 		return
@@ -360,7 +389,7 @@ func (r *followRun) onLink(l *link.Link) {
 	nonce := conn.Session().BootstrapID()
 	r.ctl.SetState(ctl.StateConnecting)
 	go func() {
-		timer := time.NewTimer(followSetupTimeout)
+		timer := time.NewTimer(timeout)
 		defer timer.Stop()
 		select {
 		case <-l.Ready():
@@ -370,14 +399,14 @@ func (r *followRun) onLink(l *link.Link) {
 			_ = r.certs.SetLeader(r.hub, name)
 			r.emit(followEvent{kind: evUp, name: name, conn: conn})
 			<-l.Done()
-			r.emit(followEvent{kind: evDown, conn: conn})
+			r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
 		case <-l.Done():
 			if conn.Session().BootstrapID() == nonce {
-				r.emit(followEvent{kind: evDown, conn: conn})
+				r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
 			}
 		case <-timer.C:
 			_ = l.Close()
-			r.emit(followEvent{kind: evDown, conn: conn})
+			r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
 		}
 	}()
 }
@@ -525,7 +554,7 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 					}
 				}
 				_ = stopServing(cancel, served)
-				r.lost(up, "", "")
+				r.lost(up, ev.reason, "")
 				return 0, r.after(up)
 			case evUnlink:
 				_ = stopServing(cancel, served)
@@ -663,4 +692,43 @@ func printICEServers(w io.Writer, servers []tray.ICEServer) {
 func stopServing(cancel context.CancelFunc, served <-chan error) error {
 	cancel()
 	return <-served
+}
+
+type nativeScreenProvider interface {
+	Broker() *screen.Broker
+	Authenticated() bool
+	Close()
+}
+
+func startNativeScreen(ctx context.Context, n *node.Node, audit screen.Audit) (nativeScreenProvider, error) {
+	return screen.Start(ctx, n, audit)
+}
+func (ff followFlags) screenProvider(r *followRun) error {
+	return ff.screenProviderUsing(r, screen.DefaultJournal, startNativeScreen)
+}
+func (ff followFlags) screenProviderUsing(r *followRun, journalFactory func() (*screen.Journal, error), start func(context.Context, *node.Node, screen.Audit) (nativeScreenProvider, error)) error {
+	if ff.nativeScreen {
+		journal, e := journalFactory()
+		if e != nil {
+			r.closeSSH()
+			return errors.New("native screen audit unavailable")
+		}
+		native, e := start(context.Background(), r.node, journal.Record)
+		if e != nil {
+			r.closeSSH()
+			return errors.New("native screen peer is untrusted or unavailable")
+		}
+		r.native = native
+		closePrevious := r.closeSSH
+		r.closeSSH = func() { native.Close(); closePrevious() }
+	}
+
+	return nil
+}
+
+func screenLostReason(l interface{ Err() error }) string {
+	if e := l.Err(); e != nil && e.Error() == link.ScreenAbuseReason {
+		return link.ScreenAbuseReason
+	}
+	return ""
 }

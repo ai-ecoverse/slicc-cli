@@ -52,37 +52,47 @@ const (
 	StateStopped      = "stopped"
 )
 
+type ScreenStatus struct {
+	V                     int    `json:"v"`
+	Available             bool   `json:"available"`
+	ProviderAuthenticated bool   `json:"providerAuthenticated"`
+	Granted               bool   `json:"granted"`
+	Reason                string `json:"reason"`
+}
+
 type Status struct {
-	V          int        `json:"v"`
-	PID        int        `json:"pid"`
-	Mode       string     `json:"mode"`
-	Version    string     `json:"version"`
-	Started    time.Time  `json:"started"`
-	Seven      string     `json:"seven,omitempty"`
-	Origin     string     `json:"origin,omitempty"`
-	Hub        string     `json:"hub,omitempty"`
-	Device     string     `json:"device,omitempty"`
-	State      string     `json:"state"`
-	Since      time.Time  `json:"since"`
-	Attempt    int        `json:"attempt,omitempty"`
-	RetryAt    *time.Time `json:"retryAt,omitempty"`
-	Code       string     `json:"code,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	Offers     []string   `json:"offers"`
-	Ops        []string   `json:"ops,omitempty"`
-	Peers      []string   `json:"peers,omitempty"`
-	Dials      int        `json:"dials"`
-	Links      int        `json:"links"`
-	LastLinked *time.Time `json:"lastLinked,omitempty"`
+	Screen     *ScreenStatus `json:"screen,omitempty"`
+	V          int           `json:"v"`
+	PID        int           `json:"pid"`
+	Mode       string        `json:"mode"`
+	Version    string        `json:"version"`
+	Started    time.Time     `json:"started"`
+	Seven      string        `json:"seven,omitempty"`
+	Origin     string        `json:"origin,omitempty"`
+	Hub        string        `json:"hub,omitempty"`
+	Device     string        `json:"device,omitempty"`
+	State      string        `json:"state"`
+	Since      time.Time     `json:"since"`
+	Attempt    int           `json:"attempt,omitempty"`
+	RetryAt    *time.Time    `json:"retryAt,omitempty"`
+	Code       string        `json:"code,omitempty"`
+	Error      string        `json:"error,omitempty"`
+	Offers     []string      `json:"offers"`
+	Ops        []string      `json:"ops,omitempty"`
+	Peers      []string      `json:"peers,omitempty"`
+	Dials      int           `json:"dials"`
+	Links      int           `json:"links"`
+	LastLinked *time.Time    `json:"lastLinked,omitempty"`
 }
 
 type Holder struct {
-	mu    sync.Mutex
-	s     Status
-	ops   map[string]func()
-	calls map[string]func(Request) map[string]any
-	slow  map[string]time.Duration
-	peers func() []string
+	mu     sync.Mutex
+	s      Status
+	ops    map[string]func()
+	calls  map[string]func(Request) map[string]any
+	slow   map[string]time.Duration
+	peers  func() []string
+	screen func() ScreenStatus
 }
 
 func NewHolder(mode, ver string) *Holder {
@@ -106,6 +116,10 @@ func (h *Holder) Snapshot() Status {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s := h.s
+	if h.screen != nil {
+		screen := h.screen()
+		s.Screen = &screen
+	}
 	s.Offers = append([]string{}, h.s.Offers...)
 	s.Ops = []string{OpStatus}
 	for _, op := range Ops {
@@ -458,3 +472,5 @@ func Wipe(path string) (bool, error) {
 	_ = os.Remove(path + ".lock")
 	return true, nil
 }
+
+func (h *Holder) Screen(f func() ScreenStatus) { h.mu.Lock(); defer h.mu.Unlock(); h.screen = f }

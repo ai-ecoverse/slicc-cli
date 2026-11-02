@@ -75,6 +75,8 @@ type Hello struct {
 	Jerk       *Jerk     `json:"jerk,omitempty"`
 	Kernel     *Kernel   `json:"kernel,omitempty"`
 
+	Screen any `json:"screen,omitempty"`
+
 	Raw json.RawMessage `json:"-"`
 }
 

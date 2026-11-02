@@ -32,9 +32,10 @@ var (
 )
 
 type Link struct {
-	pc   *webrtc.PeerConnection
-	role Role
-	opts Options
+	pc     *webrtc.PeerConnection
+	role   Role
+	opts   Options
+	screen screenLimits
 
 	mu        sync.Mutex
 	control   *channel
@@ -58,16 +59,21 @@ type channel struct {
 	proc    sync.Mutex
 	pending [][]byte
 
-	mu       sync.Mutex
-	used     bool
-	stream   *Stream
-	released bool
-	sendOnce sync.Once
+	mu           sync.Mutex
+	used         bool
+	stream       *Stream
+	released     bool
+	sendOnce     sync.Once
+	countedClose bool
 }
 
 func New(pc *webrtc.PeerConnection, role Role, opts Options) (*Link, error) {
 	if opts.HelloTimeout <= 0 {
 		opts.HelloTimeout = 10 * time.Second
+	}
+	if opts.Hello.Screen != nil {
+		opts.HelloTimeout = 3 * time.Second
+		opts.MaxChannels = 16
 	}
 	if opts.MaxChannels <= 0 {
 		opts.MaxChannels = 256
@@ -96,14 +102,7 @@ func New(pc *webrtc.PeerConnection, role Role, opts Options) (*Link, error) {
 	if role.peer() == RoleNode {
 		l.peerIDs.floor = 2
 	}
-	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
-		switch st {
-		case webrtc.PeerConnectionStateFailed:
-			l.fail(errors.New("link: connection failed"))
-		case webrtc.PeerConnectionStateClosed:
-			l.fail(ErrClosed)
-		}
-	})
+	pc.OnConnectionStateChange(l.onConnectionStateChange)
 	pc.OnDataChannel(l.onDataChannel)
 	if role == RolePage {
 		dc, err := pc.CreateDataChannel(ControlName, nil)
@@ -122,6 +121,19 @@ func (l *Link) Role() Role { return l.role }
 func (l *Link) Done() <-chan struct{} { return l.done }
 
 func (l *Link) Ready() <-chan struct{} { return l.helloCh }
+
+func (l *Link) onConnectionStateChange(st webrtc.PeerConnectionState) {
+	switch st {
+	case webrtc.PeerConnectionStateDisconnected:
+		if l.screenEnabled() {
+			l.shedScreen()
+		}
+	case webrtc.PeerConnectionStateFailed:
+		l.fail(errors.New("link: connection failed"))
+	case webrtc.PeerConnectionStateClosed:
+		l.fail(ErrClosed)
+	}
+}
 
 func (l *Link) Err() error {
 	l.mu.Lock()
@@ -169,6 +181,16 @@ func (l *Link) violation(format string, args ...any) {
 }
 
 func (l *Link) onDataChannel(dc *webrtc.DataChannel) {
+	if l.screenEnabled() {
+		l.mu.Lock()
+		ok := l.screen.channelRate.take(time.Now(), 512)
+		l.mu.Unlock()
+		if !ok {
+			l.shedScreen()
+			_ = dc.Close()
+			return
+		}
+	}
 	switch dc.Label() {
 	case ControlName:
 		l.mu.Lock()
@@ -180,9 +202,17 @@ func (l *Link) onDataChannel(dc *webrtc.DataChannel) {
 		}
 		l.setControl(dc)
 	case StreamName:
+		if !l.admitChannel() {
+			_ = dc.Close()
+			return
+		}
 		l.wireChannel(&channel{l: l, dc: dc})
 	default:
-		l.opts.Logf("link: closing data channel with unknown label %q", dc.Label())
+		if l.screenEnabled() {
+			l.opts.Logf("link: closing unknown data channel")
+		} else {
+			l.opts.Logf("link: closing data channel with unknown label %q", dc.Label())
+		}
 		_ = dc.Close()
 	}
 }
@@ -236,6 +266,10 @@ func (l *Link) sendHello(ch *channel) {
 }
 
 func (l *Link) onHello(data []byte) {
+	if l.screenEnabled() && len(data) > 65536 {
+		l.fail(errors.New("link: HELLO too large"))
+		return
+	}
 	h, err := parseHello(data, l.role.peer())
 	if err != nil {
 		l.fail(fmt.Errorf("link: %w", err))
@@ -263,29 +297,47 @@ func (l *Link) helloDone() bool {
 }
 
 func (l *Link) wireChannel(ch *channel) {
+	if l.screenEnabled() && !ch.own {
+		time.AfterFunc(3*time.Second, func() {
+			ch.mu.Lock()
+			used := ch.used
+			ch.mu.Unlock()
+			if !used {
+				l.shedScreen()
+				_ = ch.dc.Close()
+			}
+		})
+	}
 	ch.dc.OnClose(func() { ch.onClose() })
-	ch.dc.OnMessage(func(m webrtc.DataChannelMessage) {
-		if m.IsString {
-			l.violation("text message on a stream channel")
-			return
-		}
-		ch.proc.Lock()
-		defer ch.proc.Unlock()
-		if !l.helloDone() {
-			l.mu.Lock()
-			if l.peerHello == nil {
-				if len(ch.pending) == 0 {
-					l.waiting = append(l.waiting, ch)
-				}
-				ch.pending = append(ch.pending, m.Data)
+	ch.dc.OnMessage(ch.onMessage)
+}
+func (ch *channel) onMessage(m webrtc.DataChannelMessage) {
+	l := ch.l
+	if m.IsString {
+		l.violation("text message on a stream channel")
+		return
+	}
+	ch.proc.Lock()
+	defer ch.proc.Unlock()
+	if !l.helloDone() {
+		l.mu.Lock()
+		if l.peerHello == nil {
+			if len(ch.pending) == 0 {
+				l.waiting = append(l.waiting, ch)
+			}
+			if l.screenEnabled() && (len(m.Data) > MaxPayload+5 || len(ch.pending) >= 2) {
 				l.mu.Unlock()
+				l.violation("pre-HELLO data limit")
 				return
 			}
+			ch.pending = append(ch.pending, m.Data)
 			l.mu.Unlock()
+			return
 		}
-		ch.drainLocked()
-		l.processFrame(ch, m.Data)
-	})
+		l.mu.Unlock()
+	}
+	ch.drainLocked()
+	l.processFrame(ch, m.Data)
 }
 
 func (ch *channel) drain() {
@@ -307,6 +359,14 @@ func (ch *channel) send(b []byte) error {
 }
 
 func (ch *channel) onClose() {
+	if !ch.own && !ch.control && ch.l.screenEnabled() {
+		ch.l.mu.Lock()
+		if !ch.countedClose {
+			ch.countedClose = true
+			ch.l.screen.peerChannels--
+		}
+		ch.l.mu.Unlock()
+	}
 	ch.mu.Lock()
 	s := ch.stream
 	ch.mu.Unlock()
@@ -321,6 +381,7 @@ func (l *Link) processFrame(ch *channel, data []byte) {
 		l.violation("%v", err)
 		return
 	}
+	l.screenFrame(f.Type)
 	if f.Type == FrameOpen {
 		l.handleOpen(ch, f)
 		return
@@ -348,13 +409,22 @@ func (l *Link) handleOpen(ch *channel, f Frame) {
 		l.violation("OPEN %d has the wrong parity", f.ID)
 		return
 	}
-	var head struct {
-		Kind string `json:"kind"`
-	}
-	headErr := json.Unmarshal(f.Payload, &head)
 	l.mu.Lock()
 	if l.err != nil {
 		l.mu.Unlock()
+		return
+	}
+	if l.screenEnabled() && (l.screen.idFull || len(l.peerIDs.seen) >= 65536) {
+		_, used := l.peerIDs.seen[f.ID]
+		if f.ID < l.peerIDs.floor || used {
+			l.mu.Unlock()
+			l.violation("duplicate stream id %d", f.ID)
+			return
+		}
+		l.screen.idFull = true
+		l.mu.Unlock()
+		l.shedScreen()
+		l.refuse(ch, f)
 		return
 	}
 	if !l.peerIDs.add(f.ID) {
@@ -367,6 +437,26 @@ func (l *Link) handleOpen(ch *channel, f Frame) {
 		l.violation("a second OPEN on a stream channel")
 		return
 	}
+	l.mu.Unlock()
+	if !l.admitOpen() {
+		l.refuse(ch, f)
+		return
+	}
+	l.handleAdmittedOpen(ch, f)
+}
+func (l *Link) handleAdmittedOpen(ch *channel, f Frame) {
+	var head struct {
+		Kind string `json:"kind"`
+	}
+	headErr := json.Unmarshal(f.Payload, &head)
+	l.mu.Lock()
+	if l.screenEnabled() {
+		l.screen.peerReserved--
+	}
+	if l.err != nil {
+		l.mu.Unlock()
+		return
+	}
 	s := newStream(l, ch, f.ID, head.Kind, append(json.RawMessage(nil), f.Payload...), false)
 	if !ch.control {
 		ch.setStream(s)
@@ -374,11 +464,28 @@ func (l *Link) handleOpen(ch *channel, f Frame) {
 	l.streams[f.ID] = s
 	handler := l.opts.Handlers[head.Kind]
 	l.mu.Unlock()
+	if l.screenEnabled() {
+		deadline := 30 * time.Second
+		if head.Kind == "screen" || head.Kind == "screen-stop" {
+			deadline = 3 * time.Second
+		}
+		time.AfterFunc(deadline, func() {
+			select {
+			case <-s.answered:
+			default:
+				_ = s.Reset("ETIMEDOUT")
+			}
+		})
+	}
 	switch {
 	case headErr != nil || head.Kind == "":
 		_ = s.Reset("EPROTO: bad OPEN")
 	case handler == nil:
-		_ = s.Reset("EOPNOTSUPP: " + head.Kind)
+		if l.screenEnabled() {
+			_ = s.Reset("EOPNOTSUPP")
+		} else {
+			_ = s.Reset("EOPNOTSUPP: " + head.Kind)
+		}
 	default:
 		go l.serve(handler, s)
 	}
@@ -413,6 +520,9 @@ func (ch *channel) setStream(s *Stream) {
 func (l *Link) release(s *Stream) {
 	l.mu.Lock()
 	if l.streams[s.id] == s {
+		if s.local && l.screenEnabled() {
+			l.screen.ownStreams--
+		}
 		delete(l.streams, s.id)
 	}
 	ch := s.ch
@@ -452,6 +562,11 @@ func (l *Link) Open(ctx context.Context, open any, opts OpenOptions) (*Stream, e
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+	if !l.reserveOwn() {
+		return nil, &ResetError{Code: "EBUSY"}
+	}
+	kept := false
+	defer func() { l.finishOwn(kept) }()
 	ch, id, err := l.openChannel(ctx, opts.Shared)
 	if err != nil {
 		return nil, err
@@ -463,6 +578,7 @@ func (l *Link) Open(ctx context.Context, open any, opts OpenOptions) (*Stream, e
 		return nil, l.err
 	}
 	l.streams[id] = s
+	kept = true
 	l.mu.Unlock()
 	if !ch.control {
 		ch.setStream(s)

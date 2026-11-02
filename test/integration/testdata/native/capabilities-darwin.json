@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "version": "1.2.3-test",
+  "contract": 1,
+  "commands": {
+    "abort": {
+      "json": "none"
+    },
+    "agents": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "attach": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "browsers": {
+      "json": "document"
+    },
+    "capabilities": {
+      "json": "document"
+    },
+    "default": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "follow": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "help": {
+      "json": "none"
+    },
+    "install": {
+      "json": "none"
+    },
+    "launch": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "open": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "pair": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "prompt": {
+      "json": "events",
+      "vocabulary": "agent"
+    },
+    "tray": {
+      "json": "document"
+    },
+    "unpair": {
+      "json": "document"
+    },
+    "update": {
+      "json": "none"
+    },
+    "version": {
+      "json": "none"
+    },
+    "wait": {
+      "json": "events",
+      "vocabulary": "agent"
+    },
+    "watch": {
+      "json": "events",
+      "vocabulary": "agent"
+    }
+  },
+  "events": {
+    "schema": 1,
+    "names": [
+      "attached",
+      "browser-back",
+      "browser-gone",
+      "browser-slow",
+      "closed",
+      "connecting",
+      "credential",
+      "detached",
+      "discovered",
+      "error",
+      "exited",
+      "foreign-browser",
+      "inventory",
+      "launched",
+      "link-lost",
+      "linked",
+      "mode",
+      "pairing",
+      "reconnecting"
+    ]
+  },
+  "agent": {
+    "events": [
+      "user",
+      "text",
+      "thinking",
+      "tool",
+      "tool-result",
+      "run",
+      "notice",
+      "error",
+      "end",
+      "delivered",
+      "busy",
+      "inventory"
+    ],
+    "own": [
+      "settled",
+      "opened",
+      "reconnecting"
+    ]
+  },
+  "screen": {
+    "v": 1,
+    "available": true,
+    "transport": "private-child-unix-v1",
+    "peer": "audit-token-designated-requirement",
+    "lanes": [
+      "safety",
+      "frames"
+    ],
+    "kinds": [
+      "screen",
+      "screen-stop",
+      "screen-state"
+    ],
+    "pageCap": "screen-state",
+    "dynamicCaps": true,
+    "codecs": [
+      "jpeg"
+    ],
+    "scopes": [
+      "window",
+      "display"
+    ],
+    "limits": {
+      "headerBytes": 4096,
+      "frameBytes": 2097152,
+      "longEdge": 2560,
+      "pixels": 4000000,
+      "defaultFps": 5,
+      "maxFps": 10,
+      "bytesPerSecond": 8388608
+    }
+  },
+  "control": {
+    "v": 1,
+    "ops": [
+      "status",
+      "detach",
+      "stop",
+      "revoke",
+      "leases",
+      "unseal",
+      "seal-off",
+      "seal-on"
+    ]
+  }
+}

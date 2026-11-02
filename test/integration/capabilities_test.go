@@ -65,6 +65,10 @@ type capsDoc struct {
 		Events []string `json:"events"`
 		Own    []string `json:"own"`
 	} `json:"agent"`
+	Screen struct {
+		V         int  `json:"v"`
+		Available bool `json:"available"`
+	} `json:"screen"`
 	Control struct {
 		V   int      `json:"v"`
 		Ops []string `json:"ops"`
@@ -284,7 +288,23 @@ func TestCapabilitiesNameEveryCommandEventAndOp(t *testing.T) {
 			t.Errorf("control op %q is missing from slicc capabilities --json", op)
 		}
 	}
-	nativeFixture(t, "capabilities.json", indentJSON(t, out))
+	name := "capabilities.json"
+	if runtime.GOOS == "darwin" {
+		name = "capabilities-darwin.json"
+	}
+	nativeFixture(t, name, indentJSON(t, out))
+}
+
+func TestNativeScreenCapabilitiesAreOfflineAndExplicit(t *testing.T) {
+	c, _ := readCapabilities(t)
+	if c.Screen.V != 1 || c.Screen.Available != (runtime.GOOS == "darwin") {
+		t.Fatal("native screen platform contract")
+	}
+	for _, op := range c.Control.Ops {
+		if strings.Contains(op, "screen") || strings.Contains(op, "grant") {
+			t.Fatal("public socket can grant capture")
+		}
+	}
 }
 
 func TestCapabilitiesWithoutJSONListTheCommands(t *testing.T) {
