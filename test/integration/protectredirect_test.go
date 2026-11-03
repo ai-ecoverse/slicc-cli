@@ -362,7 +362,7 @@ func TestCDPCutsProtectedRedirects(t *testing.T) {
 		}
 		sharedRefused := 0
 		for _, got := range r.result("shared Debugger.getScriptSource") {
-			if strings.Contains(got, "slicc: refused: the response came from seven's origin") || strings.Contains(got, "slicc: refused: scripts and bindings for later documents") {
+			if strings.Contains(got, "slicc: refused: the response came from seven's origin") || strings.Contains(got, refusedDebuggerText) {
 				sharedRefused++
 			}
 		}

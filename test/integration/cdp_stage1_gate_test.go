@@ -136,3 +136,20 @@ func Test675Stage1OtherExtensionRefusalIsLinkOnly(t *testing.T) {
 		stage1.Refused(t, client.Call(t, method, "S", nil))
 	}
 }
+
+const refusedDebuggerText = "slicc: refused: debugger methods other than enable, disable, setInstrumentationBreakpoint, removeBreakpoint and resume could read or run code in seven's pages or an extension's world, so the guard doesn't allow them"
+
+func TestStage1UnsupportedDebuggerMethodsHaveTheirOwnRefusal(t *testing.T) {
+	client, browser := stage1Link(t)
+	for _, method := range []string{"Debugger.pause", "Debugger.getScriptSource", "Debugger.evaluateOnCallFrame", "Debugger.setVariableValue", "Debugger.setBreakpointByUrl", "DOMDebugger.getEventListeners", "EventBreakpoints.setInstrumentationBreakpoint"} {
+		packet := client.Call(t, method, "S", nil)
+		stage1.Refused(t, packet)
+		failure := packet["error"].(map[string]any)
+		if failure["message"] != refusedDebuggerText {
+			t.Errorf("%s: %v", method, failure)
+		}
+		if stage1Sent(browser, method) != 0 {
+			t.Errorf("%s reached the backend", method)
+		}
+	}
+}

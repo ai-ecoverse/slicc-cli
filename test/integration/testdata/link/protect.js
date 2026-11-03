@@ -1,4 +1,5 @@
 import { CdpClient, frameMessage } from './cdp.js';
+import { auditSetter } from './persistent.js';
 
 export const blanked = 'data:text/html,%3Ctitle%3Eblocked%3C%2Ftitle%3E';
 
@@ -1286,12 +1287,17 @@ export function protectTest(getLink, describe) {
         await c.send('Target.detachFromTarget', { sessionId });
         return out;
       }),
-    extensionBreakpoint: (browser, targetId) =>
+    extensionBreakpoint: (browser, targetId, gate) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
         const enable = await outcome(c.send('Debugger.enable', {}, sessionId));
         await c.send('Page.enable', {}, sessionId);
-        const out = { enable };
+        const out = { enable, negative: [] };
+        for (const method of ['Debugger.setBreakpointByUrl', 'Debugger.setBreakpoint']) {
+          const before = c.sent.length;
+          const setup = await outcome(c.send(method, { urlRegex: '.*', lineNumber: 0, location: { scriptId: 'hidden', lineNumber: 0 }, condition: "document.documentElement.dataset.sliccWorld = globalThis.sliccFixtureWorld?.secret ?? ''; false" }, sessionId));
+          out.negative.push({ method, setup, audit: await auditSetter(gate, sessionId, c.sent[before].id, setup) });
+        }
         const loaded = c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 20000);
         await c.send('Page.reload', {}, sessionId);
         await loaded;
@@ -1380,10 +1386,18 @@ export function protectTest(getLink, describe) {
           paused: events.filter((e) => e.method === 'Fetch.requestPaused').length,
         };
       }),
-    extensionFrame: (browser, targetId) =>
+    extensionFrame: (browser, targetId, callFrameId, gate) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
-        const out = { enable: await outcome(c.send('Debugger.enable', {}, sessionId)) };
+        const out = { enable: await outcome(c.send('Debugger.enable', {}, sessionId)), negative: [] };
+        for (const [method, params] of [
+          ['Debugger.evaluateOnCallFrame', { callFrameId, expression: 'globalThis.sliccFixtureWorld.secret', returnByValue: true }],
+          ['Debugger.setVariableValue', { callFrameId, scopeNumber: 0, variableName: 'probe', newValue: { value: 1 } }],
+        ]) {
+          const before = c.sent.length;
+          const setup = await outcome(c.send(method, params, sessionId));
+          out.negative.push({ method, setup, audit: await auditSetter(gate, sessionId, c.sent[before].id, setup) });
+        }
         await sleep(300);
         out.pausedFrames = c.events.filter((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId).map((e) => e.params.callFrames.map((f) => f.callFrameId));
         out.scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId).map((e) => ({ url: e.params.url, contextId: e.params.executionContextId }));

@@ -34,6 +34,8 @@ var debuggerLifetimes = map[string]debuggerLifetime{
 	"Debugger.resume":                       debuggerControl,
 }
 
+const refusedDebugger = "debugger methods other than enable, disable, setInstrumentationBreakpoint, removeBreakpoint and resume could read or run code in seven's pages or an extension's world, so the guard doesn't allow them"
+
 const debuggerReadLimit = 2 * time.Second
 const debuggerPauseLimit = 5 * time.Second
 const debuggerBytesLimit = 64 << 20
@@ -117,7 +119,7 @@ func (g *guard) debuggerCheckLocked(c *command) string {
 	}
 	class := debuggerLifetimes[c.method]
 	if class == debuggerUnknown || class == debuggerDocument {
-		return refusedLaterDocuments
+		return refusedDebugger
 	}
 	if reason := g.debuggerAdmissionLocked(c); reason != "" {
 		return reason
