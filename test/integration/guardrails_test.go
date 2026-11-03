@@ -31,7 +31,7 @@ func secretPages() []map[string]string {
 	return []map[string]string{
 		{"id": "P1", "type": "page", "url": "https://lars.sliccy.ai/", "title": "seven", "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/page/P1"},
 		{"id": "S3CRET-ID-77", "type": "page", "url": "https://s3cret-intranet.example.com/s3cret-inbox?token=S3CRET-TOKEN-a9f2", "title": "S3CRET payroll Q4", "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/page/S3CRET-ID-77"},
-		{"id": "S2", "type": "page", "url": "https://www.sliccy.ai/s3cret-www", "title": "S3CRET www"},
+		{"id": "S2", "type": "page", "url": "https://vault.sliccy.ai/s3cret-vault", "title": "S3CRET vault"},
 		{"id": "S3", "type": "iframe", "url": "https://frame.sliccy.ai/", "title": "S3CRET frame"},
 		{"id": "S4", "type": "service_worker", "url": "https://lars.sliccy.ai/sw.js", "title": "S3CRET worker"},
 		{"id": "S5", "type": "page", "url": "file:///Users/me/s3cret-diary.txt", "title": "S3CRET diary"},

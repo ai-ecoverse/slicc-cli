@@ -54,7 +54,8 @@ func (f *fakeCDP) activePort() string {
 func sevenPages() []map[string]string {
 	return []map[string]string{
 		{"id": "A", "type": "page", "url": "https://lars.sliccy.ai/?x=1", "title": "seven"},
-		{"id": "B", "type": "page", "url": "https://www.sliccy.ai/", "title": "www"},
+		{"id": "B", "type": "page", "url": "https://vault.sliccy.ai/", "title": "vault"},
+		{"id": "E", "type": "page", "url": "https://www.sliccy.ai/os/", "title": "seven on www"},
 		{"id": "C", "type": "iframe", "url": "https://other.sliccy.ai/", "title": "frame"},
 		{"id": "D", "type": "page", "url": "https://example.com/", "title": "example"},
 	}
@@ -241,7 +242,7 @@ func TestBrowsersFindsEndpointsFromActivePortFilesAndFlags(t *testing.T) {
 		ep.Browser != "chrome" || got.Name != "Google Chrome" || got.Version != "150.0.7000.1" || ep.UserDataDir != h.chromeDataDir() {
 		t.Errorf("active-port endpoint: %+v %+v", got, ep)
 	}
-	if !ep.SevenOpen || len(ep.SevenTabs) != 1 || ep.SevenTabs[0].ID != "A" || ep.WebSocketURL != "ws://"+seven.Listener.Addr().String()+seven.wsPath {
+	if !ep.SevenOpen || len(ep.SevenTabs) != 2 || ep.SevenTabs[0].ID != "A" || ep.SevenTabs[1].ID != "E" || ep.WebSocketURL != "ws://"+seven.Listener.Addr().String()+seven.wsPath {
 		t.Errorf("seven tabs: %+v", ep)
 	}
 	flagged := entryByCDP(r, plain.URL)
@@ -406,11 +407,12 @@ func ids(entries []browser.Entry) []string {
 
 func TestSevenOrigins(t *testing.T) {
 	for origin, want := range map[string]bool{
-		"https://lars.sliccy.ai": true,
-		"https://www.sliccy.ai":  false,
-		"https://sliccy.ai":      false,
-		"http://lars.sliccy.ai":  false,
-		"https://a.b.sliccy.ai":  false,
+		"https://lars.sliccy.ai":  true,
+		"https://www.sliccy.ai":   true,
+		"https://vault.sliccy.ai": false,
+		"https://sliccy.ai":       false,
+		"http://lars.sliccy.ai":   false,
+		"https://a.b.sliccy.ai":   false,
 	} {
 		if browser.IsSevenOrigin(origin, nil) != want {
 			t.Errorf("%s", origin)
