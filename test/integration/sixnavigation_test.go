@@ -16,6 +16,17 @@ import (
 )
 
 func TestSixSignallingRechecksPathAfterNavigation(t *testing.T) {
+	testSixNavigation(t, "document")
+}
+
+func TestSixSignallingRechecksSameDocumentPath(t *testing.T) {
+	for _, method := range []string{"pushState", "replaceState", "hash"} {
+		t.Run(method, func(t *testing.T) { testSixNavigation(t, method) })
+	}
+}
+
+func testSixNavigation(t *testing.T, method string) {
+	t.Helper()
 	b := launchBrowserOn(t, 0, "--host-resolver-rules=MAP www.sliccy.ai ~NOTFOUND, MAP seven.sliccy.ai ~NOTFOUND")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -87,7 +98,7 @@ func TestSixSignallingRechecksPathAfterNavigation(t *testing.T) {
 	dir := filepath.Join(sixRootIn(h), "browser-coding-agent-chrome")
 	makeSixTree(t, dir, fmt.Sprintf("%d\n%s", b.port, ws.Path))
 	holdSixLock(t, dir, b.cmd.Process.Pid)
-	f := startFlow(t, sixEnv(h, "isolated"), "--plain", "--profile", "six", "--cdp", b.endpoint, "--no-kernel")
+	f := startFlow(t, append(sixEnv(h, "isolated"), "SLICC_DEBUG=1"), "--plain", "--profile", "six", "--cdp", b.endpoint, "--no-kernel")
 	waitLeft := func(want int) {
 		t.Helper()
 		deadline := time.Now().Add(10 * time.Second)
@@ -114,19 +125,100 @@ func TestSixSignallingRechecksPathAfterNavigation(t *testing.T) {
 		}
 	}
 	waitHellos(1)
-	for i, path := range []string{"/", "/os/", "/settings", "/7/back"} {
-		navigate(path)
-		if strings.HasPrefix(path, "/7/") || strings.HasPrefix(path, "/os/") {
-			waitHellos(1)
-			continue
+	if method != "document" {
+		testSixRoutes(t, ctx, s, method, waitHellos, waitLeft, f.stderr.String)
+	} else {
+		for i, path := range []string{"/", "/os/", "/settings", "/7/back"} {
+			navigate(path)
+			if strings.HasPrefix(path, "/7/") || strings.HasPrefix(path, "/os/") {
+				waitHellos(1)
+				continue
+			}
+			waitLeft(i/2 + 1)
+			waitHellos(0)
 		}
-		waitLeft(i/2 + 1)
-		waitHellos(0)
 	}
 	if err := interrupt(f.cmd); err != nil {
 		t.Fatal(err)
 	}
 	if code := f.wait(t); code != 0 {
 		t.Fatalf("exit %d", code)
+	}
+}
+
+func testSixRoutes(t *testing.T, ctx context.Context, s *cdp.Session, method string, waitHellos, waitLeft func(int), logs func() string) {
+	t.Helper()
+	eval := func(expr string, out any) {
+		t.Helper()
+		if err := s.Evaluate(ctx, expr, cdp.EvaluateOptions{ReturnByValue: true, AwaitPromise: true}, out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	route := func(path string) {
+		t.Helper()
+		encoded, _ := json.Marshal(path)
+		operation := method
+		if method == "hash" {
+			operation = "pushState"
+		}
+		eval("history."+operation+"({}, '', "+string(encoded)+")", nil)
+		if method == "hash" {
+			eval("location.hash = 'route'", nil)
+		}
+	}
+	settle := func(want int) {
+		t.Helper()
+		eval("new Promise(resolve => setTimeout(resolve, 200))", nil)
+		waitHellos(want)
+	}
+
+	probe := func(allowed bool) {
+		t.Helper()
+		marker := "signal: candidate from the page"
+		if !allowed {
+			marker = "signal: ignoring sliccLinkSend from context"
+		}
+		before := strings.Count(logs(), marker)
+		eval("sliccLinkSend(JSON.stringify({t: 'candidate', nonce: hellos.at(-1).nonce, candidate: null}))", nil)
+		deadline := time.Now().Add(5 * time.Second)
+		for strings.Count(logs(), marker) <= before {
+			if time.Now().After(deadline) {
+				t.Fatalf("no signalling probe result: %s", marker)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	var first string
+	eval("hellos[0].nonce", &first)
+	route("/os/within")
+	settle(1)
+	probe(true)
+	eval("globalThis.child = document.createElement('iframe'); child.src = '/7/child'; document.body.append(child); new Promise(resolve => child.onload = resolve)", nil)
+	eval("child.contentWindow.history.replaceState({}, '', '/settings#child')", nil)
+	settle(1)
+	probe(true)
+	for i, path := range []string{"/settings", "/"} {
+		route(path)
+		waitLeft(i + 1)
+		settle(i + 1)
+		probe(false)
+		if method == "hash" {
+			eval("location.hash = 'still-outside'", nil)
+			settle(i + 1)
+			probe(false)
+		}
+		allowed := "/7/return"
+		if i == 1 {
+			allowed = "/os/return"
+		}
+		route(allowed)
+		waitHellos(i + 2)
+		probe(true)
+		var nonce string
+		eval(fmt.Sprintf("hellos[%d].nonce", i+1), &nonce)
+		if nonce == first {
+			t.Fatal("return reused the old nonce")
+		}
+		first = nonce
 	}
 }

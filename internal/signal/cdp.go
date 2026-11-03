@@ -376,6 +376,10 @@ func (c *CDP) prepare(ctx context.Context, t cdp.TargetInfo, attached func(strin
 		}
 		c.opts.Logf("signal: Inspector.enable: %v", err)
 	}
+	if err := c.bounded(ctx, func(cctx context.Context) error { return s.Call(cctx, "Page.enable", nil, nil) }); err != nil {
+		c.detach(s)
+		return nil, err
+	}
 	c.grantLocalNetwork(ctx, t.URL)
 	if err := c.bounded(ctx, func(cctx context.Context) error { return s.AddBinding(cctx, BindingName) }); err != nil {
 		c.detach(s)
@@ -510,11 +514,13 @@ func (c *CDP) grantLocalNetwork(ctx context.Context, rawURL string) {
 }
 
 type watch struct {
-	c         *CDP
-	s         *cdp.Session
-	targetID  string
-	mainFrame string
-	cancel    context.CancelFunc
+	c           *CDP
+	s           *cdp.Session
+	targetID    string
+	mainFrame   string
+	cancel      context.CancelFunc
+	helloDone   chan struct{}
+	mainContext cdp.ExecutionContext
 }
 
 var (
@@ -608,7 +614,26 @@ func (w *watch) handle(ctx context.Context, ev cdp.Event) error {
 		if json.Unmarshal(ev.Params, &p) == nil {
 			w.contextGone(ctx, p.ID)
 		}
+	case "Page.navigatedWithinDocument":
+		var p struct {
+			FrameID string `json:"frameId"`
+			URL     string `json:"url"`
+		}
+		if json.Unmarshal(ev.Params, &p) == nil && p.FrameID == w.mainFrame && w.mainContext.ID != 0 {
+			if !w.c.opts.Tab(p.URL) {
+				w.drop(ctx, "page navigated")
+				w.c.opts.Status("the seven tab left seven")
+			} else {
+				w.c.mu.Lock()
+				active := w.c.ctxID != 0
+				w.c.mu.Unlock()
+				if !active {
+					w.contextCreated(ctx, w.mainContext)
+				}
+			}
+		}
 	case "Runtime.executionContextsCleared":
+		w.mainContext = cdp.ExecutionContext{}
 		w.drop(ctx, "page navigated")
 	case "Runtime.bindingCalled":
 		var p cdp.BindingCalled
@@ -628,6 +653,7 @@ func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 		}
 		return
 	}
+	w.mainContext = ec
 	if BlankOrigin(ec.Origin) {
 		w.c.opts.Logf("signal: ignoring the blank context %d of a new tab", ec.ID)
 		return
@@ -656,10 +682,17 @@ func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 	w.c.mu.Unlock()
 	hctx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
-	go w.deliverHello(hctx, ec.ID, nonce)
+	w.helloDone = make(chan struct{})
+	go func() {
+		defer close(w.helloDone)
+		w.deliverHello(hctx, ec.ID, nonce)
+	}()
 }
 
 func (w *watch) contextGone(ctx context.Context, id int) {
+	if id == w.mainContext.ID {
+		w.mainContext = cdp.ExecutionContext{}
+	}
 	w.c.mu.Lock()
 	current := w.c.ctxID
 	w.c.mu.Unlock()
@@ -672,6 +705,8 @@ func (w *watch) drop(ctx context.Context, reason string) {
 	if w.cancel != nil {
 		w.cancel()
 		w.cancel = nil
+		<-w.helloDone
+		w.helloDone = nil
 	}
 	w.c.mu.Lock()
 	nonce := w.c.nonce
