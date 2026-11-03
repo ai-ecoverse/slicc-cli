@@ -187,8 +187,9 @@ func follow(joinURL string, args []string, stdout, stderr io.Writer) int {
 	out := newJSONLines(stdout, f.json)
 	defer func() { out.end(st.kept()) }()
 	if f.nativeScreenProof {
-		f.proof = startScreenProofOutput(out)
-		defer f.proof.Close()
+		var finishProof func()
+		f.proof, finishProof = startScreenProofOutput(out)
+		defer finishProof()
 	}
 	r, err := newFollowRun(joinURL, f, st, stderr)
 	if err != nil {

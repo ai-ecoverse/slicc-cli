@@ -8,16 +8,18 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/screen"
 )
 
-func startScreenProofOutput(out *jsonLines) *screen.ProofObserver {
+func startScreenProofOutput(out *jsonLines) (*screen.ProofObserver, func()) {
 	observer := screen.NewProofObserver()
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for report := range observer.Reports() {
 			if !out.emitScreenProof(report) {
 				return
 			}
 		}
 	}()
-	return observer
+	return observer, func() { observer.Close(); <-done }
 }
 func (j *jsonLines) emitScreenProof(report screen.ProofReport) bool {
 	if j == nil || !j.on {

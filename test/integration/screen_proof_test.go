@@ -145,3 +145,40 @@ func TestScreenProofCannotTrustAnEmptyPeer(t *testing.T) {
 		t.Fatal("observer created trust or invented kernel evidence")
 	}
 }
+
+func TestScreenProofStartupFailureFlushesBeforeClosed(t *testing.T) {
+	stdout, stderr, code := sliccEnv(t, isolatedEnv(t, "GOMAXPROCS=1"), "http://127.0.0.1:1/join/synthetic.0000", "follow", "--native-screen", "--json", "--native-screen-proof")
+	if code != 1 || !strings.Contains(stderr, "native screen peer is untrusted or unavailable") {
+		t.Fatal("did not exercise native startup refusal", code, stderr)
+	}
+	decoder := json.NewDecoder(strings.NewReader(stdout))
+	completion, closed, seq := false, false, 0
+	for decoder.More() {
+		var row map[string]any
+		if decoder.Decode(&row) != nil {
+			t.Fatal("malformed shutdown output")
+		}
+		if closed {
+			t.Fatal("output followed closed")
+		}
+		if row["event"] == nativeScreen.ProofEvent {
+			if completion {
+				t.Fatal("proof row followed completion")
+			}
+			seq++
+			if row["seq"] != float64(seq) {
+				t.Fatal("proof sequence gap")
+			}
+			completion = row["stage"] == "complete"
+		}
+		if row["event"] == "closed" {
+			if !completion {
+				t.Fatal("closed discarded queued proof completion")
+			}
+			closed = true
+		}
+	}
+	if !completion || !closed {
+		t.Fatal("missing complete/closed shutdown rows")
+	}
+}
