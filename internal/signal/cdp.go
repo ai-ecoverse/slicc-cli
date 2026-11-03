@@ -636,6 +636,17 @@ func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 		w.c.opts.Status("the seven tab left seven")
 		return
 	}
+	var pageURL string
+	if err := w.c.bounded(ctx, func(cctx context.Context) error {
+		return w.s.Evaluate(cctx, "location.href", cdp.EvaluateOptions{ContextID: ec.ID, ReturnByValue: true}, &pageURL)
+	}); err != nil {
+		w.c.opts.Logf("signal: could not read the URL of context %d", ec.ID)
+		return
+	}
+	if !w.c.opts.Tab(pageURL) {
+		w.c.opts.Status("the seven tab left seven")
+		return
+	}
 	w.drop(ctx, "page navigated")
 	nonce := NewNonce()
 	w.c.mu.Lock()
