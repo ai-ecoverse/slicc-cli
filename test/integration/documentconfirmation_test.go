@@ -74,8 +74,8 @@ func TestCDPOrdinaryDocumentConfirmation(t *testing.T) {
 				resumed = resumed || (m.Method == "Debugger.resume" && m.Session == "S2")
 			}
 			if mode == "reload" {
-				if confirmed || resumed || result.Scripts != 1 || result.Styles != 1 || result.Pauses != 1 {
-					t.Fatalf("ordinary events changed: confirmed=%t resumed=%t result=%+v", confirmed, resumed, result)
+				if confirmed || !resumed || result.Scripts != 0 || result.Styles != 1 || result.Pauses != 0 {
+					t.Fatalf("unleased debugger events were not suppressed and privately resumed: confirmed=%t resumed=%t result=%+v", confirmed, resumed, result)
 				}
 			} else if !confirmed {
 				t.Fatal("document was not confirmed")
