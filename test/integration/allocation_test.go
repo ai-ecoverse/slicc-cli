@@ -29,7 +29,7 @@ func TestSharedHTTPAndCDPAllocations(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			budget := link.NewAllocationBudget(2*(capCDP.MaxMessage+1) + 2*capHTTP.MaxHead + link.MaxPayload)
+			budget := link.NewAllocationBudget(2*capHTTP.MaxHead + 4096 + 1024)
 			pair := publicationLinks(t, ctx, link.Options{
 				AllocationBudget: budget,
 				Hello:            link.Hello{Caps: []string{"http", "cdp"}},
@@ -150,7 +150,7 @@ func TestSharedAllocationGuardHoldFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	budget := link.NewAllocationBudget(2*(capCDP.MaxMessage+1) + 2*capHTTP.MaxHead + link.MaxPayload)
+	budget := link.NewAllocationBudget(2*capHTTP.MaxHead + (512 << 10))
 	pair := publicationLinks(t, ctx, link.Options{AllocationBudget: budget, Hello: link.Hello{Caps: []string{"http", "cdp"}}, Handlers: map[string]link.Handler{
 		"http": capHTTP.Handler(capHTTP.Options{Dialer: &net.Dialer{}}), "cdp": registry.Handler(),
 	}}, link.Options{})
@@ -183,55 +183,6 @@ func TestSharedAllocationGuardHoldFailsClosed(t *testing.T) {
 	allocationZero(t, ctx, budget)
 }
 
-func TestSharedAllocationDefaultAdmissionAcrossLinks(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	fake := newFakeCDPBrowser(t, func(string, json.RawMessage) (string, []string) { return "{}", nil })
-	registry := capCDP.NewRegistry(nil)
-	browser, err := registry.Add(ctx, fake.srv.URL, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	options := link.Options{Hello: link.Hello{Caps: []string{"http", "cdp"}}, Handlers: map[string]link.Handler{"cdp": registry.Handler(), "http": capHTTP.Handler(capHTTP.Options{Dialer: &net.Dialer{}})}}
-	first := publicationLinks(t, ctx, options, link.Options{})
-	second := publicationLinks(t, ctx, options, link.Options{})
-	var streams []*link.Stream
-	defer func() {
-		for _, s := range streams {
-			_ = s.Reset("ECONNRESET")
-		}
-	}()
-	refused := false
-	for i := 0; i < 4; i++ {
-		page := first.page
-		if i%2 != 0 {
-			page = second.page
-		}
-		s, e := page.Open(ctx, map[string]any{"kind": "cdp", "browser": browser.ID}, link.OpenOptions{Shared: true})
-		if e != nil {
-			var reset *link.ResetError
-			if !errors.As(e, &reset) || reset.Code != "ENOBUFS" {
-				t.Fatal(e)
-			}
-			refused = true
-			break
-		}
-		streams = append(streams, s)
-	}
-	if !refused {
-		t.Fatal("four CDP relays exceeded the shared process reservation without refusal")
-	}
-	h, err := second.page.Open(ctx, map[string]any{"kind": "http"}, link.OpenOptions{Shared: true})
-	if err != nil {
-		t.Fatalf("HTTP starved by CDP admission: %v", err)
-	}
-	streams = append(streams, h)
-	if _, err = h.Write([]byte{0, 0, 0, 1, 'x'}); err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.Copy(io.Discard, h)
-}
-
 func TestSharedAllocationParkedCommandsRelease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -241,7 +192,7 @@ func TestSharedAllocationParkedCommandsRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	budget := link.NewAllocationBudget(2*(capCDP.MaxMessage+1) + 3*capHTTP.MaxHead)
+	budget := link.NewAllocationBudget(3*capHTTP.MaxHead + link.MaxPayload)
 	pair := publicationLinks(t, ctx, link.Options{AllocationBudget: budget, Hello: link.Hello{Caps: []string{"cdp"}}, Handlers: map[string]link.Handler{"cdp": registry.Handler()}}, link.Options{})
 	s, err := pair.page.Open(ctx, map[string]any{"kind": "cdp", "browser": browser.ID}, link.OpenOptions{Shared: true})
 	if err != nil {

@@ -37,6 +37,8 @@ var dropped = [][]byte{
 
 var httpClient = cdpclient.EndpointClient(nil, 0)
 
+var errAllocation = errors.New("ENOBUFS: shared HTTP/CDP allocation limit")
+
 func (r *Registry) Handler() link.Handler {
 	return r.serve
 }
@@ -52,12 +54,12 @@ func (r *Registry) serve(s *link.Stream) {
 		_ = s.Reset("ENOENT: no browser " + strconv.Quote(req.Browser))
 		return
 	}
-	reservation := s.ReserveAllocation(2*(MaxMessage+1), false)
-	if reservation == nil {
-		_ = s.Reset("ENOBUFS: shared HTTP/CDP allocation limit")
+	reader := &messageReader{reserve: func(n int) *link.Reservation { return s.ReserveAllocation(n, false) }}
+	if !reader.grow(4096) {
+		_ = s.Reset(errAllocation.Error())
 		return
 	}
-	defer reservation.Release()
+	defer reader.release()
 	ctx, cancel := context.WithTimeout(context.Background(), DialTimeout)
 	go func() {
 		select {
@@ -66,14 +68,18 @@ func (r *Registry) serve(s *link.Stream) {
 		case <-ctx.Done():
 		}
 	}()
-	conn, opened, err := dial(ctx, e.ep)
+	conn, opened, err := dial(ctx, e.ep, reader)
 	if err != nil {
 		cancel()
 		r.logf("cdp %s: %v", req.Browser, err)
-		_ = s.Reset("ECONNREFUSED: " + err.Error())
+		if errors.Is(err, errAllocation) {
+			_ = s.Reset(errAllocation.Error())
+		} else {
+			_ = s.Reset("ECONNREFUSED: " + err.Error())
+		}
 		return
 	}
-	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), parked: map[parkKey][]parkedMessage{}}
+	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), reader: reader, parked: map[parkKey][]parkedMessage{}}
 	rl.g.reserveHold = func(data []byte) (*link.Reservation, bool) {
 		r := s.ReserveAllocation(cap(data), false)
 		if r == nil {
@@ -88,7 +94,11 @@ func (r *Registry) serve(s *link.Stream) {
 	if err != nil {
 		_ = conn.CloseNow()
 		r.logf("cdp %s: %v", req.Browser, err)
-		_ = s.Reset("ECONNREFUSED: slicc can't watch the browser's targets: " + err.Error())
+		if errors.Is(err, errAllocation) {
+			_ = s.Reset(errAllocation.Error())
+		} else {
+			_ = s.Reset("ECONNREFUSED: slicc can't watch the browser's targets: " + err.Error())
+		}
 		return
 	}
 	if !r.track(e, rl) {
@@ -110,7 +120,7 @@ type versionInfo struct {
 	WebSocketURL    string `json:"webSocketDebuggerUrl"`
 }
 
-func dial(ctx context.Context, ep browser.Endpoint) (*websocket.Conn, Opened, error) {
+func dial(ctx context.Context, ep browser.Endpoint, reader *messageReader) (*websocket.Conn, Opened, error) {
 	wsURL := ep.WebSocketURL
 	var opened Opened
 	if !ep.WSOnly {
@@ -130,7 +140,7 @@ func dial(ctx context.Context, ep browser.Endpoint) (*websocket.Conn, Opened, er
 	}
 	conn.SetReadLimit(MaxMessage)
 	if ep.WSOnly {
-		if opened, err = getVersion(ctx, conn); err != nil {
+		if opened, err = getVersion(ctx, conn, reader); err != nil {
 			_ = conn.CloseNow()
 			return nil, opened, err
 		}
@@ -164,13 +174,13 @@ func fetchVersion(ctx context.Context, base string) (versionInfo, error) {
 
 const versionID = 1 << 30
 
-func getVersion(ctx context.Context, conn *websocket.Conn) (Opened, error) {
+func getVersion(ctx context.Context, conn *websocket.Conn, reader *messageReader) (Opened, error) {
 	req, _ := json.Marshal(map[string]any{"id": versionID, "method": "Browser.getVersion"})
 	if err := conn.Write(ctx, websocket.MessageText, req); err != nil {
 		return Opened{}, fmt.Errorf("Browser.getVersion: %w", err)
 	}
 	for {
-		_, data, err := readMessage(ctx, conn)
+		_, data, err := reader.readMessage(ctx, conn)
 		if err != nil {
 			return Opened{}, fmt.Errorf("Browser.getVersion: %w", err)
 		}
@@ -195,6 +205,7 @@ type parkKey struct {
 }
 
 type relay struct {
+	reader *messageReader
 	s      *link.Stream
 	conn   *websocket.Conn
 	logf   func(format string, args ...any)
@@ -325,7 +336,7 @@ func (rl *relay) readBrowser(ctx context.Context) (websocket.MessageType, []byte
 	if d := rl.g.reads.back(time.Now()); d > slowGuard {
 		rl.g.logf("cdp: slicc didn't read the browser for %s while it passed messages on; the guards' idle bound leaves that time out", d.Round(time.Millisecond))
 	}
-	typ, data, err := readMessage(ctx, rl.conn)
+	typ, data, err := rl.reader.readMessage(ctx, rl.conn)
 	rl.g.reads.left(time.Now())
 	return typ, data, err
 }
@@ -410,6 +421,8 @@ func (rl *relay) browserClosed(err error) {
 	default:
 	}
 	switch {
+	case errors.Is(err, errAllocation):
+		rl.kill(errAllocation.Error())
 	case rl.pageEnded.Load():
 		_ = rl.s.CloseWrite()
 	case errors.Is(err, websocket.ErrMessageTooBig):
@@ -502,26 +515,63 @@ func (rl *relay) pageClosed(err error) {
 	_ = rl.conn.CloseNow()
 }
 
-func readMessage(ctx context.Context, conn *websocket.Conn) (websocket.MessageType, []byte, error) {
-	typ, r, err := conn.Reader(ctx)
+type messageReader struct {
+	reserve     func(int) *link.Reservation
+	reservation *link.Reservation
+	data        []byte
+	used        bool
+}
+
+func (r *messageReader) release() {
+	r.data = nil
+	r.reservation.Release()
+	r.reservation = nil
+}
+
+func (r *messageReader) grow(capacity int) bool {
+	reservation := r.reserve(capacity)
+	if reservation == nil {
+		return false
+	}
+	next := make([]byte, len(r.data), capacity)
+	copy(next, r.data)
+	r.data = next
+	r.reservation.Release()
+	r.reservation = reservation
+	return true
+}
+
+func (r *messageReader) readMessage(ctx context.Context, conn *websocket.Conn) (websocket.MessageType, []byte, error) {
+	if r.used {
+		if cap(r.data) == 4096 {
+			r.data = nil
+			r.data = make([]byte, 0, 4096)
+		} else {
+			r.release()
+		}
+	}
+	r.used = true
+	if r.reservation == nil && !r.grow(4096) {
+		return 0, nil, errAllocation
+	}
+	typ, source, err := conn.Reader(ctx)
 	if err != nil {
 		return typ, nil, err
 	}
-	var data []byte
 	for {
-		if len(data) == cap(data) {
-			capacity := min(MaxMessage+1, max(4096, 2*cap(data)))
-			next := make([]byte, len(data), capacity)
-			copy(next, data)
-			data = next
+		if len(r.data) == cap(r.data) {
+			capacity := min(MaxMessage+1, 2*cap(r.data))
+			if !r.grow(capacity) {
+				return typ, nil, errAllocation
+			}
 		}
-		n, err := r.Read(data[len(data):cap(data)])
-		data = data[:len(data)+n]
-		if len(data) > MaxMessage {
+		n, err := source.Read(r.data[len(r.data):cap(r.data)])
+		r.data = r.data[:len(r.data)+n]
+		if len(r.data) > MaxMessage {
 			return typ, nil, websocket.ErrMessageTooBig
 		}
 		if errors.Is(err, io.EOF) {
-			return typ, data, nil
+			return typ, r.data, nil
 		}
 		if err != nil {
 			return typ, nil, err

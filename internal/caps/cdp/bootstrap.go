@@ -59,7 +59,7 @@ func (rl *relay) syncCall(ctx context.Context, sessionID, method string, params 
 			return m, nil
 		default:
 		}
-		_, data, err := readMessage(ctx, rl.conn)
+		_, data, err := rl.reader.readMessage(ctx, rl.conn)
 		if err != nil {
 			return message{}, fmt.Errorf("%s: %w", method, err)
 		}

@@ -419,6 +419,19 @@ func startAttachEnv(t *testing.T, stdio bool, env []string, args ...string) *att
 	}
 	t.Cleanup(func() {
 		reap(t, cmd, "slicc attach")
+		peak := 0
+		for _, line := range strings.Split(a.stderr.String(), "\n") {
+			_, value, ok := strings.Cut(line, "cdp: active relay streams: ")
+			if ok {
+				var count int
+				if _, err := fmt.Sscanf(value, "%d", &count); err == nil {
+					peak = max(peak, count)
+				}
+			}
+		}
+		if peak > 0 {
+			t.Logf("CDP concurrent relay peak: %d (process %d)", peak, cmd.Process.Pid)
+		}
 		if t.Failed() {
 			t.Logf("slicc attach stderr:\n%s", a.stderr.String())
 		}

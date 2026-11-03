@@ -736,7 +736,7 @@ func TestScreenRevokeIndependentOfFullHTTPCDPBuffers(t *testing.T) {
 		capHTTP.RegisterOptions(n, capHTTP.Options{Dialer: &net.Dialer{Timeout: time.Second}})
 		capCDP.Register(n, registry)
 		n.Handle("memory-test", "memory-test", func(s *link.Stream) {
-			r := s.ReserveAllocation(link.AllocationLimit-(2*(capCDP.MaxMessage+1)+capCDP.MaxMessage+capHTTP.MaxHead), false)
+			r := s.ReserveAllocation(link.AllocationLimit-(4096+capCDP.MaxMessage+capHTTP.MaxHead), false)
 			reserved <- r
 			_ = s.Accept(nil)
 			<-s.Done()
