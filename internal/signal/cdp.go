@@ -36,6 +36,7 @@ const crashGrace = time.Second
 type CDPOptions struct {
 	Client        *cdp.Client
 	Origins       *Origins
+	Tab           func(url string) bool
 	Logf          func(format string, args ...any)
 	Status        func(format string, args ...any)
 	SetupTimeout  time.Duration
@@ -84,6 +85,9 @@ func NewCDP(opts CDPOptions) *CDP {
 	}
 	if opts.ReloadTimeout <= 0 {
 		opts.ReloadTimeout = ReloadTimeout
+	}
+	if opts.Tab == nil {
+		opts.Tab = func(string) bool { return true }
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &CDP{opts: opts, in: make(chan Message, 64), done: make(chan struct{}), ran: make(chan struct{}), stop: cancel}
@@ -247,7 +251,7 @@ func (c *CDP) findTarget(ctx context.Context, sub *cdp.Subscription) (cdp.Target
 	}
 	var avoided *cdp.TargetInfo
 	for _, t := range targets {
-		if t.Type != "page" || !c.opts.Origins.AllowedURL(t.URL) {
+		if t.Type != "page" || !c.opts.Origins.AllowedURL(t.URL) || !c.opts.Tab(t.URL) {
 			continue
 		}
 		if t.TargetID != c.avoid {
@@ -284,7 +288,7 @@ func (c *CDP) sevenPage(ev cdp.Event) (cdp.TargetInfo, bool) {
 	var p struct {
 		TargetInfo cdp.TargetInfo `json:"targetInfo"`
 	}
-	if json.Unmarshal(ev.Params, &p) != nil || p.TargetInfo.Type != "page" || !c.opts.Origins.AllowedURL(p.TargetInfo.URL) {
+	if json.Unmarshal(ev.Params, &p) != nil || p.TargetInfo.Type != "page" || !c.opts.Origins.AllowedURL(p.TargetInfo.URL) || !c.opts.Tab(p.TargetInfo.URL) {
 		return cdp.TargetInfo{}, false
 	}
 	return p.TargetInfo, true

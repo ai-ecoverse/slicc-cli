@@ -52,8 +52,10 @@ flags for slicc with no command:
   --browser <id>      use this browser from "slicc browsers" (repeatable;
                       the first one hosts seven)
   --cdp <url>         also consider this CDP endpoint (repeatable)
-  --page <url>        the seven page to open (default ` + flow.DefaultPage + `);
-                      its origin is accepted too
+  --page <url>        the seven page to open (default ` + flow.DefaultPage + `,
+                      or ` + flow.SixPage + ` in SLICC six's profile,
+                      where six upgrades in place); its origin is accepted
+                      too
   --origin <origin>   also accept seven on this origin (repeatable)
   --profile <name>    SLICC profile for a launched browser (default: its id)
   --profile six[:<port>]
@@ -90,6 +92,7 @@ type defaultFlags struct {
 	browsers   []string
 	cdp        []string
 	page       string
+	pageSet    bool
 	origins    []string
 	profile    string
 	six        *int
@@ -186,6 +189,7 @@ func parseDefault(args []string, stderr io.Writer) (defaultFlags, int) {
 		fmt.Fprintf(stderr, "slicc: %v\n", err)
 		return f, 2
 	}
+	fs.Visit(func(fl *flag.Flag) { f.pageSet = f.pageSet || fl.Name == "page" })
 	return f, -1
 }
 
@@ -302,7 +306,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	lc := newLiveCaps(f.compute, mounts, !f.noJerk, f.kernel)
 	st := &stopper{}
 	cfg := flow.Config{
-		Page: f.page, Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
+		Page: f.chosenPage(), Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
 		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(lc, pageOrigins(f.page, f.origins), st, logf), Keep: st.kept, Compute: f.compute.dashboard(), Logf: logf,
 	}
 	origins, _ := flow.PageOrigins(f.page, f.origins)
@@ -561,4 +565,11 @@ func pageOrigins(page string, extra []string) []string {
 		return extra
 	}
 	return origins
+}
+
+func (f defaultFlags) chosenPage() string {
+	if f.pageSet {
+		return f.page
+	}
+	return ""
 }

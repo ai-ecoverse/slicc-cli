@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,8 @@ import (
 )
 
 const DefaultPage = "https://seven.sliccy.ai/"
+
+const SixPage = "https://www.sliccy.ai/7/"
 
 type Browser struct {
 	ID           string
@@ -75,6 +78,7 @@ type run struct {
 	browsers []Browser
 	client   *cdp.Client
 	allowed  *signal.Origins
+	sixHome  bool
 	kernel   int
 }
 
@@ -94,8 +98,12 @@ func PageOrigins(page string, extra []string) ([]string, error) {
 }
 
 func Go(ctx context.Context, cfg Config, sel []browser.Entry) error {
+	sixHome := false
 	if cfg.Page == "" {
 		cfg.Page = DefaultPage
+		if len(sel) > 0 && IsSix(sel[0]) {
+			cfg.Page, sixHome = SixPage, true
+		}
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}
@@ -103,7 +111,7 @@ func Go(ctx context.Context, cfg Config, sel []browser.Entry) error {
 	if cfg.Register == nil {
 		cfg.Register = func(context.Context, *node.Node, *policy.Policy, []Browser) (Caps, error) { return Caps{}, nil }
 	}
-	r := &run{cfg: cfg}
+	r := &run{cfg: cfg, sixHome: sixHome}
 	r.cfg.Emit = r.serialize(cfg.Emit)
 	err := r.start(ctx, sel)
 	if err != nil && ctx.Err() == nil {
@@ -291,7 +299,7 @@ func (r *run) sevenTab(ctx context.Context) string {
 		return ""
 	}
 	for _, t := range targets {
-		if t.Type == "page" && r.allowed.AllowedURL(t.URL) {
+		if t.Type == "page" && r.allowed.AllowedURL(t.URL) && r.tab(t.URL) {
 			return protect.Redact(t.URL)
 		}
 	}
@@ -398,6 +406,7 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 	sig := signal.NewCDP(signal.CDPOptions{
 		Client:  r.client,
 		Origins: r.allowed,
+		Tab:     r.tab,
 		Logf:    r.cfg.Logf,
 		Status:  func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) },
 	})
@@ -628,4 +637,22 @@ func (q *queue) pop() (node.Event, bool) {
 	e := q.items[0]
 	q.items = q.items[1:]
 	return e, true
+}
+
+var sixPaths = []string{"/7/", "/os/"}
+
+func (r *run) tab(raw string) bool {
+	if !r.sixHome {
+		return true
+	}
+	u, err := url.Parse(raw)
+	if err != nil || browser.OriginOf(raw) != browser.OriginOf(SixPage) {
+		return false
+	}
+	for _, p := range sixPaths {
+		if strings.HasPrefix(u.Path, p) {
+			return true
+		}
+	}
+	return false
 }
