@@ -181,7 +181,8 @@ type peerChecks struct {
 }
 
 func VerifyApp(c *net.UnixConn, expected Peer) error {
-	return verifyAppUsing(c, expected, peerChecks{os.Getuid, os.Getppid, unix.SysctlUint32, auditPeer, loadSecurity})
+	_, e := VerifyAppWithProof(c, expected)
+	return e
 }
 func VerifyAppWithProof(c *net.UnixConn, expected Peer) (ProofChecks, error) {
 	var samples [2]ProofChecks
