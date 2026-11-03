@@ -798,7 +798,9 @@ func (rl *relay) publishDebuggerFrames(p *debuggerPause, page [][]byte) []byte {
 }
 
 func (rl *relay) tryDebuggerFrames(p *debuggerPause, frames []byte, tree *message) (bool, bool) {
-	rl.pageMu.Lock()
+	if !rl.pageMu.TryLock() {
+		return false, false
+	}
 	defer rl.pageMu.Unlock()
 	rl.g.mu.Lock()
 	defer rl.g.mu.Unlock()
