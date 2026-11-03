@@ -99,6 +99,17 @@ func (h *tuiHarness) keys(keys ...string) tea.Cmd {
 
 func (h *tuiHarness) view() string { return h.m.View().Content }
 
+func (h *tuiHarness) capLabels() []string {
+	var out []string
+	for _, l := range strings.Split(h.view(), "\n") {
+		f := strings.Fields(strings.TrimPrefix(strings.TrimSpace(l), "\u203a"))
+		if len(f) > 1 && (f[0] == "\u25cb" || f[0] == "\u25cf") && slices.Contains([]string{"shell", "kernel", "folders", "jerk"}, f[1]) {
+			out = append(out, f[1])
+		}
+	}
+	return out
+}
+
 func (h *tuiHarness) capRow(label string) {
 	h.t.Helper()
 	h.keys("g")
@@ -409,6 +420,9 @@ func TestTUIDashboard(t *testing.T) {
 			t.Fatalf("dashboard lacks %q:\n%s", s, v)
 		}
 	}
+	if got := h.capLabels(); !slices.Equal(got, []string{"shell", "kernel", "folders", "jerk"}) || !strings.Contains(v, "\u25cb jerk    disabled") {
+		t.Fatalf("jerk should be the last capability and read disabled, got %v:\n%s", got, v)
+	}
 	ev(flow.Event{Event: flow.BrowserGone, Browser: "cdp:127.0.0.1:9333", Name: "Brave", Role: flow.RoleExtra})
 	if !strings.Contains(h.view(), "extra cdp  gone") {
 		t.Fatalf("after browser-gone:\n%s", h.view())
@@ -503,6 +517,9 @@ func TestTUICapabilities(t *testing.T) {
 	h.keys("c")
 	if h.model().Mode() != tui.ModeCaps || !strings.Contains(h.view(), "ALWAYS OFFERED  net · http · cdp") {
 		t.Fatalf("c: mode %s\n%s", h.model().Mode(), h.view())
+	}
+	if got := h.capLabels(); !slices.Equal(got, []string{"shell", "kernel", "jerk"}) {
+		t.Fatalf("THIS MACHINE should read shell, kernel, jerk, got %v:\n%s", got, h.view())
 	}
 	h.capRow("shell")
 	h.keys("space", "a", dir+"/project:proj:ro", "enter")
