@@ -122,12 +122,6 @@ func (a *securityAPI) loadUsing(open func(string, int) (uintptr, error), lookup 
 	}
 	return nil
 }
-func auditPeer(c *net.UnixConn) (Peer, error) {
-	return auditPeerUsing(c, loadSecurity)
-}
-func auditPeerUsing(c *net.UnixConn, load func() (*securityAPI, error)) (Peer, error) {
-	return auditPeerObservedUsing(c, load, Peer{}, nil)
-}
 func auditPeerObservedUsing(c *net.UnixConn, load func() (*securityAPI, error), expected Peer, checks *ProofChecks) (Peer, error) {
 	var p Peer
 	a, e := load()
