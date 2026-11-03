@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/cdp"
@@ -16,19 +17,31 @@ import (
 )
 
 const (
-	BindingName  = "sliccLinkSend"
-	ReceiverName = "sliccLinkReceive"
-	SetupTimeout = 10 * time.Second
-	QuietEnv     = "SLICC_SEVEN_QUIET"
-	QuietTimeout = 15 * time.Second
-	NoSevenTab   = "still no seven tab. Open seven in this browser. If it's open and slicc can't see it, the browser hides it from debugging clients, so link it through seven's Link a device with slicc <join-url> follow"
+	BindingName   = "sliccLinkSend"
+	ReceiverName  = "sliccLinkReceive"
+	SetupTimeout  = 10 * time.Second
+	RetryMin      = time.Second
+	RetryMax      = 30 * time.Second
+	ReloadTimeout = 30 * time.Second
+	CrashReloads  = 3
+	CrashWindow   = 5 * time.Minute
+	QuietEnv      = "SLICC_SEVEN_QUIET"
+	QuietTimeout  = 15 * time.Second
+	NoSevenTab    = "still no seven tab. Open seven in this browser. If it's open and slicc can't see it, the browser hides it from debugging clients, so link it through seven's Link a device with slicc <join-url> follow"
+	KeepsCrashing = "the seven tab keeps crashing. Reload it and slicc links it again"
 )
 
+const crashGrace = time.Second
+
 type CDPOptions struct {
-	Client  *cdp.Client
-	Origins *Origins
-	Logf    func(format string, args ...any)
-	Status  func(format string, args ...any)
+	Client        *cdp.Client
+	Origins       *Origins
+	Logf          func(format string, args ...any)
+	Status        func(format string, args ...any)
+	SetupTimeout  time.Duration
+	RetryMin      time.Duration
+	RetryMax      time.Duration
+	ReloadTimeout time.Duration
 }
 
 type CDP struct {
@@ -39,6 +52,9 @@ type CDP struct {
 	ctxID   int
 	nonce   string
 	origin  string
+
+	reloads []time.Time
+	avoid   string
 
 	in   chan Message
 	err  error
@@ -56,6 +72,18 @@ func NewCDP(opts CDPOptions) *CDP {
 	}
 	if opts.Status == nil {
 		opts.Status = func(string, ...any) {}
+	}
+	if opts.SetupTimeout <= 0 {
+		opts.SetupTimeout = SetupTimeout
+	}
+	if opts.RetryMin <= 0 {
+		opts.RetryMin = RetryMin
+	}
+	if opts.RetryMax < opts.RetryMin {
+		opts.RetryMax = max(RetryMax, opts.RetryMin)
+	}
+	if opts.ReloadTimeout <= 0 {
+		opts.ReloadTimeout = ReloadTimeout
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &CDP{opts: opts, in: make(chan Message, 64), done: make(chan struct{}), ran: make(chan struct{}), stop: cancel}
@@ -129,28 +157,75 @@ func (c *CDP) emit(ctx context.Context, m Message) {
 }
 
 func (c *CDP) run(ctx context.Context) {
-	sub := c.opts.Client.Subscribe()
-	defer sub.Close()
+	wait := c.opts.RetryMin
 	for {
-		target, err := c.findTarget(ctx, sub)
-		if err != nil {
-			c.finish(err)
+		linked, err := c.round(ctx)
+		if end := c.ended(ctx); end != nil {
+			c.finish(end)
 			return
 		}
-		if err := c.serveTarget(ctx, sub, target); err != nil {
-			if ctx.Err() == nil && c.gone(ctx, target.TargetID) {
-				c.opts.Logf("signal: the seven tab went away during setup: %v", err)
-				continue
-			}
-			c.finish(err)
-			return
+		if linked {
+			wait = c.opts.RetryMin
 		}
+		if err == nil {
+			continue
+		}
+		c.opts.Status("couldn't link the seven tab (%v), trying again in %s", err, wait)
+		c.sleep(ctx, wait)
+		wait = min(wait*2, c.opts.RetryMax)
 	}
 }
 
-func (c *CDP) gone(ctx context.Context, targetID string) bool {
-	targets, err := c.opts.Client.Targets(ctx)
+func (c *CDP) ended(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := c.opts.Client.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *CDP) sleep(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	case <-c.opts.Client.Done():
+	}
+}
+
+func (c *CDP) round(ctx context.Context) (bool, error) {
+	sub := c.opts.Client.Subscribe()
+	defer sub.Close()
+	target, err := c.findTarget(ctx, sub)
 	if err != nil {
+		return false, err
+	}
+	linked, err := c.serveTarget(ctx, sub, target)
+	if errors.Is(err, errTargetCrashed) {
+		if !linked {
+			c.opts.Status("seven tab crashed")
+		}
+		err = c.recover(ctx, sub, target)
+	}
+	switch {
+	case err == nil, errors.Is(err, errTargetGone):
+		return linked, nil
+	case ctx.Err() == nil && c.gone(ctx, target.TargetID):
+		c.opts.Logf("signal: the seven tab went away during setup: %v", err)
+		return linked, nil
+	}
+	return linked, err
+}
+
+func (c *CDP) gone(ctx context.Context, targetID string) bool {
+	var targets []cdp.TargetInfo
+	if err := c.bounded(ctx, func(cctx context.Context) (err error) {
+		targets, err = c.opts.Client.Targets(cctx)
+		return err
+	}); err != nil {
 		return false
 	}
 	for _, t := range targets {
@@ -170,10 +245,18 @@ func (c *CDP) findTarget(ctx context.Context, sub *cdp.Subscription) (cdp.Target
 	if err != nil {
 		return cdp.TargetInfo{}, err
 	}
+	var avoided *cdp.TargetInfo
 	for _, t := range targets {
-		if t.Type == "page" && c.opts.Origins.AllowedURL(t.URL) {
+		if t.Type != "page" || !c.opts.Origins.AllowedURL(t.URL) {
+			continue
+		}
+		if t.TargetID != c.avoid {
 			return t, nil
 		}
+		avoided = &t
+	}
+	if avoided != nil {
+		return *avoided, nil
 	}
 	c.opts.Status("waiting for a seven tab")
 	quiet := time.After(quietFor())
@@ -185,19 +268,26 @@ func (c *CDP) findTarget(ctx context.Context, sub *cdp.Subscription) (cdp.Target
 			if !ok {
 				return cdp.TargetInfo{}, cl.Err()
 			}
-			if ev.Method != "Target.targetCreated" && ev.Method != "Target.targetInfoChanged" {
-				continue
-			}
-			var p struct {
-				TargetInfo cdp.TargetInfo `json:"targetInfo"`
-			}
-			if json.Unmarshal(ev.Params, &p) == nil && p.TargetInfo.Type == "page" && c.opts.Origins.AllowedURL(p.TargetInfo.URL) {
-				return p.TargetInfo, nil
+			if t, ok := c.sevenPage(ev); ok {
+				return t, nil
 			}
 		case <-ctx.Done():
 			return cdp.TargetInfo{}, ctx.Err()
 		}
 	}
+}
+
+func (c *CDP) sevenPage(ev cdp.Event) (cdp.TargetInfo, bool) {
+	if ev.SessionID != "" || (ev.Method != "Target.targetCreated" && ev.Method != "Target.targetInfoChanged") {
+		return cdp.TargetInfo{}, false
+	}
+	var p struct {
+		TargetInfo cdp.TargetInfo `json:"targetInfo"`
+	}
+	if json.Unmarshal(ev.Params, &p) != nil || p.TargetInfo.Type != "page" || !c.opts.Origins.AllowedURL(p.TargetInfo.URL) {
+		return cdp.TargetInfo{}, false
+	}
+	return p.TargetInfo, true
 }
 
 func quietFor() time.Duration {
@@ -207,45 +297,196 @@ func quietFor() time.Duration {
 	return QuietTimeout
 }
 
-func (c *CDP) serveTarget(ctx context.Context, sub *cdp.Subscription, t cdp.TargetInfo) error {
-	s, err := c.setup(ctx, t)
+func (c *CDP) serveTarget(ctx context.Context, sub *cdp.Subscription, t cdp.TargetInfo) (bool, error) {
+	s, early, err := c.setup(ctx, sub, t)
 	if err != nil {
-		return err
+		return false, err
 	}
+	c.avoid = ""
 	w := &watch{c: c, s: s, targetID: t.TargetID, mainFrame: t.TargetID}
-	err = w.loop(ctx, sub)
+	err = w.loop(ctx, sub, early)
 	c.detach(s)
-	return err
+	return true, err
 }
 
-func bounded(ctx context.Context, fn func(context.Context) error) error {
-	cctx, cancel := context.WithTimeout(ctx, SetupTimeout)
+func (c *CDP) bounded(ctx context.Context, fn func(context.Context) error) error {
+	cctx, cancel := context.WithTimeout(ctx, c.opts.SetupTimeout)
 	defer cancel()
 	return fn(cctx)
 }
 
-func (c *CDP) setup(ctx context.Context, t cdp.TargetInfo) (*cdp.Session, error) {
+func (c *CDP) setup(ctx context.Context, sub *cdp.Subscription, t cdp.TargetInfo) (*cdp.Session, []cdp.Event, error) {
+	sctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var sid atomic.Value
+	sid.Store("")
+	type result struct {
+		s   *cdp.Session
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		s, err := c.prepare(sctx, t, func(id string) { sid.Store(id) })
+		done <- result{s, err}
+	}()
+	var early []cdp.Event
+	events := sub.Events()
+	for {
+		select {
+		case r := <-done:
+			if r.err == nil {
+				return r.s, early, nil
+			}
+			if cause := context.Cause(sctx); errors.Is(cause, errTargetCrashed) || errors.Is(cause, errTargetGone) {
+				return nil, nil, cause
+			}
+			return nil, nil, r.err
+		case ev, ok := <-events:
+			if !ok {
+				events = nil
+				cancel(c.opts.Client.Err())
+				continue
+			}
+			early = append(early, ev)
+			if err := targetEvent(ev, t.TargetID, sid.Load().(string)); err != nil {
+				cancel(err)
+			}
+		}
+	}
+}
+
+func (c *CDP) prepare(ctx context.Context, t cdp.TargetInfo, attached func(string)) (*cdp.Session, error) {
 	var s *cdp.Session
-	if err := bounded(ctx, func(cctx context.Context) (err error) {
+	if err := c.bounded(ctx, func(cctx context.Context) (err error) {
 		s, err = c.opts.Client.Attach(cctx, t.TargetID)
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	c.opts.Status("found seven at %s", protect.Redact(t.URL))
+	attached(s.ID)
+	if err := c.bounded(ctx, func(cctx context.Context) error { return s.Call(cctx, "Inspector.enable", nil, nil) }); err != nil {
+		var ce *cdp.Error
+		if !errors.As(err, &ce) {
+			c.detach(s)
+			return nil, err
+		}
+		c.opts.Logf("signal: Inspector.enable: %v", err)
+	}
 	c.grantLocalNetwork(ctx, t.URL)
-	if err := bounded(ctx, func(cctx context.Context) error { return s.AddBinding(cctx, BindingName) }); err != nil {
+	if err := c.bounded(ctx, func(cctx context.Context) error { return s.AddBinding(cctx, BindingName) }); err != nil {
 		c.detach(s)
 		return nil, err
 	}
 	c.mu.Lock()
 	c.session = s
 	c.mu.Unlock()
-	if err := bounded(ctx, func(cctx context.Context) error { return s.Call(cctx, "Runtime.enable", nil, nil) }); err != nil {
+	if err := c.bounded(ctx, func(cctx context.Context) error { return s.Call(cctx, "Runtime.enable", nil, nil) }); err != nil {
 		c.detach(s)
 		return nil, err
 	}
+	c.opts.Status("found seven at %s", protect.Redact(t.URL))
 	return s, nil
+}
+
+func (c *CDP) recover(ctx context.Context, sub *cdp.Subscription, t cdp.TargetInfo) error {
+	var s *cdp.Session
+	if err := c.bounded(ctx, func(cctx context.Context) (err error) {
+		s, err = c.opts.Client.Attach(cctx, t.TargetID)
+		return err
+	}); err != nil {
+		return err
+	}
+	defer c.detach(s)
+	if err := c.bounded(ctx, func(cctx context.Context) error { return s.Call(cctx, "Inspector.enable", nil, nil) }); err != nil {
+		return err
+	}
+	crashed, err := c.stillCrashed(ctx, sub, t.TargetID, s.ID)
+	if err != nil || !crashed {
+		return err
+	}
+	var limit <-chan time.Time
+	if c.mayReload(time.Now()) {
+		c.opts.Status("reloading the seven tab")
+		go c.reload(ctx, s)
+		timer := time.NewTimer(c.opts.ReloadTimeout)
+		defer timer.Stop()
+		limit = timer.C
+	} else {
+		c.opts.Status("%s", KeepsCrashing)
+	}
+	return c.revived(ctx, sub, t.TargetID, s.ID, limit)
+}
+
+func (c *CDP) reload(ctx context.Context, s *cdp.Session) {
+	if err := c.bounded(ctx, func(cctx context.Context) error { return s.Call(cctx, "Page.reload", nil, nil) }); err != nil && ctx.Err() == nil {
+		c.opts.Logf("signal: reload the seven tab: %v", err)
+	}
+}
+
+func (c *CDP) mayReload(now time.Time) bool {
+	kept := c.reloads[:0]
+	for _, at := range c.reloads {
+		if now.Sub(at) < CrashWindow {
+			kept = append(kept, at)
+		}
+	}
+	c.reloads = kept
+	if len(kept) >= CrashReloads {
+		return false
+	}
+	c.reloads = append(c.reloads, now)
+	return true
+}
+
+func (c *CDP) stillCrashed(ctx context.Context, sub *cdp.Subscription, targetID, sessionID string) (bool, error) {
+	grace := time.NewTimer(crashGrace)
+	defer grace.Stop()
+	for {
+		select {
+		case ev, ok := <-sub.Events():
+			if !ok {
+				return false, c.opts.Client.Err()
+			}
+			if ev.SessionID == sessionID && ev.Method == "Inspector.targetCrashed" {
+				return true, nil
+			}
+			if err := targetEvent(ev, targetID, sessionID); errors.Is(err, errTargetGone) {
+				return false, err
+			}
+		case <-grace.C:
+			c.opts.Logf("signal: the seven tab is running again")
+			return false, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+}
+
+func (c *CDP) revived(ctx context.Context, sub *cdp.Subscription, targetID, sessionID string, limit <-chan time.Time) error {
+	for {
+		select {
+		case ev, ok := <-sub.Events():
+			if !ok {
+				return c.opts.Client.Err()
+			}
+			if ev.SessionID == sessionID && ev.Method == "Inspector.targetReloadedAfterCrash" {
+				c.opts.Logf("signal: the seven tab is back")
+				return nil
+			}
+			if err := targetEvent(ev, targetID, sessionID); errors.Is(err, errTargetGone) {
+				return err
+			}
+			if t, ok := c.sevenPage(ev); ok && t.TargetID != targetID {
+				c.avoid = targetID
+				return nil
+			}
+		case <-limit:
+			c.opts.Logf("signal: the reloaded seven tab didn't come back within %s", c.opts.ReloadTimeout)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 func (c *CDP) grantLocalNetwork(ctx context.Context, rawURL string) {
@@ -256,7 +497,7 @@ func (c *CDP) grantLocalNetwork(ctx context.Context, rawURL string) {
 	origin := u.Scheme + "://" + u.Host
 	for _, name := range localNetworkPermissions {
 		params := map[string]any{"permission": map[string]any{"name": name}, "setting": "granted", "origin": origin}
-		if err := bounded(ctx, func(cctx context.Context) error {
+		if err := c.bounded(ctx, func(cctx context.Context) error {
 			return c.opts.Client.Call(cctx, "", "Browser.setPermission", params, nil)
 		}); err != nil {
 			c.opts.Logf("signal: grant %s to %s: %v", name, origin, err)
@@ -272,23 +513,68 @@ type watch struct {
 	cancel    context.CancelFunc
 }
 
-var errTargetGone = errors.New("signal: seven tab is gone")
+var (
+	errTargetGone    = errors.New("signal: seven tab is gone")
+	errTargetCrashed = errors.New("signal: seven tab crashed")
+)
 
-func (w *watch) loop(ctx context.Context, sub *cdp.Subscription) error {
-	defer w.drop(ctx, "seven tab closed")
+func targetEvent(ev cdp.Event, targetID, sessionID string) error {
+	if ev.SessionID != "" {
+		if ev.SessionID == sessionID && ev.Method == "Inspector.targetCrashed" {
+			return errTargetCrashed
+		}
+		return nil
+	}
+	switch ev.Method {
+	case "Target.detachedFromTarget":
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		if sessionID != "" && json.Unmarshal(ev.Params, &p) == nil && p.SessionID == sessionID {
+			return errTargetGone
+		}
+	case "Target.targetDestroyed", "Target.targetCrashed":
+		var p struct {
+			TargetID string `json:"targetId"`
+		}
+		if json.Unmarshal(ev.Params, &p) != nil || p.TargetID != targetID {
+			return nil
+		}
+		if ev.Method == "Target.targetCrashed" {
+			return errTargetCrashed
+		}
+		return errTargetGone
+	}
+	return nil
+}
+
+func (w *watch) loop(ctx context.Context, sub *cdp.Subscription, early []cdp.Event) error {
+	reason := "seven tab closed"
+	defer func() { w.drop(ctx, reason) }()
+	end := func(err error) error {
+		switch {
+		case errors.Is(err, errTargetGone):
+			w.c.opts.Status("seven tab closed")
+			return nil
+		case errors.Is(err, errTargetCrashed):
+			reason = "seven tab crashed"
+			w.c.opts.Status("seven tab crashed")
+		}
+		return err
+	}
+	for _, ev := range early {
+		if err := w.handle(ctx, ev); err != nil {
+			return end(err)
+		}
+	}
 	for {
 		select {
 		case ev, ok := <-sub.Events():
 			if !ok {
 				return w.c.opts.Client.Err()
 			}
-			err := w.handle(ctx, ev)
-			if errors.Is(err, errTargetGone) {
-				w.c.opts.Status("seven tab closed")
-				return nil
-			}
-			if err != nil {
-				return err
+			if err := w.handle(ctx, ev); err != nil {
+				return end(err)
 			}
 		case <-ctx.Done():
 			return ctx.Err()
@@ -297,10 +583,10 @@ func (w *watch) loop(ctx context.Context, sub *cdp.Subscription) error {
 }
 
 func (w *watch) handle(ctx context.Context, ev cdp.Event) error {
-	if ev.SessionID == "" {
-		return w.handleBrowser(ev)
+	if err := targetEvent(ev, w.targetID, w.s.ID); err != nil {
+		return err
 	}
-	if ev.SessionID != w.s.ID {
+	if ev.SessionID == "" || ev.SessionID != w.s.ID {
 		return nil
 	}
 	switch ev.Method {
@@ -324,26 +610,6 @@ func (w *watch) handle(ctx context.Context, ev cdp.Event) error {
 		var p cdp.BindingCalled
 		if json.Unmarshal(ev.Params, &p) == nil {
 			w.bindingCalled(ctx, p)
-		}
-	}
-	return nil
-}
-
-func (w *watch) handleBrowser(ev cdp.Event) error {
-	switch ev.Method {
-	case "Target.detachedFromTarget":
-		var p struct {
-			SessionID string `json:"sessionId"`
-		}
-		if json.Unmarshal(ev.Params, &p) == nil && p.SessionID == w.s.ID {
-			return errTargetGone
-		}
-	case "Target.targetDestroyed", "Target.targetCrashed":
-		var p struct {
-			TargetID string `json:"targetId"`
-		}
-		if json.Unmarshal(ev.Params, &p) == nil && p.TargetID == w.targetID {
-			return errTargetGone
 		}
 	}
 	return nil

@@ -615,7 +615,7 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 
 **Setup over CDP.**
 1. slicc picks the first page tab whose URL has an allowed origin. Until there is one it says `waiting for a seven tab` and watches for new tabs. After 15 s without one it says `still no seven tab` and what to do: a browser can hide seven's own tab from debugging clients, and then this setup can't work, so link through the tray ([Remote setup](#remote-setup-slicc-join-url-follow)). `SLICC_SEVEN_QUIET` (test-only, a Go duration) replaces the 15 s. A `Target.createTarget` refused by such a browser ends plain `slicc` with the same advice.
-2. It attaches, grants the tab's origin `local-network-access`, `local-network` and `loopback-network` with `Browser.setPermission` (best effort), calls `Runtime.addBinding { name: "sliccLinkSend" }`, then `Runtime.enable`.
+2. It attaches, calls `Inspector.enable` (answered by the browser even when the tab's renderer is gone, so a crashed tab shows up as `Inspector.targetCrashed` before anything waits on the renderer), grants the tab's origin `local-network-access`, `local-network` and `loopback-network` with `Browser.setPermission` (best effort), calls `Runtime.addBinding { name: "sliccLinkSend" }`, then `Runtime.enable`, and says `found seven at <origin>`.
 3. For each new default execution context of the main frame whose origin is allowed, slicc mints a nonce (16 random bytes, base64url). It then calls `globalThis.sliccLinkReceive({ "t": "hello", "v": 1, "nonce", "node" })` in that context. `node` is a random id per `slicc` process (16 random bytes, base64url), the same in every hello and HELLO of that process, so seven can tell a second `slicc` on the same browser (a `slicc prompt --cdp …` next to the bridge) from a restart of the same one. The call is retried every 100 ms to 1 s until `sliccLinkReceive` is a function.
 4. seven answers through `sliccLinkSend(JSON.stringify(message))`:
    - `{ "t": "offer", "nonce", "sdp" }`;
@@ -631,6 +631,8 @@ slicc attach --cdp <url> [--cdp-extra <url>]... [--origin <origin>]... [--signal
 - A navigation or reload ends the link, and the next allowed context starts the setup again with a new nonce.
 - A closed tab ends the link, and slicc waits for another seven tab.
 - A tab that closes while slicc attaches to it doesn't stop slicc: each setup call has 10 s, and when the tab is gone slicc looks for another seven tab.
+- A crashed tab (`Target.targetCrashed`, or `Inspector.targetCrashed` on slicc's session) isn't a closed one: slicc says `seven tab crashed`, ends the link with that reason, and doesn't set up again on the dead page, whose renderer would never answer. It reloads the tab with `Page.reload` (`reloading the seven tab`) and sets up again once the browser reports `Inspector.targetReloadedAfterCrash`, or after 30 s. A tab that is running again by the time slicc looks is set up without a reload. slicc reloads at most 3 times in 5 minutes; after that it says `the seven tab keeps crashing. Reload it and slicc links it again` and waits until someone reloads the tab, closes it, or opens another seven tab, which it then prefers.
+- A setup that fails while the browser connection is up doesn't stop slicc either: a call that times out or fails on a tab that is still there is tried again from the start after 1 s, doubling to 30 s, with `couldn't link the seven tab (<error>), trying again in <wait>`. A setup that succeeds resets the wait. Only a lost browser connection, or slicc stopping, ends the setup; then `slicc` (the default) ends as when the browser closes, `attach` exits 1, and agent commands stop with the error.
 
 **Setup over stdio** (`--signal stdio`), for a test harness that owns CDP itself:
 - The same messages go as NDJSON: slicc writes `hello`, `answer`, `candidate` and `bye` lines to stdout, and reads `offer`, `candidate` and `bye` lines from stdin. Messages with another nonce are ignored.
@@ -1543,7 +1545,7 @@ The wire protocol between seven (the page) and `slicc` (the node), v1. seven's s
 Used when the node already holds a CDP connection to the browser that runs seven. No key in a URL, and nothing listening on loopback.
 
 1. The node finds the seven target. That's a page target whose main-frame origin is allowed, using the same origin rule as slicc-node's gate: `https://<label>.sliccy.ai` other than the service hosts in slicc-browsers' `seven.excludedLabels`, plus any `--origin`.
-2. It attaches (`flatten: true`), calls `Runtime.enable` and `Runtime.addBinding { name: "sliccLinkSend" }`.
+2. It attaches (`flatten: true`), calls `Inspector.enable`, `Runtime.addBinding { name: "sliccLinkSend" }` and `Runtime.enable`.
 3. It sends `{ "t": "hello", "v": 1, "nonce": "<base64url 16 bytes>", "node": "<random per-process id>" }` (see [§5.11](#511-agent-page-cap-agent-node--page-remote-control) for how the page uses `node`) by calling `Runtime.evaluate` on `globalThis.sliccLinkReceive?.(<json>)`.
 4. The page answers through the binding, `sliccLinkSend(<json>)`, with:
    - `{ "t": "offer", "nonce", "sdp" }`
@@ -1558,6 +1560,7 @@ Rules:
 - **Hello delivery** is retried until both `globalThis.sliccLinkReceive` and the `sliccLinkSend` binding exist in the main frame's context. The node calls `addBinding` again when the binding is missing (seen on macOS around the about:blank → page swap). The page should also check that `sliccLinkSend` exists before calling it.
 - **On exit** the node sends `bye`.
 - **Navigating or reloading seven drops the link.** The node runs the setup again when a new allowed context appears.
+- **A crashed seven tab is reloaded.** On `Target.targetCrashed` or `Inspector.targetCrashed` the node drops the link and reloads the tab with `Page.reload`, at most 3 times in 5 minutes, then runs the setup again once the tab is back. The page gets a fresh `hello` as after any reload.
 - **ICE:** host candidates only. There's no STUN or TURN, since both peers are on the same machine.
   - Chrome hides host candidates behind mDNS (`<uuid>.local`), so the node resolves them (pion `MulticastDNSMode` query-only).
 - **Candidates:** a `candidate` message carries `RTCIceCandidateInit` JSON (`candidate.toJSON()`: `candidate`, `sdpMid`, `sdpMLineIndex`, `usernameFragment`), and `null` once gathering ends.
