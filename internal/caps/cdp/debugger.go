@@ -34,7 +34,7 @@ var debuggerLifetimes = map[string]debuggerLifetime{
 	"Debugger.resume":                       debuggerControl,
 }
 
-const refusedDebugger = "this debugger method is not supported by the Stage 1 guard"
+const refusedDebugger = "debugger methods other than enable, disable, setInstrumentationBreakpoint, removeBreakpoint and resume could read or run code in seven's pages or an extension's world, so the guard doesn't allow them"
 
 const debuggerReadLimit = 2 * time.Second
 const debuggerPauseLimit = 5 * time.Second

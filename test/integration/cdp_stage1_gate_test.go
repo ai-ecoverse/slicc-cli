@@ -143,7 +143,7 @@ func TestStage1UnsupportedDebuggerMethodsHaveTheirOwnRefusal(t *testing.T) {
 		packet := client.Call(t, method, "S", nil)
 		stage1.Refused(t, packet)
 		failure := packet["error"].(map[string]any)
-		if failure["message"] != "slicc: refused: this debugger method is not supported by the Stage 1 guard" {
+		if failure["message"] != "slicc: refused: debugger methods other than enable, disable, setInstrumentationBreakpoint, removeBreakpoint and resume could read or run code in seven's pages or an extension's world, so the guard doesn't allow them" {
 			t.Errorf("%s: %v", method, failure)
 		}
 		if stage1Sent(browser, method) != 0 {
