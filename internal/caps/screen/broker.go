@@ -147,6 +147,11 @@ func (b *Broker) Attach(l *link.Link) {
 	go func() {
 		select {
 		case <-l.Ready():
+			select {
+			case <-l.HelloSent():
+			case <-l.Done():
+				return
+			}
 			b.mu.Lock()
 			if b.l == l {
 				b.publishLocked("awaiting-consent")
