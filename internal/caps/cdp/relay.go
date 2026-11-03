@@ -52,6 +52,12 @@ func (r *Registry) serve(s *link.Stream) {
 		_ = s.Reset("ENOENT: no browser " + strconv.Quote(req.Browser))
 		return
 	}
+	reservation := s.ReserveAllocation(2*(MaxMessage+1), false)
+	if reservation == nil {
+		_ = s.Reset("ENOBUFS: shared HTTP/CDP allocation limit")
+		return
+	}
+	defer reservation.Release()
 	ctx, cancel := context.WithTimeout(context.Background(), DialTimeout)
 	go func() {
 		select {
@@ -67,7 +73,15 @@ func (r *Registry) serve(s *link.Stream) {
 		_ = s.Reset("ECONNREFUSED: " + err.Error())
 		return
 	}
-	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), parked: map[parkKey][][]byte{}}
+	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), parked: map[parkKey][]parkedMessage{}}
+	rl.g.reserveHold = func(data []byte) (*link.Reservation, bool) {
+		r := s.ReserveAllocation(cap(data), false)
+		if r == nil {
+			rl.kill("ENOBUFS: shared HTTP/CDP allocation limit")
+		}
+		return r, r != nil
+	}
+	defer rl.g.releaseAllocations()
 	rl.g.scheduleInitial = rl.scheduleInitial
 	err = rl.bootstrap(ctx)
 	cancel()
@@ -156,7 +170,7 @@ func getVersion(ctx context.Context, conn *websocket.Conn) (Opened, error) {
 		return Opened{}, fmt.Errorf("Browser.getVersion: %w", err)
 	}
 	for {
-		_, data, err := conn.Read(ctx)
+		_, data, err := readMessage(ctx, conn)
 		if err != nil {
 			return Opened{}, fmt.Errorf("Browser.getVersion: %w", err)
 		}
@@ -168,6 +182,11 @@ func getVersion(ctx context.Context, conn *websocket.Conn) (Opened, error) {
 			return res.Result, nil
 		}
 	}
+}
+
+type parkedMessage struct {
+	data        []byte
+	reservation *link.Reservation
 }
 
 type parkKey struct {
@@ -183,7 +202,7 @@ type relay struct {
 	g      *guard
 	pageMu sync.Mutex
 	parkMu sync.Mutex
-	parked map[parkKey][][]byte
+	parked map[parkKey][]parkedMessage
 
 	parkedCount int
 	parkedBytes int
@@ -275,9 +294,11 @@ func (rl *relay) toPage() {
 		for _, msg := range v.page {
 			if err := rl.writePage(msg); err != nil {
 				_ = rl.conn.CloseNow()
+				releaseReservations(v.releases)
 				return
 			}
 		}
+		releaseReservations(v.releases)
 	}
 }
 
@@ -304,7 +325,7 @@ func (rl *relay) readBrowser(ctx context.Context) (websocket.MessageType, []byte
 	if d := rl.g.reads.back(time.Now()); d > slowGuard {
 		rl.g.logf("cdp: slicc didn't read the browser for %s while it passed messages on; the guards' idle bound leaves that time out", d.Round(time.Millisecond))
 	}
-	typ, data, err := rl.conn.Read(ctx)
+	typ, data, err := readMessage(ctx, rl.conn)
 	rl.g.reads.left(time.Now())
 	return typ, data, err
 }
@@ -319,7 +340,9 @@ func (rl *relay) expireLater(sessionID string) {
 
 func (rl *relay) expireExtrasLater(k requestKey) {
 	time.AfterFunc(ExtraHold, func() {
-		for _, msg := range rl.g.expireExtras(k) {
+		page, releases := rl.g.expireExtras(k)
+		defer releaseReservations(releases)
+		for _, msg := range page {
 			if rl.writePage(msg) != nil {
 				return
 			}
@@ -329,7 +352,8 @@ func (rl *relay) expireExtrasLater(k requestKey) {
 
 func (rl *relay) expirePauseLater(k requestKey) {
 	time.AfterFunc(ExtraHold, func() {
-		page, send := rl.g.expirePause(k)
+		page, send, releases := rl.g.expirePause(k)
+		defer releaseReservations(releases)
 		for _, msg := range send {
 			_ = rl.conn.Write(context.Background(), websocket.MessageText, msg)
 		}
@@ -343,7 +367,8 @@ func (rl *relay) expirePauseLater(k requestKey) {
 
 func (rl *relay) expireAnswerLater(k callKey) {
 	time.AfterFunc(ExtraHold, func() {
-		page, send := rl.g.expireAnswer(k)
+		page, send, releases := rl.g.expireAnswer(k)
+		defer releaseReservations(releases)
 		for _, msg := range send {
 			_ = rl.conn.Write(context.Background(), websocket.MessageText, msg)
 		}
@@ -355,8 +380,7 @@ func (rl *relay) expireAnswerLater(k callKey) {
 	})
 }
 
-func (g *guard) pageFrame(data []byte) []byte {
-	data = g.scrub(data)
+func pageFrame(data []byte) []byte {
 	msg := make([]byte, 4+len(data))
 	binary.BigEndian.PutUint32(msg, uint32(len(data)))
 	copy(msg[4:], data)
@@ -364,9 +388,16 @@ func (g *guard) pageFrame(data []byte) []byte {
 }
 
 func (rl *relay) writePage(data []byte) error {
-	msg := rl.g.pageFrame(data)
 	rl.pageMu.Lock()
 	defer rl.pageMu.Unlock()
+	data = rl.g.scrub(data)
+	reservation := rl.s.ReserveAllocation(len(data)+4, false)
+	if reservation == nil {
+		rl.kill("ENOBUFS: shared HTTP/CDP allocation limit")
+		return io.ErrShortBuffer
+	}
+	defer reservation.Release()
+	msg := pageFrame(data)
 	_, err := rl.s.Write(msg)
 	return err
 }
@@ -403,8 +434,11 @@ func filtered(data []byte) bool {
 func (rl *relay) toBrowser() {
 	ctx := context.Background()
 	var hdr [4]byte
-	var buf bytes.Buffer
+	var reservation *link.Reservation
+	defer func() { reservation.Release() }()
 	for {
+		reservation.Release()
+		reservation = nil
 		if _, err := io.ReadFull(rl.s, hdr[:]); err != nil {
 			rl.pageClosed(err)
 			return
@@ -414,9 +448,14 @@ func (rl *relay) toBrowser() {
 			rl.kill(fmt.Sprintf("EMSGSIZE: a message of %d bytes, over 64 MiB", n))
 			return
 		}
-		buf.Reset()
-		if _, err := io.CopyN(&buf, rl.s, int64(n)); err != nil {
-			if errors.Is(err, io.EOF) {
+		reservation = rl.s.ReserveAllocation(int(n), true)
+		if reservation == nil {
+			rl.kill("ENOBUFS: shared HTTP/CDP allocation limit")
+			return
+		}
+		buf := make([]byte, int(n))
+		if _, err := io.ReadFull(rl.s, buf); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				rl.kill("EPROTO: END inside a message")
 				return
 			}
@@ -426,10 +465,10 @@ func (rl *relay) toBrowser() {
 		if rl.browserDone.Load() {
 			continue
 		}
-		if rl.park(buf.Bytes()) {
+		if rl.park(buf) {
 			continue
 		}
-		out, ok := rl.checkPage(buf.Bytes())
+		out, ok := rl.checkPage(buf)
 		if !ok {
 			return
 		}
@@ -461,4 +500,31 @@ func (rl *relay) pageClosed(err error) {
 		return
 	}
 	_ = rl.conn.CloseNow()
+}
+
+func readMessage(ctx context.Context, conn *websocket.Conn) (websocket.MessageType, []byte, error) {
+	typ, r, err := conn.Reader(ctx)
+	if err != nil {
+		return typ, nil, err
+	}
+	var data []byte
+	for {
+		if len(data) == cap(data) {
+			capacity := min(MaxMessage+1, max(4096, 2*cap(data)))
+			next := make([]byte, len(data), capacity)
+			copy(next, data)
+			data = next
+		}
+		n, err := r.Read(data[len(data):cap(data)])
+		data = data[:len(data)+n]
+		if len(data) > MaxMessage {
+			return typ, nil, websocket.ErrMessageTooBig
+		}
+		if errors.Is(err, io.EOF) {
+			return typ, data, nil
+		}
+		if err != nil {
+			return typ, nil, err
+		}
+	}
 }

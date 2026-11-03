@@ -3,6 +3,8 @@ package cdp
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
 const (
@@ -25,8 +27,9 @@ type requestKey struct {
 }
 
 type heldExtra struct {
-	m    message
-	data []byte
+	reservation *link.Reservation
+	m           message
+	data        []byte
 }
 
 func requestIDOf(m *message) string {
@@ -74,8 +77,12 @@ func (g *guard) extraEvent(m *message, data []byte) browserVerdict {
 		g.logf("cdp: too many network extra-info events wait for their request; stripping one")
 		return g.filterExtraLocked(m, data, true)
 	}
+	reservation, ok := g.holdReservation(data)
+	if !ok {
+		return browserVerdict{}
+	}
 	first := len(g.heldExtras[k]) == 0
-	g.heldExtras[k] = append(g.heldExtras[k], heldExtra{m: *m, data: data})
+	g.heldExtras[k] = append(g.heldExtras[k], heldExtra{m: *m, data: data, reservation: reservation})
 	g.heldExtraCount++
 	if !first {
 		return browserVerdict{}
@@ -87,6 +94,9 @@ func (g *guard) releaseExtrasLocked(k requestKey, expired bool) [][]byte {
 	list := g.heldExtras[k]
 	if len(list) == 0 {
 		return nil
+	}
+	for _, h := range list {
+		g.pendingRelease = append(g.pendingRelease, h.reservation)
 	}
 	delete(g.heldExtras, k)
 	g.heldExtraCount -= len(list)
@@ -106,10 +116,11 @@ func (g *guard) releaseExtrasLocked(k requestKey, expired bool) [][]byte {
 	return out
 }
 
-func (g *guard) expireExtras(k requestKey) [][]byte {
+func (g *guard) expireExtras(k requestKey) ([][]byte, []*link.Reservation) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.releaseExtrasLocked(k, true)
+	page := g.releaseExtrasLocked(k, true)
+	return page, g.takeReleasesLocked()
 }
 
 func (g *guard) settleLocked(k requestKey, level reqLevel) {
@@ -132,6 +143,9 @@ func (g *guard) forgetExtrasLocked(session string) {
 	for k, list := range g.heldExtras {
 		if k.session == session {
 			g.heldExtraCount -= len(list)
+			for _, h := range list {
+				h.reservation.Release()
+			}
 			delete(g.heldExtras, k)
 		}
 	}

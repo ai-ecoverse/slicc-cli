@@ -14,12 +14,13 @@ import (
 type Handler func(*Stream)
 
 type Options struct {
-	Hello        Hello
-	Handlers     map[string]Handler
-	Logf         func(format string, args ...any)
-	HelloTimeout time.Duration
-	MaxChannels  int
-	Certificates []webrtc.Certificate
+	AllocationBudget *AllocationBudget
+	Hello            Hello
+	Handlers         map[string]Handler
+	Logf             func(format string, args ...any)
+	HelloTimeout     time.Duration
+	MaxChannels      int
+	Certificates     []webrtc.Certificate
 }
 
 type OpenOptions struct {
