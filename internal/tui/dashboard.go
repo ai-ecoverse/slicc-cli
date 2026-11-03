@@ -387,11 +387,11 @@ func (m Model) dashCaps() []string {
 		return fmt.Sprintf("  %s %s %s", mark, fmt.Sprintf("%-7s", name), value)
 	}
 	off := st.faint.Render("off")
-	jerk := off
+	jerk := st.faint.Render("disabled")
 	if has("jerk") {
 		jerk = "slicc-jerk " + firstOf(m.cfg.JerkVersion, "on the link")
 	}
-	out = append(out, row(has("jerk"), "jerk", jerk))
+	jerkRow := row(has("jerk"), "jerk", jerk)
 	shell := off
 	switch {
 	case d.compute != "":
@@ -416,10 +416,9 @@ func (m Model) dashCaps() []string {
 	folders := m.settings.shared()
 	if len(folders) == 0 {
 		if d.pair {
-			return append(out, row(false, "folders", off))
+			return append(out, row(false, "folders", off), jerkRow)
 		}
-		out = append(out, row(false, "folders", off+"  "+st.key.Render("m")+st.faint.Render(" share one")))
-		return out
+		return append(out, row(false, "folders", off+"  "+st.key.Render("m")+st.faint.Render(" share one")), jerkRow)
 	}
 	parts := make([]string, len(folders))
 	for i, f := range folders {
@@ -428,7 +427,7 @@ func (m Model) dashCaps() []string {
 			parts[i] += " " + st.warn.Render("read-only")
 		}
 	}
-	return append(out, row(true, "folders", strings.Join(parts, st.faint.Render(" · "))))
+	return append(out, row(true, "folders", strings.Join(parts, st.faint.Render(" · "))), jerkRow)
 }
 
 func (m Model) streamText() string {

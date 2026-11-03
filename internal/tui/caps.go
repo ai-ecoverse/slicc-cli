@@ -157,7 +157,7 @@ type capsEditor struct {
 }
 
 func (e capsEditor) rows() []capRow {
-	rows := []capRow{{kind: rowJerk}, {kind: rowShell}, {kind: rowKernel}}
+	rows := []capRow{{kind: rowShell}, {kind: rowKernel}, {kind: rowJerk}}
 	for i := range e.draft.Folders {
 		rows = append(rows, capRow{kind: rowFolder, folder: i})
 	}

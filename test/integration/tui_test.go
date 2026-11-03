@@ -99,6 +99,31 @@ func (h *tuiHarness) keys(keys ...string) tea.Cmd {
 
 func (h *tuiHarness) view() string { return h.m.View().Content }
 
+func (h *tuiHarness) capLabels() []string {
+	var out []string
+	for _, l := range strings.Split(h.view(), "\n") {
+		f := strings.Fields(strings.TrimPrefix(strings.TrimSpace(l), "\u203a"))
+		if len(f) > 1 && (f[0] == "\u25cb" || f[0] == "\u25cf") && slices.Contains([]string{"shell", "kernel", "folders", "jerk"}, f[1]) {
+			out = append(out, f[1])
+		}
+	}
+	return out
+}
+
+func (h *tuiHarness) capRow(label string) {
+	h.t.Helper()
+	h.keys("g")
+	for range 16 {
+		for _, l := range strings.Split(h.view(), "\n") {
+			if f := strings.Fields(l); len(f) > 2 && f[0] == "\u203a" && f[2] == label {
+				return
+			}
+		}
+		h.keys("down")
+	}
+	h.t.Fatalf("no capability row %q:\n%s", label, h.view())
+}
+
 func (h *tuiHarness) rows() []string {
 	var rows []string
 	for _, l := range strings.Split(h.view(), "\n")[1:] {
@@ -395,6 +420,9 @@ func TestTUIDashboard(t *testing.T) {
 			t.Fatalf("dashboard lacks %q:\n%s", s, v)
 		}
 	}
+	if got := h.capLabels(); !slices.Equal(got, []string{"shell", "kernel", "folders", "jerk"}) || !strings.Contains(v, "\u25cb jerk    disabled") {
+		t.Fatalf("jerk should be the last capability and read disabled, got %v:\n%s", got, v)
+	}
 	ev(flow.Event{Event: flow.BrowserGone, Browser: "cdp:127.0.0.1:9333", Name: "Brave", Role: flow.RoleExtra})
 	if !strings.Contains(h.view(), "extra cdp  gone") {
 		t.Fatalf("after browser-gone:\n%s", h.view())
@@ -490,7 +518,11 @@ func TestTUICapabilities(t *testing.T) {
 	if h.model().Mode() != tui.ModeCaps || !strings.Contains(h.view(), "ALWAYS OFFERED  net · http · cdp") {
 		t.Fatalf("c: mode %s\n%s", h.model().Mode(), h.view())
 	}
-	h.keys("down", "space", "a", dir+"/project:proj:ro", "enter")
+	if got := h.capLabels(); !slices.Equal(got, []string{"shell", "kernel", "jerk"}) {
+		t.Fatalf("THIS MACHINE should read shell, kernel, jerk, got %v:\n%s", got, h.view())
+	}
+	h.capRow("shell")
+	h.keys("space", "a", dir+"/project:proj:ro", "enter")
 	v := h.view()
 	for _, s := range []string{"+ shell sh -c", "+ folder proj", "applying relinks seven", "read-only"} {
 		if !strings.Contains(v, s) {
@@ -507,7 +539,9 @@ func TestTUICapabilities(t *testing.T) {
 		t.Fatalf("after s: mode %s\n%s", h.model().Mode(), h.view())
 	}
 	live = true
-	h.keys("c", "down", "down", "down", "r")
+	h.keys("c")
+	h.capRow("proj")
+	h.keys("r")
 	if !strings.Contains(h.view(), "applies live") {
 		t.Fatalf("read-only toggle on a shared folder should apply live:\n%s", h.view())
 	}
@@ -515,7 +549,9 @@ func TestTUICapabilities(t *testing.T) {
 	if len(applied) != 2 || applied[1].relink || applied[1].s.Folders[0].ReadOnly {
 		t.Fatalf("live apply %+v", applied)
 	}
-	h.keys("c", "down", "down", "down", "x", "esc")
+	h.keys("c")
+	h.capRow("proj")
+	h.keys("x", "esc")
 	if !strings.Contains(h.view(), "apply these changes?") {
 		t.Fatalf("esc with pending changes:\n%s", h.view())
 	}
@@ -523,7 +559,9 @@ func TestTUICapabilities(t *testing.T) {
 	if h.model().Mode() != tui.ModeDashboard || len(applied) != 2 {
 		t.Fatalf("n should discard: mode %s, %d applies", h.model().Mode(), len(applied))
 	}
-	h.keys("c", "down", "down", "enter")
+	h.keys("c")
+	h.capRow("kernel")
+	h.keys("enter")
 	h.send(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	h.keys("abc", "enter")
 	if !strings.Contains(h.view(), `"abc" is not a port`) {
@@ -560,7 +598,9 @@ func TestTUIRunnerKeepsArgumentBoundaries(t *testing.T) {
 		CheckRunner: func([]string) error { return nil },
 		Apply:       func(s tui.Settings, _ bool) { applied = append(applied, s) },
 	})
-	h.keys("down", "down", "enter", "c", "down", "enter")
+	h.keys("down", "down", "enter", "c")
+	h.capRow("shell")
+	h.keys("enter")
 	if !strings.Contains(h.view(), `bash -c 'echo foo'`) {
 		t.Fatalf("the runner editor:\n%s", h.view())
 	}
@@ -568,7 +608,8 @@ func TestTUIRunnerKeepsArgumentBoundaries(t *testing.T) {
 	if strings.Contains(h.view(), "PENDING") {
 		t.Fatalf("an unchanged runner shows as a change:\n%s", h.view())
 	}
-	h.keys("down", "space", "s")
+	h.capRow("kernel")
+	h.keys("space", "s")
 	if len(applied) != 1 || !slices.Equal(applied[0].Shell, []string{"bash", "-c", "echo foo"}) {
 		t.Fatalf("applied %+v", applied)
 	}
