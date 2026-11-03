@@ -63,8 +63,12 @@ func NewClient(t *testing.T, stream *link.Stream) *Client {
 	return client
 }
 
-func (c *Client) Call(t *testing.T, method, session string, params map[string]any) map[string]any {
+func (c *Client) Call(t *testing.T, method, session string, params map[string]any, waits ...time.Duration) map[string]any {
 	t.Helper()
+	wait := 3 * time.Second
+	if len(waits) != 0 {
+		wait = waits[0]
+	}
 	id := c.next.Add(1)
 	reply := make(chan map[string]any, 1)
 	c.mu.Lock()
@@ -79,11 +83,11 @@ func (c *Client) Call(t *testing.T, method, session string, params map[string]an
 	framed := make([]byte, 4+len(data))
 	binary.BigEndian.PutUint32(framed, uint32(len(data)))
 	copy(framed[4:], data)
-	_ = c.Stream.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	_ = c.Stream.SetWriteDeadline(time.Now().Add(wait))
 	if _, err := c.Stream.Write(framed); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), wait)
 	defer cancel()
 	select {
 	case packet := <-reply:

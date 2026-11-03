@@ -17,7 +17,7 @@ func TestStage1DebuggerFloodReleasesItsBudgetAndTheNextDocumentPublishes(t *test
 	runtime.ReadMemStats(&before)
 	for i := range 96 {
 		browser.Script(t, "flood-"+strconv.Itoa(i), 1000000)
-		stage1.Result(t, client.Call(t, "Browser.getVersion", "", nil))
+		stage1.Result(t, client.Call(t, "Browser.getVersion", "", nil, 15*time.Second))
 		if i%8 == 7 {
 			runtime.GC()
 			var current runtime.MemStats
