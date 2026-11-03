@@ -652,7 +652,8 @@ func (rl *relay) writeDebugger(msg []byte) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), debuggerReadLimit)
 	defer cancel()
 	if rl.conn.Write(ctx, websocket.MessageText, msg) != nil {
-		_ = rl.conn.CloseNow()
+		rl.browserDone.Store(true)
+		rl.kill("ECONNRESET: browser socket closed")
 		return false
 	}
 	return true
