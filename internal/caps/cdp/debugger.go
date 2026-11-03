@@ -3,6 +3,8 @@ package cdp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +35,14 @@ var debuggerLifetimes = map[string]debuggerLifetime{
 const debuggerReadLimit = 2 * time.Second
 const debuggerPauseLimit = 5 * time.Second
 const debuggerBytesLimit = 64 << 20
+
+func debuggerBudgetFromEnv() int {
+	bytes, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SLICC_CDP_DEBUGGER_BYTES")))
+	if err != nil || bytes <= 0 {
+		return debuggerBytesLimit
+	}
+	return min(bytes, debuggerBytesLimit)
+}
 
 type debuggerScript struct {
 	context int64
@@ -256,7 +266,7 @@ func (g *guard) debuggerScriptLocked(m *message, data []byte) [][]byte {
 	if keep {
 		added += len(data) - len(s.scripts[p.ScriptID].data)
 	}
-	if added > debuggerBytesLimit-g.debuggerBytes {
+	if added > g.debuggerLimit-g.debuggerBytes {
 		return g.fullDebuggerLocked(s)
 	}
 	g.debuggerBytes += added
@@ -377,7 +387,7 @@ func (g *guard) holdDebuggerLocked(m *message, data []byte) browserVerdict {
 }
 
 func (g *guard) holdDebuggerDataLocked(p *debuggerPause, data []byte) browserVerdict {
-	if len(data) > debuggerBytesLimit-g.debuggerBytes {
+	if len(data) > g.debuggerLimit-g.debuggerBytes {
 		return browserVerdict{send: g.fullDebuggerLocked(p.state)}
 	}
 	p.verifying = true

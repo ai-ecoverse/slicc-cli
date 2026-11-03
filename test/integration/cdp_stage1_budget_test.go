@@ -10,13 +10,15 @@ import (
 )
 
 func TestStage1DebuggerFloodReleasesItsBudgetAndTheNextDocumentPublishes(t *testing.T) {
+	t.Setenv("SLICC_CDP_DEBUGGER_BYTES", "65536")
+	start := time.Now()
 	client, browser := stage1Link(t)
 	stage1Arm(t, client)
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 	for i := range 96 {
-		browser.Script(t, "flood-"+strconv.Itoa(i), 1000000)
+		browser.Script(t, "flood-"+strconv.Itoa(i), 8192)
 		stage1.Result(t, client.Call(t, "Browser.getVersion", "", nil, 15*time.Second))
 		if i%8 == 7 {
 			runtime.GC()
@@ -47,5 +49,8 @@ func TestStage1DebuggerFloodReleasesItsBudgetAndTheNextDocumentPublishes(t *test
 	params := pause["params"].(map[string]any)
 	if params["reason"] != "other" {
 		t.Fatal("the next ordinary document did not publish its normal pause")
+	}
+	if elapsed := time.Since(start); elapsed >= 20*time.Second {
+		t.Fatalf("lowered-budget flood row took %s, want under 20 s", elapsed)
 	}
 }

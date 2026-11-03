@@ -22,6 +22,7 @@ type Packet struct {
 type Browser struct {
 	Server        *httptest.Server
 	Closed        chan struct{}
+	closed        sync.Once
 	Resumes       chan string
 	mu            sync.Mutex
 	write         sync.Mutex
@@ -53,7 +54,7 @@ func NewBrowser(t *testing.T) *Browser {
 		b.mu.Lock()
 		b.conn = conn
 		b.mu.Unlock()
-		defer func() { _ = conn.CloseNow(); close(b.Closed) }()
+		defer func() { _ = conn.CloseNow(); b.closedConnection() }()
 		for {
 			_, data, err := conn.Read(r.Context())
 			if err != nil {
@@ -90,6 +91,10 @@ func NewBrowser(t *testing.T) *Browser {
 	b.Server = httptest.NewServer(mux)
 	t.Cleanup(b.Server.Close)
 	return b
+}
+
+func (b *Browser) closedConnection() {
+	b.closed.Do(func() { close(b.Closed) })
 }
 
 func (b *Browser) frame(session string) map[string]any {
