@@ -54,6 +54,7 @@ the command line, where ps shows it to every user of this machine.
 
 flags:
   --native-screen      native app view provider through inherited private bootstrap (off by default)
+  --native-screen-proof  content-free verifier diagnostics (requires --native-screen --json)
   --exit               offer this machine's network to seven (tcp, resolve,
                        http, ws and udp streams) under the remote policy:
                        public addresses only
@@ -75,21 +76,23 @@ machine can read, and unless :ro, change the folders listed.
 ` + debugPortsHelp
 
 type followFlags struct {
-	exit         bool
-	nativeScreen bool
-	name         string
-	allow        policy.Rules
-	deny         policy.Rules
-	expose       policy.Ports
-	signalOnly   bool
-	timeout      time.Duration
-	compute      computeFlags
-	hosts        hostsFlag
-	cdp          stringList
-	mounts       stringList
-	jerk         bool
-	jerkSeal     bool
-	json         bool
+	exit              bool
+	nativeScreen      bool
+	nativeScreenProof bool
+	proof             *screen.ProofObserver
+	name              string
+	allow             policy.Rules
+	deny              policy.Rules
+	expose            policy.Ports
+	signalOnly        bool
+	timeout           time.Duration
+	compute           computeFlags
+	hosts             hostsFlag
+	cdp               stringList
+	mounts            stringList
+	jerk              bool
+	jerkSeal          bool
+	json              bool
 }
 
 func joinCommand(args []string, stdout, stderr io.Writer) int {
@@ -121,6 +124,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&f.exit, "exit", false, "")
 	fs.BoolVar(&f.nativeScreen, "native-screen", false, "")
+	fs.BoolVar(&f.nativeScreenProof, "native-screen-proof", false, "")
 	fs.StringVar(&f.name, "name", "", "")
 	fs.Var(&f.allow, "allow", "")
 	fs.Var(&f.deny, "deny", "")
@@ -144,6 +148,10 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "slicc follow: unexpected arguments\n\n%s", followUsage)
+		return f, 2
+	}
+	if f.nativeScreenProof && (!f.nativeScreen || !f.json) {
+		fmt.Fprintln(stderr, "slicc follow: --native-screen-proof requires --native-screen and --json")
 		return f, 2
 	}
 	if f.json && f.signalOnly {
@@ -178,6 +186,11 @@ func follow(joinURL string, args []string, stdout, stderr io.Writer) int {
 	}
 	out := newJSONLines(stdout, f.json)
 	defer func() { out.end(st.kept()) }()
+	if f.nativeScreenProof {
+		var finishProof func()
+		f.proof, finishProof = startScreenProofOutput(out)
+		defer finishProof()
+	}
 	r, err := newFollowRun(joinURL, f, st, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "slicc follow: %v\n", err)
@@ -704,7 +717,13 @@ func startNativeScreen(ctx context.Context, n *node.Node, audit screen.Audit) (n
 	return screen.Start(ctx, n, audit)
 }
 func (ff followFlags) screenProvider(r *followRun) error {
-	return ff.screenProviderUsing(r, screen.DefaultJournal, startNativeScreen)
+	start := startNativeScreen
+	if ff.proof != nil {
+		start = func(ctx context.Context, n *node.Node, audit screen.Audit) (nativeScreenProvider, error) {
+			return screen.StartWithProof(ctx, n, audit, ff.proof)
+		}
+	}
+	return ff.screenProviderUsing(r, screen.DefaultJournal, start)
 }
 func (ff followFlags) screenProviderUsing(r *followRun, journalFactory func() (*screen.Journal, error), start func(context.Context, *node.Node, screen.Audit) (nativeScreenProvider, error)) error {
 	if ff.nativeScreen {

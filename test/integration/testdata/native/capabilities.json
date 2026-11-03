@@ -91,6 +91,7 @@
       "link-lost",
       "linked",
       "mode",
+      "native-screen-verification",
       "pairing",
       "reconnecting"
     ]

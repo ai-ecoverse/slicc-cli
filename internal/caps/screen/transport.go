@@ -136,6 +136,7 @@ func (m safety) MarshalJSON() ([]byte, error) {
 }
 
 type Client struct {
+	proof         proofConfig
 	writeRecord   func(net.Conn, any, []byte, time.Duration) error
 	verifyGate    chan struct{}
 	authUntil     time.Time
@@ -167,7 +168,17 @@ type Client struct {
 func Start(ctx context.Context, n *node.Node, audit Audit) (*Client, error) {
 	return start(ctx, n, audit, bootstrapFile, VerifyApp, monitorPeer)
 }
-func start(ctx context.Context, n *node.Node, audit Audit, open func() (*os.File, error), verify Verifier, monitor func(*Client) error) (*Client, error) {
+func StartWithProof(ctx context.Context, n *node.Node, audit Audit, observer *ProofObserver) (*Client, error) {
+	if observer == nil {
+		return Start(ctx, n, audit)
+	}
+	c, e := start(ctx, n, audit, bootstrapFile, VerifyApp, monitorPeer, proofConfig{observer, VerifyAppWithProof})
+	if e != nil {
+		observer.Close()
+	}
+	return c, e
+}
+func start(ctx context.Context, n *node.Node, audit Audit, open func() (*os.File, error), verify Verifier, monitor func(*Client) error, proof ...proofConfig) (*Client, error) {
 	deadline := time.Now().Add(3 * time.Second)
 	f, openErr := open()
 	if openErr != nil {
@@ -197,7 +208,7 @@ func start(ctx context.Context, n *node.Node, audit Audit, open func() (*os.File
 	if _, e := f.Read(extra[:]); e != io.EOF {
 		return nil, ErrAccess
 	}
-	c, e := connect(ctx, b, verify, audit, deadline)
+	c, e := connect(ctx, b, verify, audit, deadline, proof...)
 	if e != nil {
 		return nil, e
 	}
@@ -212,13 +223,31 @@ func start(ctx context.Context, n *node.Node, audit Audit, open func() (*os.File
 func Connect(ctx context.Context, b Bootstrap, verify Verifier, audit Audit) (*Client, error) {
 	return connect(ctx, b, verify, audit, time.Now().Add(3*time.Second))
 }
-func connect(ctx context.Context, b Bootstrap, verify Verifier, audit Audit, deadline time.Time) (*Client, error) {
+func ConnectWithProof(ctx context.Context, b Bootstrap, verify ProofVerifier, audit Audit, observer *ProofObserver) (*Client, error) {
+	if verify == nil {
+		observer.Close()
+		return nil, ErrAccess
+	}
+	ordinary := func(conn *net.UnixConn, peer Peer) error { _, e := verify(conn, peer); return e }
+	if observer == nil {
+		return Connect(ctx, b, ordinary, audit)
+	}
+	c, e := connect(ctx, b, ordinary, audit, time.Now().Add(3*time.Second), proofConfig{observer, verify})
+	if e != nil {
+		observer.Close()
+	}
+	return c, e
+}
+func connect(ctx context.Context, b Bootstrap, verify Verifier, audit Audit, deadline time.Time, proof ...proofConfig) (*Client, error) {
 	if !b.Valid() || verify == nil {
 		return nil, ErrAccess
 	}
 	peer, _ := ParsePeer(b.ParentAuditToken)
 	var e error
 	c := &Client{verifyGate: make(chan struct{}, 1), authUntil: deadline, bootstrap: b, peer: peer, verify: verify, write: make(chan safety, 16), stop: make(chan struct{}), sent: "0", received: "0", echoed: "0", ready: make(chan struct{})}
+	if len(proof) > 0 {
+		c.proof = proof[0]
+	}
 	c.broker = NewBroker(audit, nil)
 	c.broker.nativeRevoke = c.revokeBound
 	c.broker.nativeStop = c.stopBound
@@ -297,6 +326,7 @@ func (c *Client) Close() {
 		if c.frames != nil {
 			_ = c.frames.Close()
 		}
+		c.proof.observer.Close()
 	})
 }
 func (c *Client) writer(ctx context.Context) {
@@ -352,7 +382,7 @@ func (c *Client) send(m safety) error {
 	if m.Type == "link" && !c.broker.registrationCurrent(m.registration) {
 		return nil
 	}
-	if c.verifyPeer(c.safety) != nil {
+	if c.verifyPeer(c.safety, "safety") != nil {
 		return ErrAccess
 	}
 	if m.Type == "link" && !c.broker.registrationCurrent(m.registration) {
@@ -380,7 +410,7 @@ func (c *Client) reader() {
 			c.Close()
 			return
 		}
-		if e = c.verifyPeer(c.safety); e != nil {
+		if e = c.verifyPeer(c.safety, "safety"); e != nil {
 			c.Close()
 			return
 		}
@@ -700,7 +730,7 @@ func (c *Client) images() {
 			c.Close()
 			return
 		}
-		if c.verifyPeer(c.frames) != nil || frame.Launch != c.bootstrap.Launch || frame.Connection != c.connection {
+		if c.verifyPeer(c.frames, "frames") != nil || frame.Launch != c.bootstrap.Launch || frame.Connection != c.connection {
 			c.Close()
 			return
 		}
@@ -787,7 +817,7 @@ func (c *Client) dial(ctx context.Context, path, lane string, deadline time.Time
 	u := conn.(*net.UnixConn)
 	_ = u.SetDeadline(deadline)
 	fail := func() (*net.UnixConn, error) { _ = u.Close(); return nil, ErrAccess }
-	if e = c.verifyPeer(u); e != nil {
+	if e = c.verifyPeer(u, lane); e != nil {
 		return fail()
 	}
 	hello := authHello{V: 1, Lane: lane, Launch: b.Launch, Challenge: b.Challenge, ClientNonce: ID(32), Connection: c.connection}
@@ -798,7 +828,7 @@ func (c *Client) dial(ctx context.Context, path, lane string, deadline time.Time
 	if e = readHello(privateConn{u}, &response); e != nil {
 		return fail()
 	}
-	if e = c.verifyPeer(u); e != nil {
+	if e = c.verifyPeer(u, lane); e != nil {
 		return fail()
 	}
 	if response.V != 1 || response.Lane != lane || response.Launch != b.Launch || response.Challenge != b.Challenge || response.ClientNonce != hello.ClientNonce || !validID(response.ServerNonce, 32) || !validID(response.Connection, 32) {
@@ -844,7 +874,16 @@ func (c *Client) heartbeat(m safety) bool {
 
 func (c *Client) Authenticated() bool { return c.healthy() }
 
-func (c *Client) verifyPeer(conn *net.UnixConn) error {
+func (c *Client) verifyPeer(conn *net.UnixConn, lane string) (err error) {
+	var checks ProofChecks
+	end := c.proof.observer.begin()
+	started, received := false, false
+	defer func() {
+		if started && !received {
+			c.proof.observer.lose()
+		}
+		end(lane, checks, err == nil)
+	}()
 	select {
 	case <-c.stop:
 		return ErrAccess
@@ -873,11 +912,27 @@ func (c *Client) verifyPeer(conn *net.UnixConn) error {
 	case <-c.stop:
 		return ErrAccess
 	}
-	result := make(chan error, 1)
-	go func() { defer func() { <-c.verifyGate }(); result <- c.verify(conn, c.peer) }()
+	type verification struct {
+		checks ProofChecks
+		err    error
+	}
+	result := make(chan verification, 1)
+	started = true
+	go func() {
+		defer func() { <-c.verifyGate }()
+		var r verification
+		if c.proof.verify != nil {
+			r.checks, r.err = c.proof.verify(conn, c.peer)
+		} else {
+			r.err = c.verify(conn, c.peer)
+		}
+		result <- r
+	}()
 	select {
-	case e := <-result:
-		return c.checkedVerification(e, by)
+	case r := <-result:
+		received = true
+		checks = r.checks
+		return c.checkedVerification(r.err, by)
 	case <-timer.C:
 		return ErrAccess
 	case <-c.stop:

@@ -101,6 +101,7 @@ type capControl struct {
 
 func currentCapabilities() capabilities {
 	names := append(flow.Names(), launchEvents...)
+	names = append(names, screen.ProofEvent)
 	slices.Sort(names)
 	return capabilities{
 		Schema:   capabilitiesSchema,

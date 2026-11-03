@@ -417,6 +417,9 @@ func newScreenAppAcknowledging(t *testing.T, acknowledge bool, audits ...nativeS
 	return newScreenAppVerified(t, acknowledge, func(*net.UnixConn, nativeScreen.Peer) error { return nil }, audits...)
 }
 func newScreenAppVerified(t *testing.T, acknowledge bool, verify nativeScreen.Verifier, audits ...nativeScreen.Audit) (*nativeScreen.Client, *screenApp) {
+	return newScreenAppDialing(t, acknowledge, verify, nativeScreen.Connect, audits...)
+}
+func newScreenAppDialing(t *testing.T, acknowledge bool, verify nativeScreen.Verifier, dial func(context.Context, nativeScreen.Bootstrap, nativeScreen.Verifier, nativeScreen.Audit) (*nativeScreen.Client, error), audits ...nativeScreen.Audit) (*nativeScreen.Client, *screenApp) {
 	t.Helper()
 	dir, e := os.MkdirTemp("", "screen-ipc-")
 	if e != nil {
@@ -554,7 +557,7 @@ func newScreenAppVerified(t *testing.T, acknowledge bool, verify nativeScreen.Ve
 	if len(audits) > 0 {
 		audit = audits[0]
 	}
-	c, e := nativeScreen.Connect(ctx, bootstrap, verify, audit)
+	c, e := dial(ctx, bootstrap, verify, audit)
 	if e != nil {
 		t.Fatal(e)
 	}

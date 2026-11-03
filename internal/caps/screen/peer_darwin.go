@@ -126,6 +126,9 @@ func auditPeer(c *net.UnixConn) (Peer, error) {
 	return auditPeerUsing(c, loadSecurity)
 }
 func auditPeerUsing(c *net.UnixConn, load func() (*securityAPI, error)) (Peer, error) {
+	return auditPeerObservedUsing(c, load, Peer{}, nil)
+}
+func auditPeerObservedUsing(c *net.UnixConn, load func() (*securityAPI, error), expected Peer, checks *ProofChecks) (Peer, error) {
 	var p Peer
 	a, e := load()
 	if e != nil {
@@ -142,13 +145,23 @@ func auditPeerUsing(c *net.UnixConn, load func() (*securityAPI, error)) (Peer, e
 			se = ErrAccess
 			return
 		}
+		if checks != nil {
+			mergeProofCheck(&checks.TokenMatched, p == expected)
+		}
 		var pid uint32
 		n = 4
-		if a.sockopt(int32(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID, &pid, &n) != 0 || n != 4 || pid != p.Token[5] {
+		result := a.sockopt(int32(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID, &pid, &n)
+		if checks != nil && result == 0 && n == 4 {
+			mergeProofCheck(&checks.PIDAgreed, pid == p.Token[5])
+		}
+		if result != 0 || n != 4 || pid != p.Token[5] {
 			se = ErrAccess
 			return
 		}
 		cred, e := unix.GetsockoptXucred(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERCRED)
+		if checks != nil && e == nil {
+			mergeProofCheck(&checks.UIDAgreed, cred.Uid == p.Token[1])
+		}
 		if e != nil || cred.Uid != p.Token[1] {
 			se = ErrAccess
 		}
@@ -168,7 +181,19 @@ type peerChecks struct {
 }
 
 func VerifyApp(c *net.UnixConn, expected Peer) error {
-	return verifyAppUsing(c, expected, peerChecks{os.Getuid, os.Getppid, unix.SysctlUint32, auditPeer, loadSecurity})
+	_, e := VerifyAppWithProof(c, expected)
+	return e
+}
+func VerifyAppWithProof(c *net.UnixConn, expected Peer) (ProofChecks, error) {
+	var samples [2]ProofChecks
+	index := 0
+	audit := func(conn *net.UnixConn) (Peer, error) {
+		sample := &samples[index]
+		index++
+		return auditPeerObservedUsing(conn, loadSecurity, expected, sample)
+	}
+	e := verifyAppUsing(c, expected, peerChecks{os.Getuid, os.Getppid, unix.SysctlUint32, audit, loadSecurity})
+	return combineProofChecks(samples[0], samples[1]), e
 }
 func verifyAppUsing(c *net.UnixConn, expected Peer, ops peerChecks) error {
 	if expected.Token[1] != uint32(ops.uid()) || expected.Token[5] != uint32(ops.ppid()) {
@@ -319,7 +344,7 @@ func monitorPeerUsing(c *Client, ops peerMonitorOps) error {
 		_ = ops.close(kq)
 		return ErrAccess
 	}
-	if c.verifyPeer(c.safety) != nil {
+	if c.verifyPeer(c.safety, "safety") != nil {
 		_ = ops.close(kq)
 		return ErrAccess
 	}
@@ -385,4 +410,27 @@ func (a *securityAPI) checkMetadata(info uintptr) error {
 		return ErrAccess
 	}
 	return nil
+}
+
+func mergeProofCheck(target **bool, matched bool) {
+	if *target != nil {
+		matched = matched && **target
+	}
+	value := matched
+	*target = &value
+}
+
+func combineProofChecks(before, after ProofChecks) ProofChecks {
+	return ProofChecks{combineProofValue(before.TokenMatched, after.TokenMatched), combineProofValue(before.PIDAgreed, after.PIDAgreed), combineProofValue(before.UIDAgreed, after.UIDAgreed)}
+}
+func combineProofValue(before, after *bool) *bool {
+	if (before != nil && !*before) || (after != nil && !*after) {
+		value := false
+		return &value
+	}
+	if before == nil || after == nil {
+		return nil
+	}
+	value := true
+	return &value
 }
