@@ -16,6 +16,7 @@ const refusedText = "slicc: refused: target is on seven's origin"
 
 type protectEnv struct {
 	*linkEnv
+	gate    *guardGate
 	plain   *httptest.Server
 	allowed string
 	seven   string
@@ -80,7 +81,7 @@ func setupProtect(t *testing.T) *protectEnv {
 	return setupProtectOn(t, launchBrowser(t))
 }
 
-func setupProtectOn(t *testing.T, b *chromeProc) *protectEnv {
+func setupProtectOn(t *testing.T, b *chromeProc, gated ...bool) *protectEnv {
 	t.Helper()
 	srv := pageServer(t)
 	plain := plainServer(t)
@@ -90,7 +91,12 @@ func setupProtectOn(t *testing.T, b *chromeProc) *protectEnv {
 		allowed: strings.Replace(plain.URL, "127.0.0.1", "localhost", 1),
 		seven:   srv.URL,
 	}
-	env.a = startAttach(t, "--cdp", b.endpoint, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
+	endpoint := b.endpoint
+	if len(gated) != 0 && gated[0] {
+		env.gate = newGuardGate(t, endpoint, srv.URL)
+		endpoint = env.gate.srv.URL
+	}
+	env.a = startAttach(t, "--cdp", endpoint, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	return env

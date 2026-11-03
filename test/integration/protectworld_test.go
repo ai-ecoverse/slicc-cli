@@ -52,7 +52,7 @@ func launchExtensionBrowser(t *testing.T, ext string, extra ...string) *chromePr
 
 func setupProtectExtension(t *testing.T) *protectEnv {
 	t.Helper()
-	return setupProtectOn(t, launchExtensionBrowser(t, filepath.Join("testdata", "extension")))
+	return setupProtectOn(t, launchExtensionBrowser(t, filepath.Join("testdata", "extension")), true)
 }
 
 func TestCDPHidesExtensionWorlds(t *testing.T) {
@@ -241,15 +241,16 @@ func (e *protectEnv) testExtensionFrame(t *testing.T) {
 		_ = s.Call(c, "Debugger.disable", nil, nil)
 	})
 	var r struct {
-		Enable       cdpOutcome `json:"enable"`
-		PausedFrames [][]string `json:"pausedFrames"`
+		Enable       cdpOutcome         `json:"enable"`
+		Negative     []debuggerNegative `json:"negative"`
+		PausedFrames [][]string         `json:"pausedFrames"`
 		Scripts      []struct {
 			URL       string `json:"url"`
 			ContextID int64  `json:"contextId"`
 		} `json:"scripts"`
 	}
 	var raw map[string]any
-	e.evalJSON(t, "linkTest.protect.extensionFrame("+jsArgs("chrome", target, frame)+")", &raw)
+	e.evalJSON(t, "linkTest.protect.extensionFrame("+jsArgs("chrome", target, frame, e.gate.srv.URL+"/gate")+")", &raw)
 	b, _ := json.Marshal(raw)
 	if err := json.Unmarshal(b, &r); err != nil {
 		t.Fatal(err)
@@ -260,6 +261,7 @@ func (e *protectEnv) testExtensionFrame(t *testing.T) {
 	if r.Enable.Error.Message != refusedWorld {
 		t.Errorf("Debugger.enable beside the extension's world: %+v", r.Enable)
 	}
+	checkDebuggerNegatives(t, r.Negative, 2)
 	for _, frames := range r.PausedFrames {
 		for _, id := range frames {
 			if id == frame {
@@ -349,14 +351,16 @@ func (e *protectEnv) testExtensionStale(t *testing.T) {
 func (e *protectEnv) testExtensionBreakpoint(t *testing.T) {
 	target, _, _, _ := e.extensionPage(t, "breakpoint")
 	var r struct {
-		Enable cdpOutcome `json:"enable"`
-		Leak   string     `json:"leak"`
-		Paused int        `json:"paused"`
+		Enable   cdpOutcome         `json:"enable"`
+		Negative []debuggerNegative `json:"negative"`
+		Leak     string             `json:"leak"`
+		Paused   int                `json:"paused"`
 	}
-	e.evalJSON(t, "linkTest.protect.extensionBreakpoint("+jsArgs("chrome", target, e.allowed+"/?n=breakpoint")+")", &r)
+	e.evalJSON(t, "linkTest.protect.extensionBreakpoint("+jsArgs("chrome", target, e.gate.srv.URL+"/gate")+")", &r)
 	if r.Enable.Error.Message != refusedWorld {
 		t.Errorf("Debugger.enable beside the extension's world: %+v", r.Enable)
 	}
+	checkDebuggerNegatives(t, r.Negative, 2)
 	if r.Leak != `{"sliccWorld":""}` {
 		t.Errorf("after a reload breakpoint conditions left %s in the page's DOM", r.Leak)
 	}
@@ -426,6 +430,29 @@ func (e *protectEnv) testExtensionRequests(t *testing.T) {
 		}
 		if !intercept && (len(r.Seen) == 0 || r.PostData == nil || !r.PostData.refused()) {
 			t.Errorf("the extension's request reached seven as %v, and its post data gave %+v", r.Seen, r.PostData)
+		}
+	}
+}
+
+type debuggerNegative struct {
+	Method string     `json:"method"`
+	Setup  cdpOutcome `json:"setup"`
+	Audit  struct {
+		Complete bool `json:"complete"`
+		Probes   []struct {
+			Forwarded bool `json:"forwarded"`
+		} `json:"probes"`
+	} `json:"audit"`
+}
+
+func checkDebuggerNegatives(t *testing.T, rows []debuggerNegative, count int) {
+	t.Helper()
+	if len(rows) != count {
+		t.Fatalf("missing direct debugger probes: %+v", rows)
+	}
+	for _, row := range rows {
+		if !row.Setup.refused() || !row.Audit.Complete || len(row.Audit.Probes) != 1 || row.Audit.Probes[0].Forwarded {
+			t.Errorf("direct %s was not refused before the backend: %+v", row.Method, row)
 		}
 	}
 }

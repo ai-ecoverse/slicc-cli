@@ -136,3 +136,18 @@ func Test675Stage1OtherExtensionRefusalIsLinkOnly(t *testing.T) {
 		stage1.Refused(t, client.Call(t, method, "S", nil))
 	}
 }
+
+func TestStage1UnsupportedDebuggerMethodsHaveTheirOwnRefusal(t *testing.T) {
+	client, browser := stage1Link(t)
+	for _, method := range []string{"Debugger.pause", "Debugger.getScriptSource", "Debugger.evaluateOnCallFrame", "Debugger.setVariableValue", "Debugger.setBreakpointByUrl", "DOMDebugger.getEventListeners", "EventBreakpoints.setInstrumentationBreakpoint"} {
+		packet := client.Call(t, method, "S", nil)
+		stage1.Refused(t, packet)
+		failure := packet["error"].(map[string]any)
+		if failure["message"] != "slicc: refused: this debugger method is not supported by the Stage 1 guard" {
+			t.Errorf("%s: %v", method, failure)
+		}
+		if stage1Sent(browser, method) != 0 {
+			t.Errorf("%s reached the backend", method)
+		}
+	}
+}
