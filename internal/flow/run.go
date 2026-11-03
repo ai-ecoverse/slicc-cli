@@ -23,6 +23,8 @@ import (
 
 const DefaultPage = "https://seven.sliccy.ai/"
 
+const SixPage = "https://www.sliccy.ai/7/"
+
 type Browser struct {
 	ID           string
 	Name         string
@@ -96,6 +98,9 @@ func PageOrigins(page string, extra []string) ([]string, error) {
 func Go(ctx context.Context, cfg Config, sel []browser.Entry) error {
 	if cfg.Page == "" {
 		cfg.Page = DefaultPage
+		if len(sel) > 0 && IsSix(sel[0]) {
+			cfg.Page = SixPage
+		}
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}

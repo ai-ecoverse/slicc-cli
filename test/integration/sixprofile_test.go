@@ -569,6 +569,40 @@ func TestSixAttachOpensSevenAndLeavesTheProfileAsItWas(t *testing.T) {
 	}
 }
 
+func TestSixOpensSevenWhereSixUpgradesInPlace(t *testing.T) {
+	b := launchBrowserOn(t, 0, "--host-resolver-rules=MAP www.sliccy.ai ~NOTFOUND")
+	v, err := getVersion(b.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, _ := url.Parse(fmt.Sprint(v["webSocketDebuggerUrl"]))
+	h := newFakeHome(t)
+	dir := filepath.Join(sixRootIn(h), "browser-coding-agent-chrome")
+	makeSixTree(t, dir, fmt.Sprintf("%d\n%s", b.port, ws.Path))
+	holdSixLock(t, dir, b.cmd.Process.Pid)
+
+	f := startFlow(t, sixEnv(h, "isolated"), "--json", "--profile", "six", "--no-kernel")
+	f.next(t, "discovered")
+	if a := f.next(t, "attached"); a.CDP != b.endpoint || a.Launched {
+		t.Fatalf("attached %s", a.raw)
+	}
+	if fb := f.next(t, "foreign-browser"); !strings.Contains(fb.raw, `"profile":"six"`) || !strings.Contains(fb.raw, `"openedTab":true`) {
+		t.Fatalf("foreign-browser %s", fb.raw)
+	}
+	if n := countTabs(t, b.client, flow.SixPage); n != 1 {
+		t.Fatalf("%d tabs on %s", n, flow.SixPage)
+	}
+	if n := countTabs(t, b.client, flow.DefaultPage); n != 0 {
+		t.Fatalf("%d tabs on %s", n, flow.DefaultPage)
+	}
+	if err := interrupt(f.cmd); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.wait(t); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+}
+
 func TestSixLaunchCommandAttachesWithoutClosing(t *testing.T) {
 	cdpSrv := newFakeCDP(t, "Chrome/154.0.8037.98", nil)
 	h := newFakeHome(t)
