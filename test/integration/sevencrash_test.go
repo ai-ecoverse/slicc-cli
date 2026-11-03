@@ -619,44 +619,52 @@ func TestALostCDPConnectionEndsTheSignalWhileACrashedTabWaits(t *testing.T) {
 	}
 }
 
-func startCrashBinary(t *testing.T, args ...string) (*syncBuffer, <-chan error) {
+type crashProc struct {
+	logs   *syncBuffer
+	exited chan struct{}
+	err    error
+}
+
+func startCrashBinary(t *testing.T, args ...string) *crashProc {
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Env = isolatedEnv(t)
-	logs := &syncBuffer{}
-	cmd.Stderr = logs
-	cmd.Stdout = logs
+	p := &crashProc{logs: &syncBuffer{}, exited: make(chan struct{})}
+	cmd.Stderr = p.logs
+	cmd.Stdout = p.logs
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	go func() {
+		p.err = cmd.Wait()
+		close(p.exited)
+	}()
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		select {
-		case <-exited:
+		case <-p.exited:
 		case <-time.After(reapTimeout):
 			t.Errorf("slicc (pid %d) was not reaped after SIGKILL", cmd.Process.Pid)
 		}
 		if t.Failed() {
-			t.Logf("slicc output:\n%s", logs.String())
+			t.Logf("slicc output:\n%s", p.logs.String())
 		}
 	})
-	return logs, exited
+	return p
 }
 
-func outlivesACrash(t *testing.T, f *crashBrowser, logs *syncBuffer, exited <-chan error) {
+func outlivesACrash(t *testing.T, f *crashBrowser, p *crashProc) {
 	t.Helper()
 	f.waitHello(t, 1)
 	f.crash()
 	f.waitHello(t, 2)
 	time.Sleep(300 * time.Millisecond)
 	select {
-	case err := <-exited:
-		t.Fatalf("slicc exited after the crash: %v\n%s", err, logs.String())
+	case <-p.exited:
+		t.Fatalf("slicc exited after the crash: %v\n%s", p.err, p.logs.String())
 	default:
 	}
-	out := logs.String()
+	out := p.logs.String()
 	for _, want := range []string{"seven tab crashed\n", "reloading the seven tab\n"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output lacks %q:\n%s", want, out)
@@ -672,15 +680,13 @@ func outlivesACrash(t *testing.T, f *crashBrowser, logs *syncBuffer, exited <-ch
 
 func TestAttachOutlivesACrashedSevenTab(t *testing.T) {
 	f := newCrashBrowser(t)
-	logs, exited := startCrashBinary(t, "attach", "--no-kernel", "--no-jerk", "--cdp", f.srv.URL)
-	outlivesACrash(t, f, logs, exited)
+	outlivesACrash(t, f, startCrashBinary(t, "attach", "--no-kernel", "--no-jerk", "--cdp", f.srv.URL))
 }
 
 func TestTheDefaultFlowOutlivesACrashedSevenTab(t *testing.T) {
 	f := newCrashBrowser(t)
 	id := "cdp:" + strings.TrimPrefix(f.srv.URL, "http://")
-	logs, exited := startCrashBinary(t, "--cdp", f.srv.URL, "--browser", id, "--plain", "--yes", "--no-kernel", "--no-jerk")
-	outlivesACrash(t, f, logs, exited)
+	outlivesACrash(t, f, startCrashBinary(t, "--cdp", f.srv.URL, "--browser", id, "--plain", "--yes", "--no-kernel", "--no-jerk"))
 }
 
 func TestTheLinkComesBackAfterTheSevenTabCrashes(t *testing.T) {
