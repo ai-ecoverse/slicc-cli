@@ -32,6 +32,7 @@ var debuggerLifetimes = map[string]debuggerLifetime{
 
 const debuggerReadLimit = 2 * time.Second
 const debuggerPauseLimit = 5 * time.Second
+const debuggerBytesLimit = 64 << 20
 
 type debuggerScript struct {
 	context int64
@@ -107,6 +108,9 @@ func (g *guard) debuggerCheckLocked(c *command) string {
 		return reason
 	}
 	s := g.debuggers[c.session]
+	if s != nil && s.full {
+		return refusedTarget
+	}
 	if c.method == "Debugger.enable" {
 		for owner, other := range g.debuggers {
 			if owner != c.session && other.target == g.sessions[c.session].target {
@@ -142,6 +146,8 @@ func (g *guard) noteDebuggerLocked(k callKey, c *command) {
 	}
 	g.debuggerReplies[k] = debuggerReply{state: s, method: c.method, generation: s.generation}
 	if c.method == "Debugger.resume" {
+		g.releaseDebuggerPauseLocked(s.resuming)
+		g.releaseDebuggerPauseLocked(s.pause)
 		s.resuming = s.pause
 		s.pause = nil
 	}
@@ -164,10 +170,10 @@ func (g *guard) debuggerReplyLocked(k callKey, m *message) bool {
 	case "Debugger.enable":
 		s.enabled = m.Error == nil
 		if !s.enabled {
-			delete(g.debuggers, s.owner)
+			g.dropDebuggerLocked(s)
 		}
 	case "Debugger.disable":
-		delete(g.debuggers, s.owner)
+		g.dropDebuggerLocked(s)
 	case "Debugger.setInstrumentationBreakpoint":
 		var result struct {
 			BreakpointID string `json:"breakpointId"`
@@ -184,19 +190,54 @@ func (g *guard) debuggerEventLocked(m *message, data []byte) (browserVerdict, bo
 	case "Debugger.paused":
 		return g.holdDebuggerLocked(m, data), true
 	case "Debugger.scriptParsed", "Debugger.scriptFailedToParse":
-		g.debuggerScriptLocked(m, data)
-		return browserVerdict{}, true
+		return browserVerdict{send: g.debuggerScriptLocked(m, data)}, true
 	case "Debugger.resumed":
 		return g.debuggerResumedLocked(m, data), true
 	}
 	return browserVerdict{}, strings.HasPrefix(m.Method, "Debugger.")
 }
 
-func (g *guard) debuggerScriptLocked(m *message, data []byte) {
+func (g *guard) clearDebuggerScriptsLocked(s *debuggerState) {
+	for id := range s.scriptInfo {
+		g.debuggerBytes -= len(id)
+	}
+	for _, script := range s.scripts {
+		g.debuggerBytes -= len(script.data)
+	}
+	clear(s.scriptInfo)
+	clear(s.scripts)
+}
+
+func (g *guard) releaseDebuggerPauseLocked(p *debuggerPause) {
+	if p != nil {
+		g.debuggerBytes -= len(p.data)
+		p.data = nil
+	}
+}
+
+func (g *guard) dropDebuggerLocked(s *debuggerState) {
+	g.clearDebuggerScriptsLocked(s)
+	g.releaseDebuggerPauseLocked(s.pause)
+	g.releaseDebuggerPauseLocked(s.resuming)
+	delete(g.debuggers, s.owner)
+}
+
+func (g *guard) fullDebuggerLocked(s *debuggerState) [][]byte {
+	s.full = true
+	g.clearDebuggerScriptsLocked(s)
+	if s.pause == nil {
+		return nil
+	}
+	resume := g.resumeDebuggerLocked(s)
+	s.resuming = nil
+	return [][]byte{resume}
+}
+
+func (g *guard) debuggerScriptLocked(m *message, data []byte) [][]byte {
 	g.noteScriptLocked(m)
 	s := g.debuggers[m.SessionID]
-	if s == nil {
-		return
+	if s == nil || s.full {
+		return nil
 	}
 	var p struct {
 		ScriptID     string  `json:"scriptId"`
@@ -205,21 +246,35 @@ func (g *guard) debuggerScriptLocked(m *message, data []byte) {
 		EmbedderName *string `json:"embedderName"`
 	}
 	if json.Unmarshal(m.Params, &p) != nil || p.ScriptID == "" || p.Context == 0 || (p.URL != nil && *p.URL != "" && g.o.Loaded(*p.URL)) || len(s.scriptInfo) >= maxWorlds || len(data) > 1<<20 {
-		s.full = true
-		return
+		return g.fullDebuggerLocked(s)
 	}
+	keep := g.debuggerAdmissionLocked(&command{session: m.SessionID}) == ""
+	added := 0
+	if _, known := s.scriptInfo[p.ScriptID]; !known {
+		added += len(p.ScriptID)
+	}
+	if keep {
+		added += len(data) - len(s.scripts[p.ScriptID].data)
+	}
+	if added > debuggerBytesLimit-g.debuggerBytes {
+		return g.fullDebuggerLocked(s)
+	}
+	g.debuggerBytes += added
 	s.scriptInfo[p.ScriptID] = debuggerScriptInfo{context: p.Context, evaluate: p.URL != nil && *p.URL == "" && p.EmbedderName != nil && *p.EmbedderName == ""}
-	if g.debuggerAdmissionLocked(&command{session: m.SessionID}) != "" {
-		return
+	if !keep {
+		return nil
 	}
 	unique := ""
 	if shown := g.shown[s.target]; shown != nil && shown.contexts[p.Context] != nil {
 		unique = shown.contexts[p.Context].unique
 	}
 	s.scripts[p.ScriptID] = debuggerScript{context: p.Context, unique: unique, data: append([]byte(nil), data...)}
+	return nil
 }
 
 func (g *guard) resumeDebuggerLocked(s *debuggerState) []byte {
+	g.releaseDebuggerPauseLocked(s.resuming)
+	g.releaseDebuggerPauseLocked(s.pause)
 	s.resuming = nil
 	t := g.targets[s.target]
 	if s.pause != nil && s.pause.published && t != nil && s.generation == t.documentRevision && g.debuggerContextsLocked(s, s.pause) && g.debuggerAdmissionLocked(&command{session: s.owner}) == "" {
@@ -318,7 +373,15 @@ func (g *guard) holdDebuggerLocked(m *message, data []byte) browserVerdict {
 		})
 		return browserVerdict{send: [][]byte{msg}, debuggerDeadlines: []*debuggerPause{p}}
 	}
+	return g.holdDebuggerDataLocked(p, data)
+}
+
+func (g *guard) holdDebuggerDataLocked(p *debuggerPause, data []byte) browserVerdict {
+	if len(data) > debuggerBytesLimit-g.debuggerBytes {
+		return browserVerdict{send: g.fullDebuggerLocked(p.state)}
+	}
 	p.verifying = true
+	g.debuggerBytes += len(data)
 	p.data = append([]byte(nil), data...)
 	return browserVerdict{debuggerReads: []*debuggerPause{p}, debuggerDeadlines: []*debuggerPause{p}}
 }
@@ -467,15 +530,15 @@ func (g *guard) recheckDebuggersLocked() [][]byte {
 	for owner, s := range g.debuggers {
 		t := g.targets[s.target]
 		if t == nil || g.sessions[owner] == nil {
-			delete(g.debuggers, owner)
+			g.dropDebuggerLocked(s)
 			continue
 		}
 		if s.generation != t.documentRevision || g.debuggerAdmissionLocked(&command{session: owner}) != "" || (s.pause != nil && s.pause.published && !g.debuggerContextsLocked(s, s.pause)) {
 			if s.pause != nil {
 				send = append(send, g.resumeDebuggerLocked(s))
 			}
-			clear(s.scripts)
-			clear(s.scriptInfo)
+			g.clearDebuggerScriptsLocked(s)
+			g.releaseDebuggerPauseLocked(s.resuming)
 			clear(s.publishedContexts)
 			s.resuming = nil
 			s.full = false

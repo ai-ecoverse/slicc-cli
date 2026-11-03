@@ -159,6 +159,7 @@ type guard struct {
 	castCut            map[string]bool
 	debuggers          map[string]*debuggerState
 	debuggerReplies    map[callKey]debuggerReply
+	debuggerBytes      int
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {

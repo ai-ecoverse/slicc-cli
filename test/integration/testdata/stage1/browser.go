@@ -203,6 +203,24 @@ func (b *Browser) Emit(t *testing.T, method string) {
 	}
 }
 
+func (b *Browser) Script(t *testing.T, id string, size int) {
+	t.Helper()
+	b.mu.Lock()
+	b.activeScript, b.activeContext = id, 7
+	conn := b.conn
+	b.mu.Unlock()
+	packet := map[string]any{"method": "Debugger.scriptParsed", "sessionId": "S", "params": map[string]any{"scriptId": id, "executionContextId": 7, "url": "https://ordinary.test/" + strings.Repeat("x", size)}}
+	data, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.write.Lock()
+	defer b.write.Unlock()
+	if err := conn.Write(t.Context(), websocket.MessageText, data); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (b *Browser) Trace() []Packet {
 	b.mu.Lock()
 	defer b.mu.Unlock()
