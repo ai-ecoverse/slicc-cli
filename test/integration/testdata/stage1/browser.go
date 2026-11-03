@@ -245,7 +245,7 @@ func (b *Browser) Script(t *testing.T, id string, size int) {
 	b.activeScript, b.activeContext = id, 7
 	conn := b.conn
 	b.mu.Unlock()
-	packet := map[string]any{"method": "Debugger.scriptParsed", "sessionId": "S", "params": map[string]any{"scriptId": id, "executionContextId": 7, "url": "https://ordinary.test/" + strings.Repeat("x", size)}}
+	packet := map[string]any{"method": "Debugger.scriptParsed", "sessionId": "S", "params": map[string]any{"scriptId": id, "executionContextId": 7, "url": "https://ordinary.test/" + id + ".js", "hash": strings.Repeat("x", size)}}
 	data, err := json.Marshal(packet)
 	if err != nil {
 		t.Fatal(err)

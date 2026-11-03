@@ -11,9 +11,10 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/test/integration/testdata/stage1"
 )
 
-func stage1PublishedScripts(t *testing.T, client *stage1.Client, expected ...string) {
+func stage1PublishedScripts(t *testing.T, client *stage1.Client, expected ...string) map[string]int {
 	t.Helper()
 	seen := map[string]bool{}
+	hashLengths := map[string]int{}
 	timer := time.NewTimer(3 * time.Second)
 	defer timer.Stop()
 	for {
@@ -21,7 +22,11 @@ func stage1PublishedScripts(t *testing.T, client *stage1.Client, expected ...str
 		case event := <-client.Events:
 			switch event["method"] {
 			case "Debugger.scriptParsed", "Debugger.scriptFailedToParse":
-				seen[event["params"].(map[string]any)["scriptId"].(string)] = true
+				params := event["params"].(map[string]any)
+				id := params["scriptId"].(string)
+				seen[id] = true
+				hash, _ := params["hash"].(string)
+				hashLengths[id] = len(hash)
 			case "Debugger.paused":
 				for _, id := range expected {
 					if !seen[id] {
@@ -31,7 +36,7 @@ func stage1PublishedScripts(t *testing.T, client *stage1.Client, expected ...str
 				if len(seen) != len(expected) {
 					t.Errorf("published scripts outside verified record set: %v", seen)
 				}
-				return
+				return hashLengths
 			}
 		case <-client.Done:
 			t.Fatal("stream ended before verified pause")
@@ -128,7 +133,15 @@ func TestStage1DebuggerPublicationWaitsForAvailableWindow(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	release()
-	stage1PublishedScripts(t, client, "window-script")
+	hashLengths := stage1PublishedScripts(t, client, "window-script")
+	if hashLengths["window-script"] != 1024 {
+		t.Fatal("script padding did not survive scrubbing", hashLengths)
+	}
+	select {
+	case <-read:
+	default:
+		t.Fatal("publication did not take a second frame-tree read after waiting for credit")
+	}
 }
 
 func TestStage1DebuggerBatchLargerThanWindowResumesPrivately(t *testing.T) {
@@ -215,5 +228,16 @@ func TestStage1DebuggerStalledCreditKeepsTheOriginalPauseDeadline(t *testing.T) 
 	case <-client.Stream.Done():
 		t.Fatal("credit expiry unnecessarily reset the stream")
 	default:
+	}
+}
+
+func TestStage1DebuggerRetainedScriptPaddingSurvivesScrubbing(t *testing.T) {
+	client, browser := stage1Link(t)
+	stage1Arm(t, client)
+	browser.Script(t, "padded-script", 128<<10)
+	browser.Emit(t, "normal")
+	lengths := stage1PublishedScripts(t, client, "padded-script")
+	if lengths["padded-script"] != 128<<10 {
+		t.Fatal("large non-URL padding was lost during scrubbing", lengths)
 	}
 }
