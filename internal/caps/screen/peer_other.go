@@ -7,8 +7,9 @@ import (
 	"os"
 )
 
-func VerifyApp(*net.UnixConn, Peer) error { return ErrAccess }
-func NativeAvailable() bool               { return false }
+func VerifyApp(*net.UnixConn, Peer) error                         { return ErrAccess }
+func VerifyAppWithProof(*net.UnixConn, Peer) (ProofChecks, error) { return ProofChecks{}, ErrAccess }
+func NativeAvailable() bool                                       { return false }
 
 func bootstrapFile() (*os.File, error) { return nil, ErrAccess }
 func monitorPeer(*Client) error        { return ErrAccess }
