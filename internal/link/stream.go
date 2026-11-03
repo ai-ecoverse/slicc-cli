@@ -1,6 +1,7 @@
 package link
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -263,6 +264,28 @@ func (s *Stream) TryWrite(p []byte) (bool, error) {
 	return true, nil
 }
 
+func (s *Stream) WaitWritable(ctx context.Context, n int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stop := context.AfterFunc(ctx, func() { s.mu.Lock(); s.cond.Broadcast(); s.mu.Unlock() })
+	defer stop()
+	for {
+		switch {
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case s.reset != nil:
+			return s.reset
+		case s.sentEnd:
+			return ErrWriteAfterEnd
+		case !s.estab:
+			return ErrNotAccepted
+		case n <= Window-s.outstanding:
+			return nil
+		}
+		s.cond.Wait()
+	}
+}
+
 func (s *Stream) SetReadDeadline(t time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -315,6 +338,7 @@ func (s *Stream) CloseWrite() error {
 	}
 	err := s.send(FrameEnd, nil)
 	s.sentEnd = true
+	s.cond.Broadcast()
 	fin := s.peerEnd && s.finishLocked()
 	s.mu.Unlock()
 	if fin {

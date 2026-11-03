@@ -13,13 +13,19 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
+type recordHold struct {
+	blocked chan uint32
+	release chan struct{}
+}
+
 type Client struct {
-	Stream  *link.Stream
-	next    atomic.Int64
-	mu      sync.Mutex
-	pending map[int64]chan map[string]any
-	Events  chan map[string]any
-	Done    chan struct{}
+	Stream   *link.Stream
+	next     atomic.Int64
+	mu       sync.Mutex
+	pending  map[int64]chan map[string]any
+	Events   chan map[string]any
+	Done     chan struct{}
+	readHold *recordHold
 }
 
 func NewClient(t *testing.T, stream *link.Stream) *Client {
@@ -33,6 +39,18 @@ func NewClient(t *testing.T, stream *link.Stream) *Client {
 				return
 			}
 			length := binary.BigEndian.Uint32(head[:])
+			client.mu.Lock()
+			hold := client.readHold
+			client.readHold = nil
+			client.mu.Unlock()
+			if hold != nil {
+				hold.blocked <- length
+				select {
+				case <-hold.release:
+				case <-stream.Done():
+					return
+				}
+			}
 			if length > 1<<20 {
 				return
 			}
@@ -137,4 +155,16 @@ func (c *Client) Paused(t *testing.T) map[string]any {
 			t.Fatal("stream ended before pause")
 		}
 	}
+}
+
+func (c *Client) HoldNextRecord(t *testing.T) (<-chan uint32, func()) {
+	t.Helper()
+	hold := &recordHold{blocked: make(chan uint32, 1), release: make(chan struct{})}
+	c.mu.Lock()
+	c.readHold = hold
+	c.mu.Unlock()
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold.release) }) }
+	t.Cleanup(release)
+	return hold.blocked, release
 }
