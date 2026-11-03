@@ -338,6 +338,7 @@ func (s *Stream) CloseWrite() error {
 	}
 	err := s.send(FrameEnd, nil)
 	s.sentEnd = true
+	s.cond.Broadcast()
 	fin := s.peerEnd && s.finishLocked()
 	s.mu.Unlock()
 	if fin {

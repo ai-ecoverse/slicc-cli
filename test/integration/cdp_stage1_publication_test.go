@@ -92,88 +92,133 @@ func TestStage1PublishesValidatedAsyncAndParentStackRecords(t *testing.T) {
 	}
 }
 
-func TestStage1DebuggerPublicationCrossesFlowControlWindows(t *testing.T) {
-	for _, kind := range []string{"larger-than-window", "remaining-space"} {
-		t.Run(kind, func(t *testing.T) {
+func stage1OccupyWindow(t *testing.T, client *stage1.Client, server *link.Stream) func() {
+	t.Helper()
+	blocked, release := client.HoldNextRecord(t)
+	data, _ := json.Marshal(map[string]any{"method": "fixture.padding", "params": map[string]any{"data": strings.Repeat("x", link.Window-8192)}})
+	framed := make([]byte, 4+len(data))
+	encodingbinary.BigEndian.PutUint32(framed, uint32(len(data)))
+	copy(framed[4:], data)
+	if _, err := server.Write(framed); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-blocked:
+	case <-time.After(time.Second):
+		t.Fatal("client did not hold the occupied window")
+	}
+	return release
+}
+
+func TestStage1DebuggerPublicationWaitsForAvailableWindow(t *testing.T) {
+	client, browser, server := stage1LinkStreams(t)
+	stage1Arm(t, client)
+	release := stage1OccupyWindow(t, client, server)
+	read := browser.NextFrameRead()
+	browser.Script(t, "window-script", 64<<10)
+	browser.Emit(t, "normal")
+	select {
+	case <-read:
+	case <-time.After(time.Second):
+		t.Fatal("pause proof was not read")
+	}
+	select {
+	case <-browser.Resumes:
+		t.Fatal("remaining window space caused a private resume")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	stage1PublishedScripts(t, client, "window-script")
+	select {
+	case <-read:
+	default:
+		t.Fatal("publication reused its pre-wait frame-tree proof")
+	}
+}
+
+func TestStage1DebuggerBatchLargerThanWindowResumesPrivately(t *testing.T) {
+	client, browser := stage1Link(t)
+	stage1Arm(t, client)
+	browser.Script(t, "large-script", 300<<10)
+	browser.Emit(t, "normal")
+	select {
+	case <-browser.Resumes:
+	case <-time.After(time.Second):
+		t.Fatal("oversized batch did not resume privately")
+	}
+	privateStage1Events(t, client)
+}
+
+func TestStage1DebuggerCreditWaitProcessesQueuedRevocationBeforePublication(t *testing.T) {
+	for _, row := range []struct{ name, event string }{{"revocation-during-wait", "small-forwardable"}, {"barrier-behind-stalled-write", "forwardable"}} {
+		t.Run(row.name, func(t *testing.T) {
 			client, browser, server := stage1LinkStreams(t)
 			stage1Arm(t, client)
-			size := 300 << 10
-			release := func() {}
-			if kind == "remaining-space" {
-				size = 64 << 10
-				blocked, unblock := client.HoldNextRecord(t)
-				release = unblock
-				data, _ := json.Marshal(map[string]any{"method": "fixture.padding", "params": map[string]any{"data": strings.Repeat("x", link.Window-8192)}})
-				framed := make([]byte, 4+len(data))
-				encodingbinary.BigEndian.PutUint32(framed, uint32(len(data)))
-				copy(framed[4:], data)
-				if _, err := server.Write(framed); err != nil {
-					t.Fatal(err)
-				}
-				select {
-				case <-blocked:
-				case <-time.After(time.Second):
-					t.Fatal("client did not hold the occupied window")
-				}
-			}
-			browser.Script(t, "window-script", size)
+			release := stage1OccupyWindow(t, client, server)
+			read := browser.NextFrameRead()
+			browser.Script(t, "waiting-script", 64<<10)
 			browser.Emit(t, "normal")
-			if kind == "remaining-space" {
-				select {
-				case <-browser.Resumes:
-					t.Fatal("remaining window space caused a private resume")
-				case <-time.After(100 * time.Millisecond):
-				}
+			select {
+			case <-read:
+			case <-time.After(time.Second):
+				t.Fatal("pause proof was not read")
 			}
+			select {
+			case <-browser.Resumes:
+				t.Fatal("publisher did not wait for credit")
+			case <-time.After(100 * time.Millisecond):
+			}
+			browser.Emit(t, row.event)
+			select {
+			case <-browser.Resumes:
+				t.Fatal("publisher resumed before revocation")
+			case <-time.After(100 * time.Millisecond):
+			}
+			browser.Emit(t, "foreign")
+			revoked := time.Now()
 			release()
-			stage1PublishedScripts(t, client, "window-script")
+			select {
+			case <-browser.Resumes:
+			case <-time.After(time.Second):
+				t.Fatal("queued revocation did not resume promptly after credit returned")
+			}
+			if time.Since(revoked) >= time.Second {
+				t.Fatal("revocation waited for the pause deadline")
+			}
+			privateStage1Events(t, client)
+			stage1.Refused(t, client.Call(t, "Debugger.enable", "S", nil))
+			select {
+			case <-client.Stream.Done():
+				t.Fatal("revocation unnecessarily reset the stream")
+			default:
+			}
 		})
 	}
 }
 
-func TestStage1DebuggerPartialPublicationRevokesOrExpiresWithReset(t *testing.T) {
-	for _, kind := range []string{"revoked", "deadline"} {
-		t.Run(kind, func(t *testing.T) {
-			client, browser := stage1Link(t)
-			stage1Arm(t, client)
-			blocked, _ := client.HoldNextRecord(t)
-			browser.Script(t, "partial-script", 300<<10)
-			started := time.Now()
-			browser.Emit(t, "normal")
-			select {
-			case size := <-blocked:
-				if size < 300<<10 {
-					t.Fatal("a record outside the verified script set was started", size)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("no verified script chunk reached the client")
-			}
-			if kind == "revoked" {
-				browser.Emit(t, "foreign")
-			}
-			select {
-			case <-browser.Resumes:
-			case <-time.After(5500*time.Millisecond - time.Since(started)):
-				t.Fatal("publication held the page beyond its original deadline")
-			}
-			select {
-			case <-client.Stream.Done():
-			case <-time.After(time.Second):
-				t.Fatal("partial CDP record was not reset")
-			}
-			if !strings.Contains(client.Stream.Err().Error(), "ECANCELED") {
-				t.Fatal("wrong stream reset", client.Stream.Err())
-			}
-			for {
-				select {
-				case event := <-client.Events:
-					if event["method"] == "Debugger.paused" {
-						t.Fatal("revoked batch published a pause")
-					}
-				default:
-					return
-				}
-			}
-		})
+func TestStage1DebuggerStalledCreditKeepsTheOriginalPauseDeadline(t *testing.T) {
+	client, browser, server := stage1LinkStreams(t)
+	stage1Arm(t, client)
+	release := stage1OccupyWindow(t, client, server)
+	browser.Script(t, "waiting-script", 64<<10)
+	started := time.Now()
+	browser.Emit(t, "normal")
+	select {
+	case <-browser.Resumes:
+	case <-time.After(5500 * time.Millisecond):
+		t.Fatal("credit wait held the page beyond its original deadline")
+	}
+	if time.Since(started) < 4*time.Second {
+		t.Fatal("credit wait resumed before the original deadline")
+	}
+	if time.Since(started) > 5500*time.Millisecond {
+		t.Fatal("credit wait extended the pause")
+	}
+	release()
+	privateStage1Events(t, client)
+	select {
+	case <-client.Stream.Done():
+		t.Fatal("credit expiry unnecessarily reset the stream")
+	default:
 	}
 }

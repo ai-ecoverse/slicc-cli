@@ -743,25 +743,28 @@ func (rl *relay) verifyDebugger(p *debuggerPause) {
 	if len(v.page) == 0 {
 		return
 	}
-	rl.publishDebuggerFrames(p, v.page)
+	if resume := rl.publishDebuggerFrames(p, v.page); resume != nil {
+		rl.writeDebugger(resume)
+	}
 }
 
-func (rl *relay) publishDebuggerFrames(p *debuggerPause, page [][]byte) {
-	rl.pageMu.Lock()
-	defer rl.pageMu.Unlock()
+func (rl *relay) publishDebuggerFrames(p *debuggerPause, page [][]byte) []byte {
 	total := 0
 	for i, msg := range page {
 		page[i] = rl.g.scrub(msg)
 		if len(page[i]) > link.AllocationLimit-total-4 {
 			rl.kill(errAllocation.Error())
-			return
+			return nil
 		}
 		total += 4 + len(page[i])
+	}
+	if total > link.Window {
+		return rl.g.cancelDebuggerPublication(p)
 	}
 	reservation := rl.s.ReserveAllocation(total, false)
 	if reservation == nil {
 		rl.kill(errAllocation.Error())
-		return
+		return nil
 	}
 	defer reservation.Release()
 	frames := make([]byte, total)
@@ -776,50 +779,53 @@ func (rl *relay) publishDebuggerFrames(p *debuggerPause, page [][]byte) {
 	rl.g.mu.Lock()
 	p.cancel = cancel
 	rl.g.mu.Unlock()
-	for offset = 0; offset < len(frames); {
-		n := min(link.MaxPayload, len(frames)-offset)
-		if rl.s.WaitWritable(ctx, n) != nil {
-			rl.abortDebuggerPublication(p)
-			return
+	if ok, failed := rl.tryDebuggerFrames(p, frames, nil); ok {
+		return nil
+	} else if failed {
+		return rl.g.cancelDebuggerPublication(p)
+	}
+	for {
+		if rl.s.WaitWritable(ctx, total) != nil {
+			return rl.g.cancelDebuggerPublication(p)
 		}
-		rl.g.mu.Lock()
-		s := p.state
-		t := rl.g.targets[s.target]
-		valid := rl.g.debuggers[s.owner] == s && s.pause == p && s.generation == p.generation && t != nil && t.documentRevision == p.generation && t.document == p.document && time.Now().Before(p.deadline) && rl.g.debuggerContextsLocked(s, p) && rl.g.debuggerAdmissionLocked(&command{session: s.owner}) == "" && !rl.g.sessionRefusedLocked(s.owner)
-		var ok bool
-		var err error
-		if valid {
-			ok, err = rl.s.TryWrite(frames[offset : offset+n])
-		}
-		if ok && err == nil {
-			offset += n
-			if offset == len(frames) {
-				p.published = true
-				p.cancel = nil
-				for id, unique := range p.contexts {
-					s.publishedContexts[id] = unique
-				}
-			}
-		}
-		rl.g.mu.Unlock()
-		if !valid || err != nil {
-			rl.abortDebuggerPublication(p)
-			return
+		tree := rl.g.waitDebuggerPlacement(p, func() message { return rl.debuggerRead(p) }, rl.s.Done())
+		if ok, failed := rl.tryDebuggerFrames(p, frames, &tree); ok {
+			return nil
+		} else if failed {
+			return rl.g.cancelDebuggerPublication(p)
 		}
 	}
 }
 
-func (rl *relay) abortDebuggerPublication(p *debuggerPause) {
+func (rl *relay) tryDebuggerFrames(p *debuggerPause, frames []byte, tree *message) (bool, bool) {
+	rl.pageMu.Lock()
+	defer rl.pageMu.Unlock()
 	rl.g.mu.Lock()
-	var resume []byte
-	if rl.g.debuggers[p.state.owner] == p.state && p.state.pause == p {
-		resume = rl.g.resumeDebuggerLocked(p.state)
-	} else {
-		resume, _ = rl.g.newCallLocked(p.state.owner, "Debugger.resume", nil, false)
+	defer rl.g.mu.Unlock()
+	s := p.state
+	t := rl.g.targets[s.target]
+	valid := rl.g.debuggers[s.owner] == s && s.pause == p && s.generation == p.generation && t != nil && t.documentRevision == p.generation && t.document == p.document && time.Now().Before(p.deadline) && rl.g.debuggerContextsLocked(s, p) && rl.g.debuggerAdmissionLocked(&command{session: s.owner}) == "" && !rl.g.sessionRefusedLocked(s.owner)
+	if !valid || (tree != nil && !rl.g.debuggerTreeLocked(s, *tree)) {
+		return false, true
 	}
-	rl.g.mu.Unlock()
-	rl.writeDebugger(resume)
-	rl.kill("ECANCELED: debugger publication revoked or expired")
+	ok, err := rl.s.TryWrite(frames)
+	if ok && err == nil {
+		p.published = true
+		p.cancel = nil
+		for id, unique := range p.contexts {
+			s.publishedContexts[id] = unique
+		}
+	}
+	return ok && err == nil, err != nil
+}
+
+func (g *guard) cancelDebuggerPublication(p *debuggerPause) []byte {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.debuggers[p.state.owner] == p.state && p.state.pause == p {
+		return g.resumeDebuggerLocked(p.state)
+	}
+	return nil
 }
 
 func (rl *relay) expireDebuggerLater(p *debuggerPause) {
