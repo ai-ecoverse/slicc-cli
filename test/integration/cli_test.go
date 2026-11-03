@@ -24,11 +24,7 @@ func TestMain(m *testing.M) {
 	binary = filepath.Join(dir, name)
 	home := filepath.Join(dir, "home")
 	isolateProcess(home)
-	overlay, err := cdpMeasurementOverlay(dir)
-	if err != nil {
-		panic(err)
-	}
-	build := exec.Command("go", "build", "-overlay", overlay, "-ldflags", "-X main.version=1.2.3-test", "-o", binary, "../../cmd/slicc")
+	build := exec.Command("go", "build", "-ldflags", "-X main.version=1.2.3-test", "-o", binary, "../../cmd/slicc")
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
 	if err := build.Run(); err != nil {
 		panic(err)
