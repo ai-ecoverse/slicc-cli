@@ -2,12 +2,14 @@ package cdp
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 	"github.com/coder/websocket"
 )
@@ -45,14 +47,16 @@ func debuggerBudgetFromEnv() int {
 }
 
 type debuggerScript struct {
-	context int64
-	unique  string
-	data    []byte
+	reservation *link.Reservation
+	context     int64
+	unique      string
+	data        []byte
 }
 
 type debuggerScriptInfo struct {
-	context  int64
-	evaluate bool
+	reservation *link.Reservation
+	context     int64
+	evaluate    bool
 }
 
 type debuggerState struct {
@@ -70,6 +74,7 @@ type debuggerState struct {
 }
 
 type debuggerPause struct {
+	reservation     *link.Reservation
 	state           *debuggerState
 	generation      uint64
 	deadline        time.Time
@@ -208,10 +213,12 @@ func (g *guard) debuggerEventLocked(m *message, data []byte) (browserVerdict, bo
 }
 
 func (g *guard) clearDebuggerScriptsLocked(s *debuggerState) {
-	for id := range s.scriptInfo {
+	for id, info := range s.scriptInfo {
+		info.reservation.Release()
 		g.debuggerBytes -= len(id)
 	}
 	for _, script := range s.scripts {
+		script.reservation.Release()
 		g.debuggerBytes -= len(script.data)
 	}
 	clear(s.scriptInfo)
@@ -222,6 +229,8 @@ func (g *guard) releaseDebuggerPauseLocked(p *debuggerPause) {
 	if p != nil {
 		g.debuggerBytes -= len(p.data)
 		p.data = nil
+		p.reservation.Release()
+		p.reservation = nil
 	}
 }
 
@@ -269,8 +278,29 @@ func (g *guard) debuggerScriptLocked(m *message, data []byte) [][]byte {
 	if added > g.debuggerLimit-g.debuggerBytes {
 		return g.fullDebuggerLocked(s)
 	}
+	idReservation := s.scriptInfo[p.ScriptID].reservation
+	id := p.ScriptID
+	if _, known := s.scriptInfo[id]; !known {
+		var ok bool
+		idReservation, ok = g.holdBytes(len(id))
+		if !ok {
+			return nil
+		}
+		id = strings.Clone(id)
+	}
+	var reservation *link.Reservation
+	if keep {
+		var ok bool
+		reservation, ok = g.holdBytes(len(data))
+		if !ok {
+			if _, known := s.scriptInfo[id]; !known {
+				idReservation.Release()
+			}
+			return nil
+		}
+	}
 	g.debuggerBytes += added
-	s.scriptInfo[p.ScriptID] = debuggerScriptInfo{context: p.Context, evaluate: p.URL != nil && *p.URL == "" && p.EmbedderName != nil && *p.EmbedderName == ""}
+	s.scriptInfo[id] = debuggerScriptInfo{reservation: idReservation, context: p.Context, evaluate: p.URL != nil && *p.URL == "" && p.EmbedderName != nil && *p.EmbedderName == ""}
 	if !keep {
 		return nil
 	}
@@ -278,7 +308,10 @@ func (g *guard) debuggerScriptLocked(m *message, data []byte) [][]byte {
 	if shown := g.shown[s.target]; shown != nil && shown.contexts[p.Context] != nil {
 		unique = shown.contexts[p.Context].unique
 	}
-	s.scripts[p.ScriptID] = debuggerScript{context: p.Context, unique: unique, data: append([]byte(nil), data...)}
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	s.scripts[id].reservation.Release()
+	s.scripts[id] = debuggerScript{reservation: reservation, context: p.Context, unique: unique, data: copyData}
 	return nil
 }
 
@@ -390,9 +423,15 @@ func (g *guard) holdDebuggerDataLocked(p *debuggerPause, data []byte) browserVer
 	if len(data) > g.debuggerLimit-g.debuggerBytes {
 		return browserVerdict{send: g.fullDebuggerLocked(p.state)}
 	}
+	reservation, ok := g.holdBytes(len(data))
+	if !ok {
+		return browserVerdict{}
+	}
 	p.verifying = true
 	g.debuggerBytes += len(data)
-	p.data = append([]byte(nil), data...)
+	p.reservation = reservation
+	p.data = make([]byte, len(data))
+	copy(p.data, data)
 	return browserVerdict{debuggerReads: []*debuggerPause{p}, debuggerDeadlines: []*debuggerPause{p}}
 }
 
@@ -532,7 +571,17 @@ func (g *guard) publishDebugger(p *debuggerPause, m message) browserVerdict {
 	if !ok || !g.debuggerIDsLocked(s, p, root) {
 		return browserVerdict{send: [][]byte{g.resumeDebuggerLocked(s)}}
 	}
-	return browserVerdict{page: append(page, p.data)}
+	page = append(page, p.data)
+	var reservations []*link.Reservation
+	for _, data := range page {
+		reservation, ok := g.holdReservation(data)
+		if !ok {
+			releaseReservations(reservations)
+			return browserVerdict{}
+		}
+		reservations = append(reservations, reservation)
+	}
+	return browserVerdict{page: page, releases: reservations}
 }
 
 func (g *guard) recheckDebuggersLocked() [][]byte {
@@ -671,17 +720,43 @@ func (rl *relay) writeDebugger(msg []byte) bool {
 
 func (rl *relay) verifyDebugger(p *debuggerPause) {
 	v := rl.g.publishDebugger(p, rl.g.waitDebuggerPlacement(p, func() message { return rl.debuggerRead(p) }, rl.s.Done()))
+	defer releaseReservations(v.releases)
 	for _, msg := range v.send {
 		rl.writeDebugger(msg)
 	}
 	if len(v.page) == 0 {
 		return
 	}
-	var frames []byte
-	for _, msg := range v.page {
-		frames = append(frames, rl.g.pageFrame(msg)...)
+	if resume := rl.publishDebuggerFrames(p, v.page); resume != nil {
+		rl.writeDebugger(resume)
 	}
+}
+
+func (rl *relay) publishDebuggerFrames(p *debuggerPause, page [][]byte) []byte {
 	rl.pageMu.Lock()
+	defer rl.pageMu.Unlock()
+	total := 0
+	for i, msg := range page {
+		page[i] = rl.g.scrub(msg)
+		if len(page[i]) > link.AllocationLimit-total-4 {
+			rl.kill(errAllocation.Error())
+			return nil
+		}
+		total += 4 + len(page[i])
+	}
+	reservation := rl.s.ReserveAllocation(total, false)
+	if reservation == nil {
+		rl.kill(errAllocation.Error())
+		return nil
+	}
+	defer reservation.Release()
+	frames := make([]byte, total)
+	offset := 0
+	for _, msg := range page {
+		binary.BigEndian.PutUint32(frames[offset:], uint32(len(msg)))
+		copy(frames[offset+4:], msg)
+		offset += 4 + len(msg)
+	}
 	rl.g.mu.Lock()
 	s := p.state
 	var resume []byte
@@ -697,10 +772,7 @@ func (rl *relay) verifyDebugger(p *debuggerPause) {
 		}
 	}
 	rl.g.mu.Unlock()
-	rl.pageMu.Unlock()
-	if resume != nil {
-		rl.writeDebugger(resume)
-	}
+	return resume
 }
 
 func (rl *relay) expireDebuggerLater(p *debuggerPause) {

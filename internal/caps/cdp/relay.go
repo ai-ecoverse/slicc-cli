@@ -80,13 +80,14 @@ func (r *Registry) serve(s *link.Stream) {
 		return
 	}
 	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), reader: reader, parked: map[parkKey][]parkedMessage{}}
-	rl.g.reserveHold = func(data []byte) (*link.Reservation, bool) {
-		r := s.ReserveAllocation(cap(data), false)
+	rl.g.reserveBytes = func(n int) (*link.Reservation, bool) {
+		r := s.ReserveAllocation(n, false)
 		if r == nil {
-			rl.kill("ENOBUFS: shared HTTP/CDP allocation limit")
+			rl.kill(errAllocation.Error())
 		}
 		return r, r != nil
 	}
+	rl.g.reserveHold = func(data []byte) (*link.Reservation, bool) { return rl.g.reserveBytes(cap(data)) }
 	defer rl.g.releaseAllocations()
 	rl.g.scheduleInitial = rl.scheduleInitial
 	err = rl.bootstrap(ctx)
@@ -285,6 +286,7 @@ func (rl *relay) toPage() {
 			})
 		}
 		if !rl.sendGuardVerdict(ctx, v) {
+			releaseReservations(v.releases)
 			return
 		}
 		for _, id := range v.hold {

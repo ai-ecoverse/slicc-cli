@@ -85,6 +85,7 @@ type session struct {
 
 type guard struct {
 	reserveHold     func([]byte) (*link.Reservation, bool)
+	reserveBytes    func(int) (*link.Reservation, bool)
 	pendingRelease  []*link.Reservation
 	mu              sync.Mutex
 	o               *protect.Origins
@@ -595,6 +596,13 @@ func (g *guard) holdReservation(data []byte) (*link.Reservation, bool) {
 	return g.reserveHold(data)
 }
 
+func (g *guard) holdBytes(n int) (*link.Reservation, bool) {
+	if g.reserveBytes == nil {
+		return nil, true
+	}
+	return g.reserveBytes(n)
+}
+
 func (g *guard) takeReleasesLocked() []*link.Reservation {
 	list := g.pendingRelease
 	g.pendingRelease = nil
@@ -616,6 +624,9 @@ func (g *guard) releaseAllocations() {
 		for _, h := range list {
 			h.reservation.Release()
 		}
+	}
+	for _, s := range g.debuggers {
+		g.dropDebuggerLocked(s)
 	}
 	clear(g.heldExtras)
 	clear(g.heldAnswers)
