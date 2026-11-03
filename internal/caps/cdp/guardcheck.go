@@ -24,7 +24,7 @@ func checkGuard(ctx context.Context, ep browser.Endpoint) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, guardCheckTimeout)
 	defer cancel()
-	conn, _, err := dial(ctx, ep)
+	conn, _, err := dial(ctx, ep, nil)
 	if err != nil {
 		return nil
 	}

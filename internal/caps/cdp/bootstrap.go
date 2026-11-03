@@ -1,7 +1,6 @@
 package cdp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -60,7 +59,7 @@ func (rl *relay) syncCall(ctx context.Context, sessionID, method string, params 
 			return m, nil
 		default:
 		}
-		_, data, err := rl.conn.Read(ctx)
+		_, data, err := rl.reader.readMessage(ctx, rl.conn)
 		if err != nil {
 			return message{}, fmt.Errorf("%s: %w", method, err)
 		}
@@ -68,6 +67,7 @@ func (rl *relay) syncCall(ctx context.Context, sessionID, method string, params 
 		for _, out := range v.send {
 			_ = rl.conn.Write(ctx, websocket.MessageText, out)
 		}
+		releaseReservations(v.releases)
 	}
 }
 
@@ -148,9 +148,16 @@ func (rl *relay) park(data []byte) bool {
 		rl.kill("ENOBUFS: too many commands wait for a target's guard")
 		return true
 	}
+	reservation := rl.s.ReserveAllocation(len(data), false)
+	if reservation == nil {
+		rl.kill("ENOBUFS: shared HTTP/CDP allocation limit")
+		return true
+	}
 	rl.parkedCount++
 	rl.parkedBytes += len(data)
-	rl.parked[key] = append(q, bytes.Clone(data))
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	rl.parked[key] = append(q, parkedMessage{data: copyData, reservation: reservation})
 	return true
 }
 
@@ -164,22 +171,37 @@ func (rl *relay) release(key parkKey) {
 			rl.parkMu.Unlock()
 			return
 		}
-		data := q[0]
+		item := q[0]
+		data := item.data
 		rl.parkMu.Unlock()
 		if c, _, ok := parseCommand(data); ok {
 			rl.g.awaitCommand(c, rl.g.commandWait(c), rl.s.Done())
 		}
 		rl.parkMu.Lock()
+		rl.parked[key][0] = parkedMessage{}
 		rl.parked[key] = rl.parked[key][1:]
 		rl.parkedCount--
 		rl.parkedBytes -= len(data)
 		rl.parkMu.Unlock()
 		out, ok := rl.checkPage(data)
-		if !ok {
-			return
+		if ok && out != nil {
+			ok = rl.conn.Write(context.Background(), websocket.MessageText, out) == nil
 		}
-		if out != nil && rl.conn.Write(context.Background(), websocket.MessageText, out) != nil {
+		item.reservation.Release()
+		if !ok {
+			rl.clearParked(key)
 			return
 		}
 	}
+}
+
+func (rl *relay) clearParked(key parkKey) {
+	rl.parkMu.Lock()
+	defer rl.parkMu.Unlock()
+	for _, item := range rl.parked[key] {
+		rl.parkedCount--
+		rl.parkedBytes -= len(item.data)
+		item.reservation.Release()
+	}
+	delete(rl.parked, key)
 }

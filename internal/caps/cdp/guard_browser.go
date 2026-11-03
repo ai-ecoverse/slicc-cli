@@ -6,9 +6,12 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
 type browserVerdict struct {
+	releases          []*link.Reservation
 	forward           []byte
 	page              [][]byte
 	send              [][]byte
@@ -29,6 +32,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	defer func() { verdict.releases = g.takeReleasesLocked() }()
 	defer g.resolveUnknownLocked()
 	g.frameEventLocked(&m)
 	defer func() {

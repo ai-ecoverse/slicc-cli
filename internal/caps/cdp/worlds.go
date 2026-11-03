@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
 const (
@@ -761,8 +763,9 @@ var worldDropped = map[string]bool{"postData": true, "postDataEntries": true, "h
 var requestIDKeys = map[string]bool{"requestId": true, "networkId": true, "transportId": true}
 
 type heldPause struct {
-	m    message
-	data []byte
+	reservation *link.Reservation
+	m           message
+	data        []byte
 }
 
 func requestIDIn(p map[string]any) string {
@@ -870,6 +873,9 @@ func (g *guard) navRequestLocked(nt *navTarget, m *message) browserVerdict {
 
 func (g *guard) releasePausesLocked(k requestKey) browserVerdict {
 	held := g.heldPauses[k]
+	for _, h := range held {
+		g.pendingRelease = append(g.pendingRelease, h.reservation)
+	}
 	delete(g.heldPauses, k)
 	g.heldPauseCount -= len(held)
 	var out browserVerdict
@@ -889,14 +895,14 @@ func (g *guard) releasePausesLocked(k requestKey) browserVerdict {
 	return out
 }
 
-func (g *guard) expirePause(k requestKey) (page, send [][]byte) {
+func (g *guard) expirePause(k requestKey) (page, send [][]byte, releases []*link.Reservation) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if len(g.heldPauses[k]) > 0 {
 		g.logf("cdp: handed out a paused request the navigation guard never reported")
 	}
 	v := g.releasePausesLocked(k)
-	return v.page, v.send
+	return v.page, v.send, g.takeReleasesLocked()
 }
 
 var pauseHandler = afterRequestBy((*guard).pausedEvent, levelSettled, pausedIDOf)
@@ -920,7 +926,11 @@ func (g *guard) pauseGateEvent(m *message, data []byte) browserVerdict {
 		g.logf("cdp: too many paused requests wait for the navigation guard; continuing one without showing it to the page")
 		return g.continuePauseLocked(m)
 	}
-	g.heldPauses[k] = append(g.heldPauses[k], heldPause{m: *m, data: data})
+	reservation, ok := g.holdReservation(data)
+	if !ok {
+		return browserVerdict{}
+	}
+	g.heldPauses[k] = append(g.heldPauses[k], heldPause{m: *m, data: data, reservation: reservation})
 	g.heldPauseCount++
 	return browserVerdict{pauses: []requestKey{k}}
 }

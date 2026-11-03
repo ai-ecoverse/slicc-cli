@@ -731,9 +731,17 @@ func TestScreenRevokeIndependentOfFullHTTPCDPBuffers(t *testing.T) {
 	}
 	c, a := newScreenApp(t)
 	b := c.Broker()
+	reserved := make(chan *link.Reservation, 1)
 	page, states := screenLinksWith(t, b, func(n *node.Node) {
 		capHTTP.RegisterOptions(n, capHTTP.Options{Dialer: &net.Dialer{Timeout: time.Second}})
 		capCDP.Register(n, registry)
+		n.Handle("memory-test", "memory-test", func(s *link.Stream) {
+			r := s.ReserveAllocation(link.AllocationLimit-(4096+capCDP.MaxMessage+capHTTP.MaxHead), false)
+			reserved <- r
+			_ = s.Accept(nil)
+			<-s.Done()
+			r.Release()
+		})
 	})
 	screenState(t, states, false)
 	binding := screenBinding(b)
@@ -789,6 +797,24 @@ func TestScreenRevokeIndependentOfFullHTTPCDPBuffers(t *testing.T) {
 			t.Fatal(e)
 		}
 		remaining -= n
+	}
+	memory, e := page.Open(ctx, map[string]any{"kind": "memory-test"}, link.OpenOptions{Shared: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = memory.Reset("ECANCELED") })
+	select {
+	case reservation := <-reserved:
+		if reservation == nil {
+			t.Fatal("screen double-counted the HTTP/CDP reservation")
+		}
+	case <-ctx.Done():
+		t.Fatal("memory reservation blocked control channel")
+	}
+	_, e = page.Open(ctx, map[string]any{"kind": "http"}, link.OpenOptions{Shared: true})
+	var exhausted *link.ResetError
+	if !errors.As(e, &exhausted) || exhausted.Code != "ENOBUFS" {
+		t.Fatalf("budget not exhausted: %v", e)
 	}
 	if len(b.Snapshot().Caps) != 1 {
 		t.Fatal("buffer load revoked healthy provider before stop")

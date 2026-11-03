@@ -71,11 +71,18 @@ func Handler(o Options) link.Handler {
 }
 
 func serve(s *link.Stream, tr nethttp.RoundTripper, logf func(string, ...any)) {
+	reservation := s.ReserveAllocation(MaxHead, false)
+	if reservation == nil {
+		_ = s.Reset("ENOBUFS: shared HTTP/CDP allocation limit")
+		return
+	}
+	defer reservation.Release()
 	cred := Credentialed(s.OpenPayload())
 	if err := s.Accept(nil); err != nil {
 		return
 	}
 	head, err := ReadHead(s)
+	reservation.Release()
 	if err != nil {
 		resetRead(s, err)
 		return

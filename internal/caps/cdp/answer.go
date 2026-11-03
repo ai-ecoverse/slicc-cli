@@ -3,6 +3,8 @@ package cdp
 import (
 	"encoding/json"
 	"sort"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
 const (
@@ -38,9 +40,10 @@ type bodyCall struct {
 }
 
 type heldAnswer struct {
-	call bodyCall
-	m    message
-	data []byte
+	reservation *link.Reservation
+	call        bodyCall
+	m           message
+	data        []byte
 }
 
 func (g *guard) noteBodyCallLocked(k callKey, c *command) {
@@ -65,7 +68,11 @@ func (g *guard) bodyAnswerLocked(k callKey, bc bodyCall, m *message, data []byte
 		g.logf("cdp: too many answers wait for their request; refusing one")
 		return g.refuseAnswerLocked(k, bc, m, refusedUnknown)
 	}
-	g.heldAnswers[k] = &heldAnswer{call: bc, m: *m, data: data}
+	reservation, ok := g.holdReservation(data)
+	if !ok {
+		return browserVerdict{}
+	}
+	g.heldAnswers[k] = &heldAnswer{call: bc, m: *m, data: data, reservation: reservation}
 	return browserVerdict{answers: []callKey{k}}
 }
 
@@ -117,6 +124,7 @@ func (g *guard) releaseAnswersLocked(req requestKey) (page, send [][]byte) {
 		default:
 			continue
 		}
+		g.pendingRelease = append(g.pendingRelease, h.reservation)
 		delete(g.heldAnswers, k)
 		page = append(page, v.forward)
 		send = append(send, v.send...)
@@ -124,24 +132,26 @@ func (g *guard) releaseAnswersLocked(req requestKey) (page, send [][]byte) {
 	return page, send
 }
 
-func (g *guard) expireAnswer(k callKey) (page, send [][]byte) {
+func (g *guard) expireAnswer(k callKey) (page, send [][]byte, releases []*link.Reservation) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	h, ok := g.heldAnswers[k]
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
+	defer func() { releases = append(g.takeReleasesLocked(), h.reservation) }()
 	delete(g.heldAnswers, k)
 	v := g.refuseAnswerLocked(k, h.call, &h.m, refusedUnknown)
 	if g.sessionRefusedLocked(k.session) {
-		return nil, v.send
+		return nil, v.send, nil
 	}
-	return [][]byte{v.forward}, v.send
+	return [][]byte{v.forward}, v.send, nil
 }
 
 func (g *guard) forgetAnswersLocked(session string) {
 	for k := range g.heldAnswers {
 		if k.session == session {
+			g.heldAnswers[k].reservation.Release()
 			delete(g.heldAnswers, k)
 		}
 	}

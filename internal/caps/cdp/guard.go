@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
 const (
@@ -82,6 +84,9 @@ type session struct {
 }
 
 type guard struct {
+	reserveHold     func([]byte) (*link.Reservation, bool)
+	reserveBytes    func(int) (*link.Reservation, bool)
+	pendingRelease  []*link.Reservation
 	mu              sync.Mutex
 	o               *protect.Origins
 	logf            func(format string, args ...any)
@@ -576,4 +581,55 @@ func (g *guard) sessionTargetLocked(id string) *target {
 
 func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
+}
+
+func releaseReservations(list []*link.Reservation) {
+	for _, r := range list {
+		r.Release()
+	}
+}
+
+func (g *guard) holdReservation(data []byte) (*link.Reservation, bool) {
+	if g.reserveHold == nil {
+		return nil, true
+	}
+	return g.reserveHold(data)
+}
+
+func (g *guard) holdBytes(n int) (*link.Reservation, bool) {
+	if g.reserveBytes == nil {
+		return nil, true
+	}
+	return g.reserveBytes(n)
+}
+
+func (g *guard) takeReleasesLocked() []*link.Reservation {
+	list := g.pendingRelease
+	g.pendingRelease = nil
+	return list
+}
+
+func (g *guard) releaseAllocations() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, list := range g.heldExtras {
+		for _, h := range list {
+			h.reservation.Release()
+		}
+	}
+	for _, h := range g.heldAnswers {
+		h.reservation.Release()
+	}
+	for _, list := range g.heldPauses {
+		for _, h := range list {
+			h.reservation.Release()
+		}
+	}
+	for _, s := range g.debuggers {
+		g.dropDebuggerLocked(s)
+	}
+	clear(g.heldExtras)
+	clear(g.heldAnswers)
+	clear(g.heldPauses)
+	releaseReservations(g.takeReleasesLocked())
 }
