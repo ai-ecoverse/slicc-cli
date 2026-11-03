@@ -60,6 +60,11 @@ const observerNavigation = async (targetId, params) => {
   await new Promise((resolve) => { window.protectObserverNext = resolve; });
 };
 
+const observerScriptIDs = async (scriptTargets) => {
+  window.protectObserverRequest = { scriptTargets };
+  return new Promise((resolve) => { window.protectObserverNext = resolve; });
+};
+
 const later = (url) => `setTimeout(() => { location.href = ${JSON.stringify(url)}; }, 50); true`;
 
 async function load(c, sessionId, url) {
@@ -1281,19 +1286,12 @@ export function protectTest(getLink, describe) {
         await c.send('Target.detachFromTarget', { sessionId });
         return out;
       }),
-    extensionBreakpoint: (browser, targetId, pageURL) =>
+    extensionBreakpoint: (browser, targetId) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
-        await c.send('Debugger.enable', {}, sessionId);
+        const enable = await outcome(c.send('Debugger.enable', {}, sessionId));
         await c.send('Page.enable', {}, sessionId);
-        const condition = (key) => `(document.documentElement.dataset.${key} = globalThis.sliccFixtureWorld?.secret ?? "none", false)`;
-        const out = {
-          regex: await outcome(c.send('Debugger.setBreakpointByUrl', { urlRegex: 'chrome-extension://.*', lineNumber: 2, condition: condition('regex') }, sessionId)),
-          hash: await outcome(c.send('Debugger.setBreakpointByUrl', { scriptHash: '0'.repeat(64), lineNumber: 2, condition: condition('hash') }, sessionId)),
-          blank: await outcome(c.send('Debugger.setBreakpointByUrl', { url: '', lineNumber: 0, condition: condition('blank') }, sessionId)),
-          page: await outcome(c.send('Debugger.setBreakpointByUrl', { url: pageURL, lineNumber: 0, condition: 'false' }, sessionId)),
-          plain: await outcome(c.send('Debugger.setBreakpointByUrl', { urlRegex: 'chrome-extension://.*', lineNumber: 1 }, sessionId)),
-        };
+        const out = { enable };
         const loaded = c.waitEvent((e) => e.method === 'Page.loadEventFired' && e.sessionId === sessionId, 20000);
         await c.send('Page.reload', {}, sessionId);
         await loaded;
@@ -1382,14 +1380,10 @@ export function protectTest(getLink, describe) {
           paused: events.filter((e) => e.method === 'Fetch.requestPaused').length,
         };
       }),
-    extensionFrame: (browser, targetId, callFrameId) =>
+    extensionFrame: (browser, targetId) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
-        await c.send('Debugger.enable', {}, sessionId);
-        const out = {
-          evaluate: await outcome(c.send('Debugger.evaluateOnCallFrame', { callFrameId, expression: 'globalThis.sliccFixtureWorld?.secret ?? null', returnByValue: true }, sessionId)),
-          setVariable: await outcome(c.send('Debugger.setVariableValue', { callFrameId, scopeNumber: 0, variableName: 'probe', newValue: { value: 1 } }, sessionId)),
-        };
+        const out = { enable: await outcome(c.send('Debugger.enable', {}, sessionId)) };
         await sleep(300);
         out.pausedFrames = c.events.filter((e) => e.method === 'Debugger.paused' && e.sessionId === sessionId).map((e) => e.params.callFrames.map((f) => f.callFrameId));
         out.scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && e.sessionId === sessionId).map((e) => ({ url: e.params.url, contextId: e.params.executionContextId }));
@@ -1591,6 +1585,7 @@ export function protectTest(getLink, describe) {
         const { targetId, sessionId } = await c.attachTo('about:blank');
         const sessions = new Set([sessionId]);
         const kinds = new Map([[sessionId, '']]);
+        const targetSessions = new Map([[targetId, sessionId]]);
         const autoAttach = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
         c.on((e) => {
           if (e.method !== 'Target.attachedToTarget') return;
@@ -1601,12 +1596,12 @@ export function protectTest(getLink, describe) {
           if (kind === null) return;
           sessions.add(child);
           kinds.set(child, kind);
+          targetSessions.set(targetInfo.targetId, child);
           (kind === 'worker ' ? c.send('Target.setAutoAttach', autoAttach, child) : Promise.resolve())
-            .then(() => c.send('Debugger.enable', {}, child))
             .then(() => c.send('Runtime.runIfWaitingForDebugger', {}, child))
             .catch(() => {});
         });
-        for (const domain of ['Page', 'Network', 'DOM', 'CSS', 'Debugger', 'Runtime']) await c.send(`${domain}.enable`, {}, sessionId);
+        for (const domain of ['Page', 'Network', 'DOM', 'CSS', 'Runtime']) await c.send(`${domain}.enable`, {}, sessionId);
         await c.send('Target.setAutoAttach', autoAttach, sessionId);
         await outcome(load(c, sessionId, page));
         await sleep(2000);
@@ -1639,14 +1634,14 @@ export function protectTest(getLink, describe) {
         if (shared) {
           sharedSession = (await c.send('Target.attachToTarget', { targetId: shared.targetId, flatten: true })).sessionId;
           sessions.add(sharedSession);
-          await c.send('Debugger.enable', {}, sharedSession);
-          await sleep(500);
+          targetSessions.set(shared.targetId, sharedSession);
         }
-        const scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && sessions.has(e.sessionId) && e.params.url);
-        for (const e of scripts) {
-          const call = e.sessionId === sharedSession ? 'shared ' : kinds.get(e.sessionId);
-          await record(`${call}Debugger.getScriptSource`, c.send('Debugger.getScriptSource', { scriptId: e.params.scriptId }, e.sessionId));
-          await record(`${call}Debugger.searchInContent`, c.send('Debugger.searchInContent', { scriptId: e.params.scriptId, query: 'fake' }, e.sessionId));
+        const scripts = await observerScriptIDs([...targetSessions.keys()]);
+        for (const script of scripts) {
+          const guarded = targetSessions.get(script.targetId);
+          const call = guarded === sharedSession ? 'shared ' : kinds.get(guarded);
+          await record(`${call}Debugger.getScriptSource`, c.send('Debugger.getScriptSource', { scriptId: script.scriptId }, guarded));
+          await record(`${call}Debugger.searchInContent`, c.send('Debugger.searchInContent', { scriptId: script.scriptId, query: 'fake' }, guarded));
         }
         await outcome(c.send('Target.closeTarget', { targetId }));
         const events = c.events.filter((e) => sessions.has(e.sessionId)).map((e) => ({ method: e.method, text: JSON.stringify(e.params) }));
@@ -1662,6 +1657,7 @@ export function protectTest(getLink, describe) {
         const { targetId, sessionId } = await c.attachTo(page);
         const workers = new Set();
         const kinds = new Map();
+        const targetSessions = new Map();
         c.on((e) => {
           if (e.method !== 'Target.attachedToTarget' || e.sessionId) return;
           const { sessionId: child, targetInfo } = e.params;
@@ -1669,8 +1665,7 @@ export function protectTest(getLink, describe) {
           if (targetInfo.type === 'service_worker' || targetInfo.type === 'shared_worker') {
             workers.add(child);
             kinds.set(child, targetInfo.type === 'shared_worker' ? 'shared' : 'sw');
-            c.send('Debugger.enable', {}, child)
-              .then(() => step('sw Debugger.enable answered'), (err) => step(`sw Debugger.enable failed ${err.message}`));
+            targetSessions.set(targetInfo.targetId, child);
           }
           c.send('Runtime.runIfWaitingForDebugger', {}, child)
             .then(() => step(`${targetInfo.type} runIfWaitingForDebugger answered`), (err) => step(`${targetInfo.type} run failed ${err.message}`));
@@ -1688,14 +1683,18 @@ export function protectTest(getLink, describe) {
         if (early) {
           const { sessionId: explicit } = await c.send('Target.attachToTarget', { targetId: early.targetId, flatten: true });
           step('early explicitly attached');
+          targetSessions.set(early.targetId, explicit);
+          workers.add(explicit);
+          kinds.set(explicit, 'shared');
           await record('early Debugger.enable', Promise.race([c.send('Debugger.enable', {}, explicit), sleep(40000).then(() => { throw new Error('timeout'); })]));
           step('early Debugger.enable settled');
         }
         await record('sw redirect', c.evaluate(`navigator.serviceWorker.register('/r/sw.js', { scope: '/r/' }).then(() => 'registered')`, sessionId));
         await sleep(1000);
-        const scripts = c.events.filter((e) => e.method === 'Debugger.scriptParsed' && workers.has(e.sessionId) && e.params.url);
-        for (const e of scripts) {
-          await record(`${kinds.get(e.sessionId)} Debugger.getScriptSource`, c.send('Debugger.getScriptSource', { scriptId: e.params.scriptId }, e.sessionId));
+        const scripts = await observerScriptIDs([...targetSessions.keys()]);
+        for (const script of scripts) {
+          const guarded = targetSessions.get(script.targetId);
+          await record(`${kinds.get(guarded)} Debugger.getScriptSource`, c.send('Debugger.getScriptSource', { scriptId: script.scriptId }, guarded));
         }
         step('sources read');
         await outcome(c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false }));

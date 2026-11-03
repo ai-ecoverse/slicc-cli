@@ -52,8 +52,8 @@ func TestCDPAnswersAroundAPageItsOwnInstrumentationBreakpointPaused(t *testing.T
 		} `json:"title"`
 	}
 	env.evalJSON(t, "linkTest.protect.instrumentationPause("+jsArgs("chrome", base, timeout)+")", &r)
-	if r.Reason != "instrumentation" {
-		t.Fatalf("the page paused with reason %q, want instrumentation", r.Reason)
+	if r.Reason != "other" {
+		t.Fatalf("the page paused with reason %q, want the guard-converted ordinary pause", r.Reason)
 	}
 	if !r.Disable.OK && (r.Disable.Error.Message != "CDP timed out: Debugger.disable" || r.Disable.MS > timeout+5000) {
 		t.Errorf("Debugger.disable on the paused page: %+v, want an answer or the client's own timeout", r.Disable)

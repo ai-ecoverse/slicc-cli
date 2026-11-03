@@ -9,14 +9,16 @@ import (
 )
 
 type browserVerdict struct {
-	forward []byte
-	page    [][]byte
-	send    [][]byte
-	hold    []string
-	extra   []requestKey
-	answers []callKey
-	pauses  []requestKey
-	lost    bool
+	forward           []byte
+	page              [][]byte
+	send              [][]byte
+	hold              []string
+	extra             []requestKey
+	answers           []callKey
+	pauses            []requestKey
+	lost              bool
+	debuggerReads     []*debuggerPause
+	debuggerDeadlines []*debuggerPause
 }
 
 func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
@@ -30,6 +32,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	defer g.resolveUnknownLocked()
 	g.frameEventLocked(&m)
 	defer func() {
+		verdict.send = append(verdict.send, g.recheckDebuggersLocked()...)
 		recheck := m.ID != nil
 		switch m.Method {
 		case "Target.targetCreated", "Target.targetInfoChanged", "Target.targetDestroyed", "Target.attachedToTarget", "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared", "Page.frameAttached", "Page.frameDetached", "Page.frameNavigated":
@@ -44,6 +47,9 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	g.progressLocked(&m)
 	if m.ID != nil {
 		return g.answerLocked(&m, data)
+	}
+	if v, handled := g.debuggerEventLocked(&m, data); handled {
+		return v
 	}
 	if m.SessionID != "" && m.SessionID == g.relaySession {
 		return g.relayEventLocked(&m)
@@ -87,17 +93,25 @@ func (g *guard) ownsClientAnswerLocked(k callKey) bool {
 	return ok
 }
 
+func (g *guard) relayAnswerLocked(k callKey, m *message) (browserVerdict, bool) {
+	rc, ok := g.relayCalls[k]
+	if !ok {
+		return browserVerdict{}, false
+	}
+	delete(g.relayCalls, k)
+	if rc.ch != nil {
+		rc.ch <- *m
+	}
+	if rc.fn != nil {
+		return browserVerdict{send: rc.fn(*m)}, true
+	}
+	return browserVerdict{}, true
+}
+
 func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	k := callKey{m.SessionID, *m.ID}
-	if rc, ok := g.relayCalls[k]; ok {
-		delete(g.relayCalls, k)
-		if rc.ch != nil {
-			rc.ch <- *m
-		}
-		if rc.fn != nil {
-			return browserVerdict{send: rc.fn(*m)}
-		}
-		return browserVerdict{}
+	if v, handled := g.relayAnswerLocked(k, m); handled {
+		return v
 	}
 	if !g.ownsClientAnswerLocked(k) {
 		return browserVerdict{}
@@ -111,6 +125,9 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	bc, body := g.bodyCalls[k]
 	delete(g.bodyCalls, k)
 	outlived := g.outlivedLocked(k)
+	if !g.debuggerReplyLocked(k, m) {
+		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget)}
+	}
 	if g.sessionRefusedLocked(m.SessionID) {
 		return browserVerdict{send: g.closeStreamLocked(bc, m)}
 	}
