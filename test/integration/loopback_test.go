@@ -500,7 +500,7 @@ func TestLoopbackGateRefuses(t *testing.T) {
 	o.waitStderr(t, "refused a pairing request from "+srv.URL+": the token is wrong, used or expired")
 	wantForbidden(t, "an unpaired fingerprint", gateDo(t, pr.port, "POST", "/slicc/v1/signal", host, origin, jsonBody(t, map[string]string{"offer": offer})), srv.URL)
 
-	for _, bad := range []string{"https://www.sliccy.ai", "https://vault.sliccy.ai", "https://mcpcat.sliccy.ai", "https://get.sliccy.ai", "https://vault-main.sliccy.ai", "https://example.com", "https://seven.sliccy.ai.example.com", "null", "http://127.0.0.1:2"} {
+	for _, bad := range []string{"https://vault.sliccy.ai", "https://mcpcat.sliccy.ai", "https://get.sliccy.ai", "https://vault-main.sliccy.ai", "https://example.com", "https://seven.sliccy.ai.example.com", "null", "http://127.0.0.1:2"} {
 		t.Run("origin "+bad, func(t *testing.T) {
 			h := map[string]string{"Origin": bad, "Access-Control-Request-Method": "POST"}
 			wantForbidden(t, "preflight from "+bad, gateDo(t, pr.port, "OPTIONS", "/slicc/v1/signal", host, h, nil), "")
@@ -508,6 +508,13 @@ func TestLoopbackGateRefuses(t *testing.T) {
 		})
 	}
 	wantForbidden(t, "no Origin", gateDo(t, pr.port, "POST", "/slicc/v1/pair", host, nil, pairBody(pr.token)), "")
+	t.Run("origin https://www.sliccy.ai", func(t *testing.T) {
+		const www = "https://www.sliccy.ai"
+		a := gateDo(t, pr.port, "OPTIONS", "/slicc/v1/signal", host, map[string]string{"Origin": www, "Access-Control-Request-Method": "POST"}, nil)
+		if a.status != 204 || a.header.Get("Access-Control-Allow-Origin") != www {
+			t.Fatalf("preflight from seven on www: %d %v", a.status, a.header)
+		}
+	})
 
 	for _, okHost := range []string{host, fmt.Sprintf("localhost:%d", pr.port), fmt.Sprintf("[::1]:%d", pr.port)} {
 		a := gateDo(t, pr.port, "OPTIONS", "/slicc/v1/pair", okHost, map[string]string{"Origin": srv.URL, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type", "Access-Control-Request-Private-Network": "true"}, nil)
