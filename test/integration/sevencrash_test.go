@@ -633,7 +633,11 @@ func startCrashBinary(t *testing.T, args ...string) (*syncBuffer, <-chan error) 
 	go func() { exited <- cmd.Wait() }()
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
-		<-exited
+		select {
+		case <-exited:
+		case <-time.After(reapTimeout):
+			t.Errorf("slicc (pid %d) was not reaped after SIGKILL", cmd.Process.Pid)
+		}
 		if t.Failed() {
 			t.Logf("slicc output:\n%s", logs.String())
 		}
