@@ -6,10 +6,17 @@ import (
 	"time"
 
 	capcdp "github.com/ai-ecoverse/slicc-cli/internal/caps/cdp"
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/test/integration/testdata/stage1"
 )
 
 func stage1Link(t *testing.T) (*stage1.Client, *stage1.Browser) {
+	t.Helper()
+	client, browser, _ := stage1LinkStreams(t)
+	return client, browser
+}
+
+func stage1LinkStreams(t *testing.T) (*stage1.Client, *stage1.Browser, *link.Stream) {
 	t.Helper()
 	browser := stage1.NewBrowser(t)
 	registry := capcdp.NewRegistry(nil)
@@ -17,7 +24,7 @@ func stage1Link(t *testing.T) (*stage1.Client, *stage1.Browser) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, _ := stage1.Open(t, registry.Handler(), entry.ID)
+	stream, peer := stage1.Open(t, registry.Handler(), entry.ID)
 	client := stage1.NewClient(t, stream)
 	stage1.Result(t, client.Call(t, "Target.createTarget", "", map[string]any{"url": "https://ordinary.test/doc"}))
 	attached := stage1.Result(t, client.Call(t, "Target.attachToTarget", "", map[string]any{"targetId": "T", "flatten": true}))
@@ -25,7 +32,7 @@ func stage1Link(t *testing.T) (*stage1.Client, *stage1.Browser) {
 		t.Fatal("fixture attached with wrong native session")
 	}
 	stage1.Result(t, client.Call(t, "Page.enable", "S", nil))
-	return client, browser
+	return client, browser, peer
 }
 
 func stage1Arm(t *testing.T, client *stage1.Client) {

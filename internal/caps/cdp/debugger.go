@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -65,6 +67,7 @@ type debuggerState struct {
 	owner             string
 	target            string
 	generation        uint64
+	revocation        uint64
 	enabled           bool
 	full              bool
 	scripts           map[string]debuggerScript
@@ -77,6 +80,8 @@ type debuggerState struct {
 
 type debuggerPause struct {
 	reservation     *link.Reservation
+	cancel          context.CancelFunc
+	document        string
 	state           *debuggerState
 	generation      uint64
 	deadline        time.Time
@@ -93,6 +98,7 @@ type debuggerReply struct {
 	state      *debuggerState
 	method     string
 	generation uint64
+	revocation uint64
 }
 
 func debuggerDomain(method string) bool {
@@ -161,7 +167,7 @@ func (g *guard) noteDebuggerLocked(k callKey, c *command) {
 		s = &debuggerState{owner: c.session, target: t.id, generation: t.documentRevision, scripts: map[string]debuggerScript{}, scriptInfo: map[string]debuggerScriptInfo{}, publishedContexts: map[int64]string{}, breakpoints: map[string]bool{}}
 		g.debuggers[c.session] = s
 	}
-	g.debuggerReplies[k] = debuggerReply{state: s, method: c.method, generation: s.generation}
+	g.debuggerReplies[k] = debuggerReply{state: s, method: c.method, generation: s.generation, revocation: s.revocation}
 	if c.method == "Debugger.resume" {
 		g.releaseDebuggerPauseLocked(s.resuming)
 		g.releaseDebuggerPauseLocked(s.pause)
@@ -180,7 +186,7 @@ func (g *guard) debuggerReplyLocked(k callKey, m *message) bool {
 		return true
 	}
 	s := r.state
-	if g.debuggers[s.owner] != s || s.generation != r.generation {
+	if g.debuggers[s.owner] != s || s.revocation != r.revocation || (s.generation != r.generation && debuggerLifetimes[r.method] != debuggerPersistent) {
 		return false
 	}
 	switch r.method {
@@ -229,6 +235,9 @@ func (g *guard) clearDebuggerScriptsLocked(s *debuggerState) {
 
 func (g *guard) releaseDebuggerPauseLocked(p *debuggerPause) {
 	if p != nil {
+		if p.cancel != nil {
+			p.cancel()
+		}
 		g.debuggerBytes -= len(p.data)
 		p.data = nil
 		p.reservation.Release()
@@ -551,10 +560,10 @@ func (g *guard) publishDebugger(p *debuggerPause, m message) browserVerdict {
 	if json.Unmarshal(p.data, &event) != nil || len(event.Params.CallFrames) == 0 || shown == nil || shown.full {
 		return browserVerdict{send: [][]byte{g.resumeDebuggerLocked(s)}}
 	}
+	p.document = g.targets[s.target].document
 	p.frames = map[string]bool{}
 	p.scripts = map[string]bool{}
 	p.contexts = map[int64]string{}
-	var page [][]byte
 	for _, frame := range event.Params.CallFrames {
 		script, ok := s.scripts[frame.Location.Script]
 		context := shown.contexts[script.context]
@@ -564,14 +573,15 @@ func (g *guard) publishDebugger(p *debuggerPause, m message) browserVerdict {
 		}
 		p.frames[frame.ID] = true
 		p.contexts[id] = script.unique
-		if !p.scripts[frame.Location.Script] {
-			page = append(page, script.data)
-		}
 		p.scripts[frame.Location.Script] = true
 	}
 	root, ok := decodeObject(p.data)
 	if !ok || !g.debuggerIDsLocked(s, p, root) {
 		return browserVerdict{send: [][]byte{g.resumeDebuggerLocked(s)}}
+	}
+	page := make([][]byte, 0, len(p.scripts)+1)
+	for _, id := range slices.Sorted(maps.Keys(p.scripts)) {
+		page = append(page, s.scripts[id].data)
 	}
 	page = append(page, p.data)
 	var reservations []*link.Reservation
@@ -594,7 +604,11 @@ func (g *guard) recheckDebuggersLocked() [][]byte {
 			g.dropDebuggerLocked(s)
 			continue
 		}
-		if s.generation != t.documentRevision || g.debuggerAdmissionLocked(&command{session: owner}) != "" || (s.pause != nil && s.pause.published && !g.debuggerContextsLocked(s, s.pause)) {
+		revoked := g.debuggerAdmissionLocked(&command{session: owner}) != "" || (s.pause != nil && (s.pause.published || s.pause.cancel != nil) && !g.debuggerContextsLocked(s, s.pause))
+		if revoked {
+			s.revocation++
+		}
+		if s.generation != t.documentRevision || revoked {
 			if s.pause != nil {
 				send = append(send, g.resumeDebuggerLocked(s))
 			}
@@ -729,12 +743,10 @@ func (rl *relay) verifyDebugger(p *debuggerPause) {
 	if len(v.page) == 0 {
 		return
 	}
-	if resume := rl.publishDebuggerFrames(p, v.page); resume != nil {
-		rl.writeDebugger(resume)
-	}
+	rl.publishDebuggerFrames(p, v.page)
 }
 
-func (rl *relay) publishDebuggerFrames(p *debuggerPause, page [][]byte) []byte {
+func (rl *relay) publishDebuggerFrames(p *debuggerPause, page [][]byte) {
 	rl.pageMu.Lock()
 	defer rl.pageMu.Unlock()
 	total := 0
@@ -742,14 +754,14 @@ func (rl *relay) publishDebuggerFrames(p *debuggerPause, page [][]byte) []byte {
 		page[i] = rl.g.scrub(msg)
 		if len(page[i]) > link.AllocationLimit-total-4 {
 			rl.kill(errAllocation.Error())
-			return nil
+			return
 		}
 		total += 4 + len(page[i])
 	}
 	reservation := rl.s.ReserveAllocation(total, false)
 	if reservation == nil {
 		rl.kill(errAllocation.Error())
-		return nil
+		return
 	}
 	defer reservation.Release()
 	frames := make([]byte, total)
@@ -759,22 +771,55 @@ func (rl *relay) publishDebuggerFrames(p *debuggerPause, page [][]byte) []byte {
 		copy(frames[offset+4:], msg)
 		offset += 4 + len(msg)
 	}
+	ctx, cancel := context.WithDeadline(context.Background(), p.deadline)
+	defer cancel()
 	rl.g.mu.Lock()
-	s := p.state
-	var resume []byte
-	if rl.g.debuggers[s.owner] == s && s.pause == p && s.generation == p.generation && time.Now().Before(p.deadline) && rl.g.debuggerContextsLocked(s, p) && rl.g.debuggerAdmissionLocked(&command{session: s.owner}) == "" {
-		ok, err := rl.s.TryWrite(frames)
+	p.cancel = cancel
+	rl.g.mu.Unlock()
+	for offset = 0; offset < len(frames); {
+		n := min(link.MaxPayload, len(frames)-offset)
+		if rl.s.WaitWritable(ctx, n) != nil {
+			rl.abortDebuggerPublication(p)
+			return
+		}
+		rl.g.mu.Lock()
+		s := p.state
+		t := rl.g.targets[s.target]
+		valid := rl.g.debuggers[s.owner] == s && s.pause == p && s.generation == p.generation && t != nil && t.documentRevision == p.generation && t.document == p.document && time.Now().Before(p.deadline) && rl.g.debuggerContextsLocked(s, p) && rl.g.debuggerAdmissionLocked(&command{session: s.owner}) == "" && !rl.g.sessionRefusedLocked(s.owner)
+		var ok bool
+		var err error
+		if valid {
+			ok, err = rl.s.TryWrite(frames[offset : offset+n])
+		}
 		if ok && err == nil {
-			p.published = true
-			for id, unique := range p.contexts {
-				s.publishedContexts[id] = unique
+			offset += n
+			if offset == len(frames) {
+				p.published = true
+				p.cancel = nil
+				for id, unique := range p.contexts {
+					s.publishedContexts[id] = unique
+				}
 			}
-		} else {
-			resume = rl.g.resumeDebuggerLocked(s)
+		}
+		rl.g.mu.Unlock()
+		if !valid || err != nil {
+			rl.abortDebuggerPublication(p)
+			return
 		}
 	}
+}
+
+func (rl *relay) abortDebuggerPublication(p *debuggerPause) {
+	rl.g.mu.Lock()
+	var resume []byte
+	if rl.g.debuggers[p.state.owner] == p.state && p.state.pause == p {
+		resume = rl.g.resumeDebuggerLocked(p.state)
+	} else {
+		resume, _ = rl.g.newCallLocked(p.state.owner, "Debugger.resume", nil, false)
+	}
 	rl.g.mu.Unlock()
-	return resume
+	rl.writeDebugger(resume)
+	rl.kill("ECANCELED: debugger publication revoked or expired")
 }
 
 func (rl *relay) expireDebuggerLater(p *debuggerPause) {

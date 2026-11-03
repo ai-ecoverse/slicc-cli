@@ -36,6 +36,8 @@ type Browser struct {
 	Released      bool
 	HoldReads     bool
 	childURL      *string
+	commitMethod  string
+	revokeReply   bool
 }
 
 func NewBrowser(t *testing.T) *Browser {
@@ -73,6 +75,12 @@ func NewBrowser(t *testing.T) *Browser {
 				reply["sessionId"] = p.Session
 			}
 			b.write.Lock()
+			for _, event := range b.beforeReply(p.Method) {
+				data, _ = json.Marshal(event)
+				if err = conn.Write(r.Context(), websocket.MessageText, data); err != nil {
+					break
+				}
+			}
 			data, _ = json.Marshal(reply)
 			err = conn.Write(r.Context(), websocket.MessageText, data)
 			for _, event := range events {
@@ -186,6 +194,18 @@ func (b *Browser) Emit(t *testing.T, method string) {
 		event = b.pause(method)
 	case "normal":
 		event = b.pause("other")
+	case "async", "parent-stack", "unplaced-async":
+		context := 7
+		if method == "unplaced-async" {
+			context = 77
+		}
+		before = append(before, map[string]any{"method": "Debugger.scriptParsed", "sessionId": "S", "params": map[string]any{"scriptId": "async-script", "executionContextId": context, "url": "https://ordinary.test/async.js"}})
+		event = b.pause("other")
+		stack := map[string]any{"callFrames": []any{map[string]any{"scriptId": "async-script", "url": "https://ordinary.test/async.js", "lineNumber": 0, "columnNumber": 0}}}
+		if method == "parent-stack" {
+			stack = map[string]any{"callFrames": []any{}, "parent": stack}
+		}
+		event["params"].(map[string]any)["asyncStackTrace"] = stack
 	case "commit":
 		b.loader = "next-generation"
 		event = b.frame("N")
@@ -242,4 +262,25 @@ func (b *Browser) StallReads() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.HoldReads = true
+}
+
+func (b *Browser) CommitOnReply(method string, revoked bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.commitMethod, b.revokeReply = method, revoked
+}
+
+func (b *Browser) beforeReply(method string) []map[string]any {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.commitMethod != method {
+		return nil
+	}
+	b.commitMethod = ""
+	b.loader = "reply-generation"
+	events := []map[string]any{b.frame("N")}
+	if b.revokeReply {
+		events = append(events, map[string]any{"method": "Runtime.executionContextCreated", "sessionId": "N", "params": map[string]any{"context": map[string]any{"id": 9, "origin": "chrome-extension://foreign", "uniqueId": "foreign", "auxData": map[string]any{"isDefault": false, "frameId": "T"}}}})
+	}
+	return events
 }
