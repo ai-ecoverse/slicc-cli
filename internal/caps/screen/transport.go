@@ -382,7 +382,7 @@ func (c *Client) send(m safety) error {
 	if m.Type == "link" && !c.broker.registrationCurrent(m.registration) {
 		return nil
 	}
-	if c.verifyPeer(c.safety) != nil {
+	if c.verifyPeer(c.safety, "safety") != nil {
 		return ErrAccess
 	}
 	if m.Type == "link" && !c.broker.registrationCurrent(m.registration) {
@@ -410,7 +410,7 @@ func (c *Client) reader() {
 			c.Close()
 			return
 		}
-		if e = c.verifyPeer(c.safety); e != nil {
+		if e = c.verifyPeer(c.safety, "safety"); e != nil {
 			c.Close()
 			return
 		}
@@ -730,7 +730,7 @@ func (c *Client) images() {
 			c.Close()
 			return
 		}
-		if c.verifyPeer(c.frames) != nil || frame.Launch != c.bootstrap.Launch || frame.Connection != c.connection {
+		if c.verifyPeer(c.frames, "frames") != nil || frame.Launch != c.bootstrap.Launch || frame.Connection != c.connection {
 			c.Close()
 			return
 		}
@@ -817,7 +817,7 @@ func (c *Client) dial(ctx context.Context, path, lane string, deadline time.Time
 	u := conn.(*net.UnixConn)
 	_ = u.SetDeadline(deadline)
 	fail := func() (*net.UnixConn, error) { _ = u.Close(); return nil, ErrAccess }
-	if e = c.verifyPeer(u); e != nil {
+	if e = c.verifyPeer(u, lane); e != nil {
 		return fail()
 	}
 	hello := authHello{V: 1, Lane: lane, Launch: b.Launch, Challenge: b.Challenge, ClientNonce: ID(32), Connection: c.connection}
@@ -828,7 +828,7 @@ func (c *Client) dial(ctx context.Context, path, lane string, deadline time.Time
 	if e = readHello(privateConn{u}, &response); e != nil {
 		return fail()
 	}
-	if e = c.verifyPeer(u); e != nil {
+	if e = c.verifyPeer(u, lane); e != nil {
 		return fail()
 	}
 	if response.V != 1 || response.Lane != lane || response.Launch != b.Launch || response.Challenge != b.Challenge || response.ClientNonce != hello.ClientNonce || !validID(response.ServerNonce, 32) || !validID(response.Connection, 32) {
@@ -874,17 +874,13 @@ func (c *Client) heartbeat(m safety) bool {
 
 func (c *Client) Authenticated() bool { return c.healthy() }
 
-func (c *Client) verifyPeer(conn *net.UnixConn) (err error) {
+func (c *Client) verifyPeer(conn *net.UnixConn, lane string) (err error) {
 	var checks ProofChecks
 	end := c.proof.observer.begin()
 	started, received := false, false
 	defer func() {
 		if started && !received {
 			c.proof.observer.lose()
-		}
-		lane := "safety"
-		if c.safety != nil && conn != c.safety {
-			lane = "frames"
 		}
 		end(lane, checks, err == nil)
 	}()

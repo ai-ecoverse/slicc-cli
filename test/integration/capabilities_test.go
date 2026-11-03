@@ -187,9 +187,21 @@ func exprString(e ast.Expr) string {
 }
 
 func emittedEvents(files []*ast.File, kinds map[string]string) map[string]bool {
-	value := func(e ast.Expr) (string, bool) {
+	packages := map[string][]*ast.File{}
+	for _, f := range files {
+		packages[f.Name.Name] = append(packages[f.Name.Name], f)
+	}
+	constants := map[string]map[string]string{}
+	for name, group := range packages {
+		constants[name] = stringConsts(group, func(string, ast.Expr) bool { return true })
+	}
+	value := func(e ast.Expr, own map[string]string) (string, bool) {
 		if s, ok := stringLit(e); ok {
 			return s, true
+		}
+		if ident, ok := e.(*ast.Ident); ok {
+			s, found := own[ident.Name]
+			return s, found
 		}
 		if sel, ok := e.(*ast.SelectorExpr); ok && exprString(sel.X) == "flow" {
 			s, ok := kinds[sel.Sel.Name]
@@ -208,7 +220,7 @@ func emittedEvents(files []*ast.File, kinds map[string]string) map[string]bool {
 			if key != "Event" && key != `"event"` {
 				return true
 			}
-			if s, ok := value(kv.Value); ok {
+			if s, ok := value(kv.Value, constants[f.Name.Name]); ok {
 				out[s] = true
 			}
 			return true
@@ -250,7 +262,8 @@ func TestCapabilitiesNameEveryCommandEventAndOp(t *testing.T) {
 	if len(kinds) < 10 {
 		t.Fatalf("found only %d flow kinds", len(kinds))
 	}
-	emitted := emittedEvents(append(cmdFiles, flowFiles...), kinds)
+	screenFiles := parseGoDir(t, filepath.Join("..", "..", "internal", "caps", "screen"))
+	emitted := emittedEvents(append(append(cmdFiles, flowFiles...), screenFiles...), kinds)
 	for _, k := range kinds {
 		emitted[k] = true
 	}

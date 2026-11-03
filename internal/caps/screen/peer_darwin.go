@@ -343,7 +343,7 @@ func monitorPeerUsing(c *Client, ops peerMonitorOps) error {
 		_ = ops.close(kq)
 		return ErrAccess
 	}
-	if c.verifyPeer(c.safety) != nil {
+	if c.verifyPeer(c.safety, "safety") != nil {
 		_ = ops.close(kq)
 		return ErrAccess
 	}

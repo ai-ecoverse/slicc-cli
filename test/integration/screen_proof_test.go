@@ -93,6 +93,7 @@ func TestScreenProofKeepsInjectedVerifierRefusals(t *testing.T) {
 					}
 					if enabled {
 						count := 0
+						acceptedLanes := map[string]int{}
 						complete := false
 						for !complete {
 							select {
@@ -101,6 +102,9 @@ func TestScreenProofKeepsInjectedVerifierRefusals(t *testing.T) {
 									t.Fatal("missing observer completion")
 								}
 								count++
+								if report.Outcome == "accepted" {
+									acceptedLanes[report.Lane]++
+								}
 								if report.Seq != count || count > 5 {
 									t.Fatal("unbounded/gapped observations")
 								}
@@ -115,6 +119,9 @@ func TestScreenProofKeepsInjectedVerifierRefusals(t *testing.T) {
 							case <-ctx.Done():
 								t.Fatal("observer waited for native failure or stdout")
 							}
+						}
+						if acceptedLanes["safety"] != 1 || acceptedLanes["frames"] != 1 || len(acceptedLanes) != 2 {
+							t.Fatal("handshake baselines mislabelled or suppressed", acceptedLanes)
 						}
 					}
 				})
