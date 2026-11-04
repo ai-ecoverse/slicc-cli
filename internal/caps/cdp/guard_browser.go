@@ -107,9 +107,9 @@ func (g *guard) relayAnswerLocked(k callKey, m *message) (browserVerdict, bool) 
 		rc.ch <- *m
 	}
 	if rc.fn != nil {
-		return browserVerdict{send: rc.fn(*m)}, true
+		return browserVerdict{send: rc.fn(*m), page: g.takePendingPageLocked()}, true
 	}
-	return browserVerdict{}, true
+	return browserVerdict{page: g.takePendingPageLocked()}, true
 }
 
 func (g *guard) responseLocked(m *message, data []byte) browserVerdict {

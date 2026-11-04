@@ -1789,5 +1789,76 @@ export function protectTest(getLink, describe) {
         const events = c.events.filter((e) => e.method.startsWith('Network.')).map((e) => ({ method: e.method, requestId: e.params.requestId, text: JSON.stringify(e.params) }));
         return { events };
       }),
+    foreignExtensionFrame: (browser, targetId, frameTargetId, origin) =>
+      run(browser, async (c) => {
+        const shownRefusal =
+          "slicc: refused: a browser extension's frame (chrome-extension://) is showing or focused in this tab, such as a password manager's autofill list; close it or reload the tab";
+        const presentRefusal =
+          "slicc: refused: this tab holds a browser extension's frame (chrome-extension://), such as a password manager's autofill list, so it can't be captured whole or streamed; reload the tab to remove it; an active screencast is stopped or its frames are dropped until the frame is gone";
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('DOM.enable', {}, sessionId);
+        const read = await outcome(c.send('Runtime.evaluate', { expression: 'self.origin', returnByValue: true }, sessionId));
+        const painted = async () => {
+          await c.send(
+            'Runtime.evaluate',
+            {
+              expression:
+                'new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(resolve)); setTimeout(resolve, 250); })',
+              awaitPromise: true,
+              returnByValue: true,
+            },
+            sessionId
+          );
+        };
+        const style = async (apply) => {
+          await c.send(
+            'Runtime.evaluate',
+            {
+              expression: `(() => { const f = document.getElementById('slicc-extension-frame'); if (!f) throw new Error('missing frame'); ${apply}; return true; })()`,
+              returnByValue: true,
+            },
+            sessionId
+          );
+          await painted();
+        };
+        await style('f.hidden = true; f.style.cssText = ""');
+        const hiddenShot = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
+        const hiddenKey = await outcome(c.send('Input.insertText', { text: 'k' }, sessionId));
+        await style('f.hidden = false; f.style.cssText = "position:fixed;right:0;bottom:0;width:300px;height:200px;border:0"');
+        const shownShot = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
+        const shownKey = await outcome(c.send('Input.insertText', { text: 'k' }, sessionId));
+        const cast = await outcome(c.send('Page.startScreencast', { format: 'png' }, sessionId));
+        const pdf = await outcome(c.send('Page.printToPDF', {}, sessionId));
+        const snap = await outcome(c.send('Page.captureSnapshot', {}, sessionId));
+        const tree = await outcome(c.send('Page.getFrameTree', {}, sessionId));
+        const list = await outcome(c.send('Target.getTargets'));
+        const frameAttach = await outcome(c.send('Target.attachToTarget', { targetId: frameTargetId, flatten: true }));
+        if (frameAttach.ok) await outcome(c.send('Target.detachFromTarget', { sessionId: frameAttach.result.sessionId }));
+        const listed = list.ok && JSON.stringify(list.result).includes('chrome-extension://');
+        const treeLeak = tree.ok && JSON.stringify(tree.result).includes('chrome-extension://');
+        await c.send('Target.detachFromTarget', { sessionId });
+        return {
+          attached: true,
+          read: read.ok && read.result.result?.value === origin,
+          hiddenShot: hiddenShot.ok,
+          hiddenKey: hiddenKey.ok,
+          shownShot: shownShot.ok,
+          shownShotRefusal: shownShot.ok ? null : shownShot.error?.message,
+          shownKey: shownKey.ok,
+          shownKeyRefusal: shownKey.ok ? null : shownKey.error?.message,
+          cast: cast.ok,
+          castRefusal: cast.ok ? null : cast.error?.message,
+          pdf: pdf.ok,
+          pdfRefusal: pdf.ok ? null : pdf.error?.message,
+          snap: snap.ok,
+          snapRefusal: snap.ok ? null : snap.error?.message,
+          listed,
+          treeLeak,
+          frameAttach: frameAttach.ok,
+          shownRefusal,
+          presentRefusal,
+        };
+      }),
   };
 }

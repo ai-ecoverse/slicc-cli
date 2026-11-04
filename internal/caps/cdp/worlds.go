@@ -274,18 +274,26 @@ func remoteContext(id string) (int64, bool) {
 }
 
 func (g *guard) frameContentCheckLocked(c *command, target string) string {
+	if reason := g.extensionGateReasonLocked(c, target); reason != "" {
+		return reason
+	}
+	if frame := c.str("frameId"); frame != "" {
+		if t := g.targets[frame]; g.extensionFrameTargetLocked(t) {
+			return refusedTarget
+		}
+	}
 	if !g.framesProtectedLocked(target) {
 		return ""
 	}
 	if w := g.worlds[target]; w != nil {
 		for _, context := range w.contexts {
-			if c.str("frameId") != "" && c.str("frameId") == context.protectedFrame {
+			if c.str("frameId") != "" && c.str("frameId") == context.protectedFrame && !g.extensionFrameIDLocked(context.protectedFrame) {
 				return refusedTarget
 			}
 		}
 	}
 	if frame := c.str("frameId"); frame != "" {
-		if t := g.targets[frame]; t != nil && !t.gone && t.typ == "iframe" && (t.protected || g.o.Loaded(t.url)) {
+		if t := g.targets[frame]; t != nil && !t.gone && t.typ == "iframe" && (t.protected || g.o.Loaded(t.url)) && !g.extensionFrameTargetLocked(t) {
 			return refusedTarget
 		}
 	}

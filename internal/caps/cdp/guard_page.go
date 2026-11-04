@@ -33,11 +33,12 @@ func (c *command) str(key string) string {
 }
 
 type pageVerdict struct {
-	forward []byte
-	reply   []byte
-	history *command
-	cmd     *command
-	wait    <-chan struct{}
+	forward   []byte
+	reply     []byte
+	history   *command
+	extension *command
+	cmd       *command
+	wait      <-chan struct{}
 }
 
 func decodeObject(raw json.RawMessage) (map[string]any, bool) {
@@ -95,6 +96,9 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 		return pageVerdict{reply: acknowledgement(c.id, c.session)}
 	}
 	if reason := g.checkLocked(c); reason != "" {
+		if reason == extensionShownPending {
+			return pageVerdict{extension: c}
+		}
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
 	}
@@ -107,6 +111,9 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 		}
 		return pageVerdict{history: c}
 	}
+	if g.needsExtensionShownProbeLocked(c) {
+		return pageVerdict{extension: c}
+	}
 	if reply := g.answerLocally(c); reply != nil {
 		return pageVerdict{reply: reply}
 	}
@@ -116,7 +123,11 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 func (g *guard) admitLocked(c *command) pageVerdict {
 	g.narrowBindingLocked(c)
 	k := callKey{c.session, c.id}
-	g.pending[k] = resultKind(c.method)
+	kind := resultKind(c.method)
+	g.pending[k] = kind
+	if kind == kindPaint {
+		g.paintMethods[k] = c.method
+	}
 	g.noteBodyCallLocked(k, c)
 	g.noteClientRequestLocked(k, c)
 	g.noteContinueLocked(k, c)
@@ -166,11 +177,17 @@ func (g *guard) afterHistory(c *command, res message, ok bool) pageVerdict {
 		return pageVerdict{reply: refusal(c.id, c.session, "can't tell where the history entry leads")}
 	}
 	if reason := g.checkLocked(c); reason != "" {
+		if reason == extensionShownPending {
+			return pageVerdict{extension: c}
+		}
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
 	}
 	if gate := g.framesGateLocked(c.session); gate != nil {
 		return pageVerdict{wait: gate}
+	}
+	if g.needsExtensionShownProbeLocked(c) {
+		return pageVerdict{extension: c}
 	}
 	return g.admitLocked(c)
 }
@@ -375,7 +392,10 @@ var methodRules = map[string]func(g *guard, c *command) string{
 	"Network.loadNetworkResource": (*guard).loadResourceRule,
 	"Page.getResourceContent":     (*guard).resourceRule,
 	"Page.searchInResource":       (*guard).resourceRule,
-	"Page.captureSnapshot": func(*guard, *command) string {
+	"Page.captureSnapshot": func(g *guard, c *command) string {
+		if t := g.sessionTargetLocked(c.session); t != nil && g.extensionFramesPresentLocked(t.id) {
+			return protect.PresentReason()
+		}
 		return "Page.captureSnapshot serialises every frame, error pages for seven's URLs included"
 	},
 	"IO.read":                     (*guard).streamRule,

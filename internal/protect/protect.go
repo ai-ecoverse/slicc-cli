@@ -51,6 +51,39 @@ func UnparseableRefusal() string {
 	return unparseableRefusal
 }
 
+func ShownRefusal() string {
+	return rules.ExtensionFrames.ShownRefusal
+}
+
+func PresentRefusal() string {
+	return rules.ExtensionFrames.PresentRefusal
+}
+
+func ShownReason() string {
+	return strings.TrimPrefix(ShownRefusal(), refusedPrefix)
+}
+
+func PresentReason() string {
+	return strings.TrimPrefix(PresentRefusal(), refusedPrefix)
+}
+
+func ExtensionShownMethod(method string) bool {
+	return slices.Contains(rules.ExtensionFrames.WhenShown, method)
+}
+
+func ExtensionPresentMethod(method string) bool {
+	return slices.Contains(rules.ExtensionFrames.WhilePresent, method)
+}
+
+func (o *Origins) ExtensionFrame(raw string) bool {
+	u := parse(raw)
+	if u == nil || !slices.Contains(rules.ExtensionFrames.Schemes, scheme(u)) {
+		return false
+	}
+	origin := originOf(u)
+	return origin == "" || o == nil || !slices.Contains(o.extra, origin)
+}
+
 type Origins struct {
 	extra []string
 	hosts []string
@@ -331,10 +364,26 @@ func Redact(raw string) string {
 	if u == nil {
 		return ""
 	}
+	if slices.Contains(rules.ExtensionFrames.Schemes, scheme(u)) && extensionIDHost(hostOf(u)) {
+		return "about:blank"
+	}
 	if origin := originOf(u); origin != "" {
 		return origin
 	}
 	return scheme(u) + ":"
+}
+
+func extensionIDHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	for i := range len(host) {
+		c := host[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func Scheme(raw string) string {
