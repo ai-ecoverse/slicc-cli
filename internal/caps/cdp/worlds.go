@@ -191,6 +191,10 @@ func (g *guard) forgetWorldsLocked(target string) {
 }
 
 func (g *guard) worldContextLocked(target, session string, c execContext) bool {
+	if g.extensionProbeWorldName(c.Name) {
+		g.hideContextLocked(target, session, c)
+		return true
+	}
 	if !g.o.Loaded(c.Origin) || (c.AuxData.IsDefault && c.AuxData.FrameID == target) {
 		if w := g.worlds[target]; w != nil {
 			g.forgetContextLocked(w, c.ID)
@@ -273,14 +277,24 @@ func remoteContext(id string) (int64, bool) {
 	return n, err == nil
 }
 
-func (g *guard) frameContentCheckLocked(c *command, target string) string {
+func (g *guard) extensionFrameContentLocked(c *command, target string) string {
 	if reason := g.extensionGateReasonLocked(c, target); reason != "" {
 		return reason
 	}
+	if name, _ := c.params["worldName"].(string); c.method == "Page.createIsolatedWorld" && g.extensionProbeWorldName(name) {
+		return refusedTarget
+	}
 	if frame := c.str("frameId"); frame != "" {
-		if t := g.targets[frame]; g.extensionFrameTargetLocked(t) {
+		if t := g.targets[frame]; g.extensionFrameTargetLocked(t) || g.extensionFrameIDLocked(frame) {
 			return refusedTarget
 		}
+	}
+	return ""
+}
+
+func (g *guard) frameContentCheckLocked(c *command, target string) string {
+	if reason := g.extensionFrameContentLocked(c, target); reason != "" {
+		return reason
 	}
 	if !g.framesProtectedLocked(target) {
 		return ""

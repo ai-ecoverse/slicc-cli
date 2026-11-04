@@ -72,25 +72,39 @@ func TestCDPExtensionFrameDoesNotLockOrdinaryTab(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	var r struct {
-		Attached         bool    `json:"attached"`
-		Read             bool    `json:"read"`
-		HiddenShot       bool    `json:"hiddenShot"`
-		HiddenKey        bool    `json:"hiddenKey"`
-		ShownShot        bool    `json:"shownShot"`
-		ShownShotRefusal *string `json:"shownShotRefusal"`
-		ShownKey         bool    `json:"shownKey"`
-		ShownKeyRefusal  *string `json:"shownKeyRefusal"`
-		Cast             bool    `json:"cast"`
-		CastRefusal      *string `json:"castRefusal"`
-		PDF              bool    `json:"pdf"`
-		PDFRefusal       *string `json:"pdfRefusal"`
-		Snap             bool    `json:"snap"`
-		SnapRefusal      *string `json:"snapRefusal"`
-		Listed           bool    `json:"listed"`
-		TreeLeak         bool    `json:"treeLeak"`
-		FrameAttach      bool    `json:"frameAttach"`
-		ShownRefusal     string  `json:"shownRefusal"`
-		PresentRefusal   string  `json:"presentRefusal"`
+		Attached            bool    `json:"attached"`
+		Read                bool    `json:"read"`
+		HiddenShot          bool    `json:"hiddenShot"`
+		HiddenKey           bool    `json:"hiddenKey"`
+		OpacityShot         bool    `json:"opacityShot"`
+		OpacityShotRefusal  *string `json:"opacityShotRefusal"`
+		PoisonedShot        bool    `json:"poisonedShot"`
+		PoisonedShotRefusal *string `json:"poisonedShotRefusal"`
+		FocusedShot         bool    `json:"focusedShot"`
+		FocusedShotRefusal  *string `json:"focusedShotRefusal"`
+		ShownShot           bool    `json:"shownShot"`
+		ShownShotRefusal    *string `json:"shownShotRefusal"`
+		ShownKey            bool    `json:"shownKey"`
+		ShownKeyRefusal     *string `json:"shownKeyRefusal"`
+		Cast                bool    `json:"cast"`
+		CastRefusal         *string `json:"castRefusal"`
+		TabMirror           bool    `json:"tabMirror"`
+		TabMirrorRefusal    *string `json:"tabMirrorRefusal"`
+		Layer               bool    `json:"layer"`
+		LayerRefusal        *string `json:"layerRefusal"`
+		Replay              bool    `json:"replay"`
+		ReplayRefusal       *string `json:"replayRefusal"`
+		PDF                 bool    `json:"pdf"`
+		PDFRefusal          *string `json:"pdfRefusal"`
+		Snap                bool    `json:"snap"`
+		SnapRefusal         *string `json:"snapRefusal"`
+		Listed              bool    `json:"listed"`
+		TreeLeak            bool    `json:"treeLeak"`
+		SrcLeak             bool    `json:"srcLeak"`
+		AXLeak              bool    `json:"axLeak"`
+		FrameAttach         bool    `json:"frameAttach"`
+		ShownRefusal        string  `json:"shownRefusal"`
+		PresentRefusal      string  `json:"presentRefusal"`
 	}
 	env.evalJSON(t, "linkTest.protect.foreignExtensionFrame("+jsArgs("chrome", created.TargetID, frameTargetID, env.allowed)+")", &r)
 	if !r.Attached || !r.Read {
@@ -99,45 +113,57 @@ func TestCDPExtensionFrameDoesNotLockOrdinaryTab(t *testing.T) {
 	if !r.HiddenShot || !r.HiddenKey {
 		t.Fatalf("a hidden extension frame still blocked screenshot or input: shot=%t key=%t", r.HiddenShot, r.HiddenKey)
 	}
-	if r.ShownShot || r.ShownShotRefusal == nil || *r.ShownShotRefusal != protect.ShownRefusal() {
-		got := "<nil>"
-		if r.ShownShotRefusal != nil {
-			got = *r.ShownShotRefusal
+	wantShown := func(ok bool, refusal *string, label string) {
+		t.Helper()
+		if ok || refusal == nil || *refusal != protect.ShownRefusal() {
+			got := "<nil>"
+			if refusal != nil {
+				got = *refusal
+			}
+			t.Fatalf("%s: ok=%t refusal=%q want %q", label, ok, got, protect.ShownRefusal())
 		}
-		t.Fatalf("a shown extension frame did not refuse the screenshot with shownRefusal: shot=%t refusal=%q want %q", r.ShownShot, got, protect.ShownRefusal())
 	}
-	if r.ShownKey || r.ShownKeyRefusal == nil || *r.ShownKeyRefusal != protect.ShownRefusal() {
-		got := "<nil>"
-		if r.ShownKeyRefusal != nil {
-			got = *r.ShownKeyRefusal
+	wantPresent := func(ok bool, refusal *string, label string) {
+		t.Helper()
+		if ok || refusal == nil || *refusal != protect.PresentRefusal() {
+			got := "<nil>"
+			if refusal != nil {
+				got = *refusal
+			}
+			t.Fatalf("%s: ok=%t refusal=%q want %q", label, ok, got, protect.PresentRefusal())
 		}
-		t.Fatalf("a shown extension frame did not refuse input with shownRefusal: key=%t refusal=%q", r.ShownKey, got)
 	}
-	if r.Cast || r.CastRefusal == nil || *r.CastRefusal != protect.PresentRefusal() {
-		got := "<nil>"
-		if r.CastRefusal != nil {
-			got = *r.CastRefusal
-		}
-		t.Fatalf("an extension frame present did not refuse screencast: cast=%t refusal=%q", r.Cast, got)
-	}
-	if r.PDF || r.PDFRefusal == nil || *r.PDFRefusal != protect.PresentRefusal() {
-		got := "<nil>"
-		if r.PDFRefusal != nil {
-			got = *r.PDFRefusal
-		}
-		t.Fatalf("an extension frame present did not refuse printToPDF: pdf=%t refusal=%q", r.PDF, got)
-	}
-	if r.Snap || r.SnapRefusal == nil || *r.SnapRefusal != protect.PresentRefusal() {
-		got := "<nil>"
-		if r.SnapRefusal != nil {
-			got = *r.SnapRefusal
-		}
-		t.Fatalf("an extension frame present did not refuse captureSnapshot: snap=%t refusal=%q want %q", r.Snap, got, protect.PresentRefusal())
-	}
-	if r.Listed || r.TreeLeak {
-		t.Fatalf("the extension frame URL leaked: listed=%t treeLeak=%t", r.Listed, r.TreeLeak)
+	wantShown(r.OpacityShot, r.OpacityShotRefusal, "opacity-zero still counts as shown")
+	wantShown(r.PoisonedShot, r.PoisonedShotRefusal, "poisoned probe world")
+	wantShown(r.FocusedShot, r.FocusedShotRefusal, "focused extension frame")
+	wantShown(r.ShownShot, r.ShownShotRefusal, "shown screenshot")
+	wantShown(r.ShownKey, r.ShownKeyRefusal, "shown input")
+	wantPresent(r.Cast, r.CastRefusal, "screencast")
+	wantPresent(r.TabMirror, r.TabMirrorRefusal, "Cast.startTabMirroring")
+	wantPresent(r.Layer, r.LayerRefusal, "LayerTree.makeSnapshot")
+	wantPresent(r.Replay, r.ReplayRefusal, "LayerTree.replaySnapshot")
+	wantPresent(r.PDF, r.PDFRefusal, "printToPDF")
+	wantPresent(r.Snap, r.SnapRefusal, "captureSnapshot")
+	if r.Listed || r.TreeLeak || r.SrcLeak || r.AXLeak {
+		t.Fatalf("the extension frame URL leaked: listed=%t treeLeak=%t srcLeak=%t axLeak=%t", r.Listed, r.TreeLeak, r.SrcLeak, r.AXLeak)
 	}
 	if r.FrameAttach {
 		t.Fatal("the extension frame itself was attachable")
+	}
+	var cast struct {
+		Cast   bool `json:"cast"`
+		Before int  `json:"before"`
+		After  int  `json:"after"`
+		Grew   bool `json:"grew"`
+	}
+	env.evalJSON(t, "linkTest.protect.foreignExtensionFrameScreencast("+jsArgs("chrome", env.allowed, frameURL)+")", &cast)
+	if !cast.Cast {
+		t.Fatal("screencast before an extension frame appeared was refused")
+	}
+	if cast.Before == 0 {
+		t.Fatal("screencast produced no frames before the extension frame appeared")
+	}
+	if cast.Grew {
+		t.Fatalf("screencast frames kept arriving after an extension frame appeared: before=%d after=%d", cast.Before, cast.After)
 	}
 }

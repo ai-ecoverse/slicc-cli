@@ -101,6 +101,14 @@ func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 			return nil, false
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), HistoryTimeout)
+	defer cancel()
+	for _, msg := range v.send {
+		if err := rl.conn.Write(ctx, websocket.MessageText, msg); err != nil {
+			_ = rl.conn.CloseNow()
+			return nil, false
+		}
+	}
 	return v.forward, true
 }
 

@@ -35,6 +35,7 @@ func (c *command) str(key string) string {
 type pageVerdict struct {
 	forward   []byte
 	reply     []byte
+	send      [][]byte
 	history   *command
 	extension *command
 	cmd       *command
@@ -125,7 +126,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	k := callKey{c.session, c.id}
 	kind := resultKind(c.method)
 	g.pending[k] = kind
-	if kind == kindPaint {
+	if kind == kindPaint || framePaintMethods[c.method] || kind == kindStreams && protect.ExtensionPresentMethod(c.method) {
 		g.paintMethods[k] = c.method
 	}
 	g.noteBodyCallLocked(k, c)
@@ -140,7 +141,21 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 		g.attachCalls[k] = t
 		g.explicit[t]++
 	}
-	return pageVerdict{forward: c.bytes(), cmd: c}
+	v := pageVerdict{forward: c.bytes(), cmd: c}
+	if protect.ExtensionShownMethod(c.method) {
+		if t := g.sessionTargetLocked(c.session); t != nil && g.extensionFramesPresentLocked(t.id) {
+			frames := g.extensionFrameIDsLocked(t.id)
+			delete(g.extensionCaptureDirty, c.session)
+			session := c.session
+			v.send = g.probeExtensionShownLocked(c.session, t.id, frames, func(shown, ok bool) [][]byte {
+				if shown || !ok {
+					g.markExtensionCaptureDirtyLocked(session)
+				}
+				return nil
+			})
+		}
+	}
+	return v
 }
 
 func (g *guard) afterHistory(c *command, res message, ok bool) pageVerdict {

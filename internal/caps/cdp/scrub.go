@@ -148,6 +148,15 @@ func (g *guard) scrubMap(t map[string]any, headers bool, changed *bool) []scrubI
 	}
 	for k, val := range t {
 		if !headers && opaque[k] {
+			if str, ok := val.(string); ok {
+				if r, ok := g.cut(val); ok {
+					t[k], *changed = r, true
+				} else if r, ok := g.cutEmbeddedKind(str, "url"); ok {
+					t[k], *changed = r, true
+				}
+				continue
+			}
+			more = append(more, scrubItem{v: val, headers: false, urls: false})
 			continue
 		}
 		if headers || urlKey(k) {

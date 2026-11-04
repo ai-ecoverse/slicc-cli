@@ -1798,6 +1798,7 @@ export function protectTest(getLink, describe) {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
         await c.send('Runtime.enable', {}, sessionId);
         await c.send('DOM.enable', {}, sessionId);
+        await c.send('Accessibility.enable', {}, sessionId);
         const read = await outcome(c.send('Runtime.evaluate', { expression: 'self.origin', returnByValue: true }, sessionId));
         const painted = async () => {
           await c.send(
@@ -1825,40 +1826,128 @@ export function protectTest(getLink, describe) {
         await style('f.hidden = true; f.style.cssText = ""');
         const hiddenShot = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
         const hiddenKey = await outcome(c.send('Input.insertText', { text: 'k' }, sessionId));
+        await style('f.hidden = false; f.style.cssText = "position:fixed;right:0;bottom:0;width:300px;height:200px;border:0;opacity:0"');
+        const opacityShot = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
         await style('f.hidden = false; f.style.cssText = "position:fixed;right:0;bottom:0;width:300px;height:200px;border:0"');
+        const poison = await outcome(
+          c.send(
+            'Page.createIsolatedWorld',
+            { frameId: targetId, worldName: 'slicc-extension-frames' },
+            sessionId
+          )
+        );
+        if (poison.ok && poison.result?.executionContextId) {
+          await outcome(
+            c.send(
+              'Runtime.evaluate',
+              {
+                contextId: poison.result.executionContextId,
+                expression:
+                  'Element.prototype.checkVisibility = function(){ return false; }; Object.defineProperty(Document.prototype, "activeElement", { get(){ return null; } }); true',
+                returnByValue: true,
+              },
+              sessionId
+            )
+          );
+        }
+        const poisonedShot = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
+        await style(
+          'f.hidden = false; f.style.cssText = "position:fixed;right:0;bottom:0;width:300px;height:200px;border:0"; f.focus(); try { f.contentWindow && f.contentWindow.focus(); } catch (_) {}'
+        );
+        const focusedShot = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
         const shownShot = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
         const shownKey = await outcome(c.send('Input.insertText', { text: 'k' }, sessionId));
         const cast = await outcome(c.send('Page.startScreencast', { format: 'png' }, sessionId));
+        const tabMirror = await outcome(c.send('Cast.startTabMirroring', { presentationUrl: 'https://example.test/' }, sessionId));
+        const layer = await outcome(c.send('LayerTree.makeSnapshot', { layerId: 1 }, sessionId));
+        const replay = await outcome(c.send('LayerTree.replaySnapshot', { snapshotId: '1' }, sessionId));
         const pdf = await outcome(c.send('Page.printToPDF', {}, sessionId));
         const snap = await outcome(c.send('Page.captureSnapshot', {}, sessionId));
+        const src = await outcome(
+          c.send(
+            'Runtime.evaluate',
+            {
+              expression: "document.getElementById('slicc-extension-frame')?.src ?? ''",
+              returnByValue: true,
+            },
+            sessionId
+          )
+        );
+        const ax = await outcome(c.send('Accessibility.getFullAXTree', {}, sessionId));
         const tree = await outcome(c.send('Page.getFrameTree', {}, sessionId));
         const list = await outcome(c.send('Target.getTargets'));
         const frameAttach = await outcome(c.send('Target.attachToTarget', { targetId: frameTargetId, flatten: true }));
         if (frameAttach.ok) await outcome(c.send('Target.detachFromTarget', { sessionId: frameAttach.result.sessionId }));
         const listed = list.ok && JSON.stringify(list.result).includes('chrome-extension://');
         const treeLeak = tree.ok && JSON.stringify(tree.result).includes('chrome-extension://');
+        const srcLeak = src.ok && JSON.stringify(src.result).includes('chrome-extension://');
+        const axLeak = ax.ok && JSON.stringify(ax.result).includes('chrome-extension://');
         await c.send('Target.detachFromTarget', { sessionId });
         return {
           attached: true,
           read: read.ok && read.result.result?.value === origin,
           hiddenShot: hiddenShot.ok,
           hiddenKey: hiddenKey.ok,
+          opacityShot: opacityShot.ok,
+          opacityShotRefusal: opacityShot.ok ? null : opacityShot.error?.message,
+          poisonedShot: poisonedShot.ok,
+          poisonedShotRefusal: poisonedShot.ok ? null : poisonedShot.error?.message,
+          focusedShot: focusedShot.ok,
+          focusedShotRefusal: focusedShot.ok ? null : focusedShot.error?.message,
           shownShot: shownShot.ok,
           shownShotRefusal: shownShot.ok ? null : shownShot.error?.message,
           shownKey: shownKey.ok,
           shownKeyRefusal: shownKey.ok ? null : shownKey.error?.message,
           cast: cast.ok,
           castRefusal: cast.ok ? null : cast.error?.message,
+          tabMirror: tabMirror.ok,
+          tabMirrorRefusal: tabMirror.ok ? null : tabMirror.error?.message,
+          layer: layer.ok,
+          layerRefusal: layer.ok ? null : layer.error?.message,
+          replay: replay.ok,
+          replayRefusal: replay.ok ? null : replay.error?.message,
           pdf: pdf.ok,
           pdfRefusal: pdf.ok ? null : pdf.error?.message,
           snap: snap.ok,
           snapRefusal: snap.ok ? null : snap.error?.message,
           listed,
           treeLeak,
+          srcLeak,
+          axLeak,
           frameAttach: frameAttach.ok,
           shownRefusal,
           presentRefusal,
         };
+      }),
+    foreignExtensionFrameScreencast: (browser, origin, frameURL) =>
+      run(browser, async (c) => {
+        const { targetId, sessionId } = await c.attachTo(origin + '/?n=extension-cast');
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('Page.enable', {}, sessionId);
+        const cast = await outcome(c.send('Page.startScreencast', { format: 'png', everyNthFrame: 1 }, sessionId));
+        await sleep(500);
+        const before = c.events.filter((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId).length;
+        await c.send(
+          'Runtime.evaluate',
+          {
+            expression: `(() => {
+  const f = document.createElement('iframe');
+  f.id = 'slicc-extension-frame';
+  f.src = ${JSON.stringify(frameURL)};
+  f.hidden = true;
+  document.body.append(f);
+  return f.src;
+})()`,
+            returnByValue: true,
+            awaitPromise: true,
+          },
+          sessionId
+        );
+        await sleep(1500);
+        const after = c.events.filter((e) => e.method === 'Page.screencastFrame' && e.sessionId === sessionId).length;
+        await outcome(c.send('Page.stopScreencast', {}, sessionId));
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        return { cast: cast.ok, before, after, grew: after > before };
       }),
   };
 }

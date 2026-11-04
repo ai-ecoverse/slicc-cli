@@ -114,6 +114,7 @@ func (g *guard) frameEventLocked(m *message) {
 		}
 	case "Page.frameDetached":
 		delete(g.frames[id], p.FrameID)
+		g.forgetExtensionFrameURLLocked(id, p.FrameID)
 		if p.Reason == "remove" {
 			g.clearBlockedChildrenLocked(p.FrameID)
 		}

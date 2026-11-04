@@ -1,17 +1,22 @@
 package cdp
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"strings"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
 const (
-	extensionWorldName    = "slicc-extension-frames"
+	extensionWorldPrefix  = "slicc-ext-probe-"
 	extensionObjectGroup  = "slicc-extension-frames"
-	extensionShownProbe   = "function(){if(!this.isConnected||this.checkVisibility({visibilityProperty:true}))return true;let node=this;for(let depth=0;depth<64;depth++){const root=node.getRootNode();if(root.activeElement!==node)return false;if(!root.host)return true;node=root.host;}return true;}"
+	extensionShownProbe   = "function(){if(!this.isConnected||this.checkVisibility({checkOpacity:false,visibilityProperty:true}))return true;let node=this;for(let depth=0;depth<64;depth++){const root=node.getRootNode();if(root.activeElement!==node)return false;if(!root.host)return true;node=root.host;}return true;}"
 	extensionShownPending = "\x00extension-shown"
+	extensionPaintHold    = 10 * time.Second
 )
 
 type heldExtensionPaint struct {
@@ -21,10 +26,65 @@ type heldExtensionPaint struct {
 	session     string
 	target      string
 	frames      []string
+	deadline    time.Time
+	dirty       bool
+	generation  uint64
+}
+
+func (g *guard) newExtensionWorldNameLocked() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		g.nextID++
+		return extensionWorldPrefix + itoa(g.nextID)
+	}
+	name := extensionWorldPrefix + hex.EncodeToString(b[:])
+	if g.extensionProbeWorlds == nil {
+		g.extensionProbeWorlds = map[string]bool{}
+	}
+	g.extensionProbeWorlds[name] = true
+	return name
+}
+
+func (g *guard) extensionProbeWorldName(name string) bool {
+	return strings.HasPrefix(name, extensionWorldPrefix) || g.extensionProbeWorlds[name]
 }
 
 func (g *guard) extensionFrameTargetLocked(t *target) bool {
 	return t != nil && !t.gone && t.typ == "iframe" && g.o.ExtensionFrame(t.url)
+}
+
+func (g *guard) extensionFrameURLLocked(raw string) bool {
+	return raw != "" && g.o.ExtensionFrame(raw)
+}
+
+func (g *guard) noteExtensionFrameURLLocked(page, frame, raw string) {
+	if page == "" || frame == "" || !g.extensionFrameURLLocked(raw) {
+		return
+	}
+	if g.extensionFrameURLs == nil {
+		g.extensionFrameURLs = map[string]map[string]string{}
+	}
+	if g.extensionFrameURLs[page] == nil {
+		g.extensionFrameURLs[page] = map[string]string{}
+	}
+	g.extensionFrameURLs[page][frame] = raw
+	if h := g.heldExtensionPaint; h != nil && h.target == page {
+		h.dirty = true
+	}
+}
+
+func (g *guard) forgetExtensionFrameURLLocked(page, frame string) {
+	if page == "" {
+		delete(g.extensionFrameURLs, frame)
+		for _, frames := range g.extensionFrameURLs {
+			delete(frames, frame)
+		}
+		return
+	}
+	delete(g.extensionFrameURLs[page], frame)
+	if len(g.extensionFrameURLs[page]) == 0 {
+		delete(g.extensionFrameURLs, page)
+	}
 }
 
 func (g *guard) extensionFramesUnderLocked(page string) []*target {
@@ -52,15 +112,20 @@ func (g *guard) extensionFramesUnderLocked(page string) []*target {
 	return out
 }
 
-func (g *guard) extensionFramesPresentLocked(target string) bool {
-	return len(g.extensionFramesUnderLocked(target)) > 0
-}
-
 func (g *guard) extensionFrameIDsLocked(target string) []string {
 	frames := g.extensionFramesUnderLocked(target)
 	ids := make([]string, 0, len(frames))
+	seen := map[string]bool{}
 	for _, t := range frames {
 		ids = append(ids, t.id)
+		seen[t.id] = true
+	}
+	for frame := range g.extensionFrameURLs[target] {
+		if seen[frame] {
+			continue
+		}
+		ids = append(ids, frame)
+		seen[frame] = true
 	}
 	return ids
 }
@@ -69,14 +134,55 @@ func (g *guard) extensionFrameIDLocked(frame string) bool {
 	if frame == "" {
 		return false
 	}
-	return g.extensionFrameTargetLocked(g.targets[frame])
+	if g.extensionFrameTargetLocked(g.targets[frame]) {
+		return true
+	}
+	for _, frames := range g.extensionFrameURLs {
+		if _, ok := frames[frame]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) extensionUnknownIFrameLocked(page string) bool {
+	p := g.targets[page]
+	if p == nil || p.gone || p.typ != "page" {
+		return false
+	}
+	for _, t := range g.targets {
+		if t.gone || t.typ != "iframe" || t.ctx != p.ctx {
+			continue
+		}
+		if t.url == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) extensionFramesPresentLocked(target string) bool {
+	if len(g.extensionFramesUnderLocked(target)) > 0 {
+		return true
+	}
+	if len(g.extensionFrameURLs[target]) > 0 {
+		return true
+	}
+	return g.extensionUnknownIFrameLocked(target)
+}
+
+func (g *guard) extensionPresentPaintMethod(method string) bool {
+	if protect.ExtensionPresentMethod(method) {
+		return true
+	}
+	return framePaintMethods[method] && !protect.ExtensionShownMethod(method)
 }
 
 func (g *guard) extensionGateReasonLocked(c *command, target string) string {
 	if !g.extensionFramesPresentLocked(target) {
 		return ""
 	}
-	if protect.ExtensionPresentMethod(c.method) {
+	if g.extensionPresentPaintMethod(c.method) {
 		return protect.PresentReason()
 	}
 	if protect.ExtensionShownMethod(c.method) {
@@ -125,10 +231,37 @@ func (g *guard) holdExtensionPaintLocked(m *message, data []byte, target string,
 	if !ok {
 		return browserVerdict{}
 	}
-	g.heldExtensionPaint = &heldExtensionPaint{reservation: reservation, m: *m, data: data, session: m.SessionID, target: target, frames: frames}
+	g.extensionPaintGen++
+	gen := g.extensionPaintGen
+	g.heldExtensionPaint = &heldExtensionPaint{
+		reservation: reservation,
+		m:           *m,
+		data:        data,
+		session:     m.SessionID,
+		target:      target,
+		frames:      frames,
+		deadline:    time.Now().Add(extensionPaintHold),
+		generation:  gen,
+	}
+	g.scheduleExtensionPaintDeadline(gen)
 	return browserVerdict{send: g.probeExtensionShownLocked(m.SessionID, target, frames, func(shown, ok bool) [][]byte {
 		return g.finishExtensionPaintLocked(k, shown, ok)
 	})}
+}
+
+func (g *guard) scheduleExtensionPaintDeadline(gen uint64) {
+	time.AfterFunc(extensionPaintHold, func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		h := g.heldExtensionPaint
+		if h == nil || h.generation != gen {
+			return
+		}
+		g.logf("cdp: dropped a rendering that stayed held past the extension-frame check deadline")
+		g.pendingRelease = append(g.pendingRelease, h.reservation)
+		g.pendingPage = append(g.pendingPage, refusal(*h.m.ID, h.session, protect.ShownReason()))
+		g.heldExtensionPaint = nil
+	})
 }
 
 func (g *guard) finishExtensionPaintLocked(k callKey, shown, ok bool) [][]byte {
@@ -138,7 +271,9 @@ func (g *guard) finishExtensionPaintLocked(k callKey, shown, ok bool) [][]byte {
 	}
 	g.pendingRelease = append(g.pendingRelease, h.reservation)
 	g.heldExtensionPaint = nil
-	if !ok || shown {
+	dirty := h.dirty || g.extensionCaptureDirty[k.session]
+	delete(g.extensionCaptureDirty, k.session)
+	if !ok || shown || dirty || time.Now().After(h.deadline) {
 		g.logf("cdp: dropped a rendering that finished after an extension frame was showing or focused")
 		g.pendingPage = append(g.pendingPage, refusal(k.id, k.session, protect.ShownReason()))
 		return nil
@@ -151,6 +286,28 @@ func (g *guard) takePendingPageLocked() [][]byte {
 	out := g.pendingPage
 	g.pendingPage = nil
 	return out
+}
+
+func (g *guard) releaseHeldExtensionPaintLocked() {
+	h := g.heldExtensionPaint
+	if h == nil {
+		return
+	}
+	h.reservation.Release()
+	g.heldExtensionPaint = nil
+}
+
+func (g *guard) markExtensionCaptureDirtyLocked(session string) {
+	if session == "" {
+		return
+	}
+	if g.extensionCaptureDirty == nil {
+		g.extensionCaptureDirty = map[string]bool{}
+	}
+	g.extensionCaptureDirty[session] = true
+	if h := g.heldExtensionPaint; h != nil && h.session == session {
+		h.dirty = true
+	}
 }
 
 func (g *guard) probeExtensionShownLocked(session, target string, frames []string, done func(shown, ok bool) [][]byte) [][]byte {
@@ -166,6 +323,7 @@ type extensionProbe struct {
 	target  string
 	frames  []string
 	at      int
+	world   string
 	done    func(shown, ok bool) [][]byte
 }
 
@@ -191,7 +349,8 @@ func (g *guard) extensionDocumentAnsweredLocked(state *extensionProbe, frame, pa
 	if m.Error != nil {
 		return state.done(true, false)
 	}
-	return [][]byte{g.callbackLocked(state.session, "Page.createIsolatedWorld", map[string]any{"frameId": parent, "worldName": extensionWorldName}, func(world message) [][]byte {
+	state.world = g.newExtensionWorldNameLocked()
+	return [][]byte{g.callbackLocked(state.session, "Page.createIsolatedWorld", map[string]any{"frameId": parent, "worldName": state.world}, func(world message) [][]byte {
 		return g.extensionWorldAnsweredLocked(state, frame, world)
 	})}
 }
