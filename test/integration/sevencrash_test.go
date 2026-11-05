@@ -41,6 +41,7 @@ type crashBrowser struct {
 	hellos      []string
 	held        []held
 	unavailable atomic.Bool
+	onEval      func(expr string)
 }
 
 type held struct {
@@ -228,6 +229,12 @@ func (f *crashBrowser) handle(c *websocket.Conn, id int64, method, session strin
 			reply(map[string]any{"result": map[string]any{"type": "string", "value": "ok"}})
 			return
 		}
+		f.mu.Lock()
+		onEval := f.onEval
+		f.mu.Unlock()
+		if onEval != nil {
+			onEval(p.Expression)
+		}
 		reply(map[string]any{"result": map[string]any{"type": "undefined"}})
 	case "Page.reload":
 		f.mu.Lock()
@@ -346,7 +353,12 @@ func (f *crashBrowser) count(method string) int {
 
 func (f *crashBrowser) waitHello(t *testing.T, n int) (string, string) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	return f.waitHelloWithin(t, n, 20*time.Second)
+}
+
+func (f *crashBrowser) waitHelloWithin(t *testing.T, n int, within time.Duration) (string, string) {
+	t.Helper()
+	deadline := time.Now().Add(within)
 	for {
 		f.mu.Lock()
 		if len(f.hellos) >= n {

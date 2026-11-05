@@ -30,6 +30,7 @@ type OpenOptions struct {
 var (
 	ErrClosed       = errors.New("link: closed")
 	ErrHelloTimeout = errors.New("link: no HELLO from the peer")
+	ErrPeerClosed   = errors.New("link: control channel closed")
 )
 
 type Link struct {
@@ -229,7 +230,7 @@ func (l *Link) setControl(dc *webrtc.DataChannel) {
 	l.mu.Unlock()
 	gotHello := false
 	dc.OnOpen(func() { ch.sendOnce.Do(func() { l.sendHello(ch) }) })
-	dc.OnClose(func() { l.fail(errors.New("link: control channel closed")) })
+	dc.OnClose(func() { l.fail(ErrPeerClosed) })
 	dc.OnMessage(func(m webrtc.DataChannelMessage) {
 		if !gotHello {
 			if !m.IsString {

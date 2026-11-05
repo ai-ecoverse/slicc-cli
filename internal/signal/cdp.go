@@ -57,6 +57,11 @@ type CDP struct {
 	reloads []time.Time
 	avoid   string
 
+	wake      chan struct{}
+	due       string
+	retryWait time.Duration
+	retryAt   *time.Timer
+
 	in   chan Message
 	err  error
 	done chan struct{}
@@ -90,7 +95,7 @@ func NewCDP(opts CDPOptions) *CDP {
 		opts.Tab = func(string) bool { return true }
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &CDP{opts: opts, in: make(chan Message, 64), done: make(chan struct{}), ran: make(chan struct{}), stop: cancel}
+	c := &CDP{opts: opts, in: make(chan Message, 64), done: make(chan struct{}), ran: make(chan struct{}), stop: cancel, wake: make(chan struct{}, 1), retryWait: opts.RetryMin}
 	go func() {
 		defer close(c.ran)
 		c.run(ctx)
@@ -149,8 +154,63 @@ func (c *CDP) finish(err error) {
 	c.once.Do(func() {
 		c.err = err
 		c.stop()
+		c.mu.Lock()
+		c.unschedule()
+		c.mu.Unlock()
 		close(c.done)
 	})
+}
+
+func (c *CDP) Linked(string) {
+	c.mu.Lock()
+	c.retryWait = c.opts.RetryMin
+	c.mu.Unlock()
+}
+
+func (c *CDP) Failed(nonce string, err error) {
+	c.mu.Lock()
+	if nonce == "" || nonce != c.nonce || c.ctxID == 0 || c.closed() {
+		c.mu.Unlock()
+		return
+	}
+	wait := c.retryWait
+	c.retryWait = min(wait*2, c.opts.RetryMax)
+	c.unschedule()
+	var t *time.Timer
+	t = time.AfterFunc(wait, func() {
+		c.mu.Lock()
+		if c.retryAt != t {
+			c.mu.Unlock()
+			return
+		}
+		c.retryAt = nil
+		c.due = nonce
+		c.mu.Unlock()
+		select {
+		case c.wake <- struct{}{}:
+		default:
+		}
+	})
+	c.retryAt = t
+	c.mu.Unlock()
+	c.opts.Status("link failed (%v); asking seven to set it up again in %s", err, wait)
+}
+
+func (c *CDP) unschedule() {
+	if c.retryAt != nil {
+		c.retryAt.Stop()
+		c.retryAt = nil
+	}
+	c.due = ""
+}
+
+func (c *CDP) closed() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *CDP) emit(ctx context.Context, m Message) {
@@ -586,6 +646,8 @@ func (w *watch) loop(ctx context.Context, sub *cdp.Subscription, early []cdp.Eve
 			if err := w.handle(ctx, ev); err != nil {
 				return end(err)
 			}
+		case <-w.c.wake:
+			w.retry(ctx)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -674,10 +736,17 @@ func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 		return
 	}
 	w.drop(ctx, "page navigated")
+	w.c.mu.Lock()
+	w.c.origin = ec.Origin
+	w.c.mu.Unlock()
+	w.greet(ctx, ec.ID)
+}
+
+func (w *watch) greet(ctx context.Context, ctxID int) {
+	w.stopHello()
 	nonce := NewNonce()
 	w.c.mu.Lock()
-	w.c.ctxID = ec.ID
-	w.c.origin = ec.Origin
+	w.c.ctxID = ctxID
 	w.c.nonce = nonce
 	w.c.mu.Unlock()
 	hctx, cancel := context.WithCancel(ctx)
@@ -685,8 +754,20 @@ func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 	w.helloDone = make(chan struct{})
 	go func() {
 		defer close(w.helloDone)
-		w.deliverHello(hctx, ec.ID, nonce)
+		w.deliverHello(hctx, ctxID, nonce)
 	}()
+}
+
+func (w *watch) retry(ctx context.Context) {
+	w.c.mu.Lock()
+	due, nonce, ctxID := w.c.due, w.c.nonce, w.c.ctxID
+	w.c.due = ""
+	w.c.mu.Unlock()
+	if due == "" || due != nonce || ctxID == 0 || ctxID != w.mainContext.ID {
+		return
+	}
+	w.c.opts.Logf("signal: a new hello to context %d after a failed link", ctxID)
+	w.greet(ctx, ctxID)
 }
 
 func (w *watch) contextGone(ctx context.Context, id int) {
@@ -701,18 +782,23 @@ func (w *watch) contextGone(ctx context.Context, id int) {
 	}
 }
 
-func (w *watch) drop(ctx context.Context, reason string) {
+func (w *watch) stopHello() {
 	if w.cancel != nil {
 		w.cancel()
 		w.cancel = nil
 		<-w.helloDone
 		w.helloDone = nil
 	}
+}
+
+func (w *watch) drop(ctx context.Context, reason string) {
+	w.stopHello()
 	w.c.mu.Lock()
 	nonce := w.c.nonce
 	had := w.c.ctxID != 0
 	w.c.ctxID = 0
 	w.c.nonce = ""
+	w.c.unschedule()
 	w.c.mu.Unlock()
 	if had {
 		w.c.emit(ctx, Message{T: TypeBye, Nonce: nonce, Reason: reason})
@@ -775,4 +861,7 @@ func (w *watch) bindingCalled(ctx context.Context, p cdp.BindingCalled) {
 	}
 }
 
-var _ Conn = (*CDP)(nil)
+var (
+	_ Conn     = (*CDP)(nil)
+	_ Relinker = (*CDP)(nil)
+)
