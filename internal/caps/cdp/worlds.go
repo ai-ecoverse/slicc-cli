@@ -289,6 +289,9 @@ func (g *guard) extensionFrameContentLocked(c *command, target string) string {
 	}
 	if frame := c.str("frameId"); frame != "" {
 		if t := g.targets[frame]; g.extensionFrameTargetLocked(t) || g.extensionFrameIDLocked(frame) {
+			if c.method == "DOM.getFrameOwner" && g.extensionFrameOnPageLocked(frame, target) {
+				return ""
+			}
 			return refusedTarget
 		}
 	}

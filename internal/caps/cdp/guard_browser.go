@@ -127,6 +127,8 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if !g.ownsClientAnswerLocked(k) {
 		return browserVerdict{}
 	}
+	ownerFrame, ownerCall := g.extensionOwnerCalls[k]
+	delete(g.extensionOwnerCalls, k)
 	kind := g.pending[k]
 	delete(g.pending, k)
 	g.clientRequestAnsweredLocked(k, m.Error != nil)
@@ -149,6 +151,9 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	data = g.plainErrorLocked(m, data)
 	if body {
 		return g.bodyAnswerLocked(k, bc, m, data)
+	}
+	if ownerCall {
+		return g.extensionOwnerAnswerLocked(ownerFrame, m, data)
 	}
 	if m.Error != nil || kind == kindPlain {
 		return browserVerdict{forward: data}
