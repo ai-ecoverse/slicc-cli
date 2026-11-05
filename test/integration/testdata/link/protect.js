@@ -1873,6 +1873,41 @@ export function protectTest(getLink, describe) {
             sessionId
           )
         );
+        const outer = await outcome(
+          c.send(
+            'Runtime.evaluate',
+            {
+              expression: 'document.body.outerHTML',
+              returnByValue: true,
+            },
+            sessionId
+          )
+        );
+        const jsonSrc = await outcome(
+          c.send(
+            'Runtime.evaluate',
+            {
+              expression:
+                "JSON.stringify({ src: document.getElementById('slicc-extension-frame')?.src ?? '' })",
+              returnByValue: true,
+            },
+            sessionId
+          )
+        );
+        const ordinaryHTML =
+          '<main><a href="https://vault.sliccy.ai/scrub-secret-fixture">x</a>' +
+          'https://catalog.example.org/product/1 '.repeat(100) +
+          '</main>';
+        const ordinary = await outcome(
+          c.send(
+            'Runtime.evaluate',
+            {
+              expression: JSON.stringify(ordinaryHTML),
+              returnByValue: true,
+            },
+            sessionId
+          )
+        );
         const ax = await outcome(c.send('Accessibility.getFullAXTree', {}, sessionId));
         const tree = await outcome(c.send('Page.getFrameTree', {}, sessionId));
         const list = await outcome(c.send('Target.getTargets'));
@@ -1881,7 +1916,10 @@ export function protectTest(getLink, describe) {
         const listed = list.ok && JSON.stringify(list.result).includes('chrome-extension://');
         const treeLeak = tree.ok && JSON.stringify(tree.result).includes('chrome-extension://');
         const srcLeak = src.ok && JSON.stringify(src.result).includes('chrome-extension://');
+        const outerLeak = outer.ok && JSON.stringify(outer.result).includes('chrome-extension://');
+        const jsonLeak = jsonSrc.ok && JSON.stringify(jsonSrc.result).includes('chrome-extension://');
         const axLeak = ax.ok && JSON.stringify(ax.result).includes('chrome-extension://');
+        const ordinaryIntact = ordinary.ok && ordinary.result?.result?.value === ordinaryHTML;
         await c.send('Target.detachFromTarget', { sessionId });
         return {
           attached: true,
@@ -1913,7 +1951,10 @@ export function protectTest(getLink, describe) {
           listed,
           treeLeak,
           srcLeak,
+          outerLeak,
+          jsonLeak,
           axLeak,
+          ordinaryIntact,
           frameAttach: frameAttach.ok,
           shownRefusal,
           presentRefusal,
