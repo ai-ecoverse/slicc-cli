@@ -10,6 +10,12 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 )
 
+type extensionPaintDeadline struct {
+	key        callKey
+	generation uint64
+	deadline   time.Time
+}
+
 type browserVerdict struct {
 	releases          []*link.Reservation
 	forward           []byte
@@ -19,6 +25,7 @@ type browserVerdict struct {
 	extra             []requestKey
 	answers           []callKey
 	pauses            []requestKey
+	extensionPaints   []extensionPaintDeadline
 	lost              bool
 	debuggerReads     []*debuggerPause
 	debuggerDeadlines []*debuggerPause
@@ -410,15 +417,15 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		delete(g.held, p.SessionID)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{}
+		return browserVerdict{page: g.takePendingPageLocked()}
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{}
+		return browserVerdict{page: g.takePendingPageLocked()}
 	}
 	g.forgetSessionLocked(p.SessionID)
-	return browserVerdict{forward: data}
+	return browserVerdict{forward: data, page: g.takePendingPageLocked()}
 }
 
 func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {

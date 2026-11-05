@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,14 +16,33 @@ import (
 
 type fakeScript func(method string, params json.RawMessage) (result string, after []string)
 
+type parkedReply struct {
+	reply   string
+	after   []string
+	tag     string
+	session string
+}
+
+type overlapSession struct {
+	shownDone      bool
+	admitDirtyDone bool
+	awaitDirty     bool
+	parkNext       bool
+}
+
 type fakeCDPBrowser struct {
-	srv    *httptest.Server
-	script fakeScript
-	mu     sync.Mutex
-	got    []string
-	slow   map[string]time.Duration
-	pulse  []string
-	gates  map[string]string
+	srv         *httptest.Server
+	script      fakeScript
+	mu          sync.Mutex
+	got         []string
+	slow        map[string]time.Duration
+	pulse       []string
+	gates       map[string]string
+	parked      []parkedReply
+	captures    int
+	overlapHold bool
+	holdParked  bool
+	overlap     map[string]*overlapSession
 }
 
 func (f *fakeCDPBrowser) gate(method, until string) {
@@ -47,6 +67,49 @@ func (f *fakeCDPBrowser) delay(method string, d time.Duration) {
 		f.slow = map[string]time.Duration{}
 	}
 	f.slow[method] = d
+}
+
+func (f *fakeCDPBrowser) overlapCaptureHolds() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.overlapHold = true
+	if f.overlap == nil {
+		f.overlap = map[string]*overlapSession{}
+	}
+}
+
+func (f *fakeCDPBrowser) takeParked(tag, session string) []parkedReply {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if tag == "" {
+		out := f.parked
+		f.parked = nil
+		return out
+	}
+	var keep, out []parkedReply
+	for _, p := range f.parked {
+		if p.tag == tag && (session == "" || p.session == session) {
+			out = append(out, p)
+		} else {
+			keep = append(keep, p)
+		}
+	}
+	f.parked = keep
+	return out
+}
+
+func writeParked(ctx context.Context, c *websocket.Conn, parked []parkedReply) bool {
+	for _, p := range parked {
+		if c.Write(ctx, websocket.MessageText, []byte(p.reply)) != nil {
+			return false
+		}
+		for _, e := range p.after {
+			if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func afterEnable(events []string) fakeScript {
@@ -159,6 +222,71 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 				result = fmt.Sprintf(`{"targetInfo":{"targetId":%q,"type":"page","url":"about:blank"}}`, params.TargetID)
 			}
 		}
+		pendingTag := ""
+		if rest, ok := strings.CutPrefix(result, "#pending"); ok {
+			pendingTag = "hold"
+			if strings.HasPrefix(rest, "|") {
+				result = rest[1:]
+			} else if strings.HasPrefix(rest, ":") {
+				pendingTag = rest[1:]
+				if i := strings.IndexByte(pendingTag, '|'); i >= 0 {
+					result = pendingTag[i+1:]
+					pendingTag = pendingTag[:i]
+				} else {
+					result = "{}"
+				}
+			} else {
+				result = "{}"
+			}
+		}
+		flushHolds := false
+		flushDirty := false
+		f.mu.Lock()
+		if pendingTag == "" && f.overlapHold && m.SessionID != "" {
+			st := f.overlap[m.SessionID]
+			if st == nil {
+				st = &overlapSession{}
+				f.overlap[m.SessionID] = st
+			}
+			switch m.Method {
+			case "Page.captureScreenshot":
+				if f.captures == 0 {
+					if st.admitDirtyDone {
+						f.captures++
+						st.parkNext = true
+					} else {
+						st.awaitDirty = true
+						pendingTag = "await-dirty"
+					}
+				} else {
+					f.captures++
+				}
+			case "Page.getLayoutMetrics":
+				if !f.holdParked {
+					pendingTag = "await-hold"
+				} else if f.captures >= 2 {
+					flushHolds = true
+				}
+			case "DOM.getDocument", "Page.createIsolatedWorld", "DOM.getFrameOwner", "DOM.resolveNode", "Runtime.callFunctionOn":
+				if st.awaitDirty && m.Method == "Runtime.callFunctionOn" {
+					st.awaitDirty = false
+					st.admitDirtyDone = true
+					st.parkNext = true
+					f.captures++
+					flushDirty = true
+				} else if st.parkNext && f.captures >= 1 {
+					st.parkNext = false
+					pendingTag = "hold"
+				} else if m.Method == "Runtime.callFunctionOn" {
+					if st.shownDone {
+						st.admitDirtyDone = true
+					} else {
+						st.shownDone = true
+					}
+				}
+			}
+		}
+		f.mu.Unlock()
 		field := `"result":` + result
 		if msg, failed := strings.CutPrefix(result, "!"); failed {
 			field = fmt.Sprintf(`"error":{"code":-32000,"message":%q}`, msg)
@@ -166,6 +294,35 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		reply := fmt.Sprintf(`{"id":%d,%s}`, m.ID, field)
 		if m.SessionID != "" {
 			reply = fmt.Sprintf(`{"id":%d,"sessionId":%q,%s}`, m.ID, m.SessionID, field)
+		}
+		if flushDirty {
+			if !writeParked(ctx, c, f.takeParked("await-dirty", m.SessionID)) {
+				return
+			}
+			if c.Write(ctx, websocket.MessageText, []byte(reply)) != nil {
+				return
+			}
+			for _, e := range after {
+				if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
+					return
+				}
+			}
+			continue
+		}
+		if pendingTag != "" {
+			f.mu.Lock()
+			f.parked = append(f.parked, parkedReply{reply: reply, after: after, tag: pendingTag, session: m.SessionID})
+			parkedHold := pendingTag == "hold"
+			if parkedHold {
+				f.holdParked = true
+			}
+			f.mu.Unlock()
+			if parkedHold {
+				if !writeParked(ctx, c, f.takeParked("await-hold", "")) {
+					return
+				}
+			}
+			continue
 		}
 		seen[m.Method] = true
 		f.mu.Lock()
@@ -196,6 +353,11 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		delete(held, m.Method)
+		if flushHolds {
+			if !writeParked(ctx, c, f.takeParked("hold", "")) {
+				return
+			}
+		}
 	}
 }
 

@@ -64,7 +64,6 @@ func (g *guard) cutCastsLocked(target string) [][]byte {
 func (g *guard) forgetCastLocked(id string) {
 	delete(g.casting, id)
 	delete(g.castCut, id)
-	delete(g.extensionCaptureDirty, id)
 }
 
 func (g *guard) screencastFrameEvent(m *message, data []byte) browserVerdict {
@@ -99,7 +98,7 @@ func (g *guard) answerLocked(m *message, data []byte) browserVerdict {
 		return v
 	}
 	if !g.extensionFramesPresentLocked(target) {
-		delete(g.extensionCaptureDirty, m.SessionID)
+		delete(g.extensionCaptureDirty, k)
 		return v
 	}
 	frames := g.extensionFrameIDsLocked(target)
@@ -109,8 +108,8 @@ func (g *guard) answerLocked(m *message, data []byte) browserVerdict {
 		return v
 	}
 	if protect.ExtensionShownMethod(method) {
-		if g.extensionCaptureDirty[m.SessionID] {
-			delete(g.extensionCaptureDirty, m.SessionID)
+		if g.extensionCaptureDirty[k] {
+			delete(g.extensionCaptureDirty, k)
 			g.logf("cdp: dropped a rendering that sampled an extension frame as shown during capture")
 			v.forward = refusal(*m.ID, m.SessionID, protect.ShownReason())
 			return v

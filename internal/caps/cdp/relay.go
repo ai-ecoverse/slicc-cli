@@ -285,22 +285,14 @@ func (rl *relay) toPage() {
 				}
 			})
 		}
+		for _, p := range v.extensionPaints {
+			rl.expireExtensionPaintLater(p)
+		}
 		if !rl.sendGuardVerdict(ctx, v) {
 			releaseReservations(v.releases)
 			return
 		}
-		for _, id := range v.hold {
-			rl.expireLater(id)
-		}
-		for _, k := range v.extra {
-			rl.expireExtrasLater(k)
-		}
-		for _, k := range v.answers {
-			rl.expireAnswerLater(k)
-		}
-		for _, k := range v.pauses {
-			rl.expirePauseLater(k)
-		}
+		rl.scheduleBrowserVerdict(v)
 		if v.forward != nil {
 			v.page = append([][]byte{v.forward}, v.page...)
 		}
@@ -312,6 +304,21 @@ func (rl *relay) toPage() {
 			}
 		}
 		releaseReservations(v.releases)
+	}
+}
+
+func (rl *relay) scheduleBrowserVerdict(v browserVerdict) {
+	for _, id := range v.hold {
+		rl.expireLater(id)
+	}
+	for _, k := range v.extra {
+		rl.expireExtrasLater(k)
+	}
+	for _, k := range v.answers {
+		rl.expireAnswerLater(k)
+	}
+	for _, k := range v.pauses {
+		rl.expirePauseLater(k)
 	}
 }
 
@@ -384,6 +391,25 @@ func (rl *relay) expireAnswerLater(k callKey) {
 		defer releaseReservations(releases)
 		for _, msg := range send {
 			_ = rl.conn.Write(context.Background(), websocket.MessageText, msg)
+		}
+		for _, msg := range page {
+			if rl.writePage(msg) != nil {
+				return
+			}
+		}
+	})
+}
+
+func (rl *relay) expireExtensionPaintLater(p extensionPaintDeadline) {
+	d := time.Until(p.deadline)
+	if d < 0 {
+		d = 0
+	}
+	time.AfterFunc(d, func() {
+		page, releases := rl.g.expireExtensionPaint(p.key, p.generation)
+		defer releaseReservations(releases)
+		if rl.browserDone.Load() || rl.pageEnded.Load() {
+			return
 		}
 		for _, msg := range page {
 			if rl.writePage(msg) != nil {
