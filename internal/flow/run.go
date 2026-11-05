@@ -422,6 +422,9 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 	select {
 	case <-r.client.Done():
 		if ctx.Err() == nil {
+			if r.reattach(ctx) {
+				return true, nil
+			}
 			r.emit(Event{Event: Status, Message: r.browsers[0].Name + " closed"})
 			return false, nil
 		}
@@ -443,6 +446,60 @@ type Caps struct {
 	Release  func()
 	Live     func() map[string]bool
 	Unlisted map[string]bool
+}
+
+const (
+	reattachFor   = 30 * time.Second
+	reattachEvery = time.Second
+	reattachDial  = 5 * time.Second
+)
+
+func (r *run) hostProcess() *browser.Browser {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.launched {
+		if l.id == r.browsers[0].ID {
+			return l.b
+		}
+	}
+	return nil
+}
+
+func (r *run) reattach(ctx context.Context) bool {
+	host := r.browsers[0]
+	target := host.WebSocketURL
+	if target == "" {
+		target = host.CDP
+	}
+	proc := r.hostProcess()
+	r.cfg.Logf("cdp connection to %s ended: %v", host.Name, r.client.Err())
+	r.emit(Event{Event: Status, Message: "lost the debugging connection to " + host.Name + "; reattaching"})
+	deadline := time.Now().Add(reattachFor)
+	for {
+		if proc != nil && proc.Exited() {
+			return false
+		}
+		dctx, cancel := context.WithTimeout(ctx, reattachDial)
+		client, err := cdp.Dial(dctx, target)
+		cancel()
+		if err == nil {
+			_ = r.client.Close()
+			r.client = client
+			r.emit(Event{Event: Status, Message: "reattached to " + host.Name})
+			return true
+		}
+		r.cfg.Logf("reattach to %s: %v", host.Name, err)
+		if refused(err) || ctx.Err() != nil || time.Now().After(deadline) {
+			return false
+		}
+		t := time.NewTimer(reattachEvery)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return false
+		case <-t.C:
+		}
+	}
 }
 
 const browserCheck = 2 * time.Second

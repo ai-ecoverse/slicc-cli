@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +40,7 @@ type crashBrowser struct {
 	calls       []string
 	hellos      []string
 	held        []held
+	unavailable atomic.Bool
 }
 
 type held struct {
@@ -54,6 +56,10 @@ func newCrashBrowser(t *testing.T) *crashBrowser {
 	f := &crashBrowser{t: t, targets: map[string]bool{"T1": true}, order: []string{"T1"}, conns: map[*websocket.Conn]bool{}, crashed: map[string]bool{}, sessions: map[string]string{}, sawCrash: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		if f.unavailable.Load() {
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"Browser": "Crashy/1.0", "Protocol-Version": "1.3", "webSocketDebuggerUrl": "ws://" + r.Host + "/devtools/browser/x"})
 	})
 	mux.HandleFunc("/json/list", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`[]`)) })
@@ -64,6 +70,10 @@ func newCrashBrowser(t *testing.T) *crashBrowser {
 }
 
 func (f *crashBrowser) serve(w http.ResponseWriter, r *http.Request) {
+	if f.unavailable.Load() {
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+		return
+	}
 	c, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
