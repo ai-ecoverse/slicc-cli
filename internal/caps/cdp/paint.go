@@ -1,5 +1,7 @@
 package cdp
 
+import "github.com/ai-ecoverse/slicc-cli/internal/protect"
+
 var framePaintMethods = map[string]bool{
 	"Page.captureScreenshot":          true,
 	"Page.startScreencast":            true,
@@ -24,7 +26,7 @@ func (g *guard) framesProtectedLocked(target string) bool {
 		return true
 	}
 	for _, context := range w.contexts {
-		if context.protectedFrame != "" {
+		if context.protectedFrame != "" && !g.extensionFrameIDLocked(context.protectedFrame) {
 			return true
 		}
 	}
@@ -42,7 +44,7 @@ func (g *guard) noteCastLocked(c *command) {
 }
 
 func (g *guard) cutCastsLocked(target string) [][]byte {
-	if len(g.casting) == 0 || !g.framesProtectedLocked(target) {
+	if len(g.casting) == 0 || (!g.framesProtectedLocked(target) && !g.extensionFramesPresentLocked(target)) {
 		return nil
 	}
 	var send [][]byte
@@ -52,7 +54,7 @@ func (g *guard) cutCastsLocked(target string) [][]byte {
 		}
 		delete(g.casting, id)
 		g.castCut[id] = true
-		g.logf("cdp: stopped a screencast on a target that now holds a protected frame")
+		g.logf("cdp: stopped a screencast on a target that now holds a protected or extension frame")
 		msg, _ := g.newCallLocked(id, "Page.stopScreencast", nil, false)
 		send = append(send, msg)
 	}
@@ -62,10 +64,12 @@ func (g *guard) cutCastsLocked(target string) [][]byte {
 func (g *guard) forgetCastLocked(id string) {
 	delete(g.casting, id)
 	delete(g.castCut, id)
+	delete(g.extensionCaptureDirty, id)
 }
 
 func (g *guard) screencastFrameEvent(m *message, data []byte) browserVerdict {
-	if g.castCut[m.SessionID] || g.framesProtectedLocked(g.worldTargetLocked(m.SessionID)) {
+	target := g.worldTargetLocked(m.SessionID)
+	if g.castCut[m.SessionID] || g.framesProtectedLocked(target) || g.extensionFramesPresentLocked(target) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}
@@ -73,15 +77,49 @@ func (g *guard) screencastFrameEvent(m *message, data []byte) browserVerdict {
 
 func (g *guard) answerLocked(m *message, data []byte) browserVerdict {
 	k := callKey{m.SessionID, *m.ID}
-	paint := g.pending[k] == kindPaint
-	if paint {
+	kind := g.pending[k]
+	method := g.paintMethods[k]
+	paint := kind == kindPaint || framePaintMethods[method]
+	stream := kind == kindStreams
+	if kind == kindPaint {
 		g.pending[k] = kindPlain
 	}
 	v := g.responseLocked(m, data)
-	if !paint || v.forward == nil || m.Error != nil || !g.framesProtectedLocked(g.worldTargetLocked(m.SessionID)) {
+	delete(g.paintMethods, k)
+	if v.forward == nil || m.Error != nil {
 		return v
 	}
-	g.logf("cdp: dropped a rendering that finished after a protected frame appeared")
-	v.forward = refusal(*m.ID, m.SessionID, refusedTarget)
+	target := g.worldTargetLocked(m.SessionID)
+	if method == "" {
+		return v
+	}
+	if paint && g.framesProtectedLocked(target) {
+		g.logf("cdp: dropped a rendering that finished after a protected frame appeared")
+		v.forward = refusal(*m.ID, m.SessionID, refusedTarget)
+		return v
+	}
+	if !g.extensionFramesPresentLocked(target) {
+		delete(g.extensionCaptureDirty, m.SessionID)
+		return v
+	}
+	frames := g.extensionFrameIDsLocked(target)
+	if g.extensionPresentPaintMethod(method) || protect.ExtensionPresentMethod(method) {
+		g.logf("cdp: dropped a rendering that finished while an extension frame was present")
+		v.forward = refusal(*m.ID, m.SessionID, protect.PresentReason())
+		return v
+	}
+	if protect.ExtensionShownMethod(method) {
+		if g.extensionCaptureDirty[m.SessionID] {
+			delete(g.extensionCaptureDirty, m.SessionID)
+			g.logf("cdp: dropped a rendering that sampled an extension frame as shown during capture")
+			v.forward = refusal(*m.ID, m.SessionID, protect.ShownReason())
+			return v
+		}
+		return g.holdExtensionPaintLocked(m, v.forward, target, frames)
+	}
+	if framePaintMethods[method] || stream && protect.ExtensionPresentMethod(method) {
+		g.logf("cdp: dropped a rendering that finished while an extension frame was present")
+		v.forward = refusal(*m.ID, m.SessionID, protect.PresentReason())
+	}
 	return v
 }

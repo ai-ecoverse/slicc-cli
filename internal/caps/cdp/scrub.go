@@ -57,10 +57,120 @@ func (g *guard) scrub(data []byte) []byte {
 	worlds := g.scrubWorlds(m)
 	assets := g.scrubAssets(m)
 	failed := g.scrubFailed(m)
-	if !g.scrubValue(m) && !worlds && !assets && !failed {
+	frames := g.scrubExtensionFrames(m)
+	if !g.scrubValue(m) && !worlds && !assets && !failed && !frames {
 		return data
 	}
 	return encode(m)
+}
+
+func (g *guard) cutExtensionForms(s string, forms []failedForm) (string, bool) {
+	if len(forms) == 0 || !strings.Contains(s, "chrome-extension://") {
+		return s, false
+	}
+	changed := false
+	for _, f := range forms {
+		if strings.Contains(s, f.form) {
+			s, changed = strings.ReplaceAll(s, f.form, f.redacted), true
+		}
+	}
+	return s, changed
+}
+
+func (g *guard) extensionFrameFormsLocked() []failedForm {
+	seen := map[string]bool{}
+	var forms []failedForm
+	add := func(raw string) {
+		if raw == "" || !g.o.ExtensionFrame(raw) {
+			return
+		}
+		redacted := redactURL(raw)
+		if !seen[raw] {
+			seen[raw] = true
+			forms = append(forms, failedForm{raw, redacted})
+		}
+		host := protect.Host(raw)
+		scheme := protect.Scheme(raw)
+		if host == "" || scheme == "" {
+			return
+		}
+		origin := scheme + "://" + host
+		if seen[origin] {
+			return
+		}
+		seen[origin] = true
+		forms = append(forms, failedForm{origin, redactURL(origin)})
+	}
+	for _, frames := range g.extensionFrameURLs {
+		for _, u := range frames {
+			add(u)
+		}
+	}
+	for _, t := range g.targets {
+		if g.extensionFrameTargetLocked(t) {
+			add(t.url)
+		}
+	}
+	slices.SortStableFunc(forms, func(a, b failedForm) int { return len(b.form) - len(a.form) })
+	return forms
+}
+
+func (g *guard) scrubExtensionFrames(m map[string]any) bool {
+	g.mu.Lock()
+	forms := g.extensionFrameFormsLocked()
+	g.mu.Unlock()
+	if len(forms) == 0 {
+		return false
+	}
+	changed := false
+	var walk func(v any) any
+	walk = func(v any) any {
+		switch t := v.(type) {
+		case string:
+			if r, ok := g.cutExtensionForms(t, forms); ok {
+				changed = true
+				return r
+			}
+			return t
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			slices.Sort(keys)
+			type kv struct {
+				k string
+				v any
+			}
+			next := make([]kv, 0, len(keys))
+			seen := map[string]bool{}
+			for _, k := range keys {
+				val := walk(t[k])
+				nk := k
+				if r, ok := g.cutExtensionForms(k, forms); ok {
+					nk, changed = r, true
+				}
+				if seen[nk] {
+					continue
+				}
+				seen[nk] = true
+				next = append(next, kv{nk, val})
+			}
+			for k := range t {
+				delete(t, k)
+			}
+			for _, e := range next {
+				t[e.k] = e.v
+			}
+		case []any:
+			for i, val := range t {
+				t[i] = walk(val)
+			}
+		}
+		return v
+	}
+	walk(m)
+	return changed
 }
 
 func (g *guard) scrubFailed(m map[string]any) bool {
@@ -107,6 +217,42 @@ func (g *guard) cut(v any) (string, bool) {
 	return redactURL(s), true
 }
 
+func (g *guard) scrubExtensionOpaque(v any) bool {
+	switch t := v.(type) {
+	case string:
+		return false
+	case map[string]any:
+		changed := false
+		for k, val := range t {
+			if str, ok := val.(string); ok {
+				if g.o.ExtensionFrame(str) {
+					t[k], changed = redactURL(str), true
+				}
+				continue
+			}
+			if g.scrubExtensionOpaque(val) {
+				changed = true
+			}
+		}
+		return changed
+	case []any:
+		changed := false
+		for i, val := range t {
+			if str, ok := val.(string); ok {
+				if g.o.ExtensionFrame(str) {
+					t[i], changed = redactURL(str), true
+				}
+				continue
+			}
+			if g.scrubExtensionOpaque(val) {
+				changed = true
+			}
+		}
+		return changed
+	}
+	return false
+}
+
 func (g *guard) scrubValue(root any) bool {
 	changed := false
 	stack := []scrubItem{{v: root}}
@@ -148,6 +294,15 @@ func (g *guard) scrubMap(t map[string]any, headers bool, changed *bool) []scrubI
 	}
 	for k, val := range t {
 		if !headers && opaque[k] {
+			if str, ok := val.(string); ok {
+				if g.o.ExtensionFrame(str) {
+					t[k], *changed = redactURL(str), true
+				}
+				continue
+			}
+			if g.scrubExtensionOpaque(val) {
+				*changed = true
+			}
 			continue
 		}
 		if headers || urlKey(k) {

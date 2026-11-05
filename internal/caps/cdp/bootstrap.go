@@ -82,6 +82,9 @@ func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 		if v.history != nil {
 			v = rl.resolveHistory(v.history)
 		}
+		if v.extension != nil {
+			v = rl.resolveExtensionShown(v.extension)
+		}
 		if v.wait == nil {
 			break
 		}
@@ -98,7 +101,55 @@ func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 			return nil, false
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), HistoryTimeout)
+	defer cancel()
+	for _, msg := range v.send {
+		if err := rl.conn.Write(ctx, websocket.MessageText, msg); err != nil {
+			_ = rl.conn.CloseNow()
+			return nil, false
+		}
+	}
 	return v.forward, true
+}
+
+func (rl *relay) resolveExtensionShown(c *command) pageVerdict {
+	rl.g.mu.Lock()
+	t := rl.g.sessionTargetLocked(c.session)
+	frames := []string(nil)
+	if t != nil {
+		frames = rl.g.extensionFrameIDsLocked(t.id)
+	}
+	if t == nil || len(frames) == 0 {
+		rl.g.mu.Unlock()
+		return rl.g.afterExtensionShown(c, true, false)
+	}
+	ch := make(chan struct {
+		shown bool
+		ok    bool
+	}, 1)
+	send := rl.g.probeExtensionShownLocked(c.session, t.id, frames, func(shown, ok bool) [][]byte {
+		ch <- struct {
+			shown bool
+			ok    bool
+		}{shown, ok}
+		return nil
+	})
+	rl.g.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), HistoryTimeout)
+	defer cancel()
+	for _, msg := range send {
+		if err := rl.conn.Write(ctx, websocket.MessageText, msg); err != nil {
+			return rl.g.afterExtensionShown(c, true, false)
+		}
+	}
+	select {
+	case result := <-ch:
+		return rl.g.afterExtensionShown(c, result.shown, result.ok)
+	case <-ctx.Done():
+		return rl.g.afterExtensionShown(c, true, false)
+	case <-rl.s.Done():
+		return rl.g.afterExtensionShown(c, true, false)
+	}
 }
 
 func (rl *relay) resolveHistory(c *command) pageVerdict {

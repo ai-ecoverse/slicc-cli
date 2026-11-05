@@ -56,6 +56,9 @@ func (g *guard) iframeProtectedLocked(id string) bool {
 		if t.gone || t.typ != "iframe" || t.ctx != page.ctx || (!t.protected && !g.o.Loaded(t.url) && !g.framesProtectedLocked(t.id)) {
 			continue
 		}
+		if g.extensionFrameTargetLocked(t) {
+			continue
+		}
 		g.bindIframeDocumentLocked(t)
 		if g.iframeDocumentInactiveLocked(t) {
 			continue
@@ -111,6 +114,7 @@ func (g *guard) frameEventLocked(m *message) {
 		}
 	case "Page.frameDetached":
 		delete(g.frames[id], p.FrameID)
+		g.forgetExtensionFrameURLLocked(id, p.FrameID)
 		if p.Reason == "remove" {
 			g.clearBlockedChildrenLocked(p.FrameID)
 		}

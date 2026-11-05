@@ -92,80 +92,88 @@ type guard struct {
 	logf            func(format string, args ...any)
 	scheduleInitial func(*navTarget)
 
-	relaySession       string
-	documentsOnly      bool
-	verifiesInput      bool
-	lost               bool
-	targets            map[string]*target
-	tombstones         []string
-	sessions           map[string]*session
-	hidden             map[string]bool
-	refused            map[string]bool
-	refusedOrder       []string
-	browserSessions    map[string]bool
-	ownContexts        map[string]bool
-	pending            map[callKey]callKind
-	relayCalls         map[callKey]*relayCall
-	retiredCalls       map[callKey]time.Time
-	nextID             int64
-	marked             map[string]map[string]bool
-	markedCount        int
-	saturated          map[string]bool
-	swProtected        map[string]bool
-	navTargets         map[string]*navTarget
-	navSessions        map[string]*navTarget
-	unknown            map[string]*navTarget
-	gone               map[string]bool
-	goneOrder          []string
-	held               map[string]*heldSession
-	blockedChildren    map[string]string
-	explicit           map[string]int
-	attachCalls        map[callKey]string
-	patterns           []any
-	heldExtras         map[requestKey][]heldExtra
-	heldExtraCount     int
-	seen               map[requestKey]reqLevel
-	seenOrder          []requestKey
-	handed             map[requestKey]int
-	handedOrder        []handedPause
-	pauses             int
-	pauseLinks         map[requestKey]requestKey
-	clientRequests     map[requestKey]*clientRequestState
-	clientCalls        map[callKey]clientMark
-	continues          map[callKey]handedPause
-	bodyCalls          map[callKey]bodyCall
-	heldAnswers        map[callKey]*heldAnswer
-	streams            map[string]bool
-	streamOrder        []string
-	bounds             guardBounds
-	reads              readClock
-	frameProbeAttempts map[string]int
-	frameProbed        map[string]bool
-	frames             map[string]map[string]bool
-	worlds             map[string]*worldSet
-	worldUniques       map[string]string
-	shown              map[string]*shownSet
-	shownUniques       map[string]string
-	worldRequests      map[requestKey]bool
-	worldRequestCount  map[string]int
-	worldRequestsFull  map[string]bool
-	navSeen            map[requestKey]bool
-	navSeenOrder       []requestKey
-	navChains          map[requestKey][]string
-	knownRedirects     map[string]*assetSet
-	tainted            map[string]*assetSet
-	clean              map[string]*assetSet
-	assets             map[string]*assetSet
-	heldPauses         map[requestKey][]heldPause
-	heldPauseCount     int
-	commitMarks        map[callKey]commitMark
-	maxWorlds          int
-	casting            map[string]bool
-	castCut            map[string]bool
-	debuggers          map[string]*debuggerState
-	debuggerReplies    map[callKey]debuggerReply
-	debuggerBytes      int
-	debuggerLimit      int
+	relaySession          string
+	documentsOnly         bool
+	verifiesInput         bool
+	lost                  bool
+	targets               map[string]*target
+	tombstones            []string
+	sessions              map[string]*session
+	hidden                map[string]bool
+	refused               map[string]bool
+	refusedOrder          []string
+	browserSessions       map[string]bool
+	ownContexts           map[string]bool
+	pending               map[callKey]callKind
+	relayCalls            map[callKey]*relayCall
+	retiredCalls          map[callKey]time.Time
+	nextID                int64
+	marked                map[string]map[string]bool
+	markedCount           int
+	saturated             map[string]bool
+	swProtected           map[string]bool
+	navTargets            map[string]*navTarget
+	navSessions           map[string]*navTarget
+	unknown               map[string]*navTarget
+	gone                  map[string]bool
+	goneOrder             []string
+	held                  map[string]*heldSession
+	blockedChildren       map[string]string
+	explicit              map[string]int
+	attachCalls           map[callKey]string
+	patterns              []any
+	heldExtras            map[requestKey][]heldExtra
+	heldExtraCount        int
+	seen                  map[requestKey]reqLevel
+	seenOrder             []requestKey
+	handed                map[requestKey]int
+	handedOrder           []handedPause
+	pauses                int
+	pauseLinks            map[requestKey]requestKey
+	clientRequests        map[requestKey]*clientRequestState
+	clientCalls           map[callKey]clientMark
+	continues             map[callKey]handedPause
+	bodyCalls             map[callKey]bodyCall
+	heldAnswers           map[callKey]*heldAnswer
+	streams               map[string]bool
+	streamOrder           []string
+	bounds                guardBounds
+	reads                 readClock
+	frameProbeAttempts    map[string]int
+	frameProbed           map[string]bool
+	frames                map[string]map[string]bool
+	worlds                map[string]*worldSet
+	worldUniques          map[string]string
+	shown                 map[string]*shownSet
+	shownUniques          map[string]string
+	worldRequests         map[requestKey]bool
+	worldRequestCount     map[string]int
+	worldRequestsFull     map[string]bool
+	navSeen               map[requestKey]bool
+	navSeenOrder          []requestKey
+	navChains             map[requestKey][]string
+	knownRedirects        map[string]*assetSet
+	tainted               map[string]*assetSet
+	clean                 map[string]*assetSet
+	assets                map[string]*assetSet
+	heldPauses            map[requestKey][]heldPause
+	heldPauseCount        int
+	commitMarks           map[callKey]commitMark
+	maxWorlds             int
+	casting               map[string]bool
+	castCut               map[string]bool
+	debuggers             map[string]*debuggerState
+	debuggerReplies       map[callKey]debuggerReply
+	debuggerBytes         int
+	debuggerLimit         int
+	heldExtensionPaint    *heldExtensionPaint
+	pendingPage           [][]byte
+	paintMethods          map[callKey]string
+	extensionShownCleared bool
+	extensionProbeWorlds  map[string]bool
+	extensionFrameURLs    map[string]map[string]string
+	extensionCaptureDirty map[string]bool
+	extensionPaintGen     uint64
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -173,64 +181,66 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		logf = func(string, ...any) {}
 	}
 	g := &guard{
-		o:                  o,
-		logf:               logf,
-		knownRedirects:     map[string]*assetSet{},
-		targets:            map[string]*target{},
-		sessions:           map[string]*session{},
-		hidden:             map[string]bool{},
-		refused:            map[string]bool{},
-		browserSessions:    map[string]bool{},
-		ownContexts:        map[string]bool{},
-		pending:            map[callKey]callKind{},
-		relayCalls:         map[callKey]*relayCall{},
-		retiredCalls:       map[callKey]time.Time{},
-		nextID:             relayIDBase,
-		marked:             map[string]map[string]bool{},
-		saturated:          map[string]bool{},
-		swProtected:        map[string]bool{},
-		navTargets:         map[string]*navTarget{},
-		navSessions:        map[string]*navTarget{},
-		unknown:            map[string]*navTarget{},
-		gone:               map[string]bool{},
-		held:               map[string]*heldSession{},
-		blockedChildren:    map[string]string{},
-		explicit:           map[string]int{},
-		attachCalls:        map[callKey]string{},
-		heldExtras:         map[requestKey][]heldExtra{},
-		seen:               map[requestKey]reqLevel{},
-		handed:             map[requestKey]int{},
-		pauseLinks:         map[requestKey]requestKey{},
-		clientRequests:     map[requestKey]*clientRequestState{},
-		clientCalls:        map[callKey]clientMark{},
-		continues:          map[callKey]handedPause{},
-		bodyCalls:          map[callKey]bodyCall{},
-		heldAnswers:        map[callKey]*heldAnswer{},
-		streams:            map[string]bool{},
-		frameProbeAttempts: map[string]int{},
-		frameProbed:        map[string]bool{},
-		frames:             map[string]map[string]bool{},
-		worlds:             map[string]*worldSet{},
-		worldUniques:       map[string]string{},
-		shown:              map[string]*shownSet{},
-		shownUniques:       map[string]string{},
-		worldRequests:      map[requestKey]bool{},
-		worldRequestCount:  map[string]int{},
-		worldRequestsFull:  map[string]bool{},
-		navSeen:            map[requestKey]bool{},
-		navChains:          map[requestKey][]string{},
-		tainted:            map[string]*assetSet{},
-		clean:              map[string]*assetSet{},
-		assets:             map[string]*assetSet{},
-		heldPauses:         map[requestKey][]heldPause{},
-		commitMarks:        map[callKey]commitMark{},
-		casting:            map[string]bool{},
-		castCut:            map[string]bool{},
-		debuggers:          map[string]*debuggerState{},
-		debuggerReplies:    map[callKey]debuggerReply{},
-		debuggerLimit:      debuggerBudgetFromEnv(),
-		maxWorlds:          maxWorlds,
-		bounds:             boundsFromEnv(),
+		o:                     o,
+		logf:                  logf,
+		knownRedirects:        map[string]*assetSet{},
+		targets:               map[string]*target{},
+		sessions:              map[string]*session{},
+		hidden:                map[string]bool{},
+		refused:               map[string]bool{},
+		browserSessions:       map[string]bool{},
+		ownContexts:           map[string]bool{},
+		pending:               map[callKey]callKind{},
+		relayCalls:            map[callKey]*relayCall{},
+		retiredCalls:          map[callKey]time.Time{},
+		nextID:                relayIDBase,
+		marked:                map[string]map[string]bool{},
+		saturated:             map[string]bool{},
+		swProtected:           map[string]bool{},
+		navTargets:            map[string]*navTarget{},
+		navSessions:           map[string]*navTarget{},
+		unknown:               map[string]*navTarget{},
+		gone:                  map[string]bool{},
+		held:                  map[string]*heldSession{},
+		blockedChildren:       map[string]string{},
+		explicit:              map[string]int{},
+		attachCalls:           map[callKey]string{},
+		heldExtras:            map[requestKey][]heldExtra{},
+		seen:                  map[requestKey]reqLevel{},
+		handed:                map[requestKey]int{},
+		pauseLinks:            map[requestKey]requestKey{},
+		clientRequests:        map[requestKey]*clientRequestState{},
+		clientCalls:           map[callKey]clientMark{},
+		continues:             map[callKey]handedPause{},
+		bodyCalls:             map[callKey]bodyCall{},
+		heldAnswers:           map[callKey]*heldAnswer{},
+		streams:               map[string]bool{},
+		frameProbeAttempts:    map[string]int{},
+		frameProbed:           map[string]bool{},
+		frames:                map[string]map[string]bool{},
+		worlds:                map[string]*worldSet{},
+		worldUniques:          map[string]string{},
+		shown:                 map[string]*shownSet{},
+		shownUniques:          map[string]string{},
+		worldRequests:         map[requestKey]bool{},
+		worldRequestCount:     map[string]int{},
+		worldRequestsFull:     map[string]bool{},
+		navSeen:               map[requestKey]bool{},
+		navChains:             map[requestKey][]string{},
+		tainted:               map[string]*assetSet{},
+		clean:                 map[string]*assetSet{},
+		assets:                map[string]*assetSet{},
+		heldPauses:            map[requestKey][]heldPause{},
+		commitMarks:           map[callKey]commitMark{},
+		casting:               map[string]bool{},
+		castCut:               map[string]bool{},
+		debuggers:             map[string]*debuggerState{},
+		debuggerReplies:       map[callKey]debuggerReply{},
+		debuggerLimit:         debuggerBudgetFromEnv(),
+		paintMethods:          map[callKey]string{},
+		extensionCaptureDirty: map[string]bool{},
+		maxWorlds:             maxWorlds,
+		bounds:                boundsFromEnv(),
 	}
 	g.patterns = g.protectedRequestPatterns()
 	return g
@@ -412,10 +422,17 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 		return g.confirmTargetLocked(nt)
 	}
 	t.protected = g.decide(t, prev)
+	var send [][]byte
 	if t.protected && !prev {
-		return g.protectLocked(t)
+		send = append(send, g.protectLocked(t)...)
 	}
-	return nil
+	if g.extensionFrameTargetLocked(t) {
+		if page := g.iframePageLocked(t); page != nil {
+			send = append(send, g.cutCastsLocked(page.id)...)
+		}
+		send = append(send, g.cutFrameCastsLocked()...)
+	}
+	return send
 }
 
 func (g *guard) observeAll(infos []targetInfo) {
@@ -492,6 +509,7 @@ func (g *guard) destroyedLocked(id string) {
 	delete(g.frameProbeAttempts, id)
 	delete(g.frameProbed, id)
 	delete(g.frames, id)
+	g.forgetExtensionFrameURLLocked("", id)
 	g.navForgetLocked(id)
 	g.dropHeldLocked(id)
 	g.forgetWorldsLocked(id)
@@ -525,6 +543,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	for k := range g.pending {
 		if k.session == id {
 			delete(g.pending, k)
+			delete(g.paintMethods, k)
 			delete(g.commitMarks, k)
 			delete(g.bodyCalls, k)
 			g.attachDoneLocked(k)
@@ -628,6 +647,7 @@ func (g *guard) releaseAllocations() {
 	for _, s := range g.debuggers {
 		g.dropDebuggerLocked(s)
 	}
+	g.releaseHeldExtensionPaintLocked()
 	clear(g.heldExtras)
 	clear(g.heldAnswers)
 	clear(g.heldPauses)

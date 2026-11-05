@@ -107,9 +107,9 @@ func (g *guard) relayAnswerLocked(k callKey, m *message) (browserVerdict, bool) 
 		rc.ch <- *m
 	}
 	if rc.fn != nil {
-		return browserVerdict{send: rc.fn(*m)}, true
+		return browserVerdict{send: rc.fn(*m), page: g.takePendingPageLocked()}, true
 	}
-	return browserVerdict{}, true
+	return browserVerdict{page: g.takePendingPageLocked()}, true
 }
 
 func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
@@ -444,19 +444,32 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 		} `json:"frame"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	var cut [][]byte
+	if page := g.worldTargetLocked(m.SessionID); page != "" && p.Frame.ID != "" && p.Frame.ParentID != "" {
+		raw := p.Frame.URL
+		if g.extensionFrameURLLocked(p.Frame.UnreachableURL) {
+			raw = p.Frame.UnreachableURL
+		}
+		if g.extensionFrameURLLocked(raw) {
+			g.noteExtensionFrameURLLocked(page, p.Frame.ID, raw)
+			cut = append(cut, g.cutCastsLocked(page)...)
+		} else {
+			g.forgetExtensionFrameURLLocked(page, p.Frame.ID)
+		}
+	}
 	t := g.sessionTargetLocked(m.SessionID)
 	if t == nil || (p.Frame.ParentID != "" && t.typ != "iframe") || p.Frame.ID != t.id {
-		return browserVerdict{forward: data}
+		return browserVerdict{forward: data, send: cut}
 	}
 	if g.o.Loaded(p.Frame.SecurityOrigin) {
 		return browserVerdict{send: g.markLocked(t)}
 	}
-	var send [][]byte
+	send := cut
 	if nt := g.navTargets[t.id]; nt != nil {
 		if (nt.confirm != nil && nt.confirm.done && nt.confirm.failed) || p.Type == "BackForwardCacheRestore" || p.Frame.UnreachableURL != "" || strings.HasPrefix(p.Frame.URL, "chrome-error:") || protect.Inheriting(p.Frame.URL) || protect.Unparseable(p.Frame.URL) {
 			g.beginConfirmLocked(nt)
 		}
-		send = g.navEventLocked(nt, m)
+		send = append(send, g.navEventLocked(nt, m)...)
 	}
 	return browserVerdict{forward: data, send: send}
 }

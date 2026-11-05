@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
@@ -68,17 +69,32 @@ func TestProtectRefusalAndRedaction(t *testing.T) {
 		t.Fatalf("refusal %q", protect.Refusal())
 	}
 	for in, want := range map[string]string{
-		"https://seven.sliccy.ai/secret/path?q=1#x":       "https://seven.sliccy.ai",
-		"blob:https://seven.sliccy.ai/0b9e":               "https://seven.sliccy.ai",
-		"https://SEVEN.sliccy.ai:443/":                    "https://seven.sliccy.ai",
-		"http://127.0.0.1:5710/index.html":                "http://127.0.0.1:5710",
-		"devtools://devtools/bundled/inspector.html?ws=x": "devtools://devtools",
-		"about:blank#frag":                                "about:blank",
-		"":                                                "",
+		"https://seven.sliccy.ai/secret/path?q=1#x":                                "https://seven.sliccy.ai",
+		"blob:https://seven.sliccy.ai/0b9e":                                        "https://seven.sliccy.ai",
+		"https://SEVEN.sliccy.ai:443/":                                             "https://seven.sliccy.ai",
+		"http://127.0.0.1:5710/index.html":                                         "http://127.0.0.1:5710",
+		"devtools://devtools/bundled/inspector.html?ws=x":                          "devtools://devtools",
+		"chrome-extension://pejdijmoenmkgeppbflobdenhhabjlaj/completion_list.html": "about:blank",
+		"about:blank#frag":                                                         "about:blank",
+		"":                                                                         "",
 	} {
 		if got := protect.Redact(in); got != want {
 			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
 		}
+	}
+	o := protect.MustNew(nil)
+	if !o.ExtensionFrame("chrome-extension://pejdijmoenmkgeppbflobdenhhabjlaj/completion_list.html") {
+		t.Fatal("a foreign extension frame isn't recognised")
+	}
+	own := "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+	if protect.MustNew([]string{own}).ExtensionFrame(own + "/frame.html") {
+		t.Fatal("the program's own extension frame still counts as a foreign one")
+	}
+	if !protect.ExtensionShownMethod("Page.captureScreenshot") || !protect.ExtensionPresentMethod("Page.startScreencast") {
+		t.Fatal("extension frame method lists don't match the catalog")
+	}
+	if !strings.Contains(protect.ShownRefusal(), "chrome-extension://") || !strings.Contains(protect.PresentRefusal(), "chrome-extension://") {
+		t.Fatalf("extension frame refusals %q %q", protect.ShownRefusal(), protect.PresentRefusal())
 	}
 	if _, err := protect.New([]string{"not an origin"}); err == nil {
 		t.Fatal("New accepts a non-origin")

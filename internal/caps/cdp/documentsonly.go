@@ -112,6 +112,14 @@ func (g *guard) framesCleanLocked(t *frameEvidence) bool {
 	if t == nil || t.Frame == nil || t.Frame.URL == nil || t.Frame.SecurityOrigin == nil || *t.Frame.URL == "" || *t.Frame.SecurityOrigin == "" {
 		return false
 	}
+	if g.o.ExtensionFrame(*t.Frame.URL) {
+		for _, child := range t.ChildFrames {
+			if !g.framesCleanLocked(child) {
+				return false
+			}
+		}
+		return true
+	}
 	if g.o.Loaded(*t.Frame.URL) || g.o.Loaded(*t.Frame.SecurityOrigin) || (t.Frame.UnreachableURL != nil && g.o.Loaded(*t.Frame.UnreachableURL)) {
 		return false
 	}
