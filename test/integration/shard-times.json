@@ -2,6 +2,7 @@
   "linux": {
     "TestABadProtectedPortRangeExits": 0,
     "TestABuildWithoutALinkedVersionIsADevelopmentBuild": 14.2,
+    "TestAByeFromSevenDuringTheWaitCancelsTheRetry": 8.4,
     "TestAFailedLinkBacksOffAndALinkResetsTheWait": 16.1,
     "TestAGateThatExitsSilentlyFailsItsStep": 1.1,
     "TestAJoinURLFileMustBePrivate": 0,

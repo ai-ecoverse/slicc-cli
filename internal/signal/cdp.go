@@ -856,6 +856,13 @@ func (w *watch) bindingCalled(ctx context.Context, p cdp.BindingCalled) {
 	}
 	switch m.T {
 	case TypeOffer, TypeCandidate, TypeBye:
+		if m.T == TypeBye {
+			w.c.mu.Lock()
+			if w.c.nonce == nonce {
+				w.c.unschedule()
+			}
+			w.c.mu.Unlock()
+		}
 		w.c.opts.Logf("signal: %s from the page", m.T)
 		m.Origin = origin
 		w.c.emit(ctx, m)

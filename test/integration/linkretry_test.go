@@ -370,3 +370,30 @@ func TestALinkThatComesUpDuringTheWaitCancelsTheRetry(t *testing.T) {
 	waitOutput(t, p, "link up with \"fake seven\"\n", 1, 5*time.Second)
 	s.noHello(t, 4, 6*time.Second)
 }
+
+func TestAByeFromSevenDuringTheWaitCancelsTheRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail func(*testing.T, *fakeSeven, *crashProc) (string, string)
+	}{
+		{"after a link failed", func(t *testing.T, s *fakeSeven, p *crashProc) (string, string) {
+			first := s.link(t, 1)
+			waitOutput(t, p, "link up with \"fake seven\"\n", 1, 5*time.Second)
+			first.misbehave(t)
+			return first.session, first.nonce
+		}},
+		{"after an offer slicc couldn't answer", func(t *testing.T, s *fakeSeven, p *crashProc) (string, string) {
+			return s.badOffer(t, 1)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCrashBrowser(t)
+			s := newFakeSeven(t, f)
+			p := startCrashBinary(t, "attach", "--no-kernel", "--no-jerk", "--cdp", f.srv.URL)
+			session, nonce := tc.fail(t, s, p)
+			waitOutput(t, p, failedLinkStatus, 1, 10*time.Second)
+			s.post(session, f.lastContext(), map[string]any{"t": "bye", "nonce": nonce, "reason": "unlinked"})
+			s.noHello(t, 2, 3*time.Second)
+		})
+	}
+}
