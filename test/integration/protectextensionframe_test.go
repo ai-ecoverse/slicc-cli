@@ -257,9 +257,10 @@ func keysOf(m map[string]bool) []string {
 }
 
 func TestCDPExtensionFrameConcurrentCaptures(t *testing.T) {
-	env, _ := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
+	env, fake := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
 		return extensionTwoTabScript("chrome-extension://"+harnessExtensionID+"/frame.html", false)
 	})
+	fake.overlapCaptureHolds()
 	var r struct {
 		Left         bool    `json:"left"`
 		Right        bool    `json:"right"`
@@ -294,9 +295,10 @@ func TestCDPExtensionFrameSiblingProbeDirtiesInFlight(t *testing.T) {
 }
 
 func TestCDPExtensionFrameDetachMidProbeReleasesHold(t *testing.T) {
-	env, _ := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
-		return extensionTwoTabScript("chrome-extension://"+harnessExtensionID+"/frame.html", true)
+	env, fake := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
+		return extensionTwoTabScript("chrome-extension://"+harnessExtensionID+"/frame.html", false)
 	})
+	fake.overlapCaptureHolds()
 	var r struct {
 		OK           bool    `json:"ok"`
 		Refusal      *string `json:"refusal"`
@@ -317,7 +319,8 @@ func extensionTwoTabScript(frameURL string, hangHoldProbe bool) fakeScript {
 	var contexts atomic.Int64
 	var pages atomic.Int32
 	var shot atomic.Bool
-	var postShotOwners atomic.Int32
+	var postShotCalls atomic.Int32
+	var holdParked atomic.Bool
 	pageInfo := func(id string) string {
 		return `{"targetId":` + strconv.Quote(id) + `,"type":"page","title":"ordinary","url":"https://ordinary.test/","attached":false,"browserContextId":"default"}`
 	}
@@ -325,6 +328,7 @@ func extensionTwoTabScript(frameURL string, hangHoldProbe bool) fakeScript {
 		return `{"targetId":` + strconv.Quote(id) + `,"type":"iframe","title":"","url":` + strconv.Quote(frameURL) + `,"attached":false,"browserContextId":"default","parentFrameId":` + strconv.Quote(parent) + `}`
 	}
 	doc := `{"root":{"nodeId":1,"backendNodeId":1,"nodeType":9,"nodeName":"#document","localName":"","nodeValue":"","childNodeCount":1,"children":[]}}`
+	owner := `{"backendNodeId":2,"nodeId":2}`
 	return func(method string, params json.RawMessage) (string, []string) {
 		switch method {
 		case "Browser.getVersion":
@@ -378,6 +382,11 @@ func extensionTwoTabScript(frameURL string, hangHoldProbe bool) fakeScript {
 			return `{"frameTree":{"frame":{"loaderId":"L1","url":"https://ordinary.test/","securityOrigin":"https://ordinary.test"}}}`, nil
 		case "Page.getNavigationHistory":
 			return `{"currentIndex":0,"entries":[{"id":1,"url":"https://ordinary.test/"}]}`, nil
+		case "Page.getLayoutMetrics":
+			if hangHoldProbe && !holdParked.Load() {
+				return "#pending:await-hold|{}", nil
+			}
+			return `{"cssVisualViewport":{"clientWidth":800,"clientHeight":600}}`, nil
 		case "Page.captureScreenshot":
 			shot.Store(true)
 			return `{"data":"aaaa"}`, nil
@@ -387,13 +396,14 @@ func extensionTwoTabScript(frameURL string, hangHoldProbe bool) fakeScript {
 		case "DOM.getDocument":
 			return doc, nil
 		case "DOM.getFrameOwner":
-			if hangHoldProbe && shot.Load() && postShotOwners.Add(1) == 1 {
-				return "#pending", nil
-			}
-			return `{"backendNodeId":2,"nodeId":2}`, nil
+			return owner, nil
 		case "DOM.resolveNode":
 			return `{"object":{"type":"object","objectId":"ext-1"}}`, nil
 		case "Runtime.callFunctionOn":
+			if hangHoldProbe && shot.Load() && postShotCalls.Add(1) == 2 {
+				holdParked.Store(true)
+				return `#pending:hold|{"result":{"type":"boolean","value":false}}`, nil
+			}
 			return `{"result":{"type":"boolean","value":false}}`, nil
 		case "Runtime.releaseObjectGroup":
 			return `{}`, nil

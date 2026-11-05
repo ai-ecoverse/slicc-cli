@@ -127,14 +127,14 @@ func (g *guard) forgetExtensionProbeWorldsForTargetLocked(target string) {
 }
 
 func (g *guard) forgetExtensionProbeWorldContextLocked(session string, id int64) {
-	if id == 0 {
+	if id == 0 || session == "" {
 		return
 	}
 	for key, w := range g.extensionProbeCache {
 		if w.context != id {
 			continue
 		}
-		if session != "" && w.session != session && key.session != session {
+		if w.session != session && key.session != session {
 			continue
 		}
 		g.forgetExtensionProbeWorldLocked(w)

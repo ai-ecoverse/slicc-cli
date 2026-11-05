@@ -206,14 +206,14 @@ func (g *guard) worldContextLocked(target, session string, c execContext) bool {
 	return true
 }
 
-func (g *guard) contextGoneLocked(target string, id int64, unique string) bool {
+func (g *guard) contextGoneLocked(target, session string, id int64, unique string) bool {
 	g.shownGoneLocked(target, id, unique)
 	if t, ok := g.worldUniques[unique]; ok && unique != "" {
 		target = t
 	}
 	w := g.worlds[target]
 	if w == nil {
-		g.forgetExtensionProbeWorldContextLocked("", id)
+		g.forgetExtensionProbeWorldContextLocked(session, id)
 		return false
 	}
 	if unique != "" {
@@ -223,7 +223,7 @@ func (g *guard) contextGoneLocked(target string, id int64, unique string) bool {
 			}
 		}
 	}
-	g.forgetExtensionProbeWorldContextLocked("", id)
+	g.forgetExtensionProbeWorldContextLocked(session, id)
 	if w.contexts[id] == nil {
 		return false
 	}
@@ -470,7 +470,7 @@ func (g *guard) navWorldLocked(nt *navTarget, m *message) [][]byte {
 			UniqueID string `json:"executionContextUniqueId"`
 		}
 		_ = json.Unmarshal(m.Params, &p)
-		g.contextGoneLocked(nt.target, p.ID, p.UniqueID)
+		g.contextGoneLocked(nt.target, m.SessionID, p.ID, p.UniqueID)
 	case "Runtime.executionContextsCleared":
 		g.contextsClearedLocked(nt.target, m.SessionID)
 	}
@@ -490,7 +490,7 @@ func (g *guard) contextGoneEvent(m *message, data []byte) browserVerdict {
 		UniqueID string `json:"executionContextUniqueId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	if g.contextGoneLocked(g.worldTargetLocked(m.SessionID), p.ID, p.UniqueID) {
+	if g.contextGoneLocked(g.worldTargetLocked(m.SessionID), m.SessionID, p.ID, p.UniqueID) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}

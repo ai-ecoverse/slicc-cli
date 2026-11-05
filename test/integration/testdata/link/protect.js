@@ -2064,10 +2064,11 @@ export function protectTest(getLink, describe) {
         };
         const left = await open('https://ordinary.test/?n=left');
         const right = await open('https://ordinary.test/?n=right');
-        const [a, b] = await Promise.all([
-          outcome(c.send('Page.captureScreenshot', { format: 'png' }, left.sessionId)),
-          outcome(c.send('Page.captureScreenshot', { format: 'png' }, right.sessionId)),
-        ]);
+        const aPending = outcome(c.send('Page.captureScreenshot', { format: 'png' }, left.sessionId));
+        await c.send('Page.getLayoutMetrics', {}, left.sessionId);
+        const b = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, right.sessionId));
+        await c.send('Page.getLayoutMetrics', {}, right.sessionId);
+        const a = await aPending;
         await c.send('Target.detachFromTarget', { sessionId: left.sessionId });
         await c.send('Target.detachFromTarget', { sessionId: right.sessionId });
         return {
@@ -2113,9 +2114,10 @@ export function protectTest(getLink, describe) {
         const first = await open('https://ordinary.test/?n=first');
         const second = await open('https://ordinary.test/?n=second');
         const pending = outcome(c.send('Page.captureScreenshot', { format: 'png' }, first.sessionId));
-        await sleep(50);
+        await c.send('Page.getLayoutMetrics', {}, first.sessionId);
         await c.send('Target.detachFromTarget', { sessionId: first.sessionId });
         const next = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, second.sessionId));
+        await c.send('Page.getLayoutMetrics', {}, second.sessionId);
         await pending;
         await c.send('Target.detachFromTarget', { sessionId: second.sessionId });
         return {

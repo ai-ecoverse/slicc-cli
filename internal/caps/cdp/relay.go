@@ -285,6 +285,9 @@ func (rl *relay) toPage() {
 				}
 			})
 		}
+		for _, p := range v.extensionPaints {
+			rl.expireExtensionPaintLater(p)
+		}
 		if !rl.sendGuardVerdict(ctx, v) {
 			releaseReservations(v.releases)
 			return
@@ -316,9 +319,6 @@ func (rl *relay) scheduleBrowserVerdict(v browserVerdict) {
 	}
 	for _, k := range v.pauses {
 		rl.expirePauseLater(k)
-	}
-	for _, p := range v.extensionPaints {
-		rl.expireExtensionPaintLater(p)
 	}
 }
 
