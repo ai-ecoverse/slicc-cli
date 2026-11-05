@@ -127,6 +127,8 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if !g.ownsClientAnswerLocked(k) {
 		return browserVerdict{}
 	}
+	ownerFrame, ownerCall := g.extensionOwnerCalls[k]
+	delete(g.extensionOwnerCalls, k)
 	kind := g.pending[k]
 	delete(g.pending, k)
 	g.clientRequestAnsweredLocked(k, m.Error != nil)
@@ -137,31 +139,25 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	delete(g.bodyCalls, k)
 	outlived := g.outlivedLocked(k)
 	if !g.debuggerReplyLocked(k, m) {
-		delete(g.extensionOwnerCalls, k)
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget)}
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
-		delete(g.extensionOwnerCalls, k)
 		return browserVerdict{send: g.closeStreamLocked(bc, m)}
 	}
 	if outlived {
-		delete(g.extensionOwnerCalls, k)
 		g.logf("cdp: dropped an answer from before a protected error page committed")
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedOutlived), send: g.closeStreamLocked(bc, m)}
 	}
 	data = g.plainErrorLocked(m, data)
 	if body {
-		delete(g.extensionOwnerCalls, k)
 		return g.bodyAnswerLocked(k, bc, m, data)
 	}
-	if m.Error != nil {
-		delete(g.extensionOwnerCalls, k)
+	if ownerCall {
+		return g.extensionOwnerAnswerLocked(ownerFrame, m, data)
+	}
+	if m.Error != nil || kind == kindPlain {
 		return browserVerdict{forward: data}
 	}
-	if kind == kindPlain {
-		return browserVerdict{forward: data}
-	}
-	delete(g.extensionOwnerCalls, k)
 	res, ok := decodeObject(m.Result)
 	if !ok {
 		return browserVerdict{forward: data}

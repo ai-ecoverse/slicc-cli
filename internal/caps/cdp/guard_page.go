@@ -146,9 +146,9 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 		if frame := c.str("frameId"); frame != "" {
 			if t := g.sessionTargetLocked(c.session); t != nil && g.extensionFrameOnPageLocked(frame, t.id) {
 				if g.extensionOwnerCalls == nil {
-					g.extensionOwnerCalls = map[callKey]bool{}
+					g.extensionOwnerCalls = map[callKey]string{}
 				}
-				g.extensionOwnerCalls[k] = true
+				g.extensionOwnerCalls[k] = frame
 			}
 		}
 	}

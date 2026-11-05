@@ -54,9 +54,17 @@ func (g *guard) trackedExtensionFrameIDsLocked() map[string]bool {
 }
 
 func (g *guard) forgetExtensionOwnerCallsLocked(session string) {
+	if session == "" {
+		return
+	}
 	for k := range g.extensionOwnerCalls {
-		if session == "" || k.session == session {
+		if k.session == session {
 			delete(g.extensionOwnerCalls, k)
+		}
+	}
+	for k := range g.extensionOwnerReplies {
+		if k.session == session {
+			delete(g.extensionOwnerReplies, k)
 		}
 	}
 }
@@ -88,40 +96,6 @@ func frameOwnerNodeName(name string) bool {
 	return name == "IFRAME" || name == "FRAME"
 }
 
-func (g *guard) takeExtensionOwnerCall(m map[string]any) bool {
-	raw, ok := m["id"].(json.Number)
-	if !ok {
-		return false
-	}
-	id, err := raw.Int64()
-	if err != nil {
-		return false
-	}
-	session, _ := m["sessionId"].(string)
-	k := callKey{session, id}
-	if !g.extensionOwnerCalls[k] {
-		return false
-	}
-	delete(g.extensionOwnerCalls, k)
-	return true
-}
-
-func markExtensionFrameOwnerResult(m map[string]any) bool {
-	res, ok := m["result"].(map[string]any)
-	if !ok {
-		return false
-	}
-	kept := map[string]any{extensionFrameMarkerKey: extensionFrameMarker()}
-	if v, ok := res["backendNodeId"]; ok {
-		kept["backendNodeId"] = v
-	}
-	if v, ok := res["nodeId"]; ok {
-		kept["nodeId"] = v
-	}
-	m["result"] = kept
-	return true
-}
-
 func markExtensionFrameOwnerNodes(v any, ids map[string]bool) bool {
 	changed := false
 	switch t := v.(type) {
@@ -151,16 +125,69 @@ func markExtensionFrameOwnerNodes(v any, ids map[string]bool) bool {
 func (g *guard) markExtensionFramePlacement(m map[string]any) bool {
 	g.mu.Lock()
 	ids := g.trackedExtensionFrameIDsLocked()
-	ownerCall := g.takeExtensionOwnerCall(m)
+	ownerReply := false
+	if raw, ok := m["id"].(json.Number); ok {
+		if id, err := raw.Int64(); err == nil {
+			session, _ := m["sessionId"].(string)
+			k := callKey{session, id}
+			if g.extensionOwnerReplies[k] > 0 {
+				ownerReply = true
+				g.extensionOwnerReplies[k]--
+				if g.extensionOwnerReplies[k] == 0 {
+					delete(g.extensionOwnerReplies, k)
+				}
+			}
+		}
+	}
 	g.mu.Unlock()
 	changed := false
-	if ownerCall {
-		changed = markExtensionFrameOwnerResult(m)
+	if ownerReply {
+		if res, ok := m["result"].(map[string]any); ok {
+			m["result"] = extensionOwnerResult(res)
+			changed = true
+		}
 	}
 	if len(ids) == 0 {
 		return changed
 	}
 	return markExtensionFrameOwnerNodes(m, ids) || changed
+}
+
+func extensionOwnerResult(res map[string]any) map[string]any {
+	kept := map[string]any{extensionFrameMarkerKey: extensionFrameMarker()}
+	if v, ok := res["backendNodeId"]; ok {
+		kept["backendNodeId"] = v
+	}
+	if v, ok := res["nodeId"]; ok {
+		kept["nodeId"] = v
+	}
+	return kept
+}
+
+func (g *guard) extensionOwnerAnswerLocked(frame string, m *message, data []byte) browserVerdict {
+	if m.Error != nil {
+		return browserVerdict{forward: data}
+	}
+	page := ""
+	if t := g.sessionTargetLocked(m.SessionID); t != nil {
+		page = t.id
+	}
+	if !g.extensionFrameOnPageLocked(frame, page) {
+		g.logf("cdp: refused DOM.getFrameOwner: %s", refusedTarget)
+		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget)}
+	}
+	res, ok := decodeObject(m.Result)
+	if !ok {
+		g.logf("cdp: refused DOM.getFrameOwner: %s", refusedTarget)
+		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget)}
+	}
+	m.Result = encode(extensionOwnerResult(res))
+	k := callKey{m.SessionID, *m.ID}
+	if g.extensionOwnerReplies == nil {
+		g.extensionOwnerReplies = map[callKey]int{}
+	}
+	g.extensionOwnerReplies[k]++
+	return browserVerdict{forward: encode(m)}
 }
 
 func extensionPaintHoldDuration() time.Duration {

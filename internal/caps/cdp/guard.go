@@ -174,7 +174,8 @@ type guard struct {
 	extensionProbeCache   map[extensionWorldKey]*extensionProbeWorld
 	extensionFrameURLs    map[string]map[string]string
 	extensionCaptureDirty map[callKey]bool
-	extensionOwnerCalls   map[callKey]bool
+	extensionOwnerCalls   map[callKey]string
+	extensionOwnerReplies map[callKey]int
 	extensionPaintGen     uint64
 }
 
