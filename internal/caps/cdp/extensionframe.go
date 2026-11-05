@@ -14,7 +14,7 @@ import (
 const (
 	extensionWorldPrefix  = "slicc-ext-probe-"
 	extensionObjectGroup  = "slicc-extension-frames"
-	extensionShownProbe   = "function(){if(!this.isConnected||this.checkVisibility({checkOpacity:false,visibilityProperty:true}))return true;let node=this;for(let depth=0;depth<64;depth++){const root=node.getRootNode();if(root.activeElement!==node)return false;if(!root.host)return true;node=root.host;}return true;}"
+	extensionShownProbe   = "function(){if(!this.isConnected)return true;if(this.checkVisibility({checkOpacity:false,visibilityProperty:true})){const box=this.getBoundingClientRect();if(box.width>0&&box.height>0)return true;}let node=this;for(let depth=0;depth<64;depth++){const root=node.getRootNode();if(root.activeElement!==node)return false;if(!root.host)return true;node=root.host;}return true;}"
 	extensionShownPending = "\x00extension-shown"
 	extensionPaintHold    = 10 * time.Second
 )

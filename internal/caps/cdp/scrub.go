@@ -107,6 +107,42 @@ func (g *guard) cut(v any) (string, bool) {
 	return redactURL(s), true
 }
 
+func (g *guard) scrubExtensionOpaque(v any) bool {
+	switch t := v.(type) {
+	case string:
+		return false
+	case map[string]any:
+		changed := false
+		for k, val := range t {
+			if str, ok := val.(string); ok {
+				if g.o.ExtensionFrame(str) {
+					t[k], changed = redactURL(str), true
+				}
+				continue
+			}
+			if g.scrubExtensionOpaque(val) {
+				changed = true
+			}
+		}
+		return changed
+	case []any:
+		changed := false
+		for i, val := range t {
+			if str, ok := val.(string); ok {
+				if g.o.ExtensionFrame(str) {
+					t[i], changed = redactURL(str), true
+				}
+				continue
+			}
+			if g.scrubExtensionOpaque(val) {
+				changed = true
+			}
+		}
+		return changed
+	}
+	return false
+}
+
 func (g *guard) scrubValue(root any) bool {
 	changed := false
 	stack := []scrubItem{{v: root}}
@@ -149,14 +185,14 @@ func (g *guard) scrubMap(t map[string]any, headers bool, changed *bool) []scrubI
 	for k, val := range t {
 		if !headers && opaque[k] {
 			if str, ok := val.(string); ok {
-				if r, ok := g.cut(val); ok {
-					t[k], *changed = r, true
-				} else if r, ok := g.cutEmbeddedKind(str, "url"); ok {
-					t[k], *changed = r, true
+				if g.o.ExtensionFrame(str) {
+					t[k], *changed = redactURL(str), true
 				}
 				continue
 			}
-			more = append(more, scrubItem{v: val, headers: false, urls: false})
+			if g.scrubExtensionOpaque(val) {
+				*changed = true
+			}
 			continue
 		}
 		if headers || urlKey(k) {
