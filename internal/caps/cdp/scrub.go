@@ -57,10 +57,96 @@ func (g *guard) scrub(data []byte) []byte {
 	worlds := g.scrubWorlds(m)
 	assets := g.scrubAssets(m)
 	failed := g.scrubFailed(m)
-	if !g.scrubValue(m) && !worlds && !assets && !failed {
+	frames := g.scrubExtensionFrames(m)
+	if !g.scrubValue(m) && !worlds && !assets && !failed && !frames {
 		return data
 	}
 	return encode(m)
+}
+
+func (g *guard) cutExtensionForms(s string, forms []failedForm) (string, bool) {
+	if len(forms) == 0 || !strings.Contains(s, "chrome-extension://") {
+		return s, false
+	}
+	changed := false
+	for _, f := range forms {
+		if strings.Contains(s, f.form) {
+			s, changed = strings.ReplaceAll(s, f.form, f.redacted), true
+		}
+	}
+	return s, changed
+}
+
+func (g *guard) extensionFrameFormsLocked() []failedForm {
+	seen := map[string]bool{}
+	var forms []failedForm
+	add := func(raw string) {
+		if raw == "" || !g.o.ExtensionFrame(raw) {
+			return
+		}
+		redacted := redactURL(raw)
+		if !seen[raw] {
+			seen[raw] = true
+			forms = append(forms, failedForm{raw, redacted})
+		}
+		host := protect.Host(raw)
+		scheme := protect.Scheme(raw)
+		if host == "" || scheme == "" {
+			return
+		}
+		origin := scheme + "://" + host
+		if seen[origin] {
+			return
+		}
+		seen[origin] = true
+		forms = append(forms, failedForm{origin, redactURL(origin)})
+	}
+	for _, frames := range g.extensionFrameURLs {
+		for _, u := range frames {
+			add(u)
+		}
+	}
+	for _, t := range g.targets {
+		if g.extensionFrameTargetLocked(t) {
+			add(t.url)
+		}
+	}
+	slices.SortStableFunc(forms, func(a, b failedForm) int { return len(b.form) - len(a.form) })
+	return forms
+}
+
+func (g *guard) scrubExtensionFrames(m map[string]any) bool {
+	g.mu.Lock()
+	forms := g.extensionFrameFormsLocked()
+	g.mu.Unlock()
+	if len(forms) == 0 {
+		return false
+	}
+	changed := false
+	var walk func(v any) any
+	walk = func(v any) any {
+		switch t := v.(type) {
+		case string:
+			if r, ok := g.cutExtensionForms(t, forms); ok {
+				changed = true
+				return r
+			}
+			return t
+		case map[string]any:
+			for k, val := range t {
+				t[k] = walk(val)
+			}
+		case []any:
+			for i, val := range t {
+				t[i] = walk(val)
+			}
+		}
+		return v
+	}
+	for k, val := range m {
+		m[k] = walk(val)
+	}
+	return changed
 }
 
 func (g *guard) scrubFailed(m map[string]any) bool {
