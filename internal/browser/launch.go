@@ -491,6 +491,10 @@ func (b *Browser) shutdown(ctx context.Context) error {
 	return fmt.Errorf("%s (pid %d) did not exit", b.Installed.Name, b.mainPID)
 }
 
+func (b *Browser) Exited() bool {
+	return b.exited()
+}
+
 func (b *Browser) exited() bool {
 	select {
 	case <-b.done:
