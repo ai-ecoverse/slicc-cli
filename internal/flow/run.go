@@ -489,7 +489,7 @@ func (r *run) reattach(ctx context.Context) bool {
 			return true
 		}
 		r.cfg.Logf("reattach to %s: %v", host.Name, err)
-		if ctx.Err() != nil || time.Now().After(deadline) {
+		if refused(err) || ctx.Err() != nil || time.Now().After(deadline) {
 			return false
 		}
 		t := time.NewTimer(reattachEvery)
