@@ -121,7 +121,7 @@ func (rl *relay) resolveExtensionShown(c *command) pageVerdict {
 	}
 	if t == nil || len(frames) == 0 {
 		rl.g.mu.Unlock()
-		return rl.g.afterExtensionShown(c, false, true)
+		return rl.g.afterExtensionShown(c, true, false)
 	}
 	ch := make(chan struct {
 		shown bool

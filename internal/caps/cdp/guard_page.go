@@ -148,7 +148,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 			delete(g.extensionCaptureDirty, c.session)
 			session := c.session
 			v.send = g.probeExtensionShownLocked(c.session, t.id, frames, func(shown, ok bool) [][]byte {
-				if shown {
+				if shown && ok {
 					g.markExtensionCaptureDirtyLocked(session)
 				}
 				return nil

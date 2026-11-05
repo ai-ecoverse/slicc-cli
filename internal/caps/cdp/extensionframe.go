@@ -273,8 +273,18 @@ func (g *guard) finishExtensionPaintLocked(k callKey, shown, ok bool) [][]byte {
 	g.heldExtensionPaint = nil
 	dirty := h.dirty || g.extensionCaptureDirty[k.session]
 	delete(g.extensionCaptureDirty, k.session)
-	if !ok || shown || dirty || time.Now().After(h.deadline) {
-		g.logf("cdp: dropped a rendering that finished after an extension frame was showing or focused")
+	late := time.Now().After(h.deadline)
+	if !ok || shown || dirty || late {
+		switch {
+		case shown:
+			g.logf("cdp: dropped a rendering that finished while an extension frame was showing or focused")
+		case dirty:
+			g.logf("cdp: dropped a rendering that sampled an extension frame as shown during capture")
+		case late:
+			g.logf("cdp: dropped a rendering that stayed held past the extension-frame check deadline")
+		default:
+			g.logf("cdp: dropped a rendering because the extension-frame visibility probe failed")
+		}
 		g.pendingPage = append(g.pendingPage, refusal(k.id, k.session, protect.ShownReason()))
 		return nil
 	}
@@ -310,11 +320,20 @@ func (g *guard) markExtensionCaptureDirtyLocked(session string) {
 	}
 }
 
+func (g *guard) newExtensionObjectGroupLocked() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		g.nextID++
+		return extensionObjectGroup + "-" + itoa(g.nextID)
+	}
+	return extensionObjectGroup + "-" + hex.EncodeToString(b[:])
+}
+
 func (g *guard) probeExtensionShownLocked(session, target string, frames []string, done func(shown, ok bool) [][]byte) [][]byte {
 	if session == "" || len(frames) == 0 {
 		return done(true, false)
 	}
-	state := &extensionProbe{session: session, target: target, frames: frames, at: 0, done: done}
+	state := &extensionProbe{session: session, target: target, frames: frames, at: 0, group: g.newExtensionObjectGroupLocked(), done: done}
 	return g.stepExtensionProbeLocked(state)
 }
 
@@ -324,6 +343,7 @@ type extensionProbe struct {
 	frames  []string
 	at      int
 	world   string
+	group   string
 	done    func(shown, ok bool) [][]byte
 }
 
@@ -374,7 +394,7 @@ func (g *guard) extensionOwnerAnsweredLocked(state *extensionProbe, context int6
 	if m.Error != nil || json.Unmarshal(m.Result, &owner) != nil || owner.BackendNodeID == 0 {
 		return state.done(true, false)
 	}
-	return [][]byte{g.callbackLocked(state.session, "DOM.resolveNode", map[string]any{"backendNodeId": owner.BackendNodeID, "executionContextId": context, "objectGroup": extensionObjectGroup}, func(resolved message) [][]byte {
+	return [][]byte{g.callbackLocked(state.session, "DOM.resolveNode", map[string]any{"backendNodeId": owner.BackendNodeID, "executionContextId": context, "objectGroup": state.group}, func(resolved message) [][]byte {
 		return g.extensionResolvedAnsweredLocked(state, resolved)
 	})}
 }
@@ -386,7 +406,7 @@ func (g *guard) extensionResolvedAnsweredLocked(state *extensionProbe, m message
 		} `json:"object"`
 	}
 	if m.Error != nil || json.Unmarshal(m.Result, &resolved) != nil || resolved.Object.ObjectID == "" {
-		return append(g.releaseExtensionGroupLocked(state.session), state.done(true, false)...)
+		return append(g.releaseExtensionGroupLocked(state.session, state.group), state.done(true, false)...)
 	}
 	return [][]byte{g.callbackLocked(state.session, "Runtime.callFunctionOn", map[string]any{"objectId": resolved.Object.ObjectID, "functionDeclaration": extensionShownProbe, "returnByValue": true}, func(call message) [][]byte {
 		return g.extensionProbeAnsweredLocked(state, call)
@@ -394,7 +414,7 @@ func (g *guard) extensionResolvedAnsweredLocked(state *extensionProbe, m message
 }
 
 func (g *guard) extensionProbeAnsweredLocked(state *extensionProbe, m message) [][]byte {
-	send := g.releaseExtensionGroupLocked(state.session)
+	send := g.releaseExtensionGroupLocked(state.session, state.group)
 	var result struct {
 		Result struct {
 			Value *bool `json:"value"`
@@ -410,7 +430,10 @@ func (g *guard) extensionProbeAnsweredLocked(state *extensionProbe, m message) [
 	return append(send, g.stepExtensionProbeLocked(state)...)
 }
 
-func (g *guard) releaseExtensionGroupLocked(session string) [][]byte {
-	msg, _ := g.newCallLocked(session, "Runtime.releaseObjectGroup", map[string]any{"objectGroup": extensionObjectGroup}, false)
+func (g *guard) releaseExtensionGroupLocked(session, group string) [][]byte {
+	if group == "" {
+		group = extensionObjectGroup
+	}
+	msg, _ := g.newCallLocked(session, "Runtime.releaseObjectGroup", map[string]any{"objectGroup": group}, false)
 	return [][]byte{msg}
 }
