@@ -142,6 +142,16 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 		g.explicit[t]++
 	}
 	v := pageVerdict{forward: c.bytes(), cmd: c}
+	if c.method == "DOM.getFrameOwner" {
+		if frame := c.str("frameId"); frame != "" {
+			if t := g.sessionTargetLocked(c.session); t != nil && g.extensionFrameOnPageLocked(frame, t.id) {
+				if g.extensionOwnerCalls == nil {
+					g.extensionOwnerCalls = map[callKey]bool{}
+				}
+				g.extensionOwnerCalls[k] = true
+			}
+		}
+	}
 	if c.method == "Page.captureScreenshot" {
 		if t := g.sessionTargetLocked(c.session); t != nil && g.extensionFramesPresentLocked(t.id) {
 			frames := g.extensionFrameIDsLocked(t.id)
@@ -581,6 +591,15 @@ func (g *guard) scanKey(k string, val any, c *command) string {
 	return g.scanString(k, s, c)
 }
 
+func (g *guard) scanFrameID(s string, c *command) string {
+	if c.method == "DOM.getFrameOwner" {
+		if t := g.sessionTargetLocked(c.session); t != nil && g.extensionFrameOnPageLocked(s, t.id) {
+			return ""
+		}
+	}
+	return g.targetReasonLocked(s)
+}
+
 func (g *guard) scanString(k, s string, c *command) string {
 	switch {
 	case k == "topLevelSite" && g.siteProtected(s):
@@ -593,6 +612,8 @@ func (g *guard) scanString(k, s string, c *command) string {
 		return refusedTarget
 	case k == "cacheId" && g.o.StorageKey(strings.SplitN(s, "|", 2)[0]):
 		return refusedTarget
+	case k == "frameId":
+		return g.scanFrameID(s, c)
 	case idKeys[k]:
 		return g.targetReasonLocked(s)
 	case k == "sessionId" && s != "" && (s == g.relaySession || g.navSessions[s] != nil):

@@ -2145,5 +2145,126 @@ export function protectTest(getLink, describe) {
           ms,
         };
       }),
+    extensionFramePlacementMarker: (browser) =>
+      run(browser, async (c) => {
+        const want = { version: 1, kind: 'extensionFrame' };
+        const markerOf = (node) => node?.sliccExtensionFrame ?? null;
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('DOM.enable', {}, sessionId);
+        const setChild = c.waitEvent((e) => e.method === 'DOM.setChildNodes' && e.sessionId === sessionId, 10000);
+        const inserted = c.waitEvent((e) => e.method === 'DOM.childNodeInserted' && e.sessionId === sessionId, 10000);
+        const doc = await outcome(c.send('DOM.getDocument', { depth: -1, pierce: true }, sessionId));
+        const described = await outcome(c.send('DOM.describeNode', { nodeId: 2, depth: 0 }, sessionId));
+        const setNodes = await setChild;
+        const insertedEvent = await inserted;
+        const root = doc.result?.root;
+        const kids = root?.children ?? [];
+        const byId = Object.fromEntries(kids.filter((n) => n.frameId).map((n) => [n.frameId, n]));
+        const srcOnly = kids.find((n) => !n.frameId && Array.isArray(n.attributes) && n.attributes.includes('src'));
+        const payload = JSON.stringify({
+          doc: doc.result,
+          described: described.result,
+          setChildNodes: setNodes?.params,
+          childNodeInserted: insertedEvent?.params,
+        });
+        await c.send('Target.detachFromTarget', { sessionId });
+        return {
+          ok: doc.ok && described.ok,
+          foreign: markerOf(byId.FRAME),
+          frameEl: markerOf(byId.FRAMEEL),
+          ordinary: markerOf(byId.ORDINARY),
+          srcOnly: markerOf(srcOnly),
+          own: markerOf(byId.OWN),
+          described: markerOf(described.result?.node),
+          setChild: markerOf(setNodes?.params?.nodes?.[0]),
+          inserted: markerOf(insertedEvent?.params?.node),
+          want,
+          leaked: /chrome-extension:\/\//.test(payload) || /"hidden"\s*:/.test(payload) || /"focused"\s*:/.test(payload),
+          inboundLeft: payload.includes('"poisoned"') || payload.includes('"attacker"'),
+          payload,
+        };
+      }),
+    extensionFrameOwnerAdmission: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const other = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const otherSession = await c.send('Target.attachToTarget', { targetId: other.targetId, flatten: true });
+        await c.send('DOM.enable', {}, sessionId);
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('Page.enable', {}, sessionId);
+        const owner = await outcome(c.send('DOM.getFrameOwner', { frameId: 'FRAME' }, sessionId));
+        const foreignPage = await outcome(c.send('DOM.getFrameOwner', { frameId: 'FRAME2' }, sessionId));
+        const attach = await outcome(c.send('Target.attachToTarget', { targetId: 'FRAME', flatten: true }));
+        const world = await outcome(c.send('Page.createIsolatedWorld', { frameId: 'FRAME', worldName: 'probe' }, sessionId));
+        const evaluate = await outcome(c.send('Runtime.evaluate', { expression: '1', returnByValue: true }, sessionId));
+        const worldOnParent = await outcome(
+          c.send('Page.createIsolatedWorld', { frameId: targetId, worldName: 'bios-live' }, sessionId)
+        );
+        await c.send('Target.detachFromTarget', { sessionId });
+        await c.send('Target.detachFromTarget', { sessionId: otherSession.sessionId });
+        return {
+          owner,
+          foreignPage,
+          attach,
+          world,
+          evaluate,
+          worldOnParent,
+          marker: owner.result?.sliccExtensionFrame ?? null,
+          keys: owner.ok ? Object.keys(owner.result ?? {}).sort() : [],
+        };
+      }),
+    extensionFrameBiosLiveCheck: (browser, targetId, frameId) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('DOM.enable', {}, sessionId);
+        await c.send('Page.enable', {}, sessionId);
+        const world = await outcome(
+          c.send('Page.createIsolatedWorld', { frameId: targetId, worldName: 'bios-extension-live' }, sessionId)
+        );
+        const owner = await outcome(c.send('DOM.getFrameOwner', { frameId }, sessionId));
+        let resolved = { ok: false };
+        let called = { ok: false };
+        if (world.ok && owner.ok && owner.result?.backendNodeId) {
+          resolved = await outcome(
+            c.send(
+              'DOM.resolveNode',
+              {
+                backendNodeId: owner.result.backendNodeId,
+                executionContextId: world.result.executionContextId,
+                objectGroup: 'bios-extension-live',
+              },
+              sessionId
+            )
+          );
+          if (resolved.ok && resolved.result?.object?.objectId) {
+            called = await outcome(
+              c.send(
+                'Runtime.callFunctionOn',
+                {
+                  objectId: resolved.result.object.objectId,
+                  functionDeclaration:
+                    'function(){if(!this.isConnected)return true;if(this.checkVisibility({checkOpacity:false,visibilityProperty:true})){const box=this.getBoundingClientRect();if(box.width>0&&box.height>0)return true;}let node=this;for(let depth=0;depth<64;depth++){const root=node.getRootNode();if(root.activeElement!==node)return false;if(!root.host)return true;node=root.host;}return true;}',
+                  returnByValue: true,
+                },
+                sessionId
+              )
+            );
+          }
+        }
+        await outcome(c.send('Runtime.releaseObjectGroup', { objectGroup: 'bios-extension-live' }, sessionId));
+        await c.send('Target.detachFromTarget', { sessionId });
+        return {
+          world: world.ok,
+          owner: owner.ok,
+          marker: owner.result?.sliccExtensionFrame ?? null,
+          resolved: resolved.ok,
+          shown: called.ok ? called.result?.result?.value : null,
+          callOk: called.ok,
+          ownerKeys: owner.ok ? Object.keys(owner.result ?? {}).sort() : [],
+        };
+      }),
   };
 }

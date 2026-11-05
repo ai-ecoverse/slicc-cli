@@ -174,6 +174,7 @@ type guard struct {
 	extensionProbeCache   map[extensionWorldKey]*extensionProbeWorld
 	extensionFrameURLs    map[string]map[string]string
 	extensionCaptureDirty map[callKey]bool
+	extensionOwnerCalls   map[callKey]bool
 	extensionPaintGen     uint64
 }
 
@@ -538,6 +539,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.forgetWorldSessionLocked(id)
 	g.forgetCastLocked(id)
 	g.forgetExtensionProbeWorldSessionLocked(id)
+	g.forgetExtensionOwnerCallsLocked(id)
 	g.releaseExtensionPaintsForSessionLocked(id)
 	delete(g.sessions, id)
 	delete(g.browserSessions, id)

@@ -12,13 +12,156 @@ import (
 )
 
 const (
-	extensionWorldPrefix  = "slicc-ext-probe-"
-	extensionObjectGroup  = "slicc-extension-frames"
-	extensionShownProbe   = "function(){if(!this.isConnected)return true;if(this.checkVisibility({checkOpacity:false,visibilityProperty:true})){const box=this.getBoundingClientRect();if(box.width>0&&box.height>0)return true;}let node=this;for(let depth=0;depth<64;depth++){const root=node.getRootNode();if(root.activeElement!==node)return false;if(!root.host)return true;node=root.host;}return true;}"
-	extensionShownPending = "\x00extension-shown"
-	extensionPaintHold    = 10 * time.Second
-	extensionPaintHoldEnv = "SLICC_CDP_EXTENSION_PAINT_HOLD"
+	extensionWorldPrefix     = "slicc-ext-probe-"
+	extensionObjectGroup     = "slicc-extension-frames"
+	extensionShownProbe      = "function(){if(!this.isConnected)return true;if(this.checkVisibility({checkOpacity:false,visibilityProperty:true})){const box=this.getBoundingClientRect();if(box.width>0&&box.height>0)return true;}let node=this;for(let depth=0;depth<64;depth++){const root=node.getRootNode();if(root.activeElement!==node)return false;if(!root.host)return true;node=root.host;}return true;}"
+	extensionShownPending    = "\x00extension-shown"
+	extensionPaintHold       = 10 * time.Second
+	extensionPaintHoldEnv    = "SLICC_CDP_EXTENSION_PAINT_HOLD"
+	extensionFrameMarkerKey  = "sliccExtensionFrame"
+	extensionFrameMarkerKind = "extensionFrame"
 )
+
+func extensionFrameMarker() map[string]any {
+	return map[string]any{"version": 1, "kind": extensionFrameMarkerKind}
+}
+
+func (g *guard) extensionFrameOnPageLocked(frame, page string) bool {
+	if frame == "" || page == "" {
+		return false
+	}
+	for _, id := range g.extensionFrameIDsLocked(page) {
+		if id == frame {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) trackedExtensionFrameIDsLocked() map[string]bool {
+	set := map[string]bool{}
+	for id, t := range g.targets {
+		if g.extensionFrameTargetLocked(t) {
+			set[id] = true
+		}
+	}
+	for _, frames := range g.extensionFrameURLs {
+		for frame := range frames {
+			set[frame] = true
+		}
+	}
+	return set
+}
+
+func (g *guard) forgetExtensionOwnerCallsLocked(session string) {
+	for k := range g.extensionOwnerCalls {
+		if session == "" || k.session == session {
+			delete(g.extensionOwnerCalls, k)
+		}
+	}
+}
+
+func stripExtensionFrameMarkers(v any) bool {
+	changed := false
+	switch t := v.(type) {
+	case map[string]any:
+		if _, ok := t[extensionFrameMarkerKey]; ok {
+			delete(t, extensionFrameMarkerKey)
+			changed = true
+		}
+		for _, val := range t {
+			if stripExtensionFrameMarkers(val) {
+				changed = true
+			}
+		}
+	case []any:
+		for _, val := range t {
+			if stripExtensionFrameMarkers(val) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func frameOwnerNodeName(name string) bool {
+	return name == "IFRAME" || name == "FRAME"
+}
+
+func (g *guard) takeExtensionOwnerCall(m map[string]any) bool {
+	raw, ok := m["id"].(json.Number)
+	if !ok {
+		return false
+	}
+	id, err := raw.Int64()
+	if err != nil {
+		return false
+	}
+	session, _ := m["sessionId"].(string)
+	k := callKey{session, id}
+	if !g.extensionOwnerCalls[k] {
+		return false
+	}
+	delete(g.extensionOwnerCalls, k)
+	return true
+}
+
+func markExtensionFrameOwnerResult(m map[string]any) bool {
+	res, ok := m["result"].(map[string]any)
+	if !ok {
+		return false
+	}
+	kept := map[string]any{extensionFrameMarkerKey: extensionFrameMarker()}
+	if v, ok := res["backendNodeId"]; ok {
+		kept["backendNodeId"] = v
+	}
+	if v, ok := res["nodeId"]; ok {
+		kept["nodeId"] = v
+	}
+	m["result"] = kept
+	return true
+}
+
+func markExtensionFrameOwnerNodes(v any, ids map[string]bool) bool {
+	changed := false
+	switch t := v.(type) {
+	case map[string]any:
+		name, _ := t["nodeName"].(string)
+		if frameOwnerNodeName(name) {
+			if frame, _ := t["frameId"].(string); ids[frame] {
+				t[extensionFrameMarkerKey] = extensionFrameMarker()
+				changed = true
+			}
+		}
+		for _, val := range t {
+			if markExtensionFrameOwnerNodes(val, ids) {
+				changed = true
+			}
+		}
+	case []any:
+		for _, val := range t {
+			if markExtensionFrameOwnerNodes(val, ids) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func (g *guard) markExtensionFramePlacement(m map[string]any) bool {
+	g.mu.Lock()
+	ids := g.trackedExtensionFrameIDsLocked()
+	ownerCall := g.takeExtensionOwnerCall(m)
+	g.mu.Unlock()
+	changed := false
+	if ownerCall {
+		changed = markExtensionFrameOwnerResult(m)
+	}
+	if len(ids) == 0 {
+		return changed
+	}
+	return markExtensionFrameOwnerNodes(m, ids) || changed
+}
 
 func extensionPaintHoldDuration() time.Duration {
 	return envDuration(extensionPaintHoldEnv, extensionPaintHold)
