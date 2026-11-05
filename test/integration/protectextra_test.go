@@ -159,6 +159,9 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 				result = fmt.Sprintf(`{"targetInfo":{"targetId":%q,"type":"page","url":"about:blank"}}`, params.TargetID)
 			}
 		}
+		if result == "#pending" {
+			continue
+		}
 		field := `"result":` + result
 		if msg, failed := strings.CutPrefix(result, "!"); failed {
 			field = fmt.Sprintf(`"error":{"code":-32000,"message":%q}`, msg)

@@ -166,13 +166,14 @@ type guard struct {
 	debuggerReplies       map[callKey]debuggerReply
 	debuggerBytes         int
 	debuggerLimit         int
-	heldExtensionPaint    *heldExtensionPaint
+	heldExtensionPaints   map[callKey]*heldExtensionPaint
 	pendingPage           [][]byte
 	paintMethods          map[callKey]string
 	extensionShownCleared bool
 	extensionProbeWorlds  map[string]bool
+	extensionProbeCache   map[extensionWorldKey]*extensionProbeWorld
 	extensionFrameURLs    map[string]map[string]string
-	extensionCaptureDirty map[string]bool
+	extensionCaptureDirty map[callKey]bool
 	extensionPaintGen     uint64
 }
 
@@ -238,7 +239,9 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		debuggerReplies:       map[callKey]debuggerReply{},
 		debuggerLimit:         debuggerBudgetFromEnv(),
 		paintMethods:          map[callKey]string{},
-		extensionCaptureDirty: map[string]bool{},
+		heldExtensionPaints:   map[callKey]*heldExtensionPaint{},
+		extensionProbeCache:   map[extensionWorldKey]*extensionProbeWorld{},
+		extensionCaptureDirty: map[callKey]bool{},
 		maxWorlds:             maxWorlds,
 		bounds:                boundsFromEnv(),
 	}
@@ -510,6 +513,7 @@ func (g *guard) destroyedLocked(id string) {
 	delete(g.frameProbed, id)
 	delete(g.frames, id)
 	g.forgetExtensionFrameURLLocked("", id)
+	g.forgetExtensionProbeWorldsForTargetLocked(id)
 	g.navForgetLocked(id)
 	g.dropHeldLocked(id)
 	g.forgetWorldsLocked(id)
@@ -533,6 +537,8 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.goneLocked(id)
 	g.forgetWorldSessionLocked(id)
 	g.forgetCastLocked(id)
+	g.forgetExtensionProbeWorldSessionLocked(id)
+	g.releaseExtensionPaintsForSessionLocked(id)
 	delete(g.sessions, id)
 	delete(g.browserSessions, id)
 	g.markedCount -= len(g.marked[id])

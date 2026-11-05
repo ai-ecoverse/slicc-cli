@@ -145,11 +145,11 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	if c.method == "Page.captureScreenshot" {
 		if t := g.sessionTargetLocked(c.session); t != nil && g.extensionFramesPresentLocked(t.id) {
 			frames := g.extensionFrameIDsLocked(t.id)
-			delete(g.extensionCaptureDirty, c.session)
-			session := c.session
+			delete(g.extensionCaptureDirty, k)
+			paintKey := k
 			v.send = g.probeExtensionShownLocked(c.session, t.id, frames, func(shown, ok bool) [][]byte {
 				if shown && ok {
-					g.markExtensionCaptureDirtyLocked(session)
+					g.markExtensionCaptureDirtyLocked(paintKey)
 				}
 				return nil
 			})

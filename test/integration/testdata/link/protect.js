@@ -2029,5 +2029,98 @@ export function protectTest(getLink, describe) {
         await outcome(c.send('Target.closeTarget', { targetId }));
         return { cast: cast.ok, before, after, grew: after > before };
       }),
+    foreignExtensionFrameProbeWorlds: (browser, targetId, n) =>
+      run(browser, async (c) => {
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.send(
+          'Runtime.evaluate',
+          {
+            expression: `(() => { const f = document.getElementById('slicc-extension-frame'); if (!f) throw new Error('missing frame'); f.hidden = true; f.style.cssText = ''; return true; })()`,
+            returnByValue: true,
+          },
+          sessionId
+        );
+        for (let i = 0; i < n; i += 1) {
+          const key = await outcome(c.send('Input.insertText', { text: 'x' }, sessionId));
+          if (!key.ok) {
+            await c.send('Target.detachFromTarget', { sessionId });
+            return { ok: false, refusal: key.error?.message ?? '', inserts: i };
+          }
+        }
+        await c.send('Target.detachFromTarget', { sessionId });
+        return { ok: true, inserts: n };
+      }),
+    foreignExtensionFrameConcurrentShots: (browser) =>
+      run(browser, async (c) => {
+        const shownRefusal =
+          "slicc: refused: a browser extension's frame (chrome-extension://) is showing or focused in this tab, such as a password manager's autofill list; close it or reload the tab";
+        const open = async (url) => {
+          const { targetId } = await c.send('Target.createTarget', { url });
+          const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+          await c.send('Runtime.enable', {}, sessionId);
+          await c.send('Page.enable', {}, sessionId);
+          return { targetId, sessionId };
+        };
+        const left = await open('https://ordinary.test/?n=left');
+        const right = await open('https://ordinary.test/?n=right');
+        const [a, b] = await Promise.all([
+          outcome(c.send('Page.captureScreenshot', { format: 'png' }, left.sessionId)),
+          outcome(c.send('Page.captureScreenshot', { format: 'png' }, right.sessionId)),
+        ]);
+        await c.send('Target.detachFromTarget', { sessionId: left.sessionId });
+        await c.send('Target.detachFromTarget', { sessionId: right.sessionId });
+        return {
+          left: a.ok,
+          right: b.ok,
+          leftRefusal: a.ok ? null : a.error?.message,
+          rightRefusal: b.ok ? null : b.error?.message,
+          shownRefusal,
+        };
+      }),
+    foreignExtensionFrameDetachMidProbe: (browser) =>
+      run(browser, async (c) => {
+        const shownRefusal =
+          "slicc: refused: a browser extension's frame (chrome-extension://) is showing or focused in this tab, such as a password manager's autofill list; close it or reload the tab";
+        const open = async (url) => {
+          const { targetId } = await c.send('Target.createTarget', { url });
+          const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+          await c.send('Runtime.enable', {}, sessionId);
+          await c.send('Page.enable', {}, sessionId);
+          return { targetId, sessionId };
+        };
+        const first = await open('https://ordinary.test/?n=first');
+        const second = await open('https://ordinary.test/?n=second');
+        const pending = outcome(c.send('Page.captureScreenshot', { format: 'png' }, first.sessionId));
+        await sleep(50);
+        await c.send('Target.detachFromTarget', { sessionId: first.sessionId });
+        const next = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, second.sessionId));
+        await pending;
+        await c.send('Target.detachFromTarget', { sessionId: second.sessionId });
+        return {
+          ok: next.ok,
+          refusal: next.ok ? null : next.error?.message,
+          shownRefusal,
+        };
+      }),
+    foreignExtensionFramePaintDeadline: (browser) =>
+      run(browser, async (c) => {
+        const shownRefusal =
+          "slicc: refused: a browser extension's frame (chrome-extension://) is showing or focused in this tab, such as a password manager's autofill list; close it or reload the tab";
+        const start = Date.now();
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('Page.enable', {}, sessionId);
+        const shot = await outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
+        const ms = Date.now() - start;
+        await outcome(c.send('Target.closeTarget', { targetId }));
+        return {
+          ok: shot.ok,
+          refusal: shot.ok ? null : shot.error?.message,
+          shownRefusal,
+          ms,
+        };
+      }),
   };
 }

@@ -37,6 +37,7 @@ func (g *guard) rootDocumentLocked(page *target, loader string) {
 	}
 	page.document = loader
 	page.documentRevision++
+	g.forgetExtensionProbeWorldsForTargetLocked(page.id)
 }
 
 func (g *guard) probeIframeOwnersLocked() [][]byte {

@@ -213,6 +213,7 @@ func (g *guard) contextGoneLocked(target string, id int64, unique string) bool {
 	}
 	w := g.worlds[target]
 	if w == nil {
+		g.forgetExtensionProbeWorldContextLocked("", id)
 		return false
 	}
 	if unique != "" {
@@ -222,6 +223,7 @@ func (g *guard) contextGoneLocked(target string, id int64, unique string) bool {
 			}
 		}
 	}
+	g.forgetExtensionProbeWorldContextLocked("", id)
 	if w.contexts[id] == nil {
 		return false
 	}
@@ -240,6 +242,7 @@ func (g *guard) contextsClearedLocked(target, session string) {
 			s.full = false
 		}
 	}
+	g.forgetExtensionProbeWorldSessionLocked(session)
 	w := g.worlds[target]
 	if w == nil {
 		return
