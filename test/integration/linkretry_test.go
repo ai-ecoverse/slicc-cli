@@ -121,6 +121,11 @@ func (s *fakeSeven) badOffer(t *testing.T, n int) (string, string) {
 func (s *fakeSeven) link(t *testing.T, n int) *sevenPeer {
 	t.Helper()
 	session, nonce := s.f.waitHelloWithin(t, n, 40*time.Second)
+	return s.linkWith(t, n, session, nonce)
+}
+
+func (s *fakeSeven) linkWith(t *testing.T, n int, session, nonce string) *sevenPeer {
+	t.Helper()
 	udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -199,9 +204,10 @@ func waitOutput(t *testing.T, p *crashProc, want string, n int, within time.Dura
 	}
 }
 
-func setUpAgainAfterFailure(t *testing.T, f *crashBrowser, s *fakeSeven, p *crashProc, fail func(*sevenPeer), status string) {
+func setUpAgainAfterFailure(t *testing.T, f *crashBrowser, s *fakeSeven, p *crashProc, up string, fail func(*sevenPeer), status string) {
 	t.Helper()
 	first := s.link(t, 1)
+	waitOutput(t, p, up, 1, 5*time.Second)
 	enables, attaches := f.count("Runtime.enable"), f.count("Target.attachToTarget")
 	fail(first)
 	session, nonce := f.waitHelloWithin(t, 2, 40*time.Second)
@@ -240,8 +246,9 @@ func TestAttachSetsUpALinkAgainAfterTheNetworkDrops(t *testing.T) {
 	f := newCrashBrowser(t)
 	s := newFakeSeven(t, f)
 	p := startCrashBinary(t, "attach", "--no-kernel", "--no-jerk", "--cdp", f.srv.URL)
-	setUpAgainAfterFailure(t, f, s, p, (*sevenPeer).cutNetwork, "link failed (link: connection failed); asking seven to set it up again in 1s\n")
-	waitOutput(t, p, "link up with \"fake seven\"\n", 2, 5*time.Second)
+	up := "link up with \"fake seven\"\n"
+	setUpAgainAfterFailure(t, f, s, p, up, (*sevenPeer).cutNetwork, "link failed (link: connection failed); asking seven to set it up again in 1s\n")
+	waitOutput(t, p, up, 2, 5*time.Second)
 }
 
 func TestTheDefaultFlowSetsUpALinkAgainAfterItFails(t *testing.T) {
@@ -249,8 +256,9 @@ func TestTheDefaultFlowSetsUpALinkAgainAfterItFails(t *testing.T) {
 	s := newFakeSeven(t, f)
 	id := "cdp:" + strings.TrimPrefix(f.srv.URL, "http://")
 	p := startCrashBinary(t, "--cdp", f.srv.URL, "--browser", id, "--plain", "--yes", "--no-kernel", "--no-jerk")
-	setUpAgainAfterFailure(t, f, s, p, func(sp *sevenPeer) { sp.misbehave(t) }, "link failed (link: protocol violation: a second control channel); asking seven to set it up again in 1s\n")
-	waitOutput(t, p, "linked with \"fake seven\"", 2, 5*time.Second)
+	up := "linked with \"fake seven\""
+	setUpAgainAfterFailure(t, f, s, p, up, func(sp *sevenPeer) { sp.misbehave(t) }, "link failed (link: protocol violation: a second control channel); asking seven to set it up again in 1s\n")
+	waitOutput(t, p, up, 2, 5*time.Second)
 }
 
 func TestAgentWatchGetsALinkBackAfterItFails(t *testing.T) {
@@ -284,6 +292,7 @@ func TestAFailedLinkBacksOffAndALinkResetsTheWait(t *testing.T) {
 	s := newFakeSeven(t, f)
 	p := startCrashBinary(t, "attach", "--no-kernel", "--no-jerk", "--cdp", f.srv.URL)
 	first := s.link(t, 1)
+	waitOutput(t, p, "link up with \"fake seven\"\n", 1, 5*time.Second)
 	first.misbehave(t)
 	var at []time.Time
 	for n := 2; n <= 4; n++ {
@@ -298,6 +307,7 @@ func TestAFailedLinkBacksOffAndALinkResetsTheWait(t *testing.T) {
 	}
 	waitOutput(t, p, "asking seven to set it up again in 8s\n", 1, 5*time.Second)
 	linked := s.link(t, 5)
+	waitOutput(t, p, "link up with \"fake seven\"\n", 2, 5*time.Second)
 	linked.misbehave(t)
 	start := time.Now()
 	f.waitHelloWithin(t, 6, 10*time.Second)
@@ -346,4 +356,17 @@ func TestAReloadAfterAFailedLinkGreetsTheNewPageOnce(t *testing.T) {
 	}})
 	s.link(t, 2)
 	s.noHello(t, 3, 3*time.Second)
+}
+
+func TestALinkThatComesUpDuringTheWaitCancelsTheRetry(t *testing.T) {
+	f := newCrashBrowser(t)
+	s := newFakeSeven(t, f)
+	p := startCrashBinary(t, "attach", "--no-kernel", "--no-jerk", "--cdp", f.srv.URL)
+	s.badOffer(t, 1)
+	s.badOffer(t, 2)
+	session, nonce := s.badOffer(t, 3)
+	waitOutput(t, p, "asking seven to set it up again in 4s\n", 1, 10*time.Second)
+	s.linkWith(t, 3, session, nonce)
+	waitOutput(t, p, "link up with \"fake seven\"\n", 1, 5*time.Second)
+	s.noHello(t, 4, 6*time.Second)
 }

@@ -161,9 +161,12 @@ func (c *CDP) finish(err error) {
 	})
 }
 
-func (c *CDP) Linked(string) {
+func (c *CDP) Linked(nonce string) {
 	c.mu.Lock()
-	c.retryWait = c.opts.RetryMin
+	if nonce != "" && nonce == c.nonce {
+		c.retryWait = c.opts.RetryMin
+		c.unschedule()
+	}
 	c.mu.Unlock()
 }
 

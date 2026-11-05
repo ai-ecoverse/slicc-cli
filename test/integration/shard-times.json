@@ -6,6 +6,7 @@
     "TestAGateThatExitsSilentlyFailsItsStep": 1.1,
     "TestAJoinURLFileMustBePrivate": 0,
     "TestALinkSevenClosesIsNotSetUpAgain": 3.1,
+    "TestALinkThatComesUpDuringTheWaitCancelsTheRetry": 9.1,
     "TestAReloadAfterAFailedLinkGreetsTheNewPageOnce": 3.2,
     "TestASevenProfileThatIsSixsIsNeverPrepared": 0,
     "TestAbort": 0.8,
