@@ -1908,6 +1908,41 @@ export function protectTest(getLink, describe) {
             sessionId
           )
         );
+        const keyEval = await outcome(
+          c.send(
+            'Runtime.evaluate',
+            {
+              expression: "({[document.getElementById('slicc-extension-frame').src]: 1})",
+              returnByValue: true,
+            },
+            sessionId
+          )
+        );
+        const doc = await outcome(
+          c.send(
+            'Runtime.evaluate',
+            {
+              expression: 'document',
+              returnByValue: false,
+            },
+            sessionId
+          )
+        );
+        let keyCall = { ok: false, result: null, error: null };
+        if (doc.ok && doc.result?.result?.objectId) {
+          keyCall = await outcome(
+            c.send(
+              'Runtime.callFunctionOn',
+              {
+                objectId: doc.result.result.objectId,
+                functionDeclaration:
+                  "function(){ return {[document.getElementById('slicc-extension-frame').src]: 1}; }",
+                returnByValue: true,
+              },
+              sessionId
+            )
+          );
+        }
         const ax = await outcome(c.send('Accessibility.getFullAXTree', {}, sessionId));
         const tree = await outcome(c.send('Page.getFrameTree', {}, sessionId));
         const list = await outcome(c.send('Target.getTargets'));
@@ -1918,6 +1953,8 @@ export function protectTest(getLink, describe) {
         const srcLeak = src.ok && JSON.stringify(src.result).includes('chrome-extension://');
         const outerLeak = outer.ok && JSON.stringify(outer.result).includes('chrome-extension://');
         const jsonLeak = jsonSrc.ok && JSON.stringify(jsonSrc.result).includes('chrome-extension://');
+        const keyEvalLeak = keyEval.ok && JSON.stringify(keyEval.result).includes('chrome-extension://');
+        const keyCallLeak = keyCall.ok && JSON.stringify(keyCall.result).includes('chrome-extension://');
         const axLeak = ax.ok && JSON.stringify(ax.result).includes('chrome-extension://');
         const ordinaryIntact = ordinary.ok && ordinary.result?.result?.value === ordinaryHTML;
         await c.send('Target.detachFromTarget', { sessionId });
@@ -1953,6 +1990,8 @@ export function protectTest(getLink, describe) {
           srcLeak,
           outerLeak,
           jsonLeak,
+          keyEvalLeak,
+          keyCallLeak,
           axLeak,
           ordinaryIntact,
           frameAttach: frameAttach.ok,

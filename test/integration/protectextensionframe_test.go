@@ -103,6 +103,8 @@ func TestCDPExtensionFrameDoesNotLockOrdinaryTab(t *testing.T) {
 		SrcLeak             bool    `json:"srcLeak"`
 		OuterLeak           bool    `json:"outerLeak"`
 		JSONLeak            bool    `json:"jsonLeak"`
+		KeyEvalLeak         bool    `json:"keyEvalLeak"`
+		KeyCallLeak         bool    `json:"keyCallLeak"`
 		AXLeak              bool    `json:"axLeak"`
 		OrdinaryIntact      bool    `json:"ordinaryIntact"`
 		FrameAttach         bool    `json:"frameAttach"`
@@ -147,8 +149,8 @@ func TestCDPExtensionFrameDoesNotLockOrdinaryTab(t *testing.T) {
 	wantPresent(r.Replay, r.ReplayRefusal, "LayerTree.replaySnapshot")
 	wantPresent(r.PDF, r.PDFRefusal, "printToPDF")
 	wantPresent(r.Snap, r.SnapRefusal, "captureSnapshot")
-	if r.Listed || r.TreeLeak || r.SrcLeak || r.OuterLeak || r.JSONLeak || r.AXLeak {
-		t.Fatalf("the extension frame URL leaked: listed=%t treeLeak=%t srcLeak=%t outerLeak=%t jsonLeak=%t axLeak=%t", r.Listed, r.TreeLeak, r.SrcLeak, r.OuterLeak, r.JSONLeak, r.AXLeak)
+	if r.Listed || r.TreeLeak || r.SrcLeak || r.OuterLeak || r.JSONLeak || r.KeyEvalLeak || r.KeyCallLeak || r.AXLeak {
+		t.Fatalf("the extension frame URL leaked: listed=%t treeLeak=%t srcLeak=%t outerLeak=%t jsonLeak=%t keyEvalLeak=%t keyCallLeak=%t axLeak=%t", r.Listed, r.TreeLeak, r.SrcLeak, r.OuterLeak, r.JSONLeak, r.KeyEvalLeak, r.KeyCallLeak, r.AXLeak)
 	}
 	if !r.OrdinaryIntact {
 		t.Fatal("ordinary HTML evaluate was altered while an extension frame was tracked")

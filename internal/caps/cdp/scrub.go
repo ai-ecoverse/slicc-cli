@@ -133,8 +133,34 @@ func (g *guard) scrubExtensionFrames(m map[string]any) bool {
 			}
 			return t
 		case map[string]any:
-			for k, val := range t {
-				t[k] = walk(val)
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			slices.Sort(keys)
+			type kv struct {
+				k string
+				v any
+			}
+			next := make([]kv, 0, len(keys))
+			seen := map[string]bool{}
+			for _, k := range keys {
+				val := walk(t[k])
+				nk := k
+				if r, ok := g.cutExtensionForms(k, forms); ok {
+					nk, changed = r, true
+				}
+				if seen[nk] {
+					continue
+				}
+				seen[nk] = true
+				next = append(next, kv{nk, val})
+			}
+			for k := range t {
+				delete(t, k)
+			}
+			for _, e := range next {
+				t[e.k] = e.v
 			}
 		case []any:
 			for i, val := range t {
@@ -143,9 +169,7 @@ func (g *guard) scrubExtensionFrames(m map[string]any) bool {
 		}
 		return v
 	}
-	for k, val := range m {
-		m[k] = walk(val)
-	}
+	walk(m)
 	return changed
 }
 
