@@ -2078,6 +2078,27 @@ export function protectTest(getLink, describe) {
           shownRefusal,
         };
       }),
+    foreignExtensionFrameSiblingDirtyShots: (browser) =>
+      run(browser, async (c) => {
+        const shownRefusal =
+          "slicc: refused: a browser extension's frame (chrome-extension://) is showing or focused in this tab, such as a password manager's autofill list; close it or reload the tab";
+        const { targetId } = await c.send('Target.createTarget', { url: 'https://ordinary.test/?n=sibling-dirty' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('Page.enable', {}, sessionId);
+        const first = outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
+        await sleep(50);
+        const second = outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
+        const [a, b] = await Promise.all([first, second]);
+        await c.send('Target.detachFromTarget', { sessionId });
+        return {
+          firstOk: a.ok,
+          secondOk: b.ok,
+          firstRefusal: a.ok ? null : a.error?.message,
+          secondRefusal: b.ok ? null : b.error?.message,
+          shownRefusal,
+        };
+      }),
     foreignExtensionFrameDetachMidProbe: (browser) =>
       run(browser, async (c) => {
         const shownRefusal =

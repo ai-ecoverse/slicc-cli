@@ -146,10 +146,10 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 		if t := g.sessionTargetLocked(c.session); t != nil && g.extensionFramesPresentLocked(t.id) {
 			frames := g.extensionFrameIDsLocked(t.id)
 			delete(g.extensionCaptureDirty, k)
-			paintKey := k
+			session := c.session
 			v.send = g.probeExtensionShownLocked(c.session, t.id, frames, func(shown, ok bool) [][]byte {
 				if shown && ok {
-					g.markExtensionCaptureDirtyLocked(paintKey)
+					g.markExtensionCaptureDirtyLocked(session)
 				}
 				return nil
 			})

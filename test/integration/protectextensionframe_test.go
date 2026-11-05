@@ -273,6 +273,26 @@ func TestCDPExtensionFrameConcurrentCaptures(t *testing.T) {
 	}
 }
 
+func TestCDPExtensionFrameSiblingProbeDirtiesInFlight(t *testing.T) {
+	env, fake := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
+		return extensionSiblingDirtyScript("chrome-extension://" + harnessExtensionID + "/frame.html")
+	})
+	fake.delay("Page.captureScreenshot", 300*time.Millisecond)
+	var r struct {
+		FirstOK      bool    `json:"firstOk"`
+		FirstRefusal *string `json:"firstRefusal"`
+		ShownRefusal string  `json:"shownRefusal"`
+	}
+	env.evalJSONWithin(t, "linkTest.protect.foreignExtensionFrameSiblingDirtyShots('chrome-2')", &r, 30*time.Second)
+	if r.FirstOK || r.FirstRefusal == nil || *r.FirstRefusal != protect.ShownRefusal() {
+		got := "<nil>"
+		if r.FirstRefusal != nil {
+			got = *r.FirstRefusal
+		}
+		t.Fatalf("in-flight capture was not refused when a sibling probe sampled shown: ok=%t refusal=%q", r.FirstOK, got)
+	}
+}
+
 func TestCDPExtensionFrameDetachMidProbeReleasesHold(t *testing.T) {
 	env, _ := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
 		return extensionTwoTabScript("chrome-extension://"+harnessExtensionID+"/frame.html", true)
@@ -374,6 +394,77 @@ func extensionTwoTabScript(frameURL string, hangHoldProbe bool) fakeScript {
 		case "DOM.resolveNode":
 			return `{"object":{"type":"object","objectId":"ext-1"}}`, nil
 		case "Runtime.callFunctionOn":
+			return `{"result":{"type":"boolean","value":false}}`, nil
+		case "Runtime.releaseObjectGroup":
+			return `{}`, nil
+		}
+		return "{}", nil
+	}
+}
+
+func extensionSiblingDirtyScript(frameURL string) fakeScript {
+	var sessions atomic.Int32
+	var contexts atomic.Int64
+	var probes atomic.Int32
+	page := `{"targetId":"PAGE","type":"page","title":"ordinary","url":"https://ordinary.test/","attached":false,"browserContextId":"default"}`
+	frame := `{"targetId":"FRAME","type":"iframe","title":"","url":` + strconv.Quote(frameURL) + `,"attached":false,"browserContextId":"default","parentFrameId":"PAGE"}`
+	doc := `{"root":{"nodeId":1,"backendNodeId":1,"nodeType":9,"nodeName":"#document","localName":"","nodeValue":"","childNodeCount":1,"children":[]}}`
+	return func(method string, params json.RawMessage) (string, []string) {
+		switch method {
+		case "Browser.getVersion":
+			return `{"product":"Chrome/154.0.8037.98","protocolVersion":"1.3"}`, nil
+		case "Target.getTargets":
+			return `{"targetInfos":[]}`, nil
+		case "Target.createTarget":
+			return `{"targetId":"PAGE"}`, []string{
+				`{"method":"Target.targetCreated","sessionId":"RELAY","params":{"targetInfo":` + page + `}}`,
+				`{"method":"Target.targetCreated","sessionId":"RELAY","params":{"targetInfo":` + frame + `}}`,
+			}
+		case "Target.attachToTarget":
+			n := sessions.Add(1)
+			id := "S" + strconv.Itoa(int(n))
+			parent := ""
+			if n == 1 {
+				parent = `"sessionId":"RELAY",`
+			}
+			info := page
+			var p struct {
+				TargetID string `json:"targetId"`
+			}
+			_ = json.Unmarshal(params, &p)
+			if p.TargetID == "FRAME" {
+				info = frame
+			}
+			return `{"sessionId":"` + id + `"}`, []string{`{"method":"Target.attachedToTarget",` + parent + `"params":{"sessionId":"` + id + `","targetInfo":` + info + `,"waitingForDebugger":false}}`}
+		case "Target.getTargetInfo":
+			var p struct {
+				TargetID string `json:"targetId"`
+			}
+			_ = json.Unmarshal(params, &p)
+			info := page
+			if p.TargetID == "FRAME" {
+				info = frame
+			}
+			return `{"targetInfo":` + info + `}`, nil
+		case "Page.getFrameTree":
+			return `{"frameTree":{"frame":{"id":"PAGE","loaderId":"L1","url":"https://ordinary.test/","securityOrigin":"https://ordinary.test"}}}`, nil
+		case "Page.getNavigationHistory":
+			return `{"currentIndex":0,"entries":[{"id":1,"url":"https://ordinary.test/"}]}`, nil
+		case "Page.captureScreenshot":
+			return `{"data":"aaaa"}`, nil
+		case "Page.createIsolatedWorld":
+			id := contexts.Add(1)
+			return `{"executionContextId":` + strconv.FormatInt(id, 10) + `}`, nil
+		case "DOM.getDocument":
+			return doc, nil
+		case "DOM.getFrameOwner":
+			return `{"backendNodeId":2,"nodeId":2}`, nil
+		case "DOM.resolveNode":
+			return `{"object":{"type":"object","objectId":"ext-1"}}`, nil
+		case "Runtime.callFunctionOn":
+			if probes.Add(1) == 4 {
+				return `{"result":{"type":"boolean","value":true}}`, nil
+			}
 			return `{"result":{"type":"boolean","value":false}}`, nil
 		case "Runtime.releaseObjectGroup":
 			return `{}`, nil

@@ -436,16 +436,24 @@ func (g *guard) releaseExtensionPaintsForSessionLocked(session string) {
 	}
 }
 
-func (g *guard) markExtensionCaptureDirtyLocked(k callKey) {
-	if k.session == "" {
+func (g *guard) markExtensionCaptureDirtyLocked(session string) {
+	if session == "" {
 		return
 	}
 	if g.extensionCaptureDirty == nil {
 		g.extensionCaptureDirty = map[callKey]bool{}
 	}
-	g.extensionCaptureDirty[k] = true
-	if h := g.heldExtensionPaints[k]; h != nil {
+	for k, method := range g.paintMethods {
+		if k.session == session && method == "Page.captureScreenshot" {
+			g.extensionCaptureDirty[k] = true
+		}
+	}
+	for k, h := range g.heldExtensionPaints {
+		if h == nil || k.session != session {
+			continue
+		}
 		h.dirty = true
+		g.extensionCaptureDirty[k] = true
 	}
 }
 
