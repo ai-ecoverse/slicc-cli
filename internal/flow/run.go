@@ -419,6 +419,15 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 	q.close()
 	<-pumped
 	_ = sig.Close()
+	again := false
+	select {
+	case rl := <-next:
+		if ctx.Err() == nil {
+			r.cfg.Kernel, r.cfg.Compute = rl.Kernel, rl.Compute
+			again = true
+		}
+	default:
+	}
 	select {
 	case <-r.client.Done():
 		if ctx.Err() == nil {
@@ -430,13 +439,8 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 		}
 	default:
 	}
-	select {
-	case rl := <-next:
-		if ctx.Err() == nil {
-			r.cfg.Kernel, r.cfg.Compute = rl.Kernel, rl.Compute
-			return true, nil
-		}
-	default:
+	if again {
+		return true, nil
 	}
 	_ = r.client.Close()
 	return false, err
