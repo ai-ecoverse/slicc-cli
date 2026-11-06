@@ -397,3 +397,19 @@ func TestAByeFromSevenDuringTheWaitCancelsTheRetry(t *testing.T) {
 		})
 	}
 }
+
+func TestAStaleByeDuringTheWaitDoesNotCancelTheRetry(t *testing.T) {
+	f := newCrashBrowser(t)
+	s := newFakeSeven(t, f)
+	p := startCrashBinary(t, "attach", "--no-kernel", "--no-jerk", "--cdp", f.srv.URL)
+	session, nonce := s.badOffer(t, 1)
+	waitOutput(t, p, "asking seven to set it up again in 1s\n", 1, 10*time.Second)
+	s.post(session, f.lastContext(), map[string]any{"t": "bye", "nonce": "not-" + nonce, "reason": "unlinked"})
+	s.post(session, f.lastContext(), map[string]any{"t": "bye", "nonce": "stale", "reason": "unlinked"})
+	f.waitHelloWithin(t, 2, 5*time.Second)
+	select {
+	case <-p.exited:
+		t.Fatalf("slicc exited: %v\n%s", p.err, p.logs.String())
+	default:
+	}
+}

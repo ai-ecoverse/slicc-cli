@@ -390,7 +390,7 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 		defer close(pumped)
 		r.pump(q, n, pol)
 	}()
-	next := make(chan Relink, 1)
+	next := make(chan struct{}, 1)
 	watched := make(chan struct{})
 	go func() {
 		defer close(watched)
@@ -398,7 +398,8 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 		case <-lctx.Done():
 		case rl, ok := <-r.cfg.Relink:
 			if ok {
-				next <- rl
+				r.cfg.Kernel, r.cfg.Compute = rl.Kernel, rl.Compute
+				next <- struct{}{}
 				stop(node.Bye(RelinkReason))
 			}
 		}
@@ -431,9 +432,8 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 	default:
 	}
 	select {
-	case rl := <-next:
+	case <-next:
 		if ctx.Err() == nil {
-			r.cfg.Kernel, r.cfg.Compute = rl.Kernel, rl.Compute
 			return true, nil
 		}
 	default:
