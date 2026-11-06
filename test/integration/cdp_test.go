@@ -173,3 +173,39 @@ func chromeCommandLine(t *testing.T, base string) string {
 	t.Fatal("chrome://version showed no command line")
 	return ""
 }
+
+func navigatorWebdriver(t *testing.T, base string) bool {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPut, base+"/json/new?about:blank", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target struct {
+		WebSocketURL string `json:"webSocketDebuggerUrl"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&target)
+	_ = resp.Body.Close()
+	if err != nil || target.WebSocketURL == "" {
+		t.Fatalf("/json/new: %v %+v", err, target)
+	}
+	c, err := dialCDP(target.WebSocketURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	res, err := c.call("Runtime.evaluate", map[string]any{"expression": "navigator.webdriver", "returnByValue": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Result struct {
+			Type  string `json:"type"`
+			Value bool   `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(res, &v); err != nil || v.Result.Type != "boolean" {
+		t.Fatalf("navigator.webdriver: %s %v", res, err)
+	}
+	return v.Result.Value
+}

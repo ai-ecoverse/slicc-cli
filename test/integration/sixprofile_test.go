@@ -492,6 +492,9 @@ func TestSixLaunchLeavesTheProfileAsItWas(t *testing.T) {
 	if want := browser.ChromiumArgs(six.Dir, "about:blank", true, true, nil); !reflect.DeepEqual(logged.Args, want) {
 		t.Fatalf("args %q, want only the runtime flags %q", logged.Args, want)
 	}
+	if !slices.Contains(logged.Args, "--disable-blink-features=AutomationControlled") {
+		t.Fatalf("args %q: six's launch with the seven flags hides navigator.webdriver too", logged.Args)
+	}
 	if logged.SawActivePort != stale {
 		t.Fatalf("the browser found DevToolsActivePort %q, not six's stale %q", logged.SawActivePort, stale)
 	}

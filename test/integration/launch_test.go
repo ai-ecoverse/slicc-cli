@@ -230,6 +230,9 @@ func TestLaunchRealChromeAndCloseOnInterrupt(t *testing.T) {
 	cmdline := chromeCommandLine(t, ev.CDP)
 	assertSevenFlags(t, cmdline, true)
 	assertEnabledFeatures(t, cmdline, strings.Join(browser.EnabledFeatures, ","))
+	if navigatorWebdriver(t, ev.CDP) {
+		t.Error("navigator.webdriver is true with the seven flags")
+	}
 	for _, s := range browser.ThrowawaySwitches {
 		if !slices.Contains(strings.Fields(cmdline), s) {
 			t.Errorf("%s missing for a profile in a temporary home:\n%s", s, cmdline)
@@ -266,12 +269,7 @@ func TestLaunchRealChromeAndCloseOnInterrupt(t *testing.T) {
 func assertSevenFlags(t *testing.T, cmdline string, want bool) {
 	t.Helper()
 	fields := strings.Fields(cmdline)
-	var features []string
-	for _, f := range fields {
-		if v, ok := strings.CutPrefix(f, "--disable-features="); ok {
-			features = append(features, v)
-		}
-	}
+	features := switchValues(cmdline, "--disable-features=")
 	has := func(s string) bool {
 		for _, f := range fields {
 			if f == s {
@@ -289,23 +287,48 @@ func assertSevenFlags(t *testing.T, cmdline string, want bool) {
 		if len(features) != 0 {
 			t.Errorf("--disable-features without seven flags: %q", features)
 		}
+		if blink := switchValues(cmdline, "--disable-blink-features="); len(blink) != 0 {
+			t.Errorf("--disable-blink-features without seven flags: %q", blink)
+		}
 		return
 	}
 	if len(features) != 1 || features[0] != strings.Join(browser.SevenDisabledFeatures, ",") {
 		t.Errorf("want one --disable-features=%s, got %q", strings.Join(browser.SevenDisabledFeatures, ","), features)
 	}
+	assertOneSwitch(t, cmdline, "--disable-blink-features=", strings.Join(browser.SevenDisabledBlinkFeatures, ","))
+}
+
+func switchValues(cmdline, prefix string) []string {
+	var values []string
+	for _, f := range strings.Fields(cmdline) {
+		if v, ok := strings.CutPrefix(f, prefix); ok {
+			values = append(values, v)
+		}
+	}
+	return values
+}
+
+func assertOneSwitch(t *testing.T, cmdline, prefix, want string) {
+	t.Helper()
+	if values := switchValues(cmdline, prefix); len(values) != 1 || values[0] != want {
+		t.Errorf("want one %s%s, got %q\n%s", prefix, want, values, cmdline)
+	}
 }
 
 func assertEnabledFeatures(t *testing.T, cmdline, want string) {
 	t.Helper()
-	var features []string
-	for _, f := range strings.Fields(cmdline) {
-		if v, ok := strings.CutPrefix(f, "--enable-features="); ok {
-			features = append(features, v)
-		}
-	}
-	if len(features) != 1 || features[0] != want {
-		t.Errorf("want one --enable-features=%s, got %q\n%s", want, features, cmdline)
+	assertOneSwitch(t, cmdline, "--enable-features=", want)
+}
+
+func TestChromiumArgsMergeBlinkFeatures(t *testing.T) {
+	dir := t.TempDir()
+	extra := []string{"--disable-blink-features=SliccMergeProbe,AutomationControlled", "--disable-blink-features=Other"}
+	seven := strings.Join(browser.ChromiumArgs(dir, "", false, true, extra), " ")
+	assertOneSwitch(t, seven, "--disable-blink-features=", "AutomationControlled,SliccMergeProbe,Other")
+	plain := strings.Join(browser.ChromiumArgs(dir, "", false, false, extra[1:]), " ")
+	assertOneSwitch(t, plain, "--disable-blink-features=", "Other")
+	if got := switchValues(strings.Join(browser.ChromiumArgs(dir, "", false, false, nil), " "), "--disable-blink-features="); len(got) != 0 {
+		t.Errorf("--disable-blink-features without seven flags: %q", got)
 	}
 }
 
@@ -324,6 +347,9 @@ func TestLaunchWithoutSevenFlags(t *testing.T) {
 	assertSevenFlags(t, cmdline, false)
 	assertEnabledFeatures(t, cmdline, strings.Join(browser.EnabledFeatures, ","))
 	assertSevenPrefs(t, readPrefs(t, ev.ProfileDir), false)
+	if !navigatorWebdriver(t, ev.CDP) {
+		t.Error("navigator.webdriver is false without the seven flags, so the test can't tell the flag works")
+	}
 	if err := interrupt(l.cmd); err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +374,7 @@ func TestLaunchPackageAPIClosesBrowser(t *testing.T) {
 	profiles := filepath.Join(root, "profiles")
 	b, err := browser.Launch(context.Background(), chrome, browser.LaunchOptions{
 		Options: browser.Options{ProfilesDir: profiles}, Profile: "api", Headless: true,
-		ExtraArgs: []string{"--enable-features=SliccMergeProbe,ForceForegroundPriorityForAllTabs"},
+		ExtraArgs: []string{"--enable-features=SliccMergeProbe,ForceForegroundPriorityForAllTabs", "--disable-blink-features=SliccMergeProbe"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +385,12 @@ func TestLaunchPackageAPIClosesBrowser(t *testing.T) {
 	if _, err := getVersion(b.CDP); err != nil {
 		t.Fatal(err)
 	}
-	assertEnabledFeatures(t, chromeCommandLine(t, b.CDP), "ForceForegroundPriorityForAllTabs,SliccMergeProbe")
+	cmdline := chromeCommandLine(t, b.CDP)
+	assertEnabledFeatures(t, cmdline, "ForceForegroundPriorityForAllTabs,SliccMergeProbe")
+	assertOneSwitch(t, cmdline, "--disable-blink-features=", "AutomationControlled,SliccMergeProbe")
+	if navigatorWebdriver(t, b.CDP) {
+		t.Error("navigator.webdriver is true: an extra --disable-blink-features replaced AutomationControlled")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := b.Close(ctx); err != nil {
