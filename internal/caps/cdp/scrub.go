@@ -61,7 +61,8 @@ func (g *guard) scrub(data []byte) []byte {
 	frames := g.scrubExtensionFrames(m)
 	value := g.scrubValue(m)
 	marked := g.markExtensionFramePlacement(m)
-	if !stripped && !worlds && !assets && !failed && !frames && !value && !marked {
+	routed := g.markSliccRoute(m)
+	if !stripped && !worlds && !assets && !failed && !frames && !value && !marked && !routed {
 		return data
 	}
 	return encode(m)

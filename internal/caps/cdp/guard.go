@@ -177,6 +177,8 @@ type guard struct {
 	extensionOwnerCalls   map[callKey]string
 	extensionOwnerReplies map[callKey]int
 	extensionPaintGen     uint64
+	versionCalls          map[callKey]bool
+	versionReplies        map[callKey]int
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -541,6 +543,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.forgetCastLocked(id)
 	g.forgetExtensionProbeWorldSessionLocked(id)
 	g.forgetExtensionOwnerCallsLocked(id)
+	g.forgetVersionCallsLocked(id)
 	g.releaseExtensionPaintsForSessionLocked(id)
 	delete(g.sessions, id)
 	delete(g.browserSessions, id)

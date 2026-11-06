@@ -129,6 +129,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	if kind == kindPaint || framePaintMethods[c.method] || kind == kindStreams && protect.ExtensionPresentMethod(c.method) {
 		g.paintMethods[k] = c.method
 	}
+	g.noteVersionCallLocked(k, c.method)
 	g.noteBodyCallLocked(k, c)
 	g.noteClientRequestLocked(k, c)
 	g.noteContinueLocked(k, c)
