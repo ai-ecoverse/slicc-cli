@@ -390,7 +390,7 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 		defer close(pumped)
 		r.pump(q, n, pol)
 	}()
-	next := make(chan struct{}, 1)
+	next := make(chan Relink, 1)
 	watched := make(chan struct{})
 	go func() {
 		defer close(watched)
@@ -398,8 +398,7 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 		case <-lctx.Done():
 		case rl, ok := <-r.cfg.Relink:
 			if ok {
-				r.cfg.Kernel, r.cfg.Compute = rl.Kernel, rl.Compute
-				next <- struct{}{}
+				next <- rl
 				stop(node.Bye(RelinkReason))
 			}
 		}
@@ -420,6 +419,15 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 	q.close()
 	<-pumped
 	_ = sig.Close()
+	again := false
+	select {
+	case rl := <-next:
+		if ctx.Err() == nil {
+			r.cfg.Kernel, r.cfg.Compute = rl.Kernel, rl.Compute
+			again = true
+		}
+	default:
+	}
 	select {
 	case <-r.client.Done():
 		if ctx.Err() == nil {
@@ -431,12 +439,8 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 		}
 	default:
 	}
-	select {
-	case <-next:
-		if ctx.Err() == nil {
-			return true, nil
-		}
-	default:
+	if again {
+		return true, nil
 	}
 	_ = r.client.Close()
 	return false, err
