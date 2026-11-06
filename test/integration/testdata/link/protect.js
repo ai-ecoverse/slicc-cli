@@ -2215,6 +2215,20 @@ export function protectTest(getLink, describe) {
           keys: owner.ok ? Object.keys(owner.result ?? {}).sort() : [],
         };
       }),
+    versionRoute: (browser) =>
+      run(browser, async (c) => {
+        const plain = await outcome(c.send('Browser.getVersion'));
+        const poisoned = await outcome(c.send('Browser.getVersion'));
+        const failed = await outcome(c.send('Browser.getVersion'));
+        return {
+          plain,
+          poisoned,
+          failed,
+          plainKeys: plain.ok ? Object.keys(plain.result ?? {}).sort() : [],
+          poisonedKeys: poisoned.ok ? Object.keys(poisoned.result ?? {}).sort() : [],
+          failedKeys: failed.ok ? Object.keys(failed.result ?? {}).sort() : failed.error ? Object.keys(failed.error).sort() : [],
+        };
+      }),
     extensionFrameBiosLiveCheck: (browser, targetId, frameId) =>
       run(browser, async (c) => {
         const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
