@@ -79,12 +79,16 @@ var SevenDisabledFeatures = slices.Clone(catalog.Seven.DisabledFeatures)
 
 var disableFeatures = catalog.Launch.DisableFeaturesFlag
 
+const disableBlinkFeatures = "--disable-blink-features="
+
+var SevenDisabledBlinkFeatures = []string{"AutomationControlled"}
+
 const enableFeatures = "--enable-features="
 
 var EnabledFeatures = []string{"ForceForegroundPriorityForAllTabs"}
 
 func ChromiumArgs(profileDir, startURL string, headless, sevenFlags bool, extra []string) []string {
-	args := make([]string, 0, len(catalog.Launch.ChromiumArgs)+len(ThrowawaySwitches)+len(SevenSwitches)+len(extra)+4)
+	args := make([]string, 0, len(catalog.Launch.ChromiumArgs)+len(ThrowawaySwitches)+len(SevenSwitches)+len(extra)+5)
 	for _, a := range catalog.Launch.ChromiumArgs {
 		args = append(args, strings.ReplaceAll(a, "{profile}", profileDir))
 	}
@@ -95,11 +99,15 @@ func ChromiumArgs(profileDir, startURL string, headless, sevenFlags bool, extra 
 	if sevenFlags {
 		args = append(args, SevenSwitches...)
 		args = append(args, disableFeatures+strings.Join(SevenDisabledFeatures, ","))
+		args = append(args, disableBlinkFeatures+strings.Join(SevenDisabledBlinkFeatures, ","))
 	}
 	if headless {
 		args = append(args, catalog.Launch.Headless)
 	}
-	args = mergeFeatures(mergeFeatures(append(args, extra...), enableFeatures), disableFeatures)
+	args = append(args, extra...)
+	for _, flag := range []string{enableFeatures, disableFeatures, disableBlinkFeatures} {
+		args = mergeFeatures(args, flag)
+	}
 	if startURL != "" {
 		args = append(args, startURL)
 	}
