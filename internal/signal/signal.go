@@ -101,6 +101,11 @@ type Conn interface {
 	Close() error
 }
 
+type Relinker interface {
+	Linked(nonce string)
+	Failed(nonce string, err error)
+}
+
 var ErrClosed = errors.New("signal: closed")
 
 func NewNonce() string {

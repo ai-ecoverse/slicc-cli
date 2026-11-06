@@ -198,6 +198,7 @@ func byeReason(ctx context.Context) string {
 const byeTimeout = 2 * time.Second
 
 func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
+	relink, _ := conn.(signal.Relinker)
 	var cur *current
 	closeCur := func(reason string, bye bool) {
 		if cur == nil {
@@ -225,7 +226,7 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 		switch m.T {
 		case signal.TypeOffer:
 			closeCur("replaced by a new offer", false)
-			cur = n.answer(ctx, conn, m, n.Options())
+			cur = n.answer(ctx, conn, m, n.Options(), relink)
 		case signal.TypeCandidate:
 			if cur != nil && cur.nonce == m.Nonce {
 				if err := cur.l.AddCandidate(m.Candidate); err != nil {
@@ -241,11 +242,12 @@ func (n *Node) Serve(ctx context.Context, conn signal.Conn) error {
 	}
 }
 
-func (n *Node) answer(ctx context.Context, conn signal.Conn, m signal.Message, opts link.Options) *current {
+func (n *Node) answer(ctx context.Context, conn signal.Conn, m signal.Message, opts link.Options, relink signal.Relinker) *current {
 	l, err := link.Answer(ctx, n.API(), m, conn.Send, opts)
 	if err != nil {
 		n.cfg.Status("could not answer seven: %v", err)
 		n.emit(Event{Kind: EventLinkDown, Err: err})
+		failed(ctx, relink, m.Nonce, err)
 		return nil
 	}
 	c := &current{nonce: m.Nonce, l: l, watched: make(chan struct{})}
@@ -253,11 +255,17 @@ func (n *Node) answer(ctx context.Context, conn signal.Conn, m signal.Message, o
 		n.origins.Store(l, m.Origin)
 	}
 	n.emit(Event{Kind: EventConnecting, Link: l})
-	go n.watch(c)
+	go n.watch(ctx, c, relink)
 	return c
 }
 
-func (n *Node) watch(c *current) {
+func failed(ctx context.Context, relink signal.Relinker, nonce string, err error) {
+	if relink != nil && err != nil && ctx.Err() == nil {
+		relink.Failed(nonce, err)
+	}
+}
+
+func (n *Node) watch(ctx context.Context, c *current, relink signal.Relinker) {
 	defer close(c.watched)
 	l := c.l
 	select {
@@ -268,6 +276,9 @@ func (n *Node) watch(c *current) {
 			name = "seven"
 		}
 		n.cfg.Status("link up with %q", name)
+		if relink != nil {
+			relink.Linked(c.nonce)
+		}
 		n.emit(Event{Kind: EventLinked, Link: l, Peer: h})
 	case <-l.Done():
 	}
@@ -276,6 +287,9 @@ func (n *Node) watch(c *current) {
 	e := Event{Kind: EventLinkDown, Link: l, Reason: c.getReason()}
 	n.annotateLinkDown(&e, l.Err())
 	n.emit(e)
+	if !errors.Is(e.Err, link.ErrPeerClosed) {
+		failed(ctx, relink, c.nonce, e.Err)
+	}
 }
 
 func (n *Node) annotateLinkDown(e *Event, err error) {
