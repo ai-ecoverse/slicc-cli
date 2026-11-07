@@ -646,25 +646,29 @@ const RAW = (http, ws) => {
 const only = process.env.G0_CLIENTS?.split(',').filter(Boolean);
 await tidy();
 const chosen = process.env.G0_TARGETS?.split(',').filter(Boolean);
-for (const target of targets.filter((x) => !chosen?.length || chosen.includes(x.name))) {
-  current.target = target.name;
+const picked = targets.filter((x) => !chosen?.length || chosen.includes(x.name));
+for (const target of picked) {
   const { server, port } = await proxy(target.upstream);
-  const ws = `ws://127.0.0.1:${port}/devtools/browser/g0`;
-  const http = `http://127.0.0.1:${port}`;
-  const clients = [
-    ['playwright', PW(ws)],
-    ['puppeteer', PP(ws)],
-    ['raw', RAW(http, ws)],
-  ].filter(([name]) => !only?.length || only.includes(name));
-  for (const [client, flows] of clients) {
-    for (const [name, body] of flows) {
+  target.server = server;
+  target.ws = `ws://127.0.0.1:${port}/devtools/browser/g0`;
+  target.http = `http://127.0.0.1:${port}`;
+}
+const clientFlows = (target, client) => (client === 'playwright' ? PW(target.ws) : client === 'puppeteer' ? PP(target.ws) : RAW(target.http, target.ws));
+async function phase(list, client) {
+  if (only?.length && !only.includes(client)) return;
+  for (const target of list) {
+    current.target = target.name;
+    for (const [name, body] of clientFlows(target, client)) {
+      current.target = target.name;
       await flow(client, name, body);
       process.stderr.write(`g0 ${target.name} ${client} ${name}: ${results.at(-1).ok ? 'ok' : `FAILED ${results.at(-1).failed}`}\n`);
     }
   }
-  server.closeAllConnections?.();
-  server.close();
 }
+const controls = picked.filter((x) => x.name === 'control');
+const guarded = picked.filter((x) => x.name !== 'control');
+for (const client of ['playwright', 'puppeteer', 'raw']) await phase(controls, client);
+await phase(guarded, 'raw');
 const KEPT = new Set(['media', 'behavior', 'format', 'type', 'waitUntil', 'worldName', 'urlPattern', 'requestStage']);
 function signature(record) {
   const parts = Object.entries(record.params).map(([key, d]) => {
@@ -679,6 +683,7 @@ function signature(record) {
 const IDS = new Set(['objectId', 'executionContextId', 'contextId', 'uniqueContextId', 'backendNodeId', 'nodeId', 'frameId', 'requestId', 'interceptionId', 'targetId', 'sessionId', 'scriptId', 'identifier', 'browserContextId', 'loaderId', 'objectGroup']);
 const SKIP = new Set(['Browser.close', 'Browser.crash', 'Browser.crashGpuProcess', 'Target.closeTarget', 'Page.close', 'Target.detachFromTarget', 'Target.disposeBrowserContext']);
 const probes = [];
+const setups = [];
 async function probe(target) {
   current.target = target.name;
   current.client = 'probe';
@@ -719,8 +724,10 @@ async function probe(target) {
     const attached = await call('Target.attachToTarget', { targetId: created.result.targetId, flatten: true }, undefined, STEP);
     if (!attached.result) throw new Error(`probe attach: ${JSON.stringify(attached.error ?? attached)}`);
     await call('Page.enable', {}, attached.result.sessionId, STEP);
-    await call('Page.navigate', { url: PAGE }, attached.result.sessionId, STEP);
+    const navigated = await call('Page.navigate', { url: PAGE }, attached.result.sessionId, STEP);
     await new Promise((resolve) => setTimeout(resolve, 1500));
+    const href = await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, attached.result.sessionId, STEP);
+    setups.push({ target: target.name, navigateMs: navigated.ms, navigateHeld: Boolean(navigated.held), href: href.result?.result?.value ?? null, error: href.error?.message ?? null });
     page = { targetId: created.result.targetId, sessionId: attached.result.sessionId };
   };
   try {
@@ -746,8 +753,12 @@ async function probe(target) {
   const refused = probes.filter((p) => p.target === target.name && p.outcome !== 'ok' && p.outcome !== 'error');
   process.stderr.write(`g0 probe ${target.name}: ${seen.size} signatures, ${refused.length} refused or held\n`);
 }
-if (process.env.G0_PROBE !== '0') {
-  for (const target of targets.filter((x) => x.name !== 'control' && (!chosen?.length || chosen.includes(x.name)))) await probe(target);
+if (process.env.G0_PROBE !== '0') for (const target of guarded) await probe(target);
+await phase(guarded, 'playwright');
+await phase(guarded, 'puppeteer');
+for (const target of picked) {
+  target.server.closeAllConnections?.();
+  target.server.close();
 }
 fixture.closeAllConnections?.();
 fixture.close();
@@ -758,7 +769,7 @@ const versions = {
   'puppeteer-core': require('puppeteer-core/package.json').version,
   node: process.version,
 };
-await writeFile(out, JSON.stringify({ versions, page: PAGE, frameHost: FRAME_HOST, results, flagged, probes, records, events: allEvents }, null, 1));
+await writeFile(out, JSON.stringify({ versions, page: PAGE, frameHost: FRAME_HOST, results, flagged, probes, setups, records, events: allEvents }, null, 1));
 const summary = results.map((r) => `${r.target}\t${r.client}\t${r.flow}\t${r.ok ? 'ok' : `FAILED: ${r.failed}`}`).join('\n');
 process.stdout.write(`${JSON.stringify({ versions })}\n${summary}\n`);
 process.stdout.write(`flagged ${flagged.length} of ${records.length} commands\n`);
