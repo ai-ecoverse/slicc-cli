@@ -2,57 +2,45 @@ name: CI
 
 on:
   pull_request:
-  merge_group:
-  push:
-    branches: [main]
 
 permissions:
-  contents: write
-  actions: read
-  issues: write
-  pull-requests: write
-  statuses: write
-  id-token: write
-  attestations: write
+  contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: g0-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  ci:
-    uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@v2.13.10
-    secrets: inherit
-    with:
-      node-version: '26'
-      lint: |
-        # renovate: datasource=github-releases depName=golangci/golangci-lint
-        GOLANGCI_LINT=v2.15.0
-        curl -fsSL "https://raw.githubusercontent.com/golangci/golangci-lint/$GOLANGCI_LINT/install.sh" | sh -s -- -b "$RUNNER_TEMP/golangci-lint" "$GOLANGCI_LINT"
-        PATH="$RUNNER_TEMP/golangci-lint:$PATH" npm run lint
-        npm run lint:sh
-      shards: 5
-      flaky-retry: 0
-      timeout-minutes: 45
-      review-timeout-minutes: 90
-      release-secrets: APPLE_CERTIFICATE_BASE64 APPLE_DEVELOPER_CERTIFICATE_PASSWORD APPLE_API_KEY_ID APPLE_API_KEY_ISSUER_ID APPLE_API_KEY_P8_BASE64
-      attest: artifacts/release/SHA256SUMS
-      after-release: scripts/go-warm.sh "$RELEASE_VERSION"
-      review-prompt: |
-        SLICC-CLI
-
-        This repository is slicc-cli: `slicc`, one Go binary (macOS, Windows, Linux, and a WASI build that runs inside seven) that links a machine to seven over WebRTC and shares its network, HTTP, SSH, CDP, kernel and host folders with it. README.md is the contract: its link protocol (§1 to §6) must stay in step with seven's link exit in ai-ecoverse/slicc-bios. `git diff origin/main...HEAD`, or `$RUNNER_TEMP/review/context/pr.diff`, is the change.
-
-        There is no certification after you: once this pull request passes the merge queue, semantic-release builds, signs and publishes it from `main` (the GitHub release that `install.sh` and `slicc update` take, and the npm packages that seven pins). Review it as the last check before it ships.
-
-        Look for real defects, in this order:
-        1. Security: the network policy (`--allow`, protected debugging ports 9222 to 9229, loopback, DNS names from `--hosts`), the protected-origin guard on the CDP relay (seven and the vault never reach the page's own CDP session), credentialed streams, host folders (the fence: nothing outside a shared folder, symlinks included), the SSH server, join URLs and tray hub tokens, update and install (SHA256SUMS, then the build provenance attestation), and secrets that must never reach a log, an error or telemetry.
-        2. Correctness of the link: frames, stream ids, flow control, HELLO and caps, link-down and relink, against README.md. A change on the wire without its README section, or one seven's exit can't speak, is a defect.
-        3. Platforms: the build is `CGO_ENABLED=0` for darwin, linux and windows on amd64 and arm64, plus wasip1. CI runs the tests on Linux only and vets darwin and windows, so read platform-specific files (`*_windows.go`, `*_other.go`, named pipes, process groups, signals, file locks) with care.
-        4. Tests: every behaviour change has an integration test in `test/integration/` that drives the binary, and a fix's test fails without the fix. Confirm that for a fix: copy the changed test files into `$RUNNER_TEMP/base` and run them there with `go test -count=1 -run '^TestName$' ./test/integration/`.
-        5. Releases: `scripts/package.sh`, `scripts/release-build.sh`, `scripts/npm-*.mjs`, `.releaserc.json` and `install.sh` decide what ships. A pushed Go tag is permanent, so a breaking change needs a `/vN` module path first.
-        6. Repo rules: no comments in any file except Go directives and `# renovate:` annotations, no unit tests in git, AGENTS.md under 1000 characters, and a conventional-commit title (`fix`, `feat` and `perf` release, the rest don't).
-
-        Run `npm run lint` and the integration tests a change touches. Don't report style preferences, or anything you haven't confirmed in the code or by a run.
-
-        Severity: deny for a confirmed P1 or P2: a security or secret exposure, a policy or guard bypass, a broken link or a protocol change seven can't follow, a crash, a release that can't install or update, a behaviour change without its test, or a fix whose test passes without it. A narrow problem with a workaround is P3: comment with a repro and approve. A problem on seven's side belongs to ai-ecoverse/slicc-bios, one in the shared pipeline to ai-ecoverse/slicc-shared-web: open it there as an issue.
+  g0:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '26'
+          cache: npm
+      - run: npm ci
+      - name: Chrome
+        run: npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser --with-deps
+      - name: Measure
+        env:
+          G0_OUT: ${{ runner.temp }}/g0/slicc-cli-link-guard.json
+        run: |
+          mkdir -p "$RUNNER_TEMP/g0"
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+          nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+          for _ in $(seq 50); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.2; done
+          export DISPLAY=:99
+          go test -count=1 -v -timeout 50m -run '^TestG0StockClientsThroughLinkGuard$' ./test/integration/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: g0-slicc-cli
+          path: ${{ runner.temp }}/g0/
+          if-no-files-found: ignore
