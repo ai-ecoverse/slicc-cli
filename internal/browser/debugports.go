@@ -143,6 +143,8 @@ var served = &servedCache{byPID: map[int]uint16{}}
 
 func ServedPorts(ctx context.Context) []uint16 { return served.ports(ctx) }
 
+func ServedLag() time.Duration { return servedFresh + servedWait }
+
 func (c *servedCache) ports(ctx context.Context) []uint16 {
 	c.mu.Lock()
 	if c.running || time.Since(c.at) < servedFresh {

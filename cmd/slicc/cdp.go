@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/browser"
 	"github.com/ai-ecoverse/slicc-cli/internal/caps/cdpin"
 	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
@@ -51,6 +52,8 @@ taken, seven can't share its browser or the link can't be set up for good,
 2 for bad usage, 3 when seven doesn't allow browser control from this
 device.
 `
+
+const cdpReadyMargin = 500 * time.Millisecond
 
 const (
 	cdpNoCap   = "this seven can't share its browser yet; update it"
@@ -178,6 +181,7 @@ func (r *cdpRun) run(ctx context.Context, st *stopper) int {
 		return r.fail(1, fmt.Sprintf("can't serve the control socket (%v), so this machine's other slicc processes couldn't keep port %d from seven; not serving", err, srv.Port()))
 	}
 	defer cs.Close()
+	visible := time.Now().Add(browser.ServedLag() + cdpReadyMargin)
 	af := agentFlags{verb: "cdp", joinURL: r.f.joinURL, cdp: r.f.cdp, signal: r.f.signal, origins: r.f.origins}
 	al, err := af.links(ctx, r.aio, r.status)
 	if err != nil {
@@ -211,7 +215,16 @@ func (r *cdpRun) run(ctx context.Context, st *stopper) int {
 	if code := r.first(ctx, l); code >= 0 {
 		return code
 	}
-	srv.Serve()
+	ready := visible
+	if now := time.Now(); now.After(ready) {
+		ready = now
+	}
+	srv.Serve(ready)
+	select {
+	case <-ctx.Done():
+		return 0
+	case <-time.After(time.Until(ready)):
+	}
 	r.status(cdpServing, srv.URL(), peerName(l))
 	r.out.emit(flow.Event{Event: flow.Listening, URL: srv.URL()})
 	return r.serve(ctx, links, l)

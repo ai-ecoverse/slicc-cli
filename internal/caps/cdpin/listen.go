@@ -73,24 +73,34 @@ func (g *guarded) Accept() (net.Conn, error) {
 			return c, nil
 		}
 		g.logf("cdp: refused %s, not loopback", c.RemoteAddr())
-		if tc, ok := c.(*net.TCPConn); ok {
-			_ = tc.SetLinger(0)
-		}
-		_ = c.Close()
+		drop(c)
 	}
 }
 
 type multiListener struct {
 	lns   []net.Listener
+	admit func() bool
+	logf  func(string, ...any)
 	conns chan net.Conn
 	done  chan struct{}
 	once  sync.Once
-	start sync.Once
 	wg    sync.WaitGroup
 }
 
-func merge(lns []net.Listener) *multiListener {
-	return &multiListener{lns: lns, conns: make(chan net.Conn), done: make(chan struct{})}
+func merge(lns []net.Listener, admit func() bool, logf func(string, ...any)) *multiListener {
+	m := &multiListener{lns: lns, admit: admit, logf: logf, conns: make(chan net.Conn), done: make(chan struct{})}
+	for _, ln := range lns {
+		m.wg.Add(1)
+		go m.pump(ln)
+	}
+	return m
+}
+
+func drop(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetLinger(0)
+	}
+	_ = c.Close()
 }
 
 func (m *multiListener) pump(ln net.Listener) {
@@ -104,6 +114,11 @@ func (m *multiListener) pump(ln net.Listener) {
 			}
 			return
 		}
+		if !m.admit() {
+			m.logf("cdp: closed a connection from before the endpoint was ready")
+			drop(c)
+			continue
+		}
 		select {
 		case m.conns <- c:
 		case <-m.done:
@@ -114,12 +129,6 @@ func (m *multiListener) pump(ln net.Listener) {
 }
 
 func (m *multiListener) Accept() (net.Conn, error) {
-	m.start.Do(func() {
-		for _, ln := range m.lns {
-			m.wg.Add(1)
-			go m.pump(ln)
-		}
-	})
 	select {
 	case c := <-m.conns:
 		return c, nil

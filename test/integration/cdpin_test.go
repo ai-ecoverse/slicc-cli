@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -903,5 +904,49 @@ func TestCDPRefusesToServeWithoutItsControlSocket(t *testing.T) {
 	if c, err := net.DialTimeout("tcp4", "127.0.0.1:"+strconv.Itoa(port), 2*time.Second); err == nil {
 		_ = c.Close()
 		t.Fatal("the port still listens after slicc cdp gave up")
+	}
+}
+
+func earlyConnection(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	c, err := net.Dial("tcp4", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_, _ = c.Write([]byte("GET /json/version HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\nGET /json/version HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
+	return c
+}
+
+func closedWithoutAByte(t *testing.T, c net.Conn, what string) {
+	t.Helper()
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	n, err := c.Read(make([]byte, 64))
+	if n > 0 || err == nil {
+		t.Fatalf("%s got %d bytes back (%v)", what, n, err)
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatalf("%s is still open", what)
+	}
+}
+
+func TestCDPClosesConnectionsFromBeforeItIsReady(t *testing.T) {
+	srv, err := cdpin.Listen(cdpin.Config{Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	addr := "127.0.0.1:" + strconv.Itoa(srv.Port())
+	beforeServe := earlyConnection(t, addr)
+	time.Sleep(300 * time.Millisecond)
+	ready := time.Now().Add(1500 * time.Millisecond)
+	srv.Serve(ready)
+	beforeReady := earlyConnection(t, addr)
+	closedWithoutAByte(t, beforeServe, "a connection made before Serve")
+	closedWithoutAByte(t, beforeReady, "a connection made before the ready time")
+	time.Sleep(time.Until(ready) + 100*time.Millisecond)
+	if a := cdpHTTP(t, http.MethodGet, "http://"+addr+"/json/version", nil); a.status != 502 || a.body != "no link to seven" {
+		t.Fatalf("a connection after the ready time: %d %q", a.status, a.body)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
@@ -46,6 +47,7 @@ type Server struct {
 	ctx  context.Context
 	stop context.CancelFunc
 
+	ready   atomic.Int64
 	mu      sync.Mutex
 	sockets map[*socket]struct{}
 	closed  bool
@@ -71,7 +73,7 @@ func Listen(cfg Config) (*Server, error) {
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	s := &Server{cfg: cfg, id: newID(), port: port, ctx: ctx, stop: stop, sockets: map[*socket]struct{}{}}
-	s.ln = Guard(merge(lns), cfg.Logf)
+	s.ln = Guard(merge(lns, s.admit, cfg.Logf), cfg.Logf)
 	s.srv = &http.Server{Handler: s, ReadHeaderTimeout: 30 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
 	return s, nil
 }
@@ -90,7 +92,13 @@ func (s *Server) URL() string { return "http://127.0.0.1:" + strconv.Itoa(s.port
 
 func (s *Server) BrowserPath() string { return "/devtools/browser/" + s.id }
 
-func (s *Server) Serve() {
+func (s *Server) admit() bool {
+	at := s.ready.Load()
+	return at != 0 && time.Now().UnixNano() >= at
+}
+
+func (s *Server) Serve(at time.Time) {
+	s.ready.Store(max(at.UnixNano(), 1))
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
