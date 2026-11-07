@@ -154,6 +154,7 @@ func (c *servedCache) ports(ctx context.Context) []uint16 {
 	}
 	c.running = true
 	c.mu.Unlock()
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, servedWait)
 	entries, err := ctl.List(ctx)
 	cancel()
@@ -161,7 +162,7 @@ func (c *servedCache) ports(ctx context.Context) []uint16 {
 	defer c.mu.Unlock()
 	c.running = false
 	if err == nil {
-		c.at = time.Now()
+		c.at = start
 		c.mergeLocked(entries)
 	}
 	return c.listLocked()

@@ -47,7 +47,7 @@ type Server struct {
 	ctx  context.Context
 	stop context.CancelFunc
 
-	ready   atomic.Int64
+	ready   atomic.Pointer[time.Time]
 	mu      sync.Mutex
 	sockets map[*socket]struct{}
 	closed  bool
@@ -94,11 +94,11 @@ func (s *Server) BrowserPath() string { return "/devtools/browser/" + s.id }
 
 func (s *Server) admit() bool {
 	at := s.ready.Load()
-	return at != 0 && time.Now().UnixNano() >= at
+	return at != nil && !time.Now().Before(*at)
 }
 
 func (s *Server) Serve(at time.Time) {
-	s.ready.Store(max(at.UnixNano(), 1))
+	s.ready.Store(&at)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
