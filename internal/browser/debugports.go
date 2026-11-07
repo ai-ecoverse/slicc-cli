@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
 )
 
@@ -23,6 +24,7 @@ var (
 	processIdle   = 30 * time.Second
 	processActive = 30 * time.Second
 	processWait   = 5 * time.Second
+	servedWait    = time.Second
 )
 
 var errNoProcessList = errors.New("couldn't list running browsers")
@@ -126,7 +128,26 @@ func (s *liveScan) snapshot() []uint16 {
 	s.mu.Lock()
 	proc := s.proc
 	s.mu.Unlock()
-	return union(ActivePorts(s.o), proc)
+	return union(ActivePorts(s.o), proc, ServedPorts(s.ctx))
+}
+
+func ServedPorts(ctx context.Context) []uint16 {
+	ctx, cancel := context.WithTimeout(ctx, servedWait)
+	defer cancel()
+	entries, err := ctl.List(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []uint16
+	for _, e := range entries {
+		if e.Status == nil || e.Status.CDP == nil || e.PID == os.Getpid() {
+			continue
+		}
+		if p := e.Status.CDP.Port; p > 0 && p <= 65535 {
+			out = union(out, []uint16{uint16(p)})
+		}
+	}
+	return out
 }
 
 func (s *liveScan) startLocked() *scanRun {
@@ -190,7 +211,7 @@ func (s *liveScan) ports() ([]uint16, error) {
 		if !s.okAt.IsZero() && !s.okAt.Before(want) {
 			proc := s.proc
 			s.mu.Unlock()
-			return union(ActivePorts(s.o), proc), nil
+			return union(ActivePorts(s.o), proc, ServedPorts(s.ctx)), nil
 		}
 		r := s.startLocked()
 		s.mu.Unlock()

@@ -39,6 +39,9 @@ const (
 
 	Inventory Kind = "inventory"
 
+	Listening Kind = "listening"
+	Clients   Kind = "clients"
+
 	ForeignBrowser Kind = "foreign-browser"
 )
 
@@ -52,9 +55,11 @@ var Lifecycle = map[Kind]bool{Connecting: true, Reconnecting: true}
 
 var Agents = map[Kind]bool{Inventory: true}
 
+var Endpoint = map[Kind]bool{Listening: true, Clients: true}
+
 func Names() []string {
 	var out []string
-	for _, set := range []map[Kind]bool{Public, Loopback, Lifecycle, Agents} {
+	for _, set := range []map[Kind]bool{Public, Loopback, Lifecycle, Agents, Endpoint} {
 		for k := range set {
 			out = append(out, string(k))
 		}
@@ -130,6 +135,11 @@ func (e Event) MarshalJSON() ([]byte, error) {
 			plain
 			Entries []browser.Entry `json:"entries"`
 		}{p, entries})
+	case Clients:
+		return json.Marshal(struct {
+			plain
+			Count int `json:"count"`
+		}{p, e.Count})
 	case Closed:
 		closed := p.Browsers
 		if closed == nil {

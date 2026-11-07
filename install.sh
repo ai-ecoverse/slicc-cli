@@ -7,9 +7,15 @@ version="${VERSION:-}"
 dir="${INSTALL_DIR:-}"
 tmp=""
 part=""
+consumed=0
+launching=""
 
 say() {
-  printf '%s\n' "$*"
+  if [ -n "$launching" ]; then
+    printf '%s\n' "$*" >&2
+  else
+    printf '%s\n' "$*"
+  fi
 }
 
 die() {
@@ -23,6 +29,7 @@ Install slicc from the GitHub releases of $repo.
 
   curl -fsSL https://get.sliccy.ai/slicc | sh
   curl -fsSL https://get.sliccy.ai/slicc | sh -s -- [options]
+  curl -fsSL https://get.sliccy.ai/slicc | sh -s -- [options] [--] <slicc arguments>
 
 If get.sliccy.ai can't be reached, use the release URL directly:
 
@@ -32,6 +39,16 @@ Options:
   --version X   install release X (default: the latest release; env VERSION)
   --dir D       install into D (default: \$HOME/.local/bin; env INSTALL_DIR)
   --help        print this help
+
+The first argument that isn't one of these options, or everything after --,
+goes to slicc: after a good install the script runs the installed slicc with
+them, as in
+
+  curl -fsSL https://get.sliccy.ai/slicc | sh -s -- <join-url> cdp --port 9333
+
+A join URL goes to slicc on stdin (as -), out of slicc's argv; it is in this
+script's argv while it installs. On a shared machine, install first and use
+slicc @<file> cdp.
 EOF
 }
 
@@ -45,6 +62,7 @@ cleanup() {
 }
 
 parse() {
+  consumed=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --help|-h)
@@ -55,26 +73,58 @@ parse() {
         [ $# -ge 2 ] || die "--version needs a value"
         version="$2"
         shift 2
+        consumed=$((consumed + 2))
         ;;
       --version=*)
         version="${1#--version=}"
         shift
+        consumed=$((consumed + 1))
         ;;
       --dir)
         [ $# -ge 2 ] || die "--dir needs a value"
         dir="$2"
         shift 2
+        consumed=$((consumed + 2))
         ;;
       --dir=*)
         dir="${1#--dir=}"
         shift
+        consumed=$((consumed + 1))
+        ;;
+      --)
+        consumed=$((consumed + 1))
+        return 0
+        ;;
+      -?*)
+        usage >&2
+        die "unknown option $1 (slicc's own options go after --)"
         ;;
       *)
-        usage >&2
-        die "unknown option $1"
+        return 0
         ;;
     esac
   done
+}
+
+launch() {
+  cleanup
+  tmp=""
+  trap - EXIT INT TERM
+  target="$1"
+  shift
+  case "$1" in
+    *://*)
+      join="$1"
+      shift
+      exec "$target" - "$@" <<EOF
+$join
+EOF
+      ;;
+  esac
+  if (: </dev/tty) 2>/dev/null; then
+    exec "$target" "$@" </dev/tty
+  fi
+  exec "$target" "$@" </dev/null
 }
 
 detect_os() {
@@ -128,6 +178,10 @@ on_path() {
 
 main() {
   parse "$@"
+  shift "$consumed"
+  if [ $# -gt 0 ]; then
+    launching=1
+  fi
   [ -n "$dir" ] || dir="${HOME:?HOME is not set}/.local/bin"
   version="${version#v}"
   os="$(detect_os)"
@@ -178,6 +232,9 @@ main() {
   say "installed $installed at $dir/$bin"
   if ! on_path "$dir" && ! on_path "$given" && ! on_path "${given%/}"; then
     say "$dir isn't on PATH; add it with: export PATH=\"$dir:\$PATH\""
+  fi
+  if [ $# -gt 0 ]; then
+    launch "$dir/$bin" "$@"
   fi
 }
 

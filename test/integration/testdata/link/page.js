@@ -6,6 +6,7 @@ import { cdpTest } from './cdp.js';
 import { protectTest } from './protect.js';
 import { fsTest } from './fs-test.js';
 import { agentTest, onAgent } from './agent.js';
+import { cdpInTest, onCdpIn } from './cdpin.js';
 import { wsTest } from './ws.js';
 import { udpTest } from './udp.js';
 import { onJerkRevoked, recordLeases, revokeTest } from './revoke.js';
@@ -13,6 +14,7 @@ import { LoopbackError, backoff, certificateFingerprint, loadCertificate, pair a
 
 const params = new URLSearchParams(location.search);
 const kernelIn = params.has('kernel');
+const cdpIn = params.has('cdpin');
 const pendingPairing = takePairing();
 
 const state = { nonce: null, pc: null, link: null, hellos: 0, ready: null, resolveReady: null, browserUpdates: [], mountUpdates: [], entries: new Map(), current: null };
@@ -83,12 +85,14 @@ function teardown() {
 function pageCaps() {
   const caps = ['browsers', 'mounts', 'agent', 'jerk-revoke'];
   if (kernelIn) caps.push('kernel-in');
+  if (cdpIn) caps.push('cdp-in');
   return caps;
 }
 
 function pageHandlers(ref) {
   const handlers = { browsers: onBrowsers, mounts: onMounts, agent: onAgent, 'jerk-revoked': onJerkRevoked(ref) };
   if (kernelIn) handlers.kernel = onKernel;
+  if (cdpIn) handlers.cdp = onCdpIn;
   return handlers;
 }
 
@@ -553,6 +557,7 @@ globalThis.linkTest = {
     }));
   },
   agent: agentTest,
+  cdpIn: cdpInTest,
   revoke: revokeTest,
   loopback: loopbackTest,
   frameEvents: (opts) => measureFrameEvents(() => state.link, opts),

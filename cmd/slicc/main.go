@@ -36,6 +36,9 @@ usage:
                             list seven's agents, their status and model
                             (prompt, watch, wait, abort and agents also take
                             --cdp <url> instead of a join URL)
+  slicc <join-url> cdp [--port <n>]
+                            serve seven's browser as a CDP endpoint on this
+                            machine, for Playwright and Puppeteer
   slicc browsers            list CDP endpoints and installed browsers, ranked
   slicc launch              launch a browser with CDP in a separate SLICC profile
   slicc update [--check]    replace this binary with the latest release
@@ -79,6 +82,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runTray(args[1:], stdout, stderr)
 	case "prompt", "watch", "wait", "abort", "agents":
 		return runAgent(args[0], "", args[1:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
+	case "cdp":
+		return runCDP("", args[1:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
 	default:
 		if isJoinRef(args[0]) {
 			join, err := readJoinRef(args[0], os.Stdin)

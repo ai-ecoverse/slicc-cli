@@ -11,8 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func stageInstallRelease(t *testing.T, dir, version string) {
@@ -127,5 +131,62 @@ func TestInstallScriptHelpNamesTheShortURLFirst(t *testing.T) {
 	long := strings.Index(r.stdout, "curl -fsSL https://github.com/ai-ecoverse/slicc-cli/releases/latest/download/install.sh | sh\n")
 	if short < 0 || options < short || long < options {
 		t.Fatalf("help:\n%s", r.stdout)
+	}
+}
+
+func TestInstallScriptLaunchesSliccAfterTheInstall(t *testing.T) {
+	root := t.TempDir()
+	stageInstallRelease(t, filepath.Join(root, "latest", "download"), "1.1.0")
+	env := isolatedEnv(t, "SLICC_INSTALL_BASE_URL="+serveDir(t, root))
+	dir := t.TempDir()
+	for _, args := range [][]string{{"--dir", dir, "--", "--version"}, {"--dir", dir, "version"}} {
+		r := runInstaller(t, env, args...)
+		if r.code != 0 || r.stdout != "slicc 1.1.0\n" || !strings.Contains(r.stderr, "installed slicc 1.1.0 at ") {
+			t.Fatalf("install %v: %+v", args, r)
+		}
+	}
+	if r := runInstaller(t, env, "--dir", dir, "--bogus"); r.code == 0 || !strings.Contains(r.stderr, "unknown option --bogus") {
+		t.Fatalf("--bogus: %+v", r)
+	}
+	broken := isolatedEnv(t, "SLICC_INSTALL_BASE_URL="+serveDir(t, t.TempDir()))
+	if r := runInstaller(t, broken, "--dir", t.TempDir(), "--", "--version"); r.code != 1 || strings.Contains(r.stdout, "slicc 1.1.0") {
+		t.Fatalf("a failed install launched slicc: %+v", r)
+	}
+	if runtime.GOOS != "linux" {
+		return
+	}
+	h := newFakeHub(t)
+	tr := h.addTray("install")
+	join := h.joinURL(tr)
+	cmd := exec.Command("sh", installScript(t), "--dir", dir, join, "cdp", "--port", "0")
+	cmd.Env = append(env, "SLICC_NO_TELEMETRY=1")
+	var out syncBuffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	want := []string{filepath.Join(dir, "slicc"), "-", "cdp", "--port", "0"}
+	deadline := time.Now().Add(60 * time.Second)
+	var argv []string
+	for {
+		raw, _ := os.ReadFile("/proc/" + strconv.Itoa(cmd.Process.Pid) + "/cmdline")
+		argv = strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+		if len(argv) > 0 && argv[0] == want[0] && len(attachRequests(h, tr.Token)) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("slicc never dialed the hub as %v (argv %q)\n%s", want, argv, out.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !slices.Equal(argv, want) {
+		t.Fatalf("argv %q, want %q", argv, want)
+	}
+	if strings.Contains(strings.Join(argv, " "), tr.Token) {
+		t.Fatalf("the join URL is in slicc's argv: %q", argv)
 	}
 }

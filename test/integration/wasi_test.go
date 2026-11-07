@@ -391,6 +391,8 @@ func TestWasiCommandsOutsideSeven(t *testing.T) {
 		{Name: "default flags", Argv: []string{"slicc", "--profile", "x"}, check: unavailable("--profile")},
 		{Name: "prompt without a join url", Argv: []string{"slicc", "prompt", "--cdp", "http://127.0.0.1:9333", "hi"}, check: unavailable("prompt")},
 		{Name: "follow", Argv: []string{"slicc", wasiJoin, "follow", "--exit"}, check: unavailable("follow")},
+		{Name: "cdp", Argv: []string{"slicc", wasiJoin, "cdp", "--port", "9333"}, check: unavailable("cdp")},
+		{Name: "cdp without a join url", Argv: []string{"slicc", "cdp", "--cdp", "http://127.0.0.1:9333"}, check: unavailable("cdp")},
 		{Name: "no verb", Argv: []string{"slicc", wasiJoin}, check: func(t *testing.T, r wasiResult) {
 			wantExit(t, r, 2, "", "slicc: a join URL must be followed by a command: prompt, watch, wait or abort\n")
 		}},

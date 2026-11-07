@@ -33,6 +33,7 @@ var commands = map[string]bool{
 	"abort":    true,
 	"attach":   true,
 	"browsers": true,
+	"cdp":      true,
 	"follow":   true,
 	"install":  true,
 	"launch":   true,

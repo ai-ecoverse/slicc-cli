@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift (see [Coming from slicc-node](#coming-from-slicc-node)).
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, `slicc tray` (on a machine and inside seven), remote control with `prompt`, `watch`, `wait` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, `slicc tray` (on a machine and inside seven), remote control with `prompt`, `watch`, `wait` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), seven's browser as a CDP endpoint here with `slicc <join-url> cdp`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
 
 ## Commands (planned)
 
@@ -16,6 +16,7 @@
 | `slicc launch` | launch a browser with CDP in a separate SLICC profile and print its CDP URL |
 | `slicc <join-url> follow [--exit] [--runner …] [--cdp <url>] [--mount <path>]` | follow a seven's tray from another machine and offer its network, compute (over SSH), browsers or folders (`--exit`, `--runner`, `--cdp` and `--mount` work now; see [Remote setup](#remote-setup-slicc-join-url-follow)). `-` or `@<file>` in place of `<join-url>` reads it from stdin or a file, out of sight of `ps` |
 | `slicc <join-url> prompt <text>`, `watch`, `wait`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, wait until it has nothing left to do, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)) |
+| `slicc <join-url> cdp [--port <n>] [--json]` | serve seven's browser as a CDP endpoint on this machine's loopback, for stock Playwright, Puppeteer and other CDP clients, through seven's guard; `--cdp <url>` instead of a join URL links locally (see [Driving seven's browser from another computer](#driving-sevens-browser-from-another-computer-slicc-join-url-cdp)) |
 | `slicc <join-url> agents [--watch] [--json]` | list seven's agents, the active cone and its live scoops, with their status, queue and model, once or as they change; `--cdp <url>` instead of a join URL links locally (see [Agent inventory](#agent-inventory-slicc-agents)) |
 | `slicc <join-url> prompt`, `watch`, `wait`, `abort` inside seven | the same commands from seven's kernel, as `@ai-ecoverse/wasi-slicc` (works now; see [Inside seven](#inside-seven)) |
 | `slicc tray [url \| rotate \| unlink <device> \| retry]` inside seven | this seven's tray: its state and devices, the join URL on request, rotate it, drop a device, reconnect (see [Inside seven](#inside-seven)) |
@@ -30,7 +31,9 @@
 curl -fsSL https://get.sliccy.ai/slicc | sh
 ```
 
-This installs `slicc` on macOS and Linux; see [Install with curl](#install-with-curl). Options pass through to the script: `curl -fsSL https://get.sliccy.ai/slicc | sh -s -- --help`. If `get.sliccy.ai` can't be reached, use the GitHub release URL directly:
+This installs `slicc` on macOS and Linux; see [Install with curl](#install-with-curl). Options pass through to the script: `curl -fsSL https://get.sliccy.ai/slicc | sh -s -- --help`.
+
+Install and launch in one step: `slicc`'s own arguments follow the script's options, as in `curl -fsSL https://get.sliccy.ai/slicc | sh -s -- <join-url> cdp --port 9333`, which installs `slicc` and then runs `slicc <join-url> cdp --port 9333` (the join URL goes to it on stdin). On Windows, `npx sliccy@next <join-url> cdp --port 9333` is already one step. If `get.sliccy.ai` can't be reached, use the GitHub release URL directly:
 
 ```
 curl -fsSL https://github.com/ai-ecoverse/slicc-cli/releases/latest/download/install.sh | sh
@@ -57,7 +60,11 @@ Options go after `sh -s --`, as in `curl -fsSL https://get.sliccy.ai/slicc | sh 
 - downloads `slicc-<os>-<arch>` and `SHA256SUMS` from the release with `curl` or `wget`, checks the hash with `sha256sum` or `shasum -a 256`, and exits 1 without installing anything when the hash differs or `SHA256SUMS` has no line for the asset;
 - copies the binary to a temporary file in `INSTALL_DIR` and sets mode `755`; it exits 1 and leaves any installed `slicc` alone when that file's `--version` fails, doesn't print `slicc <version>`, or, with a version asked for, names another version;
 - renames it to `slicc`, so a re-run upgrades or downgrades in place;
-- prints `installed slicc <version> at <path>` from that `--version`, and, when `INSTALL_DIR` isn't on `PATH`, one line with the `export PATH=…` to add.
+- prints `installed slicc <version> at <path>` from that `--version`, and, when `INSTALL_DIR` isn't on `PATH`, one line with the `export PATH=…` to add;
+- takes `slicc`'s own arguments after its options: the first argument that isn't one of its options, or everything after `--`, goes to `slicc`. Any other argument starting with `-` before them is an unknown option and exits 1, so `slicc`'s own flags go after `--` (`sh -s -- -- --cdp …`). Without `slicc` arguments nothing else changes;
+- with them, after a successful install, `exec`s the installed `slicc` with them, and prints its own lines on stderr so that stdout is `slicc`'s alone. A first argument that is a join URL (anything with `://`) goes to `slicc` as `-`, one line on stdin, so it isn't in `slicc`'s argv; otherwise `slicc`'s stdin is `/dev/tty` when that opens, else `/dev/null`, since the script itself came on stdin. A failed install exits 1 without launching anything.
+
+**The limit of the one-step form:** the join URL is in `sh`'s argv, where `ps` shows it to every user of the machine, while the script downloads and checks the binary, for a few seconds, until the `exec`. On a shared machine, install first and run `slicc @<file> cdp`, with the join URL in a file only you can read.
 
 It never uses `sudo`, never edits shell startup files and sends no telemetry. The Linux binaries are static (`CGO_ENABLED=0`), so the libc doesn't matter. The macOS binaries are the signed and notarized ones; `curl` sets no quarantine flag. `SLICC_INSTALL_BASE_URL` replaces `https://github.com/ai-ecoverse/slicc-cli/releases` (assets from `<base>/latest/download/` or `<base>/download/v<version>/`), for tests only. A curl-installed `slicc` updates itself in place with `slicc update` (see [Updates](#updates)), or by running the one-liner again.
 
@@ -342,7 +349,7 @@ slicc capabilities [--json]
 - **`schema`:** the shape of this document, 1.
 - **`version`:** the version `slicc --version` prints.
 - **`contract`:** 1. It goes up only for a breaking change to a contract this document describes: a field or event that changes meaning or goes away. New commands, fields, events and ops leave it alone.
-- **`commands`:** every command, keyed by name: `default` for `slicc` with no command, `follow`, `prompt`, `watch`, `wait`, `abort` and `agents` (also after a join URL), `attach`, `open`, `pair`, `unpair`, `tray`, `browsers`, `launch`, `update`, `install`, `capabilities`, `version` and `help`. `json` says what `--json` prints: `document` (one JSON value), `events` (NDJSON, one event a line) or `none` (no `--json`). An `events` command has `vocabulary`: `events` for lines with `schema` and `event` (see [The default](#the-default-slicc) and [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)), or `agent` for seven's agent events with `t` (see [`agent`](#agent-page-cap-agent-node--page)).
+- **`commands`:** every command, keyed by name: `default` for `slicc` with no command, `follow`, `prompt`, `watch`, `wait`, `abort`, `agents` and `cdp` (also after a join URL), `attach`, `open`, `pair`, `unpair`, `tray`, `browsers`, `launch`, `update`, `install`, `capabilities`, `version` and `help`. `json` says what `--json` prints: `document` (one JSON value), `events` (NDJSON, one event a line) or `none` (no `--json`). An `events` command has `vocabulary`: `events` for lines with `schema` and `event` (see [The default](#the-default-slicc) and [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)), or `agent` for seven's agent events with `t` (see [`agent`](#agent-page-cap-agent-node--page)).
 - **`events`:** `schema`, the `schema` every `event` line carries, and `names`, every `event` a `vocabulary: "events"` command can print, sorted.
 - **`agent`:** `events`, the `t` of every agent event slicc knows, and `own`, the lines slicc itself adds to that stream (`settled`, `opened` and `reconnecting`, see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)).
 - **`control`:** `v`, the version of the [control socket](#running-links-slicc-tray) protocol, and `ops`, the ops it answers.
@@ -351,7 +358,7 @@ A program reads `contract` and the names it needs, and treats anything it doesn'
 
 ### Lifecycle events: `--json` on `attach`, `open`, `pair` and `follow`
 
-With `--json`, `attach`, `open`, `pair` (and `--default-browser`, which is `open`) and `follow` print the NDJSON of [the default's `--json`](#the-default-slicc) on stdout: one event a line, each with `"schema": 1` and `event`, from the same vocabulary. stdout carries nothing else: `open` and `pair` put the pairing URL in a `pairing` event instead of a line of its own. Status lines stay on stderr, and so does every error, which also comes as an `error` event. Fields marked `?` are left out when empty. New fields and events may be added, and existing ones keep their meaning. Without `--json` nothing changes.
+With `--json`, `attach`, `open`, `pair` (and `--default-browser`, which is `open`), `follow` and `cdp` print the NDJSON of [the default's `--json`](#the-default-slicc) on stdout: one event a line, each with `"schema": 1` and `event`, from the same vocabulary. stdout carries nothing else: `open` and `pair` put the pairing URL in a `pairing` event instead of a line of its own. Status lines stay on stderr, and so does every error, which also comes as an `error` event. Fields marked `?` are left out when empty. New fields and events may be added, and existing ones keep their meaning. Without `--json` nothing changes.
 
 - `connecting`: `mode`, `attempt?`. A dial or setup starts: for `attach`, the CDP connection (`mode` `cdp`), then each offer from seven; for `open` and `pair`, each offer (`loopback`); for `follow`, each dial of the tray hub (`tray`), with `attempt` from the first reconnect on, the `attempt` of the `reconnecting` before it.
 - `pairing`: `url`, on `open` and `pair`, for the first pairing URL and each new one (Enter on stdin). It is never a join URL. The pairing URL holds a one-time token and works as a secret for 10 minutes; it is printed by design, as without `--json`.
@@ -367,6 +374,8 @@ With `--json`, `attach`, `open`, `pair` (and `--default-browser`, which is `open
 - `reconnecting`: `attempt`, `retryAt` (RFC 3339, UTC), `wait` (milliseconds), `reason?` and `code?` (the failure that led here, and the hub's code), on `follow` before each new dial. These are the `attempt`, `retryAt` and `code` of [`slicc tray --json`](#running-links-slicc-tray).
 - `error`: `message`, `code?` (the hub's or seven's code, on `follow`), `mode?`, and `retryable`: `true` when slicc goes on by itself (`follow` reconnects, and an offer from seven that slicc can't answer leaves the run waiting for the next one), `false` when the run ends, with exit 1 (exit 2 for a bad `--origin` on `attach`).
 - `credential`: `op`, `provider`, `leaseId`, `expiresAt?`, `by`, `upstream?`, for each credential lease this process serves over [`jerk`](#jerk-slicc-jerk-over-the-link): `op` `seal` (`by` `seven`) once a lease has gone to seven, `unseal` (`by` `seven`) once seven's `unseal` has dropped one, and `revoked` (`by` `host`) once the control socket's `unseal` has dropped one. `upstream` is `true` when jerk revoked the token at the provider and `false` when it didn't (a token jerk only read lives on there until it expires); it is left out when jerk doesn't say, as with a slicc-jerk older than 1.4.0. Never a credential, a scope or a rule.
+- `listening`: `url`, on `cdp`, once the endpoint serves.
+- `clients`: `count`, on `cdp`, each time the number of open WebSockets changes, `0` included.
 - `closed`: `browsers: []`, the last event of every run, also one that failed or was interrupted, and `kept: []` after the control socket's `detach`.
 
 Secrets stay out: no join URL, no tray token, and no `--cdp` path, since `resources` names browsers by id and errors are redacted as on stderr. Fixtures: [`attach.ndjson`](test/integration/testdata/native/attach.ndjson), [`credential.ndjson`](test/integration/testdata/native/credential.ndjson), [`pair.ndjson`](test/integration/testdata/native/pair.ndjson), [`follow.ndjson`](test/integration/testdata/native/follow.ndjson) and [`follow-error.ndjson`](test/integration/testdata/native/follow-error.ndjson), with values that change from run to run shown as `<…>`.
@@ -1412,26 +1421,74 @@ slicc agents --signal stdio [--watch] [--json]
 - **Limits:** `summary` is at most 200 characters. Credentials and tool output beyond the summary are never sent.
 - **Unknown events:** the node ignores events and fields it doesn't know.
 
+## Driving seven's browser from another computer: `slicc <join-url> cdp`
+
+```
+slicc <join-url> cdp [--port <n>] [--json]
+slicc - cdp [--port <n>] [--json]
+slicc @<file> cdp [--port <n>] [--json]
+slicc cdp --cdp <url> [--origin <origin>]... [--port <n>] [--json]
+slicc cdp --signal stdio [--port <n>] [--json]
+```
+
+`slicc … cdp` serves seven's browser on this machine as a CDP endpoint, the way Chrome serves its own debugging port, so stock Playwright (`chromium.connectOverCDP("http://127.0.0.1:9333")`), Puppeteer (`puppeteer.connect({ browserURL })`), slicc-cdp's `playwright-cli --cdp 127.0.0.1:9333` and raw CDP clients drive the browser of the seven on the other machine. Every connection is a [`cdp`](#519-cdp-page-cap-cdp-in-node--page-a-cdp-endpoint-on-the-node) stream that ends in seven's page at the same hook and guard a kernel program's CDP goes through, so seven's own pages, the vault and the other protected targets stay out of reach, and calls that guard refuses are refused here too.
+
+- **The link:** as for `prompt` (see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)): a link that offers nothing to seven (`caps: []`), through the tray as this device with the same certificate and its own `node` id, so a running `follow` keeps its link; or over CDP with `--cdp` and `--origin`; or `--signal stdio` for a test harness. `-` and `@<file>` take the join URL off the command line. slicc waits up to 1 minute for seven's HELLO.
+- **Who may:** seven checks every connection against this device's *Browser* access in its Linked devices, off by default, and against its *Browser control from linked devices* switch. A local link (`--cdp`, not paired) always has it.
+- **Listening:** on `127.0.0.1:<port>`, plus `[::1]:<port>` when that can be bound. `--port` defaults to `9333`; `--port 0` picks a free port, and the URL line names it. On macOS, where binding `127.0.0.1` can be refused, slicc falls back to `0.0.0.0:<port>`.
+  - A connection from anything but loopback is closed before anything is read from it, as for [kernel services](#59-kernel-listener-on-the-node-local-only). There is no token: any program on this machine can use the endpoint while it runs.
+  - A port that can't be bound exits 1 with `port <n> is taken; try --port`.
+- **What every request must pass,** as Chrome checks its own port:
+  - **`Host`:** `127.0.0.1`, `localhost` or `[::1]`, with or without a port. Anything else is `403 Host header is specified and is not an IP address or localhost.`, Chrome's own text, which keeps DNS rebinding out.
+  - **`Origin`:** none, or this endpoint's own origin (`http://127.0.0.1:<port>`, `http://localhost:<port>`, `http://[::1]:<port>`), on WebSocket upgrades and plain HTTP alike. Anything else is `403`, as Chrome 111 and later do without `--remote-allow-origins`. That keeps web pages in this machine's browsers out.
+- **HTTP,** the part of Chrome's that clients use:
+  - `GET /json/version`: `{ "Browser", "Protocol-Version", "User-Agent", "V8-Version", "WebKit-Version", "webSocketDebuggerUrl": "ws://<host>:<port>/devtools/browser/<id>" }`, from the OPENED `version` of a short stream. `<id>` is a random UUID per process, and `<host>` is the request's `Host` without its port.
+  - `GET /json` and `GET /json/list`: one short stream with `Target.getTargets`, and one entry per target in Chrome's shape, `{ "description": "", "id", "title", "type", "url", "webSocketDebuggerUrl": "ws://<host>:<port>/devtools/page/<id>" }`, every type but `browser` and `tab`. seven's guard has already filtered the list: protected targets are missing, or cut to their origin.
+  - `PUT /json/new?<url>` (and `GET`, for older clients): `Target.createTarget { url }` (`about:blank` without one), answered with that target's entry.
+  - `GET /json/activate/<id>`: `Target.activateTarget`, answered `Target activated`. `GET /json/close/<id>`: `Target.closeTarget`, answered `Target is closing`.
+  - A guard refusal or a CDP error is `500` with the error's message, and any other path is `404`.
+- **`/devtools/browser/<id>`** (WebSocket): one stream per socket. Each text message is one stream message, and back, with no id or session rewritten. A binary message closes the socket with `1003`.
+- **`/devtools/page/<targetId>`** (WebSocket), for raw clients that use a page socket:
+  - **Setup:** one stream, then `Target.attachToTarget { targetId, flatten: true }` with id `-2`. A failure closes the socket with `1011` and the error's message.
+  - **To the browser:** a message without `sessionId` gets the page's session added, and one with a `sessionId` (a child session the client attached flat) goes as it is.
+  - **To the client:** messages on the page's session lose their `sessionId`, messages on the client's child sessions pass, and messages without a session (browser events) are dropped. The answer to `-2` never reaches the client.
+  - **The end:** `Target.detachedFromTarget` for the page's session, or `Target.targetDestroyed` for its target, closes the socket with `1000`.
+- **Startup:**
+  - A HELLO without `cdp-in` exits 1 with `this seven can't share its browser yet; update it`.
+  - slicc opens a first stream before it serves. `EACCES` prints seven's message (such as `browser control from this device is off; turn on Browser for it in seven's Linked devices`) and exits 3. `ENOENT` (seven has no browser to drive) prints seven's message and exits 1.
+  - **Up:** stderr says `slicc: serving seven's browser at http://127.0.0.1:<port> (<seven's name>)`.
+- **Later:**
+  - **The link drops:** every socket closes with `1011 lost the link to seven`, and HTTP answers `502 no link to seven` until the link is back. The listener stays, and slicc dials again with `follow`'s backoff. CDP sessions don't survive; clients connect again.
+  - **seven refuses later** (the owner turned *Browser* off, the switch went off, or Stop on seven's indicator): that socket closes with `1008 <seven's message>`, and HTTP answers `403 <seven's message>`. The listener stays, and the next client tries again.
+  - **Stopping:** Ctrl-C, `SIGTERM` and the control socket's `stop` close every socket with `1001`, end their streams with END, and exit 0.
+- **`--json`:** the [lifecycle events](#lifecycle-events---json-on-attach-open-pair-and-follow) on stdout (`connecting`, `linked`, `link-lost`, `reconnecting`, `error`, `closed`), plus `{ "schema": 1, "event": "listening", "url" }` once it serves and `{ "schema": 1, "event": "clients", "count" }` each time the number of open sockets changes.
+- **This machine's other `slicc`s** treat the port as a [debugging port](#65-debugging-ports-every-mode): `follow --exit` and `--runner` forwarding can't hand the leader's seven a way back into its own browser around the kernel's stamp. They find it through the control sockets, whose `status` reports `cdp: { "port", "clients" }`.
+- **`slicc tray`** shows it with MODE `cdp` and OFFERS `cdp:<port>`.
+- **Privacy:** no CDP contents, target URLs or join URL go to logs or telemetry. `SLICC_DEBUG` adds which socket opened and closed and which requests were refused.
+- **Exit status:** `0` on Ctrl-C, `SIGTERM` or `stop`; `1` when the port is taken, seven can't share its browser, or the link can't be set up for good; `2` for bad usage; `3` when seven doesn't allow browser control from this device.
+- **Inside seven** it isn't available (`slicc: cdp isn't available inside seven`).
+
 ## Running links: `slicc tray`
 
 ```
 slicc tray [--json] [-q] [-a]
 ```
 
-`slicc tray` lists the `slicc` processes on this machine that hold a link, as `screen -ls` and `tmux ls` do: `follow` (remote, through the tray hub), and the default flow, `attach`, `open` and `pair` (local). It replaces SLICC six's `host` on the machine side. Inside seven, `slicc tray` is that seven's own tray instead (see [Inside seven](#inside-seven)).
+`slicc tray` lists the `slicc` processes on this machine that hold a link, as `screen -ls` and `tmux ls` do: `follow` (remote, through the tray hub), `cdp` ([a CDP endpoint](#driving-sevens-browser-from-another-computer-slicc-join-url-cdp), through the tray hub or over CDP), and the default flow, `attach`, `open` and `pair` (local). It replaces SLICC six's `host` on the machine side. Inside seven, `slicc tray` is that seven's own tray instead (see [Inside seven](#inside-seven)).
 
 ```
 PID   MODE    SEVEN           DEVICE     STATE                   OFFERS
 4121  follow  SLICC on macOS  3fa9…c210  connected 2h            exit,ssh,fs:proj
 5530  follow  SLICC on Linux  88d1…07be  reconnecting (#4, 30s)  ssh
 6012  attach  seven           -          connected 1d            exit,cdp,kernel:80
+7104  cdp     SLICC on macOS  3fa9…c210  connected 5m            cdp:9333
 ```
 
 - **`SEVEN`:** the name from seven's HELLO, else its origin's host, else the hub's host in parentheses. Never the join URL.
 - **`DEVICE`:** this machine's device, as `follow` and seven's tray see it: for `follow`, the DTLS certificate for that hub, and for `open` and `pair`, the loopback identity. It is the SHA-256 fingerprint, shown as its first and last four hex digits, so a row here matches a row in the leader's `slicc tray`. Over CDP there is none (`-`).
 - **`STATE`:** `waiting` (a local mode, until seven links), `dialing`, `waiting for offer`, `connecting`, `connected` with how long, `reconnecting (#<attempt>, <next wait>)`, or `stopped (<code>)` with the hub's or seven's code (`TRAY_EXPIRED`, `UNLINKED`, …) as the process exits.
-- **`OFFERS`:** `exit` (the network, `--exit` for `follow`), `ssh`, `cdp`, `jerk`, `fs:<name>` per folder, and `kernel:<port>`.
-- **`--json`:** a JSON array, one object per process: `{ "v": 1, "pid", "mode", "version", "started", "seven"?, "origin"?, "hub"?, "device"?, "state", "since", "attempt"?, "retryAt"?, "code"?, "error"?, "offers", "dials", "links", "lastLinked"?, "ops"?, "peers"? }`. `ops` lists the control ops the process answers (see *Control sockets* below); it is missing from a process older than that field. `hub` is the hub's origin, `error` the last failure with secrets redacted, `dials` the dials so far and `links` the links that came up. These are SLICC six's follower counters.
+- **`OFFERS`:** `exit` (the network, `--exit` for `follow`), `ssh`, `cdp`, `jerk`, `fs:<name>` per folder, `kernel:<port>`, and `cdp:<port>`, the port a `slicc … cdp` serves.
+- **`--json`:** a JSON array, one object per process: `{ "v": 1, "pid", "mode", "version", "started", "seven"?, "origin"?, "hub"?, "device"?, "state", "since", "attempt"?, "retryAt"?, "code"?, "error"?, "offers", "dials", "links", "lastLinked"?, "ops"?, "peers"?, "cdp"? }`. `cdp` is `{ "port", "clients" }` on a `slicc … cdp`: the port it listens on and the WebSockets open on it. `ops` lists the control ops the process answers (see *Control sockets* below); it is missing from a process older than that field. `hub` is the hub's origin, `error` the last failure with secrets redacted, `dials` the dials so far and `links` the links that came up. These are SLICC six's follower counters.
 - **`-q`:** only the PIDs, one per line, for `slicc tray -q | xargs kill`. There's no `stop`.
 - **`peers`:** on `open`, `pair` and the default flow's default-browser mode, the fingerprints of the pages it holds a link with (left out when none).
 - **`-a`:** also the trays this machine knows but isn't following now, from `tray-certs.json` and `tray-join.json`, as `docker ps -a` does: PID `-`, state `not running`, the leader's name from the last link and the device for that hub. Neither file's join URL is shown.
@@ -2426,6 +2483,32 @@ App journal: `~/Library/Application Support/ai.sliccy.mac/Audit/`; CLI broker jo
 
 **Seven viewer.** The consumer shows the selected device and scope, current sharing state and Stop. This version has no agent frame tool, screenshot persistence or browser-capture fallback. Already received pixels cannot be recalled. Source availability and native identity acceptance remain subject to the app and verifier checks above.
 
+#### 5.19 `cdp` (page cap `cdp-in`), node → page: a CDP endpoint on the node
+
+This is how [`slicc … cdp`](#driving-sevens-browser-from-another-computer-slicc-join-url-cdp) drives seven's browser. It is the reverse of §5.8: the node opens the stream, so its ids are even and never collide with §5.8's page-opened `cdp`. seven's side is specified in slicc-bios's link section, and the two must stay in step.
+- **HELLO:** seven adds `cdp-in` to the page caps of every CLI link, local and remote, when it can serve the kind. The cap means "this page understands the kind", not "this device may". Links from a seven following another seven (§1.4) don't get it. The page checks the device's grant on each OPEN, so turning it on or off needs no new link.
+- **OPEN:** `{ "kind": "cdp" }` on a stream channel of its own. Unknown fields are ignored.
+- **The page's checks, in this order:**
+  1. seven's switch *Browser control from linked devices* is off: `RESET EACCES: browser control from linked devices is off in seven's settings`.
+  2. The device has no `browser` grant: `RESET EACCES: browser control from this device is off; turn on Browser for it in seven's Linked devices`. A local CLI link (not paired) has the grant fixed on, as it has `control`. A paired link (`slicc open` and `pair`) follows its own access, as for `control`.
+  3. No browser can be driven: `RESET ENOENT: <the reason>`, such as `no browser to drive: install slicc-extension, or link a computer with npx sliccy@next`.
+- **Where the stream ends:** at `browserControl().hook({ caller: { kind: 'device', id, name } })` in seven's page, the same hook and guard as the kernel's CDP facade, never at a browser host or link exit directly. `caller` only names the device for seven's indicator; routing is automatic, as for a kernel program with no `runtime=`.
+- **OPENED:** `{ "version": <the result of Browser.getVersion> }`, which the page sends with id `-2` on the guarded connection and doesn't pass to the stream. So it carries the guard's `slicc.route` hint (`extension`, `link` or `devtools`).
+- **Bytes, both ways:** as §5.8, a `u32` BE length plus one UTF-8 CDP JSON message, at most 64 MiB (67 108 864 bytes).
+  - A longer message is `RESET EMSGSIZE`, and an END in the middle of a message is `RESET EPROTO`.
+  - The page passes each message to the connection's `send` as is, and each message from the connection to the stream as one message. Neither side rewrites ids or sessions.
+- **Flow control:** the link's 256 KiB window per direction.
+  - The page credits the node's bytes once `send` has taken the message.
+  - Toward the node, the page queues the connection's messages while it has no credit, up to 64 MiB per stream, then `RESET ENOBUFS`. It keeps reading every channel (§2).
+  - The node stops reading a client's socket while it has no credit.
+- **Closing:**
+  - END from the node: the page closes the connection, then sends END.
+  - The connection closes on its own: `RESET ECONNRESET: <reason>`.
+  - The owner turns the device's `browser` access off: `RESET EACCES: the owner took this access back`, on every stream of that device.
+  - The switch goes off: the switch's text above, on every stream.
+  - Stop on seven's indicator: `RESET ECONNRESET: stopped in seven`, on that device's streams.
+  - Unlinking, or the link going down, ends the streams with the link.
+
 ### 6. Policy (node)
 
 #### 6.1 Where it's checked
@@ -2468,8 +2551,8 @@ The remote default, but it **also allows loopback and the private ranges** (`10/
 #### 6.5 Debugging ports (every mode)
 
 Both defaults, in every mode (local and remote), deny this machine's browser debugging ports on `127.0.0.0/8`, `::1` and **every address of this machine**, so `<host>.slicc.internal:<port>` (which the page sends as `127.0.0.1`) is refused too:
-- **Which:** `9222`–`9229`; every port in a `DevToolsActivePort` file the node finds read-only; the port of every running process started with `--remote-debugging-port` (for port 0, the `DevToolsActivePort` of its `--user-data-dir`); and the debugging port of each browser the node was given or launched.
-- **When:** the files at startup, every 5 s, and on each `tcp` connect (`net`, `http`, `ws`, `ssh` forwarding) to an address of this machine on a port not yet denied. The process list at startup, then in the background (one scan at a time): about every 1 s while such connects keep coming (until 30 s without one; a slow scan is followed by a pause as long), every 30 s while idle. A connect uses the list only if it is under about 1 s old; otherwise it waits for a fresh scan, bounded by the scan's timeout, and is refused if that scan fails or times out (reason `a browser debugging port: couldn't list running browsers`). Connects to other hosts never wait. On Linux the list falls back to `/proc` when `ps` fails. On Windows it is read in-process, not through PowerShell, which can take more than its 5 s to start on a busy or freshly booted machine; until then every connect to this machine was refused. With no list at all at startup, the node says `can't list running browsers here (…); connects to this machine's own addresses are refused` once on stderr; a later failed scan is reported once, and again when it recovers. So a browser that starts later is refused before its first connection, once it has run for about a second.
+- **Which:** `9222`–`9229`; every port in a `DevToolsActivePort` file the node finds read-only; the port of every running process started with `--remote-debugging-port` (for port 0, the `DevToolsActivePort` of its `--user-data-dir`); the port of every running [`slicc … cdp`](#driving-sevens-browser-from-another-computer-slicc-join-url-cdp) of this user, from the `cdp` in its control socket's `status`; and the debugging port of each browser the node was given or launched. A `slicc … cdp` forwards nothing of its own, so it denies its own port to nothing.
+- **When:** the files and the control sockets at startup, every 5 s, and on each `tcp` connect (`net`, `http`, `ws`, `ssh` forwarding) to an address of this machine on a port not yet denied. The process list at startup, then in the background (one scan at a time): about every 1 s while such connects keep coming (until 30 s without one; a slow scan is followed by a pause as long), every 30 s while idle. A connect uses the list only if it is under about 1 s old; otherwise it waits for a fresh scan, bounded by the scan's timeout, and is refused if that scan fails or times out (reason `a browser debugging port: couldn't list running browsers`). Connects to other hosts never wait. On Linux the list falls back to `/proc` when `ps` fails. On Windows it is read in-process, not through PowerShell, which can take more than its 5 s to start on a busy or freshly booted machine; until then every connect to this machine was refused. With no list at all at startup, the node says `can't list running browsers here (…); connects to this machine's own addresses are refused` once on stderr; a later failed scan is reported once, and again when it recovers. So a browser that starts later is refused before its first connection, once it has run for about a second.
 - **Above every rule:** no `--allow` reopens one, `--allow 127.0.0.1:9222` included. A refusal is `EACCES`, reason `a browser debugging port`.
 - **Opt-in:** only `--expose-debug-port <port>` (repeatable) leaves a port of the first three kinds open, and only one that is a debugging port at startup. Any other port is an error, and so is a browser the node was given or launched: `cdp` is the way to them.
 - **HELLO:** `policy.deny` lists the loopback denies of the ports known at startup; `policy.summary` ends in `exposes debugging ports <ports>`, the ports actually exposed.

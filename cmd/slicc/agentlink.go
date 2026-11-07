@@ -91,12 +91,20 @@ func serveLocal(conn signal.Conn, client *cdp.Client, what string, logf func(str
 }
 
 func (ll *localLinks) next(ctx context.Context) (agentctl.Link, error) {
+	l, err := ll.nextLink(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return agentLink(l), nil
+}
+
+func (ll *localLinks) nextLink(ctx context.Context) (*link.Link, error) {
 	if l, ok := freshLink(ll.links); ok {
-		return agentLink(l), nil
+		return l, nil
 	}
 	select {
 	case l := <-ll.links:
-		return agentLink(l), nil
+		return l, nil
 	case err := <-ll.served:
 		ll.served <- err
 		if err == nil {
@@ -123,6 +131,8 @@ type remoteLinks struct {
 	links  <-chan *link.Link
 	logf   func(string, ...any)
 	status func(string, ...any)
+	retry  func(attempt int, wait time.Duration, reason string)
+	device string
 	stop   func()
 }
 
@@ -149,17 +159,29 @@ func newRemoteLinks(joinURL string, logf, status func(string, ...any)) (*remoteL
 		return nil, fmt.Errorf("the device certificate: %w", err)
 	}
 	n := node.New(node.Config{Version: version, Mode: "remote", Logf: logf, Status: logf, Certificates: []webrtc.Certificate{*cert}})
-	return &remoteLinks{f: f, node: n, links: linkedEvents(n), logf: logf, status: status, stop: func() {}}, nil
+	rl := &remoteLinks{f: f, node: n, links: linkedEvents(n), logf: logf, status: status, retry: func(int, time.Duration, string) {}, stop: func() {}}
+	if fps, err := cert.GetFingerprints(); err == nil && len(fps) > 0 {
+		rl.device = strings.ToLower(strings.ReplaceAll(fps[0].Value, ":", ""))
+	}
+	return rl, nil
 }
 
 func (rl *remoteLinks) next(ctx context.Context) (agentctl.Link, error) {
+	l, err := rl.nextLink(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return agentLink(l), nil
+}
+
+func (rl *remoteLinks) nextLink(ctx context.Context) (*link.Link, error) {
 	rl.stop()
 	rl.stop = func() {}
 	backoff := followBackoffBase
-	for {
+	for attempt := 1; ; attempt++ {
 		l, err := rl.once(ctx)
 		if err == nil {
-			return agentLink(l), nil
+			return l, nil
 		}
 		var fe *fatalError
 		if ctx.Err() != nil || errors.As(err, &fe) {
@@ -169,7 +191,9 @@ func (rl *remoteLinks) next(ctx context.Context) (agentctl.Link, error) {
 			return nil, err
 		}
 		wait := jitter(backoff)
-		rl.status("%s; trying again in %s", rl.f.Redact(err.Error()), wait.Round(100*time.Millisecond))
+		reason := rl.f.Redact(err.Error())
+		rl.retry(attempt, wait, reason)
+		rl.status("%s; trying again in %s", reason, wait.Round(100*time.Millisecond))
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

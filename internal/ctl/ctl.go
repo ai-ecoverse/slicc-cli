@@ -60,8 +60,14 @@ type ScreenStatus struct {
 	Reason                string `json:"reason"`
 }
 
+type CDPStatus struct {
+	Port    int `json:"port"`
+	Clients int `json:"clients"`
+}
+
 type Status struct {
 	Screen     *ScreenStatus `json:"screen,omitempty"`
+	CDP        *CDPStatus    `json:"cdp,omitempty"`
 	V          int           `json:"v"`
 	PID        int           `json:"pid"`
 	Mode       string        `json:"mode"`
@@ -121,6 +127,10 @@ func (h *Holder) Snapshot() Status {
 		s.Screen = &screen
 	}
 	s.Offers = append([]string{}, h.s.Offers...)
+	if h.s.CDP != nil {
+		c := *h.s.CDP
+		s.CDP = &c
+	}
 	s.Ops = []string{OpStatus}
 	for _, op := range Ops {
 		if h.ops[op] != nil || h.calls[op] != nil {
