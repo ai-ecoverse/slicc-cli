@@ -117,6 +117,7 @@ function recorder(label) {
         method: message.method,
         session: types.sessionType(message.sessionId),
         params: shape(message.params),
+        raw: current.target === 'control' && JSON.stringify(message.params ?? {}).length < 8192 ? message.params ?? {} : undefined,
         at: Date.now(),
         ms: null,
         outcome: 'unanswered',
@@ -646,6 +647,85 @@ for (const target of targets.filter((x) => !chosen?.length || chosen.includes(x.
   server.closeAllConnections?.();
   server.close();
 }
+const KEPT = new Set(['media', 'behavior', 'format', 'type', 'waitUntil', 'worldName', 'urlPattern', 'requestStage']);
+function signature(record) {
+  const parts = Object.entries(record.params).map(([key, d]) => {
+    if (d.type === 'boolean') return `${key}=${d.value}`;
+    if (key === 'source') return `source=${d.value === '' || d.empty ? 'empty' : (d.commentOnly ?? COMMENT_ONLY.test(d.value ?? '')) ? 'comment-only' : 'code'}`;
+    if (KEPT.has(key) && typeof d.value === 'string') return `${key}=${d.value.replace(/[0-9a-f]{32}/gi, '<id>')}`;
+    if (key === 'patterns' && d.itemKeys) return `patterns[${d.itemKeys.join(',')}]`;
+    return `${key}:${d.type}`;
+  });
+  return `${record.method} @${record.session} {${parts.sort().join(' ')}}`;
+}
+const IDS = new Set(['objectId', 'executionContextId', 'contextId', 'uniqueContextId', 'backendNodeId', 'nodeId', 'frameId', 'requestId', 'interceptionId', 'targetId', 'sessionId', 'scriptId', 'identifier', 'browserContextId', 'loaderId', 'objectGroup']);
+const SKIP = new Set(['Browser.close', 'Browser.crash', 'Browser.crashGpuProcess', 'Target.closeTarget', 'Page.close', 'Target.detachFromTarget', 'Target.disposeBrowserContext']);
+const probes = [];
+async function probe(target) {
+  current.target = target.name;
+  current.client = 'probe';
+  current.flow = 'replay';
+  const seen = new Map();
+  for (const r of records) {
+    if (r.target !== 'control' || !r.raw || SKIP.has(r.method) || r.outcome !== 'ok') continue;
+    const sig = signature(r);
+    if (!seen.has(sig)) seen.set(sig, { sig, method: r.method, session: r.session, params: r.raw, from: new Set() });
+    seen.get(sig).from.add(`${r.client}: ${r.flow}`);
+  }
+  const { ws, rec, send } = openUpstream(target.upstream, 'probe');
+  await new Promise((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+  let next = 1000;
+  const answers = new Map();
+  ws.on('message', (data) => {
+    const text = data.toString();
+    rec.received(text);
+    const m = JSON.parse(text);
+    if (m.id !== undefined) answers.get(m.id)?.(m);
+  });
+  const call = (method, params, sessionId, ms = 7000) => new Promise((resolve) => {
+    next += 1;
+    const id = next;
+    const started = Date.now();
+    const timer = setTimeout(() => { answers.delete(id); resolve({ held: true, ms: Date.now() - started }); }, ms);
+    answers.set(id, (m) => { clearTimeout(timer); answers.delete(id); resolve({ ...m, ms: Date.now() - started }); });
+    send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+  });
+  let page = null;
+  const fresh = async () => {
+    current.step = 'probe setup';
+    const created = await call('Target.createTarget', { url: PAGE }, undefined, STEP);
+    if (!created.result) throw new Error(`probe page: ${JSON.stringify(created.error ?? created)}`);
+    const attached = await call('Target.attachToTarget', { targetId: created.result.targetId, flatten: true }, undefined, STEP);
+    if (!attached.result) throw new Error(`probe attach: ${JSON.stringify(attached.error ?? attached)}`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    page = { targetId: created.result.targetId, sessionId: attached.result.sessionId };
+  };
+  try {
+    await fresh();
+    for (const s of seen.values()) {
+      current.step = s.sig;
+      const sessionId = s.session === 'browser' ? undefined : page.sessionId;
+      const answer = await call(s.method, s.params, sessionId);
+      const message = answer.error?.message ?? null;
+      const outcome = answer.held ? 'held' : message?.startsWith('slicc:') ? 'refused' : message ? 'error' : answer.ms > HELD ? 'held' : 'ok';
+      probes.push({ target: target.name, sig: s.sig, method: s.method, session: s.session, as: sessionId ? 'page' : 'browser', idDependent: Object.keys(s.params ?? {}).some((key) => IDS.has(key)), outcome, ms: answer.ms, error: message, from: [...s.from] });
+      if (message && /session|not found|No target/i.test(message) && !message.startsWith('slicc:')) await fresh().catch(() => {});
+    }
+  } catch (error) {
+    probes.push({ target: target.name, sig: 'probe setup', outcome: 'error', error: String(error?.message ?? error) });
+  } finally {
+    if (page) await call('Target.closeTarget', { targetId: page.targetId }, undefined, 5000);
+    ws.close();
+  }
+  const refused = probes.filter((p) => p.target === target.name && p.outcome !== 'ok' && p.outcome !== 'error');
+  process.stderr.write(`g0 probe ${target.name}: ${seen.size} signatures, ${refused.length} refused or held\n`);
+}
+if (process.env.G0_PROBE !== '0') {
+  for (const target of targets.filter((x) => x.name !== 'control' && (!chosen?.length || chosen.includes(x.name)))) await probe(target);
+}
 fixture.closeAllConnections?.();
 fixture.close();
 
@@ -655,9 +735,10 @@ const versions = {
   'puppeteer-core': require('puppeteer-core/package.json').version,
   node: process.version,
 };
-await writeFile(out, JSON.stringify({ versions, page: PAGE, frameHost: FRAME_HOST, results, flagged, records, events: allEvents }, null, 1));
+await writeFile(out, JSON.stringify({ versions, page: PAGE, frameHost: FRAME_HOST, results, flagged, probes, records, events: allEvents }, null, 1));
 const summary = results.map((r) => `${r.target}\t${r.client}\t${r.flow}\t${r.ok ? 'ok' : `FAILED: ${r.failed}`}`).join('\n');
 process.stdout.write(`${JSON.stringify({ versions })}\n${summary}\n`);
 process.stdout.write(`flagged ${flagged.length} of ${records.length} commands\n`);
 for (const r of flagged) process.stdout.write(`${JSON.stringify({ t: r.target, c: r.client, f: r.flow, s: r.step, m: r.method, on: r.session, o: r.outcome, ms: r.ms, e: r.error, p: r.params })}\n`);
+for (const r of probes.filter((x) => x.outcome === 'refused' || x.outcome === 'held')) process.stdout.write(`probe ${JSON.stringify(r)}\n`);
 process.exit(0);
