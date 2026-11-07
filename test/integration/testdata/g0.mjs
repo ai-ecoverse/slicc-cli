@@ -732,7 +732,10 @@ async function probe(target) {
       const message = answer.error?.message ?? null;
       const outcome = answer.held ? 'held' : message?.startsWith('slicc:') ? 'refused' : message ? 'error' : answer.ms > HELD ? 'held' : 'ok';
       probes.push({ target: target.name, sig: s.sig, method: s.method, session: s.session, as: sessionId ? 'page' : 'browser', idDependent: Object.keys(s.params ?? {}).some((key) => IDS.has(key)), outcome, ms: answer.ms, error: message, from: [...s.from] });
-      if (message && /session|not found|No target/i.test(message) && !message.startsWith('slicc:')) await fresh().catch(() => {});
+      if (outcome === 'held' || (message && /session|not found|No target/i.test(message) && !message.startsWith('slicc:'))) {
+        if (page) void call('Target.closeTarget', { targetId: page.targetId }, undefined, 5000);
+        await fresh().catch(() => {});
+      }
     }
   } catch (error) {
     probes.push({ target: target.name, sig: 'probe setup', outcome: 'error', error: String(error?.message ?? error) });
