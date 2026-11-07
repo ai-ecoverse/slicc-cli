@@ -1440,12 +1440,15 @@ slicc cdp --signal stdio [--port <n>] [--json]
   - A port that can't be bound exits 1 with `port <n> is taken; try --port`.
 - **What every request must pass,** as Chrome checks its own port:
   - **`Host`:** `127.0.0.1`, `localhost` or `[::1]`, with or without a port. Anything else is `403 Host header is specified and is not an IP address or localhost.`, Chrome's own text, which keeps DNS rebinding out.
-  - **`Origin`:** none, or this endpoint's own origin (`http://127.0.0.1:<port>`, `http://localhost:<port>`, `http://[::1]:<port>`), on WebSocket upgrades and plain HTTP alike. Anything else is `403`, as Chrome 111 and later do without `--remote-allow-origins`. That keeps web pages in this machine's browsers out.
+  - **`Origin`:** none, or this endpoint's own origin (`http://127.0.0.1:<port>`, `http://localhost:<port>`, `http://[::1]:<port>`), on WebSocket upgrades and plain HTTP alike. Anything else is `403`, as Chrome 111 and later do without `--remote-allow-origins`.
+  - **`Sec-Fetch-Site`:** `cross-site` or `same-site` is `403` on every request, so a page can't reach the endpoint with a request that carries no `Origin`, such as an `<img>` pointing at `/json/close/<id>`. Clients that aren't browsers send no `Sec-Fetch-Site`.
+  - Together with `PUT`-only `/json/new` below, that keeps web pages in this machine's browsers out.
 - **HTTP,** the part of Chrome's that clients use:
   - `GET /json/version`: `{ "Browser", "Protocol-Version", "User-Agent", "V8-Version", "WebKit-Version", "webSocketDebuggerUrl": "ws://<host>:<port>/devtools/browser/<id>" }`, from the OPENED `version` of a short stream. `<id>` is a random UUID per process, and `<host>` is the request's `Host` without its port.
   - `GET /json` and `GET /json/list`: one short stream with `Target.getTargets`, and one entry per target in Chrome's shape, `{ "description": "", "id", "title", "type", "url", "webSocketDebuggerUrl": "ws://<host>:<port>/devtools/page/<id>" }`, every type but `browser` and `tab`. seven's guard has already filtered the list: protected targets are missing, or cut to their origin.
-  - `PUT /json/new?<url>` (and `GET`, for older clients): `Target.createTarget { url }` (`about:blank` without one), answered with that target's entry.
+  - `PUT /json/new?<url>`: `Target.createTarget { url }` (`about:blank` without one), answered with that target's entry.
   - `GET /json/activate/<id>`: `Target.activateTarget`, answered `Target activated`. `GET /json/close/<id>`: `Target.closeTarget`, answered `Target is closing`.
+  - `GET /json/new` is `405`, as in Chrome 111 and later: a web page can send a GET without a preflight, but not a PUT.
   - A guard refusal or a CDP error is `500` with the error's message, and any other path is `404`.
 - **`/devtools/browser/<id>`** (WebSocket): one stream per socket. Each text message is one stream message, and back, with no id or session rewritten. A binary message closes the socket with `1003`.
 - **`/devtools/page/<targetId>`** (WebSocket), for raw clients that use a page socket:

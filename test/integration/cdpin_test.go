@@ -513,6 +513,18 @@ func TestCDPChecksHostAndOrigin(t *testing.T) {
 	if a := cdpHTTP(t, http.MethodGet, c.url+"/json/version", map[string]string{"Origin": "https://example.com"}); a.status != 403 {
 		t.Fatalf("plain HTTP from a web page: %d %q", a.status, a.body)
 	}
+	opens := s.state().Opens
+	if a := cdpHTTP(t, http.MethodGet, c.url+"/json/new?https://example.com/", nil); a.status != 405 {
+		t.Fatalf("GET /json/new: %d %q", a.status, a.body)
+	}
+	for _, site := range []string{"cross-site", "same-site"} {
+		if a := cdpHTTP(t, http.MethodGet, c.url+"/json/close/x", map[string]string{"Sec-Fetch-Site": site}); a.status != 403 {
+			t.Fatalf("a %s request: %d %q", site, a.status, a.body)
+		}
+	}
+	if st := s.state(); st.Opens != opens || contains(st.Methods, "Target.createTarget") {
+		t.Fatalf("a web page's request reached seven: %+v", st)
+	}
 	url := c.browserSocket(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

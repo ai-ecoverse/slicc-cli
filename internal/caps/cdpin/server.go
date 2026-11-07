@@ -220,7 +220,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	origins := r.Header.Values("Origin")
-	if len(origins) > 1 || (len(origins) == 1 && !s.originAllowed(origins[0])) {
+	site := strings.ToLower(r.Header.Get("Sec-Fetch-Site"))
+	if len(origins) > 1 || (len(origins) == 1 && !s.originAllowed(origins[0])) || site == "cross-site" || site == "same-site" {
 		s.cfg.Logf("cdp %s %s ← 403 origin", r.Method, pathKind(r.URL.Path))
 		plain(w, http.StatusForbidden, "Rejected an incoming connection from another origin.")
 		return
@@ -404,8 +405,8 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) newTarget(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut && r.Method != http.MethodGet {
-		plain(w, http.StatusMethodNotAllowed, "Use PUT")
+	if r.Method != http.MethodPut {
+		plain(w, http.StatusMethodNotAllowed, "Using unsafe HTTP verb "+r.Method+" to invoke /json/new. This action supports only PUT verb.")
 		return
 	}
 	target := r.URL.RawQuery
