@@ -320,6 +320,12 @@ function within(promise, ms, what) {
 
 const results = [];
 
+function plain(value) {
+  if (value === undefined) return null;
+  if (value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) return `[${value.constructor?.name ?? 'object'}]`;
+  return value;
+}
+
 async function flow(client, name, body) {
   current.client = client;
   current.flow = name;
@@ -330,7 +336,7 @@ async function flow(client, name, body) {
     const started = Date.now();
     try {
       const value = await within(Promise.resolve().then(fn), ms, label);
-      steps.push({ step: label, ok: true, ms: Date.now() - started, value: value === undefined ? null : value });
+      steps.push({ step: label, ok: true, ms: Date.now() - started, value: plain(value) });
       return value;
     } catch (error) {
       steps.push({ step: label, ok: false, ms: Date.now() - started, error: String(error?.message ?? error).split('\n')[0].slice(0, 400) });
@@ -620,7 +626,8 @@ const RAW = (http, ws) => {
 };
 
 const only = process.env.G0_CLIENTS?.split(',').filter(Boolean);
-for (const target of targets) {
+const chosen = process.env.G0_TARGETS?.split(',').filter(Boolean);
+for (const target of targets.filter((x) => !chosen?.length || chosen.includes(x.name))) {
   current.target = target.name;
   const { server, port } = await proxy(target.upstream);
   const ws = `ws://127.0.0.1:${port}/devtools/browser/g0`;
