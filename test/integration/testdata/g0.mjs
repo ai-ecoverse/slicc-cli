@@ -320,6 +320,22 @@ function within(promise, ms, what) {
 }
 
 const results = [];
+const control = targets.find((x) => x.name === 'control');
+let baseline = null;
+async function tidy() {
+  if (!control) return;
+  const saved = { ...current };
+  current.target = 'tidy';
+  try {
+    const { targetInfos } = await shortCall(control.upstream, 'Target.getTargets', {}, 'tidy');
+    if (!baseline) baseline = new Set(targetInfos.map((t) => t.targetId));
+    for (const t of targetInfos) {
+      if (t.type !== 'page' || baseline.has(t.targetId)) continue;
+      if (t.url === 'about:blank' || t.url === '' || t.url.includes(`:${fixturePort}/`)) await shortCall(control.upstream, 'Target.closeTarget', { targetId: t.targetId }, 'tidy').catch(() => {});
+    }
+  } catch {}
+  Object.assign(current, saved);
+}
 
 function plain(value) {
   if (value === undefined) return null;
@@ -354,6 +370,7 @@ async function flow(client, name, body) {
   for (const cleanup of (state.cleanup ?? []).reverse()) await within(Promise.resolve().then(cleanup), 10000, 'cleanup').catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 300));
   results.push({ target: current.target, client, flow: name, ok: !failed, failed, steps });
+  await tidy();
 }
 
 const PW = (endpoint) => {
@@ -627,6 +644,7 @@ const RAW = (http, ws) => {
 };
 
 const only = process.env.G0_CLIENTS?.split(',').filter(Boolean);
+await tidy();
 const chosen = process.env.G0_TARGETS?.split(',').filter(Boolean);
 for (const target of targets.filter((x) => !chosen?.length || chosen.includes(x.name))) {
   current.target = target.name;
@@ -696,11 +714,13 @@ async function probe(target) {
   let page = null;
   const fresh = async () => {
     current.step = 'probe setup';
-    const created = await call('Target.createTarget', { url: PAGE }, undefined, STEP);
+    const created = await call('Target.createTarget', { url: 'about:blank' }, undefined, STEP);
     if (!created.result) throw new Error(`probe page: ${JSON.stringify(created.error ?? created)}`);
     const attached = await call('Target.attachToTarget', { targetId: created.result.targetId, flatten: true }, undefined, STEP);
     if (!attached.result) throw new Error(`probe attach: ${JSON.stringify(attached.error ?? attached)}`);
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await call('Page.enable', {}, attached.result.sessionId, STEP);
+    await call('Page.navigate', { url: PAGE }, attached.result.sessionId, STEP);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     page = { targetId: created.result.targetId, sessionId: attached.result.sessionId };
   };
   try {
@@ -729,7 +749,7 @@ if (process.env.G0_PROBE !== '0') {
 fixture.closeAllConnections?.();
 fixture.close();
 
-const flagged = records.filter((r) => (r.outcome === 'error' || r.ms > HELD || (r.outcome === 'unanswered' && r.step !== 'cleanup')));
+const flagged = records.filter((r) => r.target !== 'tidy' && (r.outcome === 'error' || r.ms > HELD || (r.outcome === 'unanswered' && r.step !== 'cleanup')));
 const versions = {
   'playwright-core': require('playwright-core/package.json').version,
   'puppeteer-core': require('puppeteer-core/package.json').version,
