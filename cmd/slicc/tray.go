@@ -26,8 +26,8 @@ const trayNotRunning = "not running"
 const trayUsage = `usage: slicc tray [--json] [-q] [-a]
 
 The slicc processes on this machine that hold a link to seven: follow
-(remote, through the tray hub), and attach, open, pair and the default flow
-(local). Each one serves a control socket in a directory only you can use;
+(remote, through the tray hub), cdp (a CDP endpoint for seven's browser),
+and attach, open, pair and the default flow (local). Each one serves a control socket in a directory only you can use;
 slicc tray asks each one for its state, and removes the sockets of
 processes that are gone. The join URL is never printed.
 

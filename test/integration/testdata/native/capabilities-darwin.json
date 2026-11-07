@@ -20,6 +20,10 @@
     "capabilities": {
       "json": "document"
     },
+    "cdp": {
+      "json": "events",
+      "vocabulary": "events"
+    },
     "default": {
       "json": "events",
       "vocabulary": "events"
@@ -78,6 +82,7 @@
       "browser-back",
       "browser-gone",
       "browser-slow",
+      "clients",
       "closed",
       "connecting",
       "credential",
@@ -90,6 +95,7 @@
       "launched",
       "link-lost",
       "linked",
+      "listening",
       "mode",
       "native-screen-verification",
       "pairing",

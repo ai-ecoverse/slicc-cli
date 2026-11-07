@@ -60,6 +60,7 @@ var commandTable = map[string]commandInfo{
 	"wait":         {JSON: jsonEvents, Vocabulary: vocabularyAgent},
 	"abort":        {JSON: jsonNone},
 	"agents":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
+	"cdp":          {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"browsers":     {JSON: jsonDocument},
 	"launch":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"update":       {JSON: jsonNone},
