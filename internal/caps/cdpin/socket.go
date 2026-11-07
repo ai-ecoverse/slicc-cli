@@ -201,6 +201,11 @@ func (k *socket) toBrowser() {
 		}
 		if k.sid != "" {
 			data = withSession(data, k.sid)
+			if len(data) > MaxMessage {
+				_ = k.st.Reset("ECONNRESET: the client went away")
+				k.shut(websocket.StatusMessageTooBig, "a message over 64 MiB")
+				return
+			}
 		}
 		if err := writeFrame(k.st, data); err != nil {
 			return

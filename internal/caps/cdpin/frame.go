@@ -116,11 +116,13 @@ type answer struct {
 	} `json:"error"`
 }
 
-func call(st *link.Stream, id int64, method string, params any) (json.RawMessage, error) {
+func call(st *link.Stream, id int64, method string, params any, within time.Duration) (json.RawMessage, error) {
 	req, err := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
 	if err != nil {
 		return nil, err
 	}
+	_ = st.SetReadDeadline(time.Now().Add(within))
+	defer func() { _ = st.SetReadDeadline(time.Time{}) }()
 	if err := writeFrame(st, req); err != nil {
 		return nil, refusal(err, st.Link())
 	}

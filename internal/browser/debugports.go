@@ -25,6 +25,7 @@ var (
 	processActive = 30 * time.Second
 	processWait   = 5 * time.Second
 	servedWait    = time.Second
+	servedFresh   = time.Second
 )
 
 var errNoProcessList = errors.New("couldn't list running browsers")
@@ -131,22 +132,64 @@ func (s *liveScan) snapshot() []uint16 {
 	return union(ActivePorts(s.o), proc, ServedPorts(s.ctx))
 }
 
-func ServedPorts(ctx context.Context) []uint16 {
+type servedCache struct {
+	mu      sync.Mutex
+	byPID   map[int]uint16
+	at      time.Time
+	running bool
+}
+
+var served = &servedCache{byPID: map[int]uint16{}}
+
+func ServedPorts(ctx context.Context) []uint16 { return served.ports(ctx) }
+
+func (c *servedCache) ports(ctx context.Context) []uint16 {
+	c.mu.Lock()
+	if c.running || time.Since(c.at) < servedFresh {
+		out := c.listLocked()
+		c.mu.Unlock()
+		return out
+	}
+	c.running = true
+	c.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, servedWait)
-	defer cancel()
 	entries, err := ctl.List(ctx)
-	if err != nil {
-		return nil
+	cancel()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.running = false
+	if err == nil {
+		c.at = time.Now()
+		c.mergeLocked(entries)
 	}
-	var out []uint16
+	return c.listLocked()
+}
+
+func (c *servedCache) mergeLocked(entries []ctl.Entry) {
+	next := map[int]uint16{}
 	for _, e := range entries {
-		if e.Status == nil || e.Status.CDP == nil || e.PID == os.Getpid() {
-			continue
-		}
-		if p := e.Status.CDP.Port; p > 0 && p <= 65535 {
-			out = union(out, []uint16{uint16(p)})
+		switch {
+		case e.PID == os.Getpid():
+		case e.Status != nil:
+			if e.Status.CDP != nil && e.Status.CDP.Port > 0 && e.Status.CDP.Port <= 65535 {
+				next[e.PID] = uint16(e.Status.CDP.Port)
+			}
+		case errors.Is(e.Err, ctl.ErrStale):
+		default:
+			if p, ok := c.byPID[e.PID]; ok {
+				next[e.PID] = p
+			}
 		}
 	}
+	c.byPID = next
+}
+
+func (c *servedCache) listLocked() []uint16 {
+	var out []uint16
+	for _, p := range c.byPID {
+		out = union(out, []uint16{p})
+	}
+	slices.Sort(out)
 	return out
 }
 

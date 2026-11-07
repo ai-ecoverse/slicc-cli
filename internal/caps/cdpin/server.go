@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -258,6 +259,7 @@ func pathKind(p string) string {
 
 func plain(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(msg))
 }
@@ -265,6 +267,7 @@ func plain(w http.ResponseWriter, status int, msg string) {
 func writeJSON(w http.ResponseWriter, v any) {
 	b, _ := json.MarshalIndent(v, "", "   ")
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(b)
 }
@@ -287,7 +290,7 @@ func failure(err error) (int, string) {
 		return http.StatusBadGateway, rf.Error()
 	case errors.As(err, &ce):
 		return http.StatusInternalServerError, ce.Message
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded):
 		return http.StatusGatewayTimeout, "seven didn't answer"
 	}
 	return http.StatusBadGateway, err.Error()
@@ -364,8 +367,8 @@ func (s *Server) entry(r *http.Request, t targetInfo) listEntry {
 	return listEntry{ID: t.TargetID, Title: t.Title, Type: t.Type, URL: t.URL, WSURL: s.wsBase(r) + "/devtools/page/" + url.PathEscape(t.TargetID)}
 }
 
-func targets(st *link.Stream, id int64) ([]targetInfo, error) {
-	res, err := call(st, id, "Target.getTargets", map[string]any{})
+func targets(st *link.Stream, id int64, within time.Duration) ([]targetInfo, error) {
+	res, err := call(st, id, "Target.getTargets", map[string]any{}, within)
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +392,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finish(st)
-	ts, err := targets(st, 1)
+	ts, err := targets(st, 1, s.cfg.OpenTimeout)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -422,7 +425,7 @@ func (s *Server) newTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finish(st)
-	res, err := call(st, 1, "Target.createTarget", map[string]any{"url": target})
+	res, err := call(st, 1, "Target.createTarget", map[string]any{"url": target}, s.cfg.OpenTimeout)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -432,7 +435,7 @@ func (s *Server) newTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(res, &created)
 	info := targetInfo{TargetID: created.TargetID, Type: "page", URL: target}
-	if ts, err := targets(st, 2); err == nil {
+	if ts, err := targets(st, 2, s.cfg.OpenTimeout); err == nil {
 		for _, t := range ts {
 			if t.TargetID == created.TargetID {
 				info = t
@@ -456,7 +459,7 @@ func (s *Server) targetOp(w http.ResponseWriter, r *http.Request, method, id, ok
 		return
 	}
 	defer finish(st)
-	if _, err := call(st, 1, method, map[string]any{"targetId": id}); err != nil {
+	if _, err := call(st, 1, method, map[string]any{"targetId": id}, s.cfg.OpenTimeout); err != nil {
 		s.fail(w, r, err)
 		return
 	}

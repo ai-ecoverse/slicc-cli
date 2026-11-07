@@ -85,16 +85,12 @@ type multiListener struct {
 	conns chan net.Conn
 	done  chan struct{}
 	once  sync.Once
+	start sync.Once
 	wg    sync.WaitGroup
 }
 
 func merge(lns []net.Listener) *multiListener {
-	m := &multiListener{lns: lns, conns: make(chan net.Conn), done: make(chan struct{})}
-	for _, ln := range lns {
-		m.wg.Add(1)
-		go m.pump(ln)
-	}
-	return m
+	return &multiListener{lns: lns, conns: make(chan net.Conn), done: make(chan struct{})}
 }
 
 func (m *multiListener) pump(ln net.Listener) {
@@ -118,6 +114,12 @@ func (m *multiListener) pump(ln net.Listener) {
 }
 
 func (m *multiListener) Accept() (net.Conn, error) {
+	m.start.Do(func() {
+		for _, ln := range m.lns {
+			m.wg.Add(1)
+			go m.pump(ln)
+		}
+	})
 	select {
 	case c := <-m.conns:
 		return c, nil

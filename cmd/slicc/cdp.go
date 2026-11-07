@@ -166,6 +166,18 @@ func (r *cdpRun) run(ctx context.Context, st *stopper) int {
 		return r.fail(1, err.Error())
 	}
 	r.srv = srv
+	r.ctl = ctl.NewHolder("cdp", version)
+	r.ctl.Handle(ctl.OpStop, st.stop)
+	r.ctl.Update(func(s *ctl.Status) {
+		s.Offers = []string{"cdp:" + strconv.Itoa(srv.Port())}
+		s.CDP = &ctl.CDPStatus{Port: srv.Port()}
+	})
+	cs, err := ctl.Serve(r.ctl)
+	if err != nil {
+		srv.Close()
+		return r.fail(1, fmt.Sprintf("can't serve the control socket (%v), so this machine's other slicc processes couldn't keep port %d from seven; not serving", err, srv.Port()))
+	}
+	defer cs.Close()
 	af := agentFlags{verb: "cdp", joinURL: r.f.joinURL, cdp: r.f.cdp, signal: r.f.signal, origins: r.f.origins}
 	al, err := af.links(ctx, r.aio, r.status)
 	if err != nil {
@@ -177,22 +189,11 @@ func (r *cdpRun) run(ctx context.Context, st *stopper) int {
 		srv.Close()
 		links.close()
 	}()
-	r.ctl = ctl.NewHolder("cdp", version)
-	r.ctl.Handle(ctl.OpStop, st.stop)
-	r.ctl.Update(func(s *ctl.Status) {
-		s.Offers = []string{"cdp:" + strconv.Itoa(srv.Port())}
-		s.CDP = &ctl.CDPStatus{Port: srv.Port()}
-	})
 	if rl, ok := links.(*remoteLinks); ok {
 		r.ctl.Update(func(s *ctl.Status) {
 			s.Hub, s.Device, s.State = tray.HubOrigin(r.f.joinURL), rl.device, ctl.StateDialing
 		})
 		rl.retry = r.retry
-	}
-	if cs, err := ctl.Serve(r.ctl); err == nil {
-		defer cs.Close()
-	} else {
-		logf("control socket: %v", err)
 	}
 	r.out.emit(flow.Event{Event: flow.Connecting, Mode: r.mode})
 	sctx, cancel := context.WithTimeout(ctx, agentSetupTimeout)

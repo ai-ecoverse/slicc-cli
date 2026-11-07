@@ -8,8 +8,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -379,6 +381,9 @@ func TestCDPBrowserSocketCreatesAttachesEvaluatesAndCloses(t *testing.T) {
 		t.Fatalf("evaluate: %v", got)
 	}
 	cl.call(44, "Target.closeTarget", map[string]any{"targetId": target}, "")
+	if v := cdpResult(cl.call(-2, "Browser.getVersion", nil, "")); v["product"] == nil {
+		t.Fatalf("a client's own id -2 got %v", v)
+	}
 	st := s.state()
 	for _, m := range []string{"Target.createTarget", "Target.attachToTarget", "Runtime.evaluate", "Target.closeTarget"} {
 		if !contains(st.Methods, m) {
@@ -874,5 +879,29 @@ func TestCDPStockClientsDriveTheBrowser(t *testing.T) {
 	}
 	if st := s.state(); st.Opens < 4 {
 		t.Fatalf("the clients didn't go through the endpoint: %+v", st)
+	}
+}
+
+func TestCDPRefusesToServeWithoutItsControlSocket(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the per-user directory's ACL guards it on Windows")
+	}
+	sockets := trayRuntime(t)
+	if err := os.Symlink(t.TempDir(), sockets); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	p := startAgentCmd(t, nil, strings.NewReader(""), "cdp", "--signal", "stdio", "--port", strconv.Itoa(port))
+	if code := p.wait(t, 30*time.Second); code != 1 || !strings.Contains(p.stderr.String(), "slicc cdp: can't serve the control socket (") || !strings.Contains(p.stderr.String(), "couldn't keep port "+strconv.Itoa(port)+" from seven; not serving") {
+		t.Fatalf("exit %d, stderr %q", code, p.stderr.String())
+	}
+	if c, err := net.DialTimeout("tcp4", "127.0.0.1:"+strconv.Itoa(port), 2*time.Second); err == nil {
+		_ = c.Close()
+		t.Fatal("the port still listens after slicc cdp gave up")
 	}
 }
