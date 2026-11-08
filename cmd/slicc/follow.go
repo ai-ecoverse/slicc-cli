@@ -379,6 +379,8 @@ func (r *followRun) certificate() (webrtc.Certificate, error) {
 	return *cert, nil
 }
 
+const followICEFailedMessage = "connection failed during ICE: no candidate pair; UDP looks blocked on this network; slicc retries over TURN on port 443 when the hub offers Cloudflare TURN"
+
 func (r *followRun) nodeStatus(format string, a ...any) {
 	if strings.HasPrefix(format, "link up with") {
 		return
@@ -386,6 +388,12 @@ func (r *followRun) nodeStatus(format string, a ...any) {
 	msg := r.f.Redact(fmt.Sprintf(format, a...))
 	if msg == "link closed by seven: restart" {
 		msg = "the tray hub restarted the setup"
+	}
+	if msg == "link down: "+link.ErrICEFailed.Error() {
+		if r.ctl.Snapshot().State != ctl.StateConnected {
+			return
+		}
+		msg = "link down: " + link.ErrConnectionFailed.Error()
 	}
 	r.status("%s", msg)
 }
@@ -424,9 +432,14 @@ func (r *followRun) onLinkWithin(l *link.Link, timeout time.Duration) {
 			<-l.Done()
 			r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
 		case <-l.Done():
-			if conn.Session().BootstrapID() == nonce {
-				r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
+			if conn.Session().BootstrapID() != nonce {
+				return
 			}
+			if err := l.Err(); errors.Is(err, link.ErrICEFailed) {
+				r.emit(followEvent{kind: evFailed, conn: conn, nonce: nonce, err: err})
+				return
+			}
+			r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
 		case <-timer.C:
 			_ = l.Close()
 			r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
@@ -613,7 +626,14 @@ func (r *followRun) redactErr(err error) string {
 	if err == nil {
 		return ""
 	}
-	return r.f.Redact(err.Error())
+	return r.f.Redact(followFailureMessage(err))
+}
+
+func followFailureMessage(err error) string {
+	if errors.Is(err, link.ErrICEFailed) {
+		return followICEFailedMessage
+	}
+	return err.Error()
 }
 
 func (r *followRun) lost(up bool, reason, message string) {
@@ -646,7 +666,7 @@ func (r *followRun) failed(ctx context.Context, err error, up bool) (int, follow
 	if code == "UNLINKED" {
 		return r.unlink(""), outcomeStop
 	}
-	msg := r.f.Redact(err.Error())
+	msg := r.f.Redact(followFailureMessage(err))
 	telemetry.ReportError(telemetry.Signal, errors.New(msg))
 	r.ctl.Update(func(s *ctl.Status) { s.Code, s.Error = code, msg })
 	if msg, ok := fatalFollowCodes[code]; ok {

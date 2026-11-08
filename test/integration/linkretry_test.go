@@ -247,7 +247,7 @@ func TestAttachSetsUpALinkAgainAfterTheNetworkDrops(t *testing.T) {
 	s := newFakeSeven(t, f)
 	p := startCrashBinary(t, "attach", "--no-kernel", "--no-jerk", "--cdp", f.srv.URL)
 	up := "link up with \"fake seven\"\n"
-	setUpAgainAfterFailure(t, f, s, p, up, (*sevenPeer).cutNetwork, "link failed (link: connection failed); asking seven to set it up again in 1s\n")
+	setUpAgainAfterFailure(t, f, s, p, up, (*sevenPeer).cutNetwork, "link failed (link: connection failed during ICE: no candidate pair); asking seven to set it up again in 1s\n")
 	waitOutput(t, p, up, 2, 5*time.Second)
 }
 
