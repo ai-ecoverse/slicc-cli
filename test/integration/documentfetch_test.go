@@ -497,10 +497,10 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 		},
 		{
 			name: "universal access never reaches the browser", signal: true, attest: true, enables: 2,
-			steps:   []documentStep{{Method: "Page.createIsolatedWorld", Params: map[string]any{"frameId": "tab", "grantUniveralAccess": true}}},
+			steps:   []documentStep{{Method: "Page.createIsolatedWorld", Params: map[string]any{"frameId": "tab", "grantUniveralAccess": true, "contentSecurityPolicy": "default-src 'none'"}}},
 			want:    []documentResult{{Value: "sent"}},
 			reached: []string{"Page.createIsolatedWorld"},
-			absent:  "grantUniveralAccess",
+			absent:  "grantUniveralAccess contentSecurityPolicy",
 		},
 		{
 			name: "a commit during the history lookup holds the navigation", signal: true, attest: true, enables: 2, lookup: "commit",
@@ -650,8 +650,11 @@ func TestTheGuardFallsBackToDocumentsOnlyWhenTheBrowserSaysSo(t *testing.T) {
 			if raced := fake.racedCommands(); c.atomic && len(raced) != 0 {
 				t.Fatalf("the browser got %v before the frame tree answered", raced)
 			}
-			if c.absent != "" && strings.Contains(strings.Join(fake.worldParams(), ""), c.absent) {
-				t.Fatalf("the browser got %s: %v", c.absent, fake.worldParams())
+			joined := strings.Join(fake.worldParams(), "")
+			for _, banned := range strings.Fields(c.absent) {
+				if strings.Contains(joined, banned) {
+					t.Fatalf("the browser got %s: %v", banned, fake.worldParams())
+				}
 			}
 			for _, method := range c.once {
 				if n := fake.count(method); n != 1 {

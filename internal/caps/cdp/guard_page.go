@@ -123,6 +123,7 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 
 func (g *guard) admitLocked(c *command) pageVerdict {
 	g.narrowBindingLocked(c)
+	g.stripIsolatedWorldLocked(c)
 	k := callKey{c.session, c.id}
 	kind := resultKind(c.method)
 	g.pending[k] = kind
@@ -238,6 +239,8 @@ func resultKind(method string) callKind {
 		return kindStreams
 	case "Page.captureScreenshot", "HeadlessExperimental.beginFrame", "LayerTree.replaySnapshot", "LayerTree.profileSnapshot", "LayerTree.snapshotCommandLog":
 		return kindPaint
+	case "Page.addScriptToEvaluateOnNewDocument":
+		return kindScript
 	}
 	return kindPlain
 }
@@ -258,10 +261,11 @@ func (g *guard) sessionRefusedLocked(id string) bool {
 const refusedLaterDocuments = "scripts and bindings for later documents could run in seven’s pages or the vault, so the guard doesn’t allow them; run a script in the page you see with Runtime.evaluate instead"
 
 var laterDocumentMethods = map[string]bool{
-	"Page.addScriptToEvaluateOnNewDocument": true,
-	"Page.addScriptToEvaluateOnLoad":        true,
-	"Runtime.addBinding":                    true,
-	"Page.setBypassCSP":                     true,
+	"Page.addScriptToEvaluateOnNewDocument":    true,
+	"Page.addScriptToEvaluateOnLoad":           true,
+	"Page.removeScriptToEvaluateOnNewDocument": true,
+	"Runtime.addBinding":                       true,
+	"Page.setBypassCSP":                        true,
 }
 
 const refusedSessionSettings = "settings for a whole session (headers, user agent, locale, time zone, cache, network conditions, blocked URLs, emulation) could reach seven’s pages or the vault, so the guard doesn’t allow them; change a request through Fetch instead"
@@ -282,7 +286,72 @@ var sessionSettingMethods = map[string]bool{
 
 var emulationMutators = regexp.MustCompile(`^Emulation\.(set|add|update|remove)[A-Z]`)
 
-func (g *guard) checkLocked(c *command) string {
+var admittedEmulation = map[string]bool{
+	"Emulation.setFocusEmulationEnabled": true,
+	"Emulation.setEmulatedMedia":         true,
+	"Emulation.setDeviceMetricsOverride": true,
+	"Emulation.setTouchEmulationEnabled": true,
+}
+
+var noCodeSource = regexp.MustCompile("^(?:[ \t\n]|//[^\n\r\u2028\u2029]*)*$")
+
+func (g *guard) stripIsolatedWorldLocked(c *command) {
+	if c.method != "Page.createIsolatedWorld" || c.params == nil {
+		return
+	}
+	delete(c.params, "grantUniveralAccess")
+	delete(c.params, "contentSecurityPolicy")
+}
+
+func (g *guard) laterDocumentRuleLocked(c *command) string {
+	switch c.method {
+	case "Page.addScriptToEvaluateOnNewDocument":
+		source, _ := c.params["source"].(string)
+		if noCodeSource.MatchString(source) {
+			return ""
+		}
+	case "Page.removeScriptToEvaluateOnNewDocument":
+		if id, _ := c.params["identifier"].(string); id != "" && g.scripts[id] {
+			return ""
+		}
+	case "Runtime.addBinding":
+		return g.bindingRuleLocked(c)
+	}
+	return refusedLaterDocuments
+}
+
+func (g *guard) bindingRuleLocked(c *command) string {
+	if name, _ := c.params["executionContextName"].(string); name != "" {
+		return ""
+	}
+	n, ok := c.params["executionContextId"].(json.Number)
+	if !ok {
+		return refusedLaterDocuments
+	}
+	id, err := n.Int64()
+	if err != nil {
+		return refusedLaterDocuments
+	}
+	t := g.sessionTargetLocked(c.session)
+	if t == nil {
+		return refusedLaterDocuments
+	}
+	s := g.shown[t.id]
+	if s == nil {
+		return refusedLaterDocuments
+	}
+	sc := s.contexts[id]
+	if sc == nil || sc.defaultWorld {
+		return refusedLaterDocuments
+	}
+	return ""
+}
+
+func sessionSettingRefused(c *command) bool {
+	return sessionSettingMethods[c.method] || (emulationMutators.MatchString(c.method) && !admittedEmulation[c.method])
+}
+
+func (g *guard) earlyRefuseLocked(c *command) string {
 	if c.id >= relayIDBase {
 		return "id " + itoa(c.id) + " is reserved"
 	}
@@ -294,11 +363,18 @@ func (g *guard) checkLocked(c *command) string {
 	if c.method == "Page.navigate" && (protect.Scheme(c.str("url")) == "about" || protect.Scheme(c.str("url")) == "") {
 		return refusedInheritedNavigation
 	}
-	if sessionSettingMethods[c.method] || emulationMutators.MatchString(c.method) {
+	if sessionSettingRefused(c) {
 		return refusedSessionSettings
 	}
 	if laterDocumentMethods[c.method] {
-		return refusedLaterDocuments
+		return g.laterDocumentRuleLocked(c)
+	}
+	return ""
+}
+
+func (g *guard) checkLocked(c *command) string {
+	if reason := g.earlyRefuseLocked(c); reason != "" {
+		return reason
 	}
 	if g.lost {
 		return refusedLost

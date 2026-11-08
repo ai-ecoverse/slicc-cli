@@ -504,6 +504,11 @@ func (g *guard) contextsClearedEvent(m *message, data []byte) browserVerdict {
 	return browserVerdict{forward: data}
 }
 
+func (g *guard) contextShownLocked(target string, id int64) bool {
+	s := g.shown[target]
+	return s != nil && s.contexts[id] != nil
+}
+
 func (g *guard) contextEvent(m *message, data []byte) browserVerdict {
 	var p struct {
 		ID      int64 `json:"executionContextId"`
@@ -514,6 +519,9 @@ func (g *guard) contextEvent(m *message, data []byte) browserVerdict {
 	_ = json.Unmarshal(m.Params, &p)
 	target := g.worldTargetLocked(m.SessionID)
 	if g.contextHiddenLocked(target, p.ID) || g.contextHiddenLocked(target, p.Details.ID) {
+		return browserVerdict{}
+	}
+	if m.Method == "Runtime.bindingCalled" && !g.contextShownLocked(target, p.ID) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}

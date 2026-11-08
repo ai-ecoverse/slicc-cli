@@ -314,6 +314,7 @@ func TestCDPEndpointDiscovery(t *testing.T) {
 	if !strings.Contains(local.body, `"ws://localhost:`+strconv.Itoa(c.port)+`/devtools/browser/`) {
 		t.Fatalf("the URL doesn't echo the Host: %s", local.body)
 	}
+	beforeNew := s.state()
 	newTab := cdpHTTP(t, http.MethodPut, c.url+"/json/new?"+s.origin+"/frame.html", nil)
 	var created map[string]string
 	if newTab.status != 200 || json.Unmarshal([]byte(newTab.body), &created) != nil || created["id"] == "" || created["type"] != "page" {
@@ -321,6 +322,12 @@ func TestCDPEndpointDiscovery(t *testing.T) {
 	}
 	if created["webSocketDebuggerUrl"] != fmt.Sprintf("ws://127.0.0.1:%d/devtools/page/%s", c.port, created["id"]) {
 		t.Fatalf("/json/new entry %v", created)
+	}
+	afterNew := s.state()
+	for _, m := range []string{"Target.createTarget", "Target.attachToTarget", "Page.navigate", "Target.detachFromTarget"} {
+		if !contains(afterNew.Methods, m) {
+			t.Fatalf("/json/new never sent %s: before=%v after=%v", m, beforeNew.Methods, afterNew.Methods)
+		}
 	}
 	for _, path := range []string{"/json", "/json/list"} {
 		a := c.get(t, path)

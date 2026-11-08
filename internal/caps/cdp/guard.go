@@ -50,6 +50,7 @@ const (
 	kindAttach
 	kindStreams
 	kindPaint
+	kindScript
 )
 
 type relayCall struct {
@@ -179,6 +180,7 @@ type guard struct {
 	extensionPaintGen     uint64
 	versionCalls          map[callKey]bool
 	versionReplies        map[callKey]int
+	scripts               map[string]bool
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -246,6 +248,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		heldExtensionPaints:   map[callKey]*heldExtensionPaint{},
 		extensionProbeCache:   map[extensionWorldKey]*extensionProbeWorld{},
 		extensionCaptureDirty: map[callKey]bool{},
+		scripts:               map[string]bool{},
 		maxWorlds:             maxWorlds,
 		bounds:                boundsFromEnv(),
 	}

@@ -158,6 +158,9 @@ func (s *Server) Close() {
 	s.closed = true
 	s.mu.Unlock()
 	_ = s.srv.Close()
+	if s.ln != nil {
+		_ = s.ln.Close()
+	}
 	var wg sync.WaitGroup
 	for _, k := range s.all() {
 		wg.Add(1)
@@ -433,7 +436,7 @@ func (s *Server) newTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finish(st)
-	res, err := call(st, 1, "Target.createTarget", map[string]any{"url": target}, s.cfg.OpenTimeout)
+	res, err := call(st, 1, "Target.createTarget", map[string]any{"url": "about:blank"}, s.cfg.OpenTimeout)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -442,8 +445,32 @@ func (s *Server) newTarget(w http.ResponseWriter, r *http.Request) {
 		TargetID string `json:"targetId"`
 	}
 	_ = json.Unmarshal(res, &created)
+	if created.TargetID == "" {
+		s.fail(w, r, &CDPError{Message: "no target"})
+		return
+	}
+	attached, err := call(st, 2, "Target.attachToTarget", map[string]any{"targetId": created.TargetID, "flatten": true}, s.cfg.OpenTimeout)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var sess struct {
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.Unmarshal(attached, &sess)
+	if sess.SessionID == "" {
+		s.fail(w, r, &CDPError{Message: "no session for that target"})
+		return
+	}
+	if target != "about:blank" {
+		if _, err := callOn(st, 3, sess.SessionID, "Page.navigate", map[string]any{"url": target}, s.cfg.OpenTimeout); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	_, _ = call(st, 4, "Target.detachFromTarget", map[string]any{"sessionId": sess.SessionID}, s.cfg.OpenTimeout)
 	info := targetInfo{TargetID: created.TargetID, Type: "page", URL: target}
-	if ts, err := targets(st, 2, s.cfg.OpenTimeout); err == nil {
+	if ts, err := targets(st, 5, s.cfg.OpenTimeout); err == nil {
 		for _, t := range ts {
 			if t.TargetID == created.TargetID {
 				info = t
