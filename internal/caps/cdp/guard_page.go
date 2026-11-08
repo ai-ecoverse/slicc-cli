@@ -381,10 +381,20 @@ func excludeAutoAttachWorkers(filter []any) []any {
 		}
 		out = append(out, entry)
 	}
-	if admitsAutoAttachType(out, "tab") && admitsAutoAttachType(out, "page") {
-		return append([]any{}, autoAttachTabOnly...)
-	}
 	return out
+}
+
+func resolveAutoAttachBoth(sessionType string, filter []any) []any {
+	if !admitsAutoAttachType(filter, "tab") || !admitsAutoAttachType(filter, "page") {
+		return filter
+	}
+	if sessionType != "" && sessionType != "browser" && sessionType != "tab" {
+		return append([]any{
+			map[string]any{"type": "browser", "exclude": true},
+			map[string]any{"type": "tab", "exclude": true},
+		}, filter...)
+	}
+	return append([]any{}, autoAttachTabOnly...)
 }
 
 func (g *guard) narrowAutoAttachLocked(c *command) {
@@ -403,7 +413,11 @@ func (g *guard) narrowAutoAttachLocked(c *command) {
 	if !ok {
 		return
 	}
-	c.params["filter"] = excludeAutoAttachWorkers(filter)
+	sessionType := ""
+	if s := g.sessions[c.session]; s != nil {
+		sessionType = s.typ
+	}
+	c.params["filter"] = resolveAutoAttachBoth(sessionType, excludeAutoAttachWorkers(filter))
 }
 
 func (g *guard) laterDocumentRuleLocked(c *command) string {
