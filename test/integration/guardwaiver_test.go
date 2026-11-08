@@ -61,6 +61,12 @@ func TestGuardWaiversAcceptOnlyDocumentedLegs(t *testing.T) {
 	if _, ok := waivedGuardRow(attachOther); ok {
 		t.Fatal("accepted non-settle attach failure", attachOther)
 	}
+	attachLegOnly := attachOK
+	attachLegOnly.Why = json.RawMessage(`"admitted: got false, want true"`)
+	attachLegOnly.Errors = []string{`{"leg":"guarded","error":"admitted: got false, want true"}`}
+	if _, ok := waivedGuardRow(attachLegOnly); ok {
+		t.Fatal("accepted guarded leg marker without settle token", attachLegOnly)
+	}
 	attachGuardedPass := attachOK
 	attachGuardedPass.Guarded = "pass"
 	if _, ok := waivedGuardRow(attachGuardedPass); ok {
@@ -94,5 +100,15 @@ func TestGuardWaiversAcceptOnlyDocumentedLegs(t *testing.T) {
 	})
 	if len(rec.errs) == 0 {
 		t.Fatal("checkGuardSummary accepted a guarded iframeAttached leak on a waived id")
+	}
+	rec = &recordTB{TB: t}
+	checkGuardSummary(rec, &guardSummary{
+		Set:     guardNPMPackage + "@" + guardSetVersion(t),
+		Pass:    false,
+		Missing: json.RawMessage(`[]`),
+		Results: []guardRow{attachLegOnly},
+	})
+	if len(rec.errs) == 0 {
+		t.Fatal("checkGuardSummary accepted a guarded leg marker without settle token")
 	}
 }

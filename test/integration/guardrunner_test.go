@@ -28,7 +28,10 @@ const (
 	guardGoModule   = "github.com/ai-ecoverse/slicc-browsers"
 )
 
-var guardExactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+var (
+	guardExactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	guardSettleToken  = regexp.MustCompile(`(?i)settle:\s*no request for .+ within \d+ms`)
+)
 
 func guardSetVersion(t testing.TB) string {
 	t.Helper()
@@ -350,8 +353,7 @@ func waivedGuardRow(r guardRow) (string, bool) {
 }
 
 func guardedSettleFailure(r guardRow) bool {
-	blob := strings.ToLower(string(r.Why) + " " + strings.Join(r.Errors, " "))
-	return strings.Contains(blob, "settle") || strings.Contains(blob, `"leg":"guarded"`) || strings.Contains(blob, "leg\":\"guarded")
+	return guardSettleToken.MatchString(string(r.Why) + " " + strings.Join(r.Errors, " "))
 }
 
 func guardVectorSet() []guardVector {
