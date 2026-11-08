@@ -28,9 +28,11 @@ type OpenOptions struct {
 }
 
 var (
-	ErrClosed       = errors.New("link: closed")
-	ErrHelloTimeout = errors.New("link: no HELLO from the peer")
-	ErrPeerClosed   = errors.New("link: control channel closed")
+	ErrClosed           = errors.New("link: closed")
+	ErrHelloTimeout     = errors.New("link: no HELLO from the peer")
+	ErrPeerClosed       = errors.New("link: control channel closed")
+	ErrConnectionFailed = errors.New("link: connection failed")
+	ErrICEFailed        = fmt.Errorf("%w during ICE: no candidate pair", ErrConnectionFailed)
 )
 
 type Link struct {
@@ -135,7 +137,11 @@ func (l *Link) onConnectionStateChange(st webrtc.PeerConnectionState) {
 			l.shedScreen()
 		}
 	case webrtc.PeerConnectionStateFailed:
-		l.fail(errors.New("link: connection failed"))
+		if l.pc.ICEConnectionState() == webrtc.ICEConnectionStateFailed {
+			l.fail(ErrICEFailed)
+		} else {
+			l.fail(ErrConnectionFailed)
+		}
 	case webrtc.PeerConnectionStateClosed:
 		l.fail(ErrClosed)
 	}
