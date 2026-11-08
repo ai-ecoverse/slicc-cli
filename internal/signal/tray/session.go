@@ -63,16 +63,25 @@ type Session struct {
 }
 
 func (f *Follower) newSession(controllerID, joinURL string, b *bootstrapStatus, resp *hubResponse) *Session {
-	return &Session{
+	s := &Session{
 		f:            f,
 		controllerID: controllerID,
 		joinURL:      joinURL,
 		bootstrapID:  b.BootstrapID,
 		attempt:      b.Attempt,
-		iceServers:   resp.IceServers,
 		trust:        resp.Trust,
 		started:      time.Now(),
 		done:         make(chan struct{}),
+	}
+	s.useICE(resp.IceServers)
+	return s
+}
+
+func (s *Session) useICE(servers []ICEServer) {
+	next, added := PrepareICEServers(servers)
+	s.iceServers = next
+	if added {
+		s.f.logf("tray: added turns:turn.cloudflare.com:443?transport=tcp")
 	}
 }
 
@@ -217,7 +226,7 @@ func (s *Session) retry(ctx context.Context, oldID string, failure *bootstrapFai
 	s.bootstrapID = next.BootstrapID
 	s.attempt = next.Attempt
 	if len(resp.IceServers) > 0 {
-		s.iceServers = resp.IceServers
+		s.useICE(resp.IceServers)
 	}
 	ice := append([]ICEServer(nil), s.iceServers...)
 	s.mu.Unlock()
@@ -303,7 +312,7 @@ func (s *Session) request(ctx context.Context, body map[string]any) (*hubRespons
 	}
 	s.mu.Lock()
 	if len(resp.IceServers) > 0 && resp.Bootstrap.BootstrapID == s.bootstrapID {
-		s.iceServers = resp.IceServers
+		s.useICE(resp.IceServers)
 	}
 	s.mu.Unlock()
 	return resp, nil
