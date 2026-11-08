@@ -15,13 +15,18 @@ import (
 const ReceiveBuffer = 4 << 20
 
 type APIOptions struct {
-	Logf     func(format string, args ...any)
-	Loopback bool
+	Logf      func(format string, args ...any)
+	Loopback  bool
+	RelayOnly bool
 }
 
 func NewAPI(opts APIOptions) *webrtc.API {
 	se := webrtc.SettingEngine{}
 	se.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
+	if opts.RelayOnly {
+		se.SetNet(&relayNet{})
+		se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	}
 	se.SetSCTPMaxReceiveBufferSize(ReceiveBuffer)
 	se.SetIncludeLoopbackCandidate(opts.Loopback)
 	se.SetICETimeouts(5*time.Second, 15*time.Second, 2*time.Second)
@@ -73,6 +78,13 @@ func Answer(ctx context.Context, api *webrtc.API, offer signal.Message, send fun
 	cfg := webrtc.Configuration{Certificates: opts.Certificates}
 	for _, s := range offer.ICEServers {
 		cfg.ICEServers = append(cfg.ICEServers, webrtc.ICEServer{URLs: s.URLs, Username: s.Username, Credential: s.Credential})
+	}
+	if opts.RelayOnly {
+		cfg.ICETransportPolicy = webrtc.ICETransportPolicyRelay
+		cfg.ICEServers = tlsRelayServers(cfg.ICEServers)
+		if len(cfg.ICEServers) == 0 {
+			return nil, fmt.Errorf("link: relay-only requires a TURN-over-TLS TCP server with credentials")
+		}
 	}
 	pc, err := api.NewPeerConnection(cfg)
 	if err != nil {

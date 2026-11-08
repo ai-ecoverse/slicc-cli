@@ -1226,6 +1226,8 @@ A command that can't start exits 127 with the reason on stderr.
 
 ## Remote setup: `slicc <join-url> follow`
 
+Use `slicc - follow --relay-only` to use only offered TURN-over-TLS TCP servers with credentials. This opt-in transport disables host and server-reflexive candidates, mDNS and WebRTC ICE network-interface discovery. It requires an accessible TLS relay, retains certificate verification and existing network restrictions, and never falls back to direct connections or UDP TURN. It does not enable network, compute, browser or filesystem sharing. Other sharing flags and their existing guards remain unchanged and may still query interfaces when serving shared resources. Internal callers must set both `link.APIOptions.RelayOnly` and `link.Options.RelayOnly`; `node.Config.RelayOnly` wires both together.
+
 ```
 slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]... [--name <name>] [--cdp <url>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
