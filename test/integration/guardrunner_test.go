@@ -350,32 +350,61 @@ func logTabIframeLeakEvidence(t testing.TB, r guardRow) {
 		Guarded map[string]any `json:"guarded"`
 	}
 	_ = json.Unmarshal(r.Observed, &obs)
-	t.Logf("C3.tab-iframe-leak verdict: id=%s target=%s variant=%s control=%s guarded=%s live=%s control.iframeAttached=%v guarded.iframeAttached=%v control.frameListed=%v guarded.frameListed=%v diagnostics=%s observed=%s",
-		r.ID, r.Target, r.Variant, r.Control, r.Guarded, r.Live, obs.Control["iframeAttached"], obs.Guarded["iframeAttached"], obs.Control["frameListed"], obs.Guarded["frameListed"], r.Diagnostics, r.Observed)
-}
-
-func tabIframeLeakObservation(observed json.RawMessage) (control, guarded map[string]any, err error) {
-	var sides map[string]map[string]any
-	if err = json.Unmarshal(observed, &sides); err != nil {
-		return nil, nil, err
+	var diag struct {
+		IframeLeak map[string]any `json:"iframeLeak"`
 	}
-	return sides["control"], sides["guarded"], nil
+	_ = json.Unmarshal(r.Diagnostics, &diag)
+	leak, _ := json.Marshal(diag.IframeLeak)
+	t.Logf("C3.tab-iframe-leak verdict: id=%s target=%s variant=%s control=%s guarded=%s live=%s control.iframeAttached=%v guarded.iframeAttached=%v iframeLeak=%s observed=%s",
+		r.ID, r.Target, r.Variant, r.Control, r.Guarded, r.Live, obs.Control["iframeAttached"], obs.Guarded["iframeAttached"], leak, r.Observed)
 }
 
-func tabIframeLeakGuardedHidesFrame(observed json.RawMessage) error {
-	control, guarded, err := tabIframeLeakObservation(observed)
+type tabIframeLeakEvidence struct {
+	IframeAttached bool  `json:"iframeAttached"`
+	FrameScrubbed  bool  `json:"frameScrubbed"`
+	AttachRefused  bool  `json:"attachRefused"`
+	Frames         []any `json:"frames"`
+	Attached       []any `json:"attached"`
+	Listings       []any `json:"listings"`
+	Sessions       []any `json:"sessions"`
+	AttachAttempts []any `json:"attachAttempts"`
+}
+
+func tabIframeLeakFromDiagnostics(raw json.RawMessage) (tabIframeLeakEvidence, error) {
+	var wrap struct {
+		IframeLeak tabIframeLeakEvidence `json:"iframeLeak"`
+	}
+	if err := json.Unmarshal(raw, &wrap); err != nil {
+		return tabIframeLeakEvidence{}, err
+	}
+	return wrap.IframeLeak, nil
+}
+
+func tabIframeLeakGuardedHidesFrame(observed, diagnostics json.RawMessage) error {
+	var sides map[string]map[string]any
+	if err := json.Unmarshal(observed, &sides); err != nil {
+		return err
+	}
+	controlAttached, _ := sides["control"]["iframeAttached"].(bool)
+	guardedAttached, _ := sides["guarded"]["iframeAttached"].(bool)
+	if !controlAttached {
+		return fmt.Errorf("control must see the cross-site frame attach: iframeAttached=%v", controlAttached)
+	}
+	if guardedAttached {
+		return fmt.Errorf("guarded stock iframeAttached must be false: %v", guardedAttached)
+	}
+	ev, err := tabIframeLeakFromDiagnostics(diagnostics)
 	if err != nil {
 		return err
 	}
-	controlAttached, _ := control["iframeAttached"].(bool)
-	controlListed, _ := control["frameListed"].(bool)
-	guardedAttached, _ := guarded["iframeAttached"].(bool)
-	guardedListed, _ := guarded["frameListed"].(bool)
-	if !controlAttached || !controlListed {
-		return fmt.Errorf("control must see the cross-site frame: iframeAttached=%v frameListed=%v", controlAttached, controlListed)
+	if ev.IframeAttached || len(ev.Attached) != 0 || len(ev.Sessions) != 0 {
+		return fmt.Errorf("guarded attached or opened a session for the framed target: attached=%v sessions=%v", ev.Attached, ev.Sessions)
 	}
-	if guardedAttached || guardedListed {
-		return fmt.Errorf("guarded must hide framed origin and targetId: iframeAttached=%v frameListed=%v", guardedAttached, guardedListed)
+	if !ev.FrameScrubbed || len(ev.Listings) == 0 {
+		return fmt.Errorf("guarded listings must show only the bare origin: scrubbed=%v listings=%v", ev.FrameScrubbed, ev.Listings)
+	}
+	if !ev.AttachRefused || len(ev.AttachAttempts) == 0 {
+		return fmt.Errorf("Target.attachToTarget must be refused: refused=%v attempts=%v", ev.AttachRefused, ev.AttachAttempts)
 	}
 	return nil
 }

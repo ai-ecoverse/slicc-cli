@@ -20,11 +20,11 @@ func TestCDPTabIframeLeakIsCrossSite(t *testing.T) {
 				}
 				seen[row.Target] = true
 				if row.Control != "pass" || row.Guarded != "pass" || row.Live != "pass" || len(row.Errors) != 0 {
-					t.Fatalf("C3.tab-iframe-leak must pass both legs without a waiver: control=%s guarded=%s live=%s why=%s errors=%v observed=%s",
-						row.Control, row.Guarded, row.Live, row.Why, row.Errors, row.Observed)
+					t.Fatalf("C3.tab-iframe-leak must pass both legs without a waiver: control=%s guarded=%s live=%s why=%s errors=%v observed=%s diagnostics=%s",
+						row.Control, row.Guarded, row.Live, row.Why, row.Errors, row.Observed, row.Diagnostics)
 				}
-				if err := tabIframeLeakGuardedHidesFrame(row.Observed); err != nil {
-					t.Fatalf("%s %s: %v observed=%s", row.Target, row.Variant, err, row.Observed)
+				if err := tabIframeLeakGuardedHidesFrame(row.Observed, row.Diagnostics); err != nil {
+					t.Fatalf("%s %s: %v observed=%s diagnostics=%s", row.Target, row.Variant, err, row.Observed, row.Diagnostics)
 				}
 			}
 			for _, target := range []string{"seven", "vault"} {
@@ -37,30 +37,20 @@ func TestCDPTabIframeLeakIsCrossSite(t *testing.T) {
 }
 
 func TestTabIframeLeakFailsWhenGuardedLeaks(t *testing.T) {
-	clean := json.RawMessage(`{"control":{"admitted":true,"iframeExists":true,"iframeAttached":true,"frameListed":true},"guarded":{"admitted":true,"iframeExists":true,"iframeAttached":false,"frameListed":false}}`)
-	if err := tabIframeLeakGuardedHidesFrame(clean); err != nil {
+	cleanObs := json.RawMessage(`{"control":{"admitted":true,"iframeExists":true,"iframeAttached":true},"guarded":{"admitted":true,"iframeExists":true,"iframeAttached":false}}`)
+	cleanDiag := json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":true,"attachRefused":true,"frames":[{"targetId":"F1"}],"attached":[],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1","title":"http://seven.oopif.test:1","origin":"http://seven.oopif.test:1"}],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":true,"message":"slicc: refused: target is on seven's origin"}]}}`)
+	if err := tabIframeLeakGuardedHidesFrame(cleanObs, cleanDiag); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"attach", "list", "both"} {
-		leaked := map[string]map[string]any{
-			"control": {"admitted": true, "iframeExists": true, "iframeAttached": true, "frameListed": true},
-			"guarded": {"admitted": true, "iframeExists": true, "iframeAttached": false, "frameListed": false},
-		}
-		switch name {
-		case "attach":
-			leaked["guarded"]["iframeAttached"] = true
-		case "list":
-			leaked["guarded"]["frameListed"] = true
-		case "both":
-			leaked["guarded"]["iframeAttached"] = true
-			leaked["guarded"]["frameListed"] = true
-		}
-		raw, err := json.Marshal(leaked)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := tabIframeLeakGuardedHidesFrame(raw); err == nil {
-			t.Fatalf("%s leak accepted: %s", name, raw)
+	cases := map[string]json.RawMessage{
+		"attach-other-type": json.RawMessage(`{"iframeLeak":{"iframeAttached":true,"frameScrubbed":true,"attachRefused":true,"frames":[{"targetId":"F1"}],"attached":[{"targetId":"F1","type":"page","url":"http://seven.oopif.test:1"}],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1","title":"http://seven.oopif.test:1","origin":"http://seven.oopif.test:1"}],"sessions":[{"targetId":"F1","sessionId":"S1"}],"attachAttempts":[{"targetId":"F1","refused":true,"message":"slicc: refused: target is on seven's origin"}]}}`),
+		"listing-path":      json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":false,"attachRefused":true,"frames":[{"targetId":"F1"}],"attached":[],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1/doc?n=frame-x","title":"http://seven.oopif.test:1","origin":"http://seven.oopif.test:1"}],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":true,"message":"slicc: refused: target is on seven's origin"}]}}`),
+		"listing-title":     json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":false,"attachRefused":true,"frames":[{"targetId":"F1"}],"attached":[],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1","title":"secret title","origin":"http://seven.oopif.test:1"}],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":true,"message":"slicc: refused: target is on seven's origin"}]}}`),
+		"attach-accepted":   json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":true,"attachRefused":false,"frames":[{"targetId":"F1"}],"attached":[],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1","title":"http://seven.oopif.test:1","origin":"http://seven.oopif.test:1"}],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":false,"message":"","sessionId":"S1"}]}}`),
+	}
+	for name, diag := range cases {
+		if err := tabIframeLeakGuardedHidesFrame(cleanObs, diag); err == nil {
+			t.Fatalf("%s leak accepted: %s", name, diag)
 		}
 	}
 }

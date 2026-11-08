@@ -64,15 +64,80 @@ async function noteForwarded(gateURL, forwarded, msg) {
   }
 }
 
-function noteFrameTarget(frameLeak, info) {
-  if (!frameLeak || !info?.targetId || typeof info.url !== 'string') return;
-  if (!info.url.includes('/doc?n=frame-')) return;
-  frameLeak.ids.set(info.targetId, info.url);
+const attachRefusedText = 'slicc: refused: target is on seven\'s origin';
+
+function bareOrigin(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
 }
 
-function revealFrameLeak(frameLeak, info) {
-  if (!frameLeak || !info?.targetId || !frameLeak.ids.has(info.targetId)) return info;
-  return { ...info, url: frameLeak.ids.get(info.targetId) };
+function resetFrameLeak(frameLeak) {
+  frameLeak.ids.clear();
+  frameLeak.attached.length = 0;
+  frameLeak.listings.length = 0;
+  frameLeak.attachAttempts.length = 0;
+  frameLeak.sessions.length = 0;
+  frameLeak.observer = frameLeak.observer;
+}
+
+function frameHostMatch(frameLeak, url) {
+  if (url.includes('/doc?n=frame-')) return true;
+  return (frameLeak.hosts ?? []).some((host) => typeof host === 'string' && host && url.startsWith(host));
+}
+
+function noteFrameTarget(frameLeak, info) {
+  if (!frameLeak || !info?.targetId || typeof info.url !== 'string' || !info.url) return;
+  if (!frameHostMatch(frameLeak, info.url)) return;
+  const origin = bareOrigin(info.url);
+  if (!origin) return;
+  frameLeak.ids.set(info.targetId, { url: info.url, origin });
+}
+
+function noteClientListing(frameLeak, source, info) {
+  if (!frameLeak || !info?.targetId || !frameLeak.ids.has(info.targetId)) return;
+  const origin = frameLeak.ids.get(info.targetId).origin;
+  frameLeak.listings.push({
+    source,
+    targetId: info.targetId,
+    type: info.type ?? '',
+    url: info.url ?? '',
+    title: info.title ?? '',
+    origin,
+  });
+}
+
+function frameLeakEvidence(frameLeak) {
+  const frames = [...frameLeak.ids.entries()].map(([targetId, meta]) => ({ targetId, url: meta.url, origin: meta.origin }));
+  const listings = frameLeak.listings.map((row) => ({ ...row }));
+  const attached = frameLeak.attached.map((row) => ({ ...row }));
+  const sessions = frameLeak.sessions.map((row) => ({ ...row }));
+  const attachAttempts = frameLeak.attachAttempts.map((row) => ({ ...row }));
+  const scrubbed = listings.length > 0 && listings.every((row) => row.url === row.origin && row.title === row.origin);
+  const attachRefused =
+    attachAttempts.length > 0 && attachAttempts.every((row) => row.refused && String(row.message ?? '').includes(attachRefusedText));
+  return {
+    frames,
+    attached,
+    listings,
+    sessions,
+    attachAttempts,
+    iframeAttached: attached.length > 0,
+    frameScrubbed: scrubbed,
+    attachRefused,
+  };
+}
+
+function frameLeakFailure(evidence) {
+  if (!evidence.frames.length) return 'unguarded observer never saw the framed target';
+  if (evidence.iframeAttached) return 'guarded Target.attachedToTarget reached the framed target';
+  if (evidence.sessions.length) return 'guarded session opened for the framed targetId';
+  if (!evidence.listings.length) return 'guarded client never listed the framed target';
+  if (!evidence.frameScrubbed) return 'guarded listing left a path, query or page title on the framed target';
+  if (!evidence.attachRefused) return 'Target.attachToTarget on the framed targetId was not refused with slicc: refused: target is on seven\'s origin';
+  return '';
 }
 
 function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
@@ -80,16 +145,20 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
   const events = [];
   const fake = new Set();
   const forwarded = [];
+  let probingAttach = false;
   const onEvent = (e) => {
     noteSession(name, e);
     const info = e.params?.targetInfo;
     if (frameLeak && (e.method === 'Target.attachedToTarget' || e.method === 'Target.targetCreated' || e.method === 'Target.targetInfoChanged')) {
       if (name === 'unguarded') noteFrameTarget(frameLeak, info);
-      else if (e.method === 'Target.attachedToTarget' && frameLeak.ids.has(info?.targetId)) {
-        events.push({
-          ...e,
-          params: { ...e.params, targetInfo: revealFrameLeak(frameLeak, info) },
-        });
+      else {
+        if (e.method === 'Target.attachedToTarget' && frameLeak.ids.has(info?.targetId)) {
+          frameLeak.attached.push({ targetId: info.targetId, type: info.type ?? '', url: info.url ?? '', sessionId: e.params.sessionId ?? '' });
+          frameLeak.sessions.push({ targetId: info.targetId, sessionId: e.params.sessionId ?? '' });
+        }
+        if (e.method === 'Target.targetCreated' || e.method === 'Target.targetInfoChanged') {
+          noteClientListing(frameLeak, e.method, info);
+        }
       }
     }
     events.push(e);
@@ -112,6 +181,44 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
     await new Promise((resolve) => setTimeout(resolve, 100));
     return result;
   };
+  const refreshFrames = async () => {
+    if (!frameLeak?.observer?.send) return;
+    try {
+      const listed = await frameLeak.observer.send('Target.getTargets', { filter: [{}] });
+      const infos = listed?.targetInfos ?? [];
+      frameLeak.observerListed = infos.map((info) => ({ targetId: info.targetId, type: info.type, url: info.url, title: info.title }));
+      for (const info of infos) noteFrameTarget(frameLeak, info);
+    } catch (error) {
+      frameLeak.observerError = String(error?.message ?? error);
+    }
+  };
+  const probeAttach = async () => {
+    if (!frameLeak || name !== 'client' || probingAttach) return;
+    probingAttach = true;
+    try {
+      await refreshFrames();
+      if (!frameLeak.ids.size) {
+        frameLeak.snapshot = frameLeakEvidence(frameLeak);
+        return;
+      }
+      for (const targetId of frameLeak.ids.keys()) {
+        if (frameLeak.attachAttempts.some((row) => row.targetId === targetId)) continue;
+        try {
+          const result = await c.send('Target.attachToTarget', { targetId, flatten: true });
+          frameLeak.attachAttempts.push({ targetId, refused: false, message: '', sessionId: result?.sessionId ?? '' });
+          if (result?.sessionId) {
+            frameLeak.sessions.push({ targetId, sessionId: result.sessionId });
+            await c.send('Target.detachFromTarget', { sessionId: result.sessionId }).catch(() => {});
+          }
+        } catch (error) {
+          frameLeak.attachAttempts.push({ targetId, refused: true, message: String(error?.message ?? error) });
+        }
+      }
+      frameLeak.snapshot = frameLeakEvidence(frameLeak);
+    } finally {
+      probingAttach = false;
+    }
+  };
   const afterSend = async (before, result) => {
     const msg = c.sent[before];
     if (!msg) return result;
@@ -121,22 +228,34 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
       if (msg.sessionId) entry.sessionId = msg.sessionId;
       forwarded.push(entry);
     }
-    if (frameLeak && msg.method === 'Target.setAutoAttach') frameLeak.ids.clear();
+    if (frameLeak && msg.method === 'Target.setAutoAttach' && !probingAttach && !msg.sessionId) resetFrameLeak(frameLeak);
     if (frameLeak && msg.method === 'Target.getTargets' && Array.isArray(result?.targetInfos)) {
       if (name === 'unguarded') {
         for (const info of result.targetInfos) noteFrameTarget(frameLeak, info);
       } else {
-        const rawHits = result.targetInfos.filter(
-          (info) =>
-            frameLeak.ids.has(info.targetId) ||
-            (typeof info.url === 'string' && info.url.includes('/doc?n=frame-')),
-        );
-        if (rawHits.length) frameLeak.rawListed = rawHits.map((info) => ({ targetId: info.targetId, type: info.type, url: info.url, idKnown: frameLeak.ids.has(info.targetId) }));
-        return {
-          ...result,
-          targetInfos: result.targetInfos.map((info) => revealFrameLeak(frameLeak, info)),
-        };
+        await refreshFrames();
+        frameLeak.clientListed = result.targetInfos.map((info) => ({
+          targetId: info.targetId,
+          type: info.type,
+          url: info.url,
+          title: info.title,
+        }));
+        for (const info of result.targetInfos) {
+          if (!frameLeak.ids.has(info.targetId)) {
+            const origin = bareOrigin(info.url ?? '');
+            for (const [targetId, meta] of frameLeak.ids) {
+              if (origin && origin === meta.origin && (info.type === 'iframe' || (info.url ?? '') === origin)) {
+                frameLeak.ids.set(info.targetId, meta);
+              }
+            }
+          }
+          noteClientListing(frameLeak, 'Target.getTargets', info);
+        }
+        await probeAttach();
       }
+    }
+    if (frameLeak && name === 'client' && msg.method === 'Target.getTargetInfo' && result?.targetInfo) {
+      noteClientListing(frameLeak, 'Target.getTargetInfo', result.targetInfo);
     }
     return result;
   };
@@ -199,7 +318,7 @@ function specializeTabIframeLeak(vector, frameKey, targets) {
   clone.observe = {
     ...clone.observe,
     iframeAttached: {
-      means: 'the client got Target.attachedToTarget for the framed origin under any target type',
+      means: 'the client got Target.attachedToTarget for the framed target under any type',
       check: {
         any: [
           {
@@ -216,25 +335,14 @@ function specializeTabIframeLeak(vector, frameKey, targets) {
         observer: 'client',
       },
     },
-    frameListed: {
-      means: 'Target.getTargets lists the framed origin or its targetId',
-      check: {
-        result: 'listed',
-        path: 'result.targetInfos',
-        equals: { $some: { url: { $contains: `{${frameKey}}` } } },
-        observer: 'client',
-      },
-    },
   };
   clone.control.expected = {
     ...clone.control.expected,
     iframeAttached: true,
-    frameListed: true,
   };
   clone.expected = {
     ...clone.expected,
     iframeAttached: false,
-    frameListed: false,
   };
   return clone;
 }
@@ -357,7 +465,18 @@ export function guardStart(getLink, opts) {
           unguarded.mouseEvidence = evidence.control;
           mouseDiagnostics.set(rowKey({ id: vector.id, target, variant }), evidence);
         }
-        const frameLeak = vector.id === 'C3.tab-iframe-leak' ? { ids: new Map() } : null;
+        const frameLeak =
+          vector.id === 'C3.tab-iframe-leak'
+            ? {
+                ids: new Map(),
+                attached: [],
+                listings: [],
+                attachAttempts: [],
+                sessions: [],
+                observer: unguarded,
+                hosts: [opts.targets.sevenOopif, opts.targets.vault].filter(Boolean),
+              }
+            : null;
         await unguarded.send('Target.setDiscoverTargets', { discover: true });
         const guarded = sessionBound(client, 'client', { inject: opts.inject, gate: b.gate, frameLeak });
         guarded.inboundDelay = delayedInbound(b.gate, opts);
@@ -383,8 +502,17 @@ export function guardStart(getLink, opts) {
         const evidence = mouseDiagnostics.get(rowKey(row));
         if (evidence) { row.diagnostics = evidence; mouseDiagnostics.delete(rowKey(row)); }
         const frameLeak = frameLeakByRow.get(rowKey(row));
-        if (frameLeak?.rawListed) row.diagnostics = { ...(row.diagnostics ?? {}), frameListedRaw: frameLeak.rawListed };
-        frameLeakByRow.delete(rowKey(row));
+        if (frameLeak) {
+          const iframeLeak = frameLeak.snapshot ?? frameLeakEvidence(frameLeak);
+          row.diagnostics = { ...(row.diagnostics && typeof row.diagnostics === 'object' ? row.diagnostics : {}), iframeLeak };
+          const fail = frameLeakFailure(iframeLeak);
+          if (fail) {
+            row.guarded = 'fail';
+            row.why = [row.why, fail].filter(Boolean).join('; ');
+            row.errors = [...(row.errors ?? []), fail];
+          }
+          frameLeakByRow.delete(rowKey(row));
+        }
         state.started.delete(rowKey(row));
         if (row.inFlight) row.errors = [...(row.errors ?? []), ...describeSessions(row)];
         state.rows.push(row);
