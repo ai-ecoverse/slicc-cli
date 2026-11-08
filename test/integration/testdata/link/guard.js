@@ -202,31 +202,6 @@ export function guardStart(getLink, opts) {
     }
     for (const v of set.vectors) {
       if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
-      if (v.id === 'E7.isolated-foreign') {
-        for (const step of v.trigger ?? []) {
-          if (step.settle?.title && step.settle.required) delete step.settle.required;
-        }
-        v.liveCheck = {
-          any: [
-            { loaded: '{target}/doc?n={tag}', observer: 'fixture' },
-            {
-              all: [
-                { pre: '{target}/doc?n={tag}', observer: 'fixture' },
-                {
-                  any: [
-                    { blocked: { url: '{target}/doc?n={tag}', session: 'page', frame: false }, observer: 'client' },
-                    { blocked: { url: '{target}/doc?n={tag}', session: 'page', frame: false }, observer: 'unguarded' },
-                  ],
-                  observer: 'client',
-                },
-              ],
-              observer: 'client',
-            },
-            { registration: 'any', observer: 'client' },
-          ],
-          observer: 'client',
-        };
-      }
       if (v.id === 'C3.tab-protected' || v.id === 'C3.tab-protected.synthetic') {
         v.liveCheck = {
           any: [

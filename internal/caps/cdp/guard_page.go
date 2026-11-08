@@ -462,15 +462,8 @@ func (g *guard) earlyRefuseLocked(c *command) string {
 			return reason
 		}
 	}
-	if c.method == "Page.navigate" {
-		u := c.str("url")
-		scheme := protect.Scheme(u)
-		if scheme == "about" || scheme == "" {
-			return refusedInheritedNavigation
-		}
-		if (scheme == "http" || scheme == "https") && g.o.URL(u) && !g.fetchFailArmedLocked(c.session) {
-			return refusedTarget
-		}
+	if c.method == "Page.navigate" && (protect.Scheme(c.str("url")) == "about" || protect.Scheme(c.str("url")) == "") {
+		return refusedInheritedNavigation
 	}
 	if sessionSettingRefused(c) {
 		return refusedSessionSettings
@@ -544,46 +537,13 @@ func (g *guard) destinationRule(c *command) string {
 	if !ok {
 		return ""
 	}
-	u := c.str(key)
-	if c.method == "Page.navigate" && g.protectedHTTPNavigateArmedLocked(c.session, u) {
-		if protect.Unparseable(u) {
-			return refusedParse
-		}
-		return ""
-	}
-	if reason := g.destinationReason(u); reason != "" {
+	if reason := g.destinationReason(c.str(key)); reason != "" {
 		return reason
 	}
-	if u != "" && overrideKeys[c.method] && (g.taintedLocked(c.session, u) || g.knownRedirectLocked(u)) {
+	if u := c.str(key); overrideKeys[c.method] && u != "" && (g.taintedLocked(c.session, u) || g.knownRedirectLocked(u)) {
 		return refusedRedirect
 	}
 	return ""
-}
-
-func (g *guard) fetchFailArmedLocked(sessionID string) bool {
-	s, ok := g.sessions[sessionID]
-	if !ok || !guarded(s.typ) {
-		return false
-	}
-	nt, ok := g.navTargets[s.target]
-	if !ok || !nt.done || nt.failed || nt.worker {
-		return false
-	}
-	if nt.confirm != nil && (!nt.confirm.done || nt.confirm.failed) {
-		return false
-	}
-	return true
-}
-
-func (g *guard) protectedHTTPNavigateArmedLocked(sessionID, raw string) bool {
-	scheme := protect.Scheme(raw)
-	if scheme != "http" && scheme != "https" {
-		return false
-	}
-	if !g.o.URL(raw) {
-		return false
-	}
-	return g.fetchFailArmedLocked(sessionID)
 }
 
 func (g *guard) destinationReason(urls ...string) string {
@@ -825,7 +785,7 @@ func (g *guard) scanString(k, s string, c *command) string {
 		return refusedTarget
 	case assetKinds[k] != "" && g.assets[c.session].has(assetKinds[k]+s):
 		return refusedBody
-	case g.scanProtectedURL(k, s, c) != "":
+	case urlKeys[k] && g.o.URL(s):
 		return refusedTarget
 	case k == "storageKey" && g.o.StorageKey(s):
 		return refusedTarget
@@ -845,16 +805,6 @@ func (g *guard) scanString(k, s string, c *command) string {
 		return g.requestRule(s, c)
 	}
 	return ""
-}
-
-func (g *guard) scanProtectedURL(k, s string, c *command) string {
-	if !urlKeys[k] || !g.o.URL(s) {
-		return ""
-	}
-	if c.method == "Page.navigate" && k == "url" && g.protectedHTTPNavigateArmedLocked(c.session, s) {
-		return ""
-	}
-	return refusedTarget
 }
 
 func (g *guard) requestRule(id string, c *command) string {
