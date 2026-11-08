@@ -9,10 +9,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -314,6 +316,7 @@ func TestCDPEndpointDiscovery(t *testing.T) {
 	if !strings.Contains(local.body, `"ws://localhost:`+strconv.Itoa(c.port)+`/devtools/browser/`) {
 		t.Fatalf("the URL doesn't echo the Host: %s", local.body)
 	}
+	beforeNew := s.state()
 	newTab := cdpHTTP(t, http.MethodPut, c.url+"/json/new?"+s.origin+"/frame.html", nil)
 	var created map[string]string
 	if newTab.status != 200 || json.Unmarshal([]byte(newTab.body), &created) != nil || created["id"] == "" || created["type"] != "page" {
@@ -321,6 +324,12 @@ func TestCDPEndpointDiscovery(t *testing.T) {
 	}
 	if created["webSocketDebuggerUrl"] != fmt.Sprintf("ws://127.0.0.1:%d/devtools/page/%s", c.port, created["id"]) {
 		t.Fatalf("/json/new entry %v", created)
+	}
+	afterNew := s.state()
+	for _, m := range []string{"Target.createTarget", "Target.attachToTarget", "Page.navigate", "Target.detachFromTarget"} {
+		if !contains(afterNew.Methods, m) {
+			t.Fatalf("/json/new never sent %s: before=%v after=%v", m, beforeNew.Methods, afterNew.Methods)
+		}
 	}
 	for _, path := range []string{"/json", "/json/list"} {
 		a := c.get(t, path)
@@ -359,6 +368,40 @@ func TestCDPEndpointDiscovery(t *testing.T) {
 	}
 	if out := c.stderr.String(); strings.Contains(out, "frame.html") {
 		t.Fatalf("stderr names a target URL:\n%s", out)
+	}
+}
+
+func TestCDPRefusedNewLeavesTargetListUnchanged(t *testing.T) {
+	s := newCDPSeven(t)
+	c := s.start(t, nil)
+	listIDs := func(t *testing.T) []string {
+		t.Helper()
+		a := c.get(t, "/json/list")
+		var list []map[string]string
+		if a.status != 200 || json.Unmarshal([]byte(a.body), &list) != nil {
+			t.Fatalf("/json/list: %d %s", a.status, a.body)
+		}
+		ids := make([]string, 0, len(list))
+		for _, e := range list {
+			ids = append(ids, e["id"])
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	before := listIDs(t)
+	for _, target := range []string{"https://vault.sliccy.ai/", "about:srcdoc", "about:blank#x"} {
+		a := cdpHTTP(t, http.MethodPut, c.url+"/json/new?"+url.QueryEscape(target), nil)
+		if a.status != 500 || !strings.Contains(a.body, "slicc: refused:") {
+			t.Fatalf("PUT /json/new?%s: %d %q", target, a.status, a.body)
+		}
+		after := listIDs(t)
+		if !slices.Equal(before, after) {
+			t.Fatalf("after refused /json/new?%s target list changed: before=%v after=%v", target, before, after)
+		}
+	}
+	st := s.state()
+	if !contains(st.Methods, "Target.closeTarget") {
+		t.Fatalf("a refused /json/new never closed the created target: %v", st.Methods)
 	}
 }
 

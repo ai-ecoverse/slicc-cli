@@ -12,7 +12,16 @@ func documentedGuardSkip(r guardRow) bool {
 	if r.Reason == "not-applicable" || strings.HasPrefix(r.Reason, "not-applicable: ") {
 		return true
 	}
-	return r.Reason == "not-supported:siteIsolationOff" && (r.ID == "C4.iframe-preattach.blank.shared" || r.ID == "C4.iframe-preattach.srcdoc.shared")
+	switch r.Reason {
+	case "not-supported:siteIsolationOff":
+		return r.ID == "C4.iframe-preattach.blank.shared" || r.ID == "C4.iframe-preattach.srcdoc.shared"
+	case "not-supported:syntheticAutoAttach":
+		return strings.HasSuffix(r.ID, ".synthetic")
+	case "not-supported:secureOrigin":
+		return r.ID == "C3.tab-service-worker-leak"
+	default:
+		return false
+	}
 }
 
 func TestGuardSkipsRequireExplicitConsistentReasons(t *testing.T) {

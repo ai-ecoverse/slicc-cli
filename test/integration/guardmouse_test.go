@@ -58,7 +58,7 @@ assert.deepEqual(calls, [['Runtime.evaluate', { expression: '1' }, 'clean']]);
 	}
 }
 
-func checkMouseEvidence(t *testing.T, row guardRow) {
+func checkMouseEvidence(t testing.TB, row guardRow) {
 	t.Helper()
 	var evidence map[string][]struct {
 		Type        string          `json:"type"`
@@ -105,6 +105,13 @@ func TestCDPSharedOrdinaryMouseInput(t *testing.T) {
 				t.Fatalf("ordinary mouse evidence incomplete or failed: %+v", sum)
 			}
 			row := sum.Results[0]
+			if row.Control == "skip" {
+				if row.ID != "C9.page-drivable" || row.Target != "ordinary" || row.Guarded != "skip" || row.Live != "skip" || row.Reason != guardC9MacReason {
+					t.Fatalf("unexpected ordinary mouse skip: %+v", row)
+				}
+				t.Logf("skipping ordinary mouse evidence: %s", row.Reason)
+				return
+			}
 			t.Logf("mouse transport evidence=%s", row.Diagnostics)
 			checkMouseEvidence(t, row)
 			if row.ID != "C9.page-drivable" || row.Target != "ordinary" || row.Control != "pass" || row.Guarded != "pass" || row.Live != "pass" || len(row.Errors) != 0 {

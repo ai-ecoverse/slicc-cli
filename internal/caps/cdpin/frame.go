@@ -117,13 +117,21 @@ type answer struct {
 }
 
 func call(st *link.Stream, id int64, method string, params any, within time.Duration) (json.RawMessage, error) {
-	req, err := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
+	return callOn(st, id, "", method, params, within)
+}
+
+func callOn(st *link.Stream, id int64, session, method string, params any, within time.Duration) (json.RawMessage, error) {
+	req := map[string]any{"id": id, "method": method, "params": params}
+	if session != "" {
+		req["sessionId"] = session
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 	_ = st.SetReadDeadline(time.Now().Add(within))
 	defer func() { _ = st.SetReadDeadline(time.Time{}) }()
-	if err := writeFrame(st, req); err != nil {
+	if err := writeFrame(st, body); err != nil {
 		return nil, refusal(err, st.Link())
 	}
 	for {

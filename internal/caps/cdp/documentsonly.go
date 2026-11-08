@@ -93,9 +93,6 @@ func (g *guard) answerLocally(c *command) []byte {
 	if strings.HasPrefix(c.method, "Fetch.") || c.method == "Network.setBypassServiceWorker" || (g.verifiesInput && strings.HasPrefix(c.method, "Input.")) {
 		return acknowledgement(c.id, c.session)
 	}
-	if c.method == "Page.createIsolatedWorld" {
-		delete(c.params, "grantUniveralAccess")
-	}
 	return nil
 }
 

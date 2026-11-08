@@ -40,6 +40,7 @@ type gateConnection struct {
 	attaches         map[string]string
 	urls             map[string][]string
 	forwarded        map[string]bool
+	ledger           []map[string]any
 	hold             chan struct{}
 	target           string
 	minimum          time.Duration
@@ -157,12 +158,22 @@ func (g *guardGate) socket(w http.ResponseWriter, r *http.Request) {
 				}
 				c.mu.Lock()
 				c.forwarded[gateKey(m.Session, m.ID)] = true
+				var params any
+				_ = json.Unmarshal(m.Params, &params)
+				entry := map[string]any{"method": m.Method, "id": m.ID}
+				if m.Session != "" {
+					entry["sessionId"] = m.Session
+				}
+				if params != nil {
+					entry["params"] = params
+				}
+				c.ledger = append(c.ledger, entry)
 				if m.Method == "Target.attachToTarget" {
-					var params struct {
+					var attach struct {
 						Target string `json:"targetId"`
 					}
-					_ = json.Unmarshal(m.Params, &params)
-					c.attaches[gateKey(m.Session, m.ID)] = params.Target
+					_ = json.Unmarshal(m.Params, &attach)
+					c.attaches[gateKey(m.Session, m.ID)] = attach.Target
 				}
 				c.mu.Unlock()
 			}
@@ -297,6 +308,52 @@ func (g *guardGate) connection(session string) *gateConnection {
 	return nil
 }
 
+func ledgerID(entry map[string]any) (int64, bool) {
+	switch v := entry["id"].(type) {
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
+func (c *gateConnection) ledgerEntry(id int64, method, session string) map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := len(c.ledger) - 1; i >= 0; i-- {
+		entry := c.ledger[i]
+		got, ok := ledgerID(entry)
+		if !ok || got != id {
+			continue
+		}
+		if method != "" && entry["method"] != method {
+			continue
+		}
+		if session != "" {
+			s, _ := entry["sessionId"].(string)
+			if s != session {
+				continue
+			}
+		}
+		return entry
+	}
+	return nil
+}
+
+func (g *guardGate) ledgerEntry(id int64, method, session string) map[string]any {
+	g.mu.Lock()
+	conns := append([]*gateConnection(nil), g.connections...)
+	g.mu.Unlock()
+	for _, c := range conns {
+		if entry := c.ledgerEntry(id, method, session); entry != nil {
+			return entry
+		}
+	}
+	return nil
+}
+
 func (g *guardGate) control(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Origin") != g.origin {
 		http.Error(w, "wrong origin", http.StatusForbidden)
@@ -314,6 +371,8 @@ func (g *guardGate) control(w http.ResponseWriter, r *http.Request) {
 		Session   string   `json:"sessionId"`
 		Target    string   `json:"targetId"`
 		MS        int      `json:"ms"`
+		WireID    int64    `json:"wireId"`
+		Method    string   `json:"method"`
 		Protected []string `json:"protectedOrigins"`
 		Ordinary  string   `json:"ordinaryOrigin"`
 		Probes    []struct {
@@ -323,6 +382,10 @@ func (g *guardGate) control(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&req) != nil {
 		http.Error(w, "invalid control", http.StatusBadRequest)
+		return
+	}
+	if req.Action == "forwarded" {
+		_ = json.NewEncoder(w).Encode(map[string]any{"entry": g.ledgerEntry(req.WireID, req.Method, req.Session)})
 		return
 	}
 	c := g.connection(req.Session)

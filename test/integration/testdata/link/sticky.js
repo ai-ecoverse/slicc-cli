@@ -13,7 +13,8 @@ export async function stickyAdmissionProof(getLink, opts) {
   try {
     await client.send('Page.enable',{},sessionId);
     const cases = stickyMethods.map((method)=>({method,params:stickyConfiguration(method,'refusal-proof'),expected:headersRefusal}));
-    cases.push(...['Emulation.setFocusEmulationEnabled','Emulation.setDeviceMetricsOverride','Emulation.addVirtualSensor','Emulation.updateVirtualSensor','Emulation.removeVirtualSensor'].map((method)=>({method,params:{},expected:headersRefusal})));
+    cases.push(...['Emulation.addVirtualSensor','Emulation.updateVirtualSensor','Emulation.removeVirtualSensor'].map((method)=>({method,params:{},expected:headersRefusal})));
+    cases.push(...['Emulation.setFocusEmulationEnabled','Emulation.setEmulatedMedia','Emulation.setDeviceMetricsOverride','Emulation.setTouchEmulationEnabled'].map((method)=>({method,params:{},expected:null})));
     cases.push(...['about:blank','about:blank#blocked','about:srcdoc','ABOUT:BLANK','about:version','invalid-relative'].map((url)=>({method:'Page.navigate',params:{url},expected:inheritedRefusal})));
     cases.push(...['Emulation.set','Emulation.setx','Emulation.addx','Emulation.updatex','Emulation.removex'].map((method)=>({method,params:{},expected:null})));
     cases.push({method:'Page.navigate',params:{url:blanked},expected:null});

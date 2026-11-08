@@ -165,11 +165,17 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if !ok {
 		return browserVerdict{forward: data}
 	}
-	var send [][]byte
+	send := g.applyResultKindLocked(kind, attached, m.SessionID, res)
+	m.Result = encode(res)
+	return browserVerdict{forward: encode(m), send: send}
+}
+
+func (g *guard) applyResultKindLocked(kind callKind, attached, session string, res map[string]any) [][]byte {
 	switch kind {
 	case kindTargets:
 		list, _ := res["targetInfos"].([]any)
 		kept := make([]any, 0, len(list))
+		var send [][]byte
 		for _, item := range list {
 			info, _ := toInfo(item)
 			send = append(send, g.infoLocked(item)...)
@@ -178,8 +184,9 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 			}
 		}
 		res["targetInfos"] = kept
+		return send
 	case kindTargetInfo:
-		send = g.infoLocked(res["targetInfo"])
+		return g.infoLocked(res["targetInfo"])
 	case kindCookies:
 		res["cookies"] = g.filterCookies(res["cookies"])
 	case kindStreams:
@@ -194,15 +201,18 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		}
 	case kindCreate:
 		id, _ := res["targetId"].(string)
-		send = g.touchLocked(id, "page")
+		return g.touchLocked(id, "page")
 	case kindAttach:
 		if t, ok := g.targets[attached]; ok {
-			g.attachAnsweredLocked(m.SessionID, res, t)
-			send = g.touchLocked(attached, t.typ)
+			g.attachAnsweredLocked(session, res, t)
+			return g.touchLocked(attached, t.typ)
+		}
+	case kindScript:
+		if id, _ := res["identifier"].(string); id != "" {
+			g.scripts[id] = true
 		}
 	}
-	m.Result = encode(res)
-	return browserVerdict{forward: encode(m), send: send}
+	return nil
 }
 
 func toInfo(v any) (targetInfo, map[string]any) {

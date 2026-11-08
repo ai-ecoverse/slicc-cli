@@ -208,6 +208,7 @@ func (k *socket) toBrowser() {
 			}
 		}
 		if err := writeFrame(k.st, data); err != nil {
+			k.streamEnded(err)
 			return
 		}
 	}
