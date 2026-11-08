@@ -389,8 +389,11 @@ func (r *followRun) nodeStatus(format string, a ...any) {
 	if msg == "link closed by seven: restart" {
 		msg = "the tray hub restarted the setup"
 	}
-	if strings.HasPrefix(msg, "link down: ") && strings.Contains(msg, link.ErrConnectionFailed.Error()) {
-		return
+	if msg == "link down: "+link.ErrICEFailed.Error() {
+		if r.ctl.Snapshot().State != ctl.StateConnected {
+			return
+		}
+		msg = "link down: " + link.ErrConnectionFailed.Error()
 	}
 	r.status("%s", msg)
 }
@@ -427,25 +430,21 @@ func (r *followRun) onLinkWithin(l *link.Link, timeout time.Duration) {
 			_ = r.certs.SetLeader(r.hub, name)
 			r.emit(followEvent{kind: evUp, name: name, conn: conn})
 			<-l.Done()
-			r.emitLinkDown(l, conn, nonce)
+			r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
 		case <-l.Done():
-			r.emitLinkDown(l, conn, nonce)
+			if conn.Session().BootstrapID() != nonce {
+				return
+			}
+			if err := l.Err(); errors.Is(err, link.ErrICEFailed) {
+				r.emit(followEvent{kind: evFailed, conn: conn, nonce: nonce, err: err})
+				return
+			}
+			r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
 		case <-timer.C:
 			_ = l.Close()
 			r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
 		}
 	}()
-}
-
-func (r *followRun) emitLinkDown(l *link.Link, conn *tray.Conn, nonce string) {
-	if conn.Session().BootstrapID() != nonce {
-		return
-	}
-	if err := l.Err(); errors.Is(err, link.ErrConnectionFailed) {
-		r.emit(followEvent{kind: evFailed, conn: conn, nonce: nonce, err: err})
-		return
-	}
-	r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
 }
 
 func leaderName(h link.Hello) string {
