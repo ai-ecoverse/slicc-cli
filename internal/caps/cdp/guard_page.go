@@ -306,11 +306,8 @@ func (g *guard) stripIsolatedWorldLocked(c *command) {
 
 var autoAttachWorkers = []string{"worker", "shared_worker", "service_worker"}
 
-var autoAttachNoWorkers = []any{
-	map[string]any{"type": "worker", "exclude": true},
-	map[string]any{"type": "shared_worker", "exclude": true},
-	map[string]any{"type": "service_worker", "exclude": true},
-	map[string]any{},
+var autoAttachTabOnly = []any{
+	map[string]any{"type": "tab"},
 }
 
 func admitsAutoAttachType(filter []any, typ string) bool {
@@ -381,8 +378,13 @@ func excludeAutoAttachWorkers(filter []any) []any {
 			for _, typ := range autoAttachWorkers {
 				out = append(out, map[string]any{"type": typ, "exclude": true})
 			}
+			out = append(out, map[string]any{"type": "tab"})
+			continue
 		}
 		out = append(out, entry)
+	}
+	if admitsAutoAttachType(out, "tab") && admitsAutoAttachType(out, "page") {
+		return append([]any{}, autoAttachTabOnly...)
 	}
 	return out
 }
@@ -397,7 +399,7 @@ func (g *guard) narrowAutoAttachLocked(c *command) {
 	}
 	raw := c.params["filter"]
 	if raw == nil {
-		c.params["filter"] = append([]any{}, autoAttachNoWorkers...)
+		c.params["filter"] = append([]any{}, autoAttachTabOnly...)
 		return
 	}
 	filter, ok := raw.([]any)
