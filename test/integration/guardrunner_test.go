@@ -350,8 +350,34 @@ func logTabIframeLeakEvidence(t testing.TB, r guardRow) {
 		Guarded map[string]any `json:"guarded"`
 	}
 	_ = json.Unmarshal(r.Observed, &obs)
-	t.Logf("C3.tab-iframe-leak verdict: id=%s target=%s variant=%s control=%s guarded=%s live=%s control.iframeAttached=%v guarded.iframeAttached=%v observed=%s",
-		r.ID, r.Target, r.Variant, r.Control, r.Guarded, r.Live, obs.Control["iframeAttached"], obs.Guarded["iframeAttached"], r.Observed)
+	t.Logf("C3.tab-iframe-leak verdict: id=%s target=%s variant=%s control=%s guarded=%s live=%s control.iframeAttached=%v guarded.iframeAttached=%v control.frameListed=%v guarded.frameListed=%v diagnostics=%s observed=%s",
+		r.ID, r.Target, r.Variant, r.Control, r.Guarded, r.Live, obs.Control["iframeAttached"], obs.Guarded["iframeAttached"], obs.Control["frameListed"], obs.Guarded["frameListed"], r.Diagnostics, r.Observed)
+}
+
+func tabIframeLeakObservation(observed json.RawMessage) (control, guarded map[string]any, err error) {
+	var sides map[string]map[string]any
+	if err = json.Unmarshal(observed, &sides); err != nil {
+		return nil, nil, err
+	}
+	return sides["control"], sides["guarded"], nil
+}
+
+func tabIframeLeakGuardedHidesFrame(observed json.RawMessage) error {
+	control, guarded, err := tabIframeLeakObservation(observed)
+	if err != nil {
+		return err
+	}
+	controlAttached, _ := control["iframeAttached"].(bool)
+	controlListed, _ := control["frameListed"].(bool)
+	guardedAttached, _ := guarded["iframeAttached"].(bool)
+	guardedListed, _ := guarded["frameListed"].(bool)
+	if !controlAttached || !controlListed {
+		return fmt.Errorf("control must see the cross-site frame: iframeAttached=%v frameListed=%v", controlAttached, controlListed)
+	}
+	if guardedAttached || guardedListed {
+		return fmt.Errorf("guarded must hide framed origin and targetId: iframeAttached=%v frameListed=%v", guardedAttached, guardedListed)
+	}
+	return nil
 }
 
 func guardVectorSet() []guardVector {

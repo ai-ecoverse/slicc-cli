@@ -74,7 +74,7 @@ func TestGuardWaiversAcceptOnlyDocumentedLegs(t *testing.T) {
 
 	iframePass := guardRow{
 		ID: "C3.tab-iframe-leak", Control: "pass", Guarded: "pass", Live: "pass",
-		Observed: json.RawMessage(`{"control":{"admitted":true,"iframeExists":true,"iframeAttached":true},"guarded":{"admitted":true,"iframeExists":true,"iframeAttached":false}}`),
+		Observed: json.RawMessage(`{"control":{"admitted":true,"iframeExists":true,"iframeAttached":true,"frameListed":true},"guarded":{"admitted":true,"iframeExists":true,"iframeAttached":false,"frameListed":false}}`),
 	}
 	if _, ok := waivedGuardRow(iframePass); ok {
 		t.Fatal("C3.tab-iframe-leak must not be waived", iframePass)

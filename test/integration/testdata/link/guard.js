@@ -64,13 +64,34 @@ async function noteForwarded(gateURL, forwarded, msg) {
   }
 }
 
-function sessionBound(c, name, { inject, gate } = {}) {
+function noteFrameTarget(frameLeak, info) {
+  if (!frameLeak || !info?.targetId || typeof info.url !== 'string') return;
+  if (!info.url.includes('/doc?n=frame-')) return;
+  frameLeak.ids.set(info.targetId, info.url);
+}
+
+function revealFrameLeak(frameLeak, info) {
+  if (!frameLeak || !info?.targetId || !frameLeak.ids.has(info.targetId)) return info;
+  return { ...info, url: frameLeak.ids.get(info.targetId) };
+}
+
+function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
   const calls = new Map();
   const events = [];
   const fake = new Set();
   const forwarded = [];
   const onEvent = (e) => {
     noteSession(name, e);
+    const info = e.params?.targetInfo;
+    if (frameLeak && (e.method === 'Target.attachedToTarget' || e.method === 'Target.targetCreated' || e.method === 'Target.targetInfoChanged')) {
+      if (name === 'unguarded') noteFrameTarget(frameLeak, info);
+      else if (e.method === 'Target.attachedToTarget' && frameLeak.ids.has(info?.targetId)) {
+        events.push({
+          ...e,
+          params: { ...e.params, targetInfo: revealFrameLeak(frameLeak, info) },
+        });
+      }
+    }
     events.push(e);
     if (e.method !== 'Target.detachedFromTarget') return;
     for (const reject of calls.get(e.params.sessionId) ?? []) reject(new Error('the session detached'));
@@ -99,6 +120,23 @@ function sessionBound(c, name, { inject, gate } = {}) {
       const entry = { method: msg.method, id: msg.id, params: msg.params };
       if (msg.sessionId) entry.sessionId = msg.sessionId;
       forwarded.push(entry);
+    }
+    if (frameLeak && msg.method === 'Target.setAutoAttach') frameLeak.ids.clear();
+    if (frameLeak && msg.method === 'Target.getTargets' && Array.isArray(result?.targetInfos)) {
+      if (name === 'unguarded') {
+        for (const info of result.targetInfos) noteFrameTarget(frameLeak, info);
+      } else {
+        const rawHits = result.targetInfos.filter(
+          (info) =>
+            frameLeak.ids.has(info.targetId) ||
+            (typeof info.url === 'string' && info.url.includes('/doc?n=frame-')),
+        );
+        if (rawHits.length) frameLeak.rawListed = rawHits.map((info) => ({ targetId: info.targetId, type: info.type, url: info.url, idKnown: frameLeak.ids.has(info.targetId) }));
+        return {
+          ...result,
+          targetInfos: result.targetInfos.map((info) => revealFrameLeak(frameLeak, info)),
+        };
+      }
     }
     return result;
   };
@@ -131,6 +169,74 @@ function sessionBound(c, name, { inject, gate } = {}) {
       });
     },
   };
+}
+
+function deepRewrite(value, from, to) {
+  if (typeof value === 'string') return value.split(from).join(to);
+  if (Array.isArray(value)) return value.map((item) => deepRewrite(item, from, to));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, child] of Object.entries(value)) out[key] = deepRewrite(child, from, to);
+    return out;
+  }
+  return value;
+}
+
+function specializeTabIframeLeak(vector, frameKey, targets) {
+  const clone = deepRewrite(JSON.parse(JSON.stringify(vector)), '{seven}', `{${frameKey}}`);
+  clone.targets = targets;
+  const frameURL = `{${frameKey}}/doc?n=frame-`;
+  clone.trigger = [
+    ...clone.trigger,
+    {
+      cdp: 'Target.getTargets',
+      params: { filter: [{}] },
+      session: 'browser',
+      as: 'listed',
+      requires: ['browserSession'],
+    },
+  ];
+  clone.observe = {
+    ...clone.observe,
+    iframeAttached: {
+      means: 'the client got Target.attachedToTarget for the framed origin under any target type',
+      check: {
+        any: [
+          {
+            event: 'Target.attachedToTarget',
+            where: { params: { targetInfo: { type: 'iframe' } } },
+            observer: 'client',
+          },
+          {
+            event: 'Target.attachedToTarget',
+            where: { params: { targetInfo: { url: { $contains: frameURL } } } },
+            observer: 'client',
+          },
+        ],
+        observer: 'client',
+      },
+    },
+    frameListed: {
+      means: 'Target.getTargets lists the framed origin or its targetId',
+      check: {
+        result: 'listed',
+        path: 'result.targetInfos',
+        equals: { $some: { url: { $contains: `{${frameKey}}` } } },
+        observer: 'client',
+      },
+    },
+  };
+  clone.control.expected = {
+    ...clone.control.expected,
+    iframeAttached: true,
+    frameListed: true,
+  };
+  clone.expected = {
+    ...clone.expected,
+    iframeAttached: false,
+    frameListed: false,
+  };
+  return clone;
 }
 
 function fixtureLog(base) {
@@ -202,19 +308,6 @@ export function guardStart(getLink, opts) {
     }
     for (const v of set.vectors) {
       if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
-      if (v.id === 'C3.tab-iframe-leak') {
-        const rewrite = (value) => {
-          if (typeof value === 'string') return value.replaceAll('{seven}', '{sevenOopif}');
-          if (Array.isArray(value)) return value.map(rewrite);
-          if (value && typeof value === 'object') {
-            const out = {};
-            for (const [key, child] of Object.entries(value)) out[key] = rewrite(child);
-            return out;
-          }
-          return value;
-        };
-        Object.assign(v, rewrite(v));
-      }
       if (v.id === 'C3.tab-protected' || v.id === 'C3.tab-protected.synthetic') {
         v.liveCheck = {
           any: [
@@ -244,7 +337,12 @@ export function guardStart(getLink, opts) {
         };
       }
     }
+    set.vectors = set.vectors.flatMap((v) => {
+      if (v.id !== 'C3.tab-iframe-leak') return [v];
+      return [specializeTabIframeLeak(v, 'sevenOopif', ['seven']), specializeTabIframeLeak(v, 'vault', ['vault'])];
+    });
     const mouseDiagnostics = new Map();
+    const frameLeakByRow = new Map();
     const running = run(set, {
       clientFactory: async ({ slot, vector, target, variant }) => {
         const b = browsers[slot % browsers.length];
@@ -259,12 +357,14 @@ export function guardStart(getLink, opts) {
           unguarded.mouseEvidence = evidence.control;
           mouseDiagnostics.set(rowKey({ id: vector.id, target, variant }), evidence);
         }
+        const frameLeak = vector.id === 'C3.tab-iframe-leak' ? { ids: new Map() } : null;
         await unguarded.send('Target.setDiscoverTargets', { discover: true });
-        const guarded = sessionBound(client, 'client', { inject: opts.inject, gate: b.gate });
+        const guarded = sessionBound(client, 'client', { inject: opts.inject, gate: b.gate, frameLeak });
         guarded.inboundDelay = delayedInbound(b.gate, opts);
+        if (frameLeak) frameLeakByRow.set(rowKey({ id: vector.id, target, variant }), frameLeak);
         return {
           client: guarded,
-          unguarded: sessionBound(unguarded, 'unguarded'),
+          unguarded: sessionBound(unguarded, 'unguarded', { frameLeak }),
           close: async () => {
             unguarded.close();
             await client.close().catch(() => {});
@@ -282,6 +382,9 @@ export function guardStart(getLink, opts) {
       log: (row) => {
         const evidence = mouseDiagnostics.get(rowKey(row));
         if (evidence) { row.diagnostics = evidence; mouseDiagnostics.delete(rowKey(row)); }
+        const frameLeak = frameLeakByRow.get(rowKey(row));
+        if (frameLeak?.rawListed) row.diagnostics = { ...(row.diagnostics ?? {}), frameListedRaw: frameLeak.rawListed };
+        frameLeakByRow.delete(rowKey(row));
         state.started.delete(rowKey(row));
         if (row.inFlight) row.errors = [...(row.errors ?? []), ...describeSessions(row)];
         state.rows.push(row);
