@@ -124,6 +124,7 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 func (g *guard) admitLocked(c *command) pageVerdict {
 	g.narrowBindingLocked(c)
 	g.stripIsolatedWorldLocked(c)
+	g.narrowAutoAttachLocked(c)
 	k := callKey{c.session, c.id}
 	kind := resultKind(c.method)
 	g.pending[k] = kind
@@ -303,6 +304,107 @@ func (g *guard) stripIsolatedWorldLocked(c *command) {
 	delete(c.params, "contentSecurityPolicy")
 }
 
+var autoAttachWorkers = []string{"worker", "shared_worker", "service_worker"}
+
+var autoAttachTabFilter = []any{
+	map[string]any{"type": "tab"},
+	map[string]any{"type": "page"},
+}
+
+func admitsAutoAttachType(filter []any, typ string) bool {
+	if len(filter) == 0 {
+		filter = []any{
+			map[string]any{"type": "browser", "exclude": true},
+			map[string]any{"type": "tab", "exclude": true},
+			map[string]any{},
+		}
+	}
+	for _, entry := range filter {
+		p, _ := entry.(map[string]any)
+		if p == nil {
+			continue
+		}
+		t, has := p["type"].(string)
+		if has && t != typ {
+			continue
+		}
+		exclude, _ := p["exclude"].(bool)
+		return !exclude
+	}
+	return false
+}
+
+func workerType(typ string) bool {
+	for _, w := range autoAttachWorkers {
+		if typ == w {
+			return true
+		}
+	}
+	return false
+}
+
+func wideAutoAttach(params map[string]any) bool {
+	if params == nil {
+		return false
+	}
+	raw := params["filter"]
+	if raw == nil {
+		return true
+	}
+	filter, ok := raw.([]any)
+	if !ok {
+		return false
+	}
+	for _, typ := range autoAttachWorkers {
+		if admitsAutoAttachType(filter, typ) {
+			return true
+		}
+	}
+	return false
+}
+
+func excludeAutoAttachWorkers(filter []any) []any {
+	out := make([]any, 0, len(filter)+len(autoAttachWorkers))
+	for _, entry := range filter {
+		p, _ := entry.(map[string]any)
+		if p == nil {
+			continue
+		}
+		t, hasType := p["type"].(string)
+		exclude, _ := p["exclude"].(bool)
+		if hasType && !exclude && workerType(t) {
+			continue
+		}
+		if len(p) == 0 {
+			for _, typ := range autoAttachWorkers {
+				out = append(out, map[string]any{"type": typ, "exclude": true})
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func (g *guard) narrowAutoAttachLocked(c *command) {
+	if c.method != "Target.setAutoAttach" || c.params == nil {
+		return
+	}
+	on, _ := c.params["autoAttach"].(bool)
+	if !on || !wideAutoAttach(c.params) {
+		return
+	}
+	raw := c.params["filter"]
+	if raw == nil {
+		c.params["filter"] = append([]any{}, autoAttachTabFilter...)
+		return
+	}
+	filter, ok := raw.([]any)
+	if !ok {
+		return
+	}
+	c.params["filter"] = excludeAutoAttachWorkers(filter)
+}
+
 func (g *guard) laterDocumentRuleLocked(c *command) string {
 	switch c.method {
 	case "Page.addScriptToEvaluateOnNewDocument":
@@ -360,8 +462,15 @@ func (g *guard) earlyRefuseLocked(c *command) string {
 			return reason
 		}
 	}
-	if c.method == "Page.navigate" && (protect.Scheme(c.str("url")) == "about" || protect.Scheme(c.str("url")) == "") {
-		return refusedInheritedNavigation
+	if c.method == "Page.navigate" {
+		u := c.str("url")
+		scheme := protect.Scheme(u)
+		if scheme == "about" || scheme == "" {
+			return refusedInheritedNavigation
+		}
+		if (scheme == "http" || scheme == "https") && g.o.URL(u) && !g.fetchFailArmedLocked(c.session) {
+			return refusedTarget
+		}
 	}
 	if sessionSettingRefused(c) {
 		return refusedSessionSettings
@@ -435,13 +544,46 @@ func (g *guard) destinationRule(c *command) string {
 	if !ok {
 		return ""
 	}
-	if reason := g.destinationReason(c.str(key)); reason != "" {
+	u := c.str(key)
+	if c.method == "Page.navigate" && g.protectedHTTPNavigateArmedLocked(c.session, u) {
+		if protect.Unparseable(u) {
+			return refusedParse
+		}
+		return ""
+	}
+	if reason := g.destinationReason(u); reason != "" {
 		return reason
 	}
-	if u := c.str(key); overrideKeys[c.method] && u != "" && (g.taintedLocked(c.session, u) || g.knownRedirectLocked(u)) {
+	if u != "" && overrideKeys[c.method] && (g.taintedLocked(c.session, u) || g.knownRedirectLocked(u)) {
 		return refusedRedirect
 	}
 	return ""
+}
+
+func (g *guard) fetchFailArmedLocked(sessionID string) bool {
+	s, ok := g.sessions[sessionID]
+	if !ok || !guarded(s.typ) {
+		return false
+	}
+	nt, ok := g.navTargets[s.target]
+	if !ok || !nt.done || nt.failed || nt.worker {
+		return false
+	}
+	if nt.confirm != nil && (!nt.confirm.done || nt.confirm.failed) {
+		return false
+	}
+	return true
+}
+
+func (g *guard) protectedHTTPNavigateArmedLocked(sessionID, raw string) bool {
+	scheme := protect.Scheme(raw)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	if !g.o.URL(raw) {
+		return false
+	}
+	return g.fetchFailArmedLocked(sessionID)
 }
 
 func (g *guard) destinationReason(urls ...string) string {
@@ -683,7 +825,7 @@ func (g *guard) scanString(k, s string, c *command) string {
 		return refusedTarget
 	case assetKinds[k] != "" && g.assets[c.session].has(assetKinds[k]+s):
 		return refusedBody
-	case urlKeys[k] && g.o.URL(s):
+	case g.scanProtectedURL(k, s, c) != "":
 		return refusedTarget
 	case k == "storageKey" && g.o.StorageKey(s):
 		return refusedTarget
@@ -703,6 +845,16 @@ func (g *guard) scanString(k, s string, c *command) string {
 		return g.requestRule(s, c)
 	}
 	return ""
+}
+
+func (g *guard) scanProtectedURL(k, s string, c *command) string {
+	if !urlKeys[k] || !g.o.URL(s) {
+		return ""
+	}
+	if c.method == "Page.navigate" && k == "url" && g.protectedHTTPNavigateArmedLocked(c.session, s) {
+		return ""
+	}
+	return refusedTarget
 }
 
 func (g *guard) requestRule(id string, c *command) string {

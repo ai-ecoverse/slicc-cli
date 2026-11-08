@@ -86,6 +86,24 @@ func (g *guard) expireHold(sessionID string) [][]byte {
 		return nil
 	}
 	delete(g.held, sessionID)
+	if h.typ == "page" || h.typ == "tab" {
+		g.logf("cdp: releasing an auto-attached session with no URL as blank target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
+		g.sessions[h.id] = &session{id: h.id, target: h.target, parent: h.parent, typ: h.typ}
+		send := g.touchLocked(h.target, h.typ)
+		info, _ := h.params["targetInfo"].(map[string]any)
+		if info == nil {
+			info = map[string]any{"targetId": h.target, "type": h.typ}
+		}
+		info["url"] = "about:blank"
+		h.params["targetInfo"] = info
+		h.params["waitingForDebugger"] = false
+		ev := map[string]any{"method": "Target.attachedToTarget", "params": h.params}
+		if h.parent != "" {
+			ev["sessionId"] = h.parent
+		}
+		g.resolveUnknownLocked()
+		return append(send, encode(ev))
+	}
 	g.logf("cdp: an auto-attached target never got a URL target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 	send := g.hideLocked(h)
 	g.resolveUnknownLocked()

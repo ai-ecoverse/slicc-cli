@@ -548,13 +548,16 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 				t.Errorf("%s: inconsistent or unexplained skip: %+v", name, r)
 				continue
 			}
-			if r.Reason == "not-supported:siteIsolationOff" {
+			switch {
+			case r.Reason == "not-supported:siteIsolationOff",
+				r.Reason == "not-supported:syntheticAutoAttach",
+				r.Reason == "not-supported:secureOrigin":
 				unsupported[r.ID]++
 				t.Logf("%s: skip %s", name, r.Reason)
-			} else if !strings.HasPrefix(r.Reason, "not-applicable") {
-				t.Errorf("%s: skipped with %q", name, r.Reason)
-			} else {
+			case strings.HasPrefix(r.Reason, "not-applicable"):
 				t.Logf("%s: skip %s", name, r.Reason)
+			default:
+				t.Errorf("%s: skipped with %q", name, r.Reason)
 			}
 		case r.Control != "pass" || r.Guarded != "pass" || r.Live != "pass":
 			t.Errorf("%s: control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)

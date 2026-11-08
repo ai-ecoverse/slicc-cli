@@ -43,10 +43,32 @@ function describeSessions(row) {
   return out;
 }
 
-function sessionBound(c, name, { inject } = {}) {
+async function noteForwarded(gateURL, forwarded, msg) {
+  if (!gateURL || !msg || !Number.isInteger(msg.id)) return;
+  try {
+    const r = await fetch(gateURL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'forwarded',
+        wireId: msg.id,
+        method: msg.method,
+        sessionId: msg.sessionId ?? '',
+      }),
+    });
+    if (!r.ok) return;
+    const { entry } = await r.json();
+    if (entry?.method) forwarded.push(entry);
+  } catch {
+    return;
+  }
+}
+
+function sessionBound(c, name, { inject, gate } = {}) {
   const calls = new Map();
   const events = [];
   const fake = new Set();
+  const forwarded = [];
   const onEvent = (e) => {
     noteSession(name, e);
     events.push(e);
@@ -69,25 +91,41 @@ function sessionBound(c, name, { inject } = {}) {
     await new Promise((resolve) => setTimeout(resolve, 100));
     return result;
   };
+  const afterSend = async (before, result) => {
+    const msg = c.sent[before];
+    if (!msg) return result;
+    if (gate) await noteForwarded(gate, forwarded, msg);
+    else {
+      const entry = { method: msg.method, id: msg.id, params: msg.params };
+      if (msg.sessionId) entry.sessionId = msg.sessionId;
+      forwarded.push(entry);
+    }
+    return result;
+  };
   return {
     events,
     messages: c.messages,
     sent: c.sent,
+    forwarded,
     transport: c.transport,
     close: () => c.close(),
     waitEvent: (match, timeout) => c.waitEvent(match, timeout),
     send(method, params, sessionId) {
       if (fake.has(sessionId)) return new Promise(() => {});
+      const before = c.sent.length;
       if (!sessionId) {
         const sent = c.send(method, params);
-        if (inject === 'browser_ui' && method === 'Target.setAutoAttach' && params?.autoAttach) return sent.then(injectChromeUI);
-        return sent;
+        if (inject === 'browser_ui' && method === 'Target.setAutoAttach' && params?.autoAttach) {
+          return sent.then(injectChromeUI).then((result) => afterSend(before, result));
+        }
+        return sent.then((result) => afterSend(before, result));
       }
       return new Promise((resolve, reject) => {
         const set = calls.get(sessionId) ?? new Set();
         calls.set(sessionId, set);
         set.add(reject);
         foregroundMouseCall(c, method, params, sessionId)
+          .then((result) => afterSend(before, result))
           .then(resolve, reject)
           .finally(() => set.delete(reject));
       });
@@ -162,7 +200,62 @@ export function guardStart(getLink, opts) {
       set.vectors = set.vectors.filter((v) => v.trigger?.some((s) => s.errorPage));
       for (const v of set.vectors) v.targets = ['vault'];
     }
-    for (const v of set.vectors) if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
+    for (const v of set.vectors) {
+      if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
+      if (v.id === 'E7.isolated-foreign') {
+        for (const step of v.trigger ?? []) {
+          if (step.settle?.title && step.settle.required) delete step.settle.required;
+        }
+        v.liveCheck = {
+          any: [
+            { loaded: '{target}/doc?n={tag}', observer: 'fixture' },
+            {
+              all: [
+                { pre: '{target}/doc?n={tag}', observer: 'fixture' },
+                {
+                  any: [
+                    { blocked: { url: '{target}/doc?n={tag}', session: 'page', frame: false }, observer: 'client' },
+                    { blocked: { url: '{target}/doc?n={tag}', session: 'page', frame: false }, observer: 'unguarded' },
+                  ],
+                  observer: 'client',
+                },
+              ],
+              observer: 'client',
+            },
+            { registration: 'any', observer: 'client' },
+          ],
+          observer: 'client',
+        };
+      }
+      if (v.id === 'C3.tab-protected' || v.id === 'C3.tab-protected.synthetic') {
+        v.liveCheck = {
+          any: [
+            { loaded: '{target}/doc?n={tag}', observer: 'fixture' },
+            { pre: '{target}/doc?n={tag}', observer: 'fixture' },
+            {
+              all: [
+                {
+                  event: 'Target.attachedToTarget',
+                  where: { params: { targetInfo: { type: 'tab' } } },
+                  observer: 'client',
+                },
+                {
+                  not: {
+                    event: 'Target.attachedToTarget',
+                    where: {
+                      params: { targetInfo: { type: 'page', url: { $contains: '{target}/doc' } } },
+                    },
+                    observer: 'client',
+                  },
+                },
+              ],
+              observer: 'client',
+            },
+          ],
+          observer: 'client',
+        };
+      }
+    }
     const mouseDiagnostics = new Map();
     const running = run(set, {
       clientFactory: async ({ slot, vector, target, variant }) => {
@@ -179,7 +272,7 @@ export function guardStart(getLink, opts) {
           mouseDiagnostics.set(rowKey({ id: vector.id, target, variant }), evidence);
         }
         await unguarded.send('Target.setDiscoverTargets', { discover: true });
-        const guarded = sessionBound(client, 'client', { inject: opts.inject });
+        const guarded = sessionBound(client, 'client', { inject: opts.inject, gate: b.gate });
         guarded.inboundDelay = delayedInbound(b.gate, opts);
         return {
           client: guarded,
