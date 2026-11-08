@@ -124,7 +124,6 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 func (g *guard) admitLocked(c *command) pageVerdict {
 	g.narrowBindingLocked(c)
 	g.stripIsolatedWorldLocked(c)
-	g.narrowAutoAttachLocked(c)
 	k := callKey{c.session, c.id}
 	kind := resultKind(c.method)
 	g.pending[k] = kind
@@ -302,80 +301,6 @@ func (g *guard) stripIsolatedWorldLocked(c *command) {
 	}
 	delete(c.params, "grantUniveralAccess")
 	delete(c.params, "contentSecurityPolicy")
-}
-
-var autoAttachWorkers = []string{"worker", "shared_worker", "service_worker"}
-
-var autoAttachTabOnly = []any{
-	map[string]any{"type": "tab"},
-}
-
-func admitsAutoAttachType(filter []any, typ string) bool {
-	if len(filter) == 0 {
-		filter = []any{
-			map[string]any{"type": "browser", "exclude": true},
-			map[string]any{"type": "tab", "exclude": true},
-			map[string]any{},
-		}
-	}
-	for _, entry := range filter {
-		p, _ := entry.(map[string]any)
-		if p == nil {
-			continue
-		}
-		t, has := p["type"].(string)
-		if has && t != typ {
-			continue
-		}
-		exclude, _ := p["exclude"].(bool)
-		return !exclude
-	}
-	return false
-}
-
-func workerType(typ string) bool {
-	for _, w := range autoAttachWorkers {
-		if typ == w {
-			return true
-		}
-	}
-	return false
-}
-
-func resolveAutoAttachBoth(sessionType string, filter []any) []any {
-	if !admitsAutoAttachType(filter, "tab") || !admitsAutoAttachType(filter, "page") {
-		return filter
-	}
-	if sessionType != "" && sessionType != "browser" {
-		return append([]any{
-			map[string]any{"type": "browser", "exclude": true},
-			map[string]any{"type": "tab", "exclude": true},
-		}, filter...)
-	}
-	return append([]any{}, autoAttachTabOnly...)
-}
-
-func (g *guard) narrowAutoAttachLocked(c *command) {
-	if c.method != "Target.setAutoAttach" || c.params == nil {
-		return
-	}
-	on, _ := c.params["autoAttach"].(bool)
-	if !on {
-		return
-	}
-	raw := c.params["filter"]
-	if raw == nil {
-		return
-	}
-	filter, ok := raw.([]any)
-	if !ok {
-		return
-	}
-	sessionType := ""
-	if s := g.sessions[c.session]; s != nil {
-		sessionType = s.typ
-	}
-	c.params["filter"] = resolveAutoAttachBoth(sessionType, filter)
 }
 
 func (g *guard) laterDocumentRuleLocked(c *command) string {

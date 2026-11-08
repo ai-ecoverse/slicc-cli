@@ -362,40 +362,6 @@ func (g *guard) hiddenTargetLocked(id string) bool {
 	return ok && protect.HiddenType(t.typ)
 }
 
-func (g *guard) attachURLLocked(parentSession string, info targetInfo) targetInfo {
-	if info.URL == "" {
-		if t, ok := g.targets[info.TargetID]; ok && t.url != "" {
-			info.URL = t.url
-		}
-	}
-	if info.URL == "" {
-		if parent := g.sessions[parentSession]; parent != nil && parent.typ == "tab" {
-			if t, ok := g.targets[parent.target]; ok && t.url != "" {
-				info.URL = t.url
-			}
-		}
-	}
-	return info
-}
-
-func (g *guard) holdOrBlankUnderTabLocked(m *message, data []byte, info *targetInfo, sessionID string, waiting bool) (held browserVerdict, next []byte, extra [][]byte, done bool) {
-	params := decodeParams(m.Params)
-	if info.URL != "" || (info.Type != "page" && info.Type != "iframe") || g.explicit[info.TargetID] != 0 || params == nil {
-		return browserVerdict{}, data, nil, false
-	}
-	parent := g.sessions[m.SessionID]
-	if parent == nil || parent.typ != "tab" {
-		return browserVerdict{send: g.holdLocked(m.SessionID, params, *info, waiting), hold: []string{sessionID}}, data, nil, true
-	}
-	info.URL = "about:blank"
-	if obj, _ := params["targetInfo"].(map[string]any); obj != nil {
-		obj["url"] = "about:blank"
-		m.Params = encode(params)
-		data = encode(m)
-	}
-	return browserVerdict{}, data, g.observeLocked(*info), false
-}
-
 func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	var p struct {
 		SessionID          string     `json:"sessionId"`
@@ -406,21 +372,16 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if p.SessionID == "" || p.SessionID == g.relaySession {
 		return browserVerdict{}
 	}
-	info := g.attachURLLocked(m.SessionID, p.TargetInfo)
+	info := p.TargetInfo
+	if t, ok := g.targets[info.TargetID]; ok && info.URL == "" && t.url != "" {
+		info.URL = t.url
+	}
 	send := g.observeLocked(info)
 	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" {
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID, target: info.TargetID, waiting: p.WaitingForDebugger})...)}
 	}
-	if workerType(info.Type) {
-		g.logf("cdp: detached an auto-attached worker session target=%s session=%s parent=%s type=%s waiting=%t", info.TargetID, p.SessionID, m.SessionID, info.Type, p.WaitingForDebugger)
-		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID, target: info.TargetID, typ: info.Type, waiting: p.WaitingForDebugger})...)}
-	}
-	if v, next, extra, done := g.holdOrBlankUnderTabLocked(m, data, &info, p.SessionID, p.WaitingForDebugger); done {
-		v.send = append(send, v.send...)
-		return v
-	} else {
-		data = next
-		send = append(send, extra...)
+	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
+		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
 	}
 	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
 	if info.Type == "browser" {
