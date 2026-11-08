@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
 const (
@@ -418,6 +419,21 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+var catalogProtect = protect.MustNew(nil)
+
+func newURLRefusal(target string) string {
+	if target == "" || target == "about:blank" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(target), "about:") {
+		return "slicc: refused: a browser-side navigation to about: gives the page the origin of whatever drives the browser, so the guard doesn’t send it; open a new tab on about:blank instead"
+	}
+	if catalogProtect.URL(target) {
+		return protect.Refusal()
+	}
+	return ""
+}
+
 func (s *Server) newTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		plain(w, http.StatusMethodNotAllowed, "Using unsafe HTTP verb "+r.Method+" to invoke /json/new. This action supports only PUT verb.")
@@ -426,6 +442,9 @@ func (s *Server) newTarget(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.RawQuery
 	if u, err := url.QueryUnescape(target); err == nil {
 		target = u
+	}
+	if r.URL.Fragment != "" {
+		target += "#" + r.URL.Fragment
 	}
 	if target == "" {
 		target = "about:blank"
@@ -449,8 +468,12 @@ func (s *Server) newTarget(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, &CDPError{Message: "no target"})
 		return
 	}
+	closeCreated := func(id int64) {
+		_, _ = call(st, id, "Target.closeTarget", map[string]any{"targetId": created.TargetID}, s.cfg.OpenTimeout)
+	}
 	attached, err := call(st, 2, "Target.attachToTarget", map[string]any{"targetId": created.TargetID, "flatten": true}, s.cfg.OpenTimeout)
 	if err != nil {
+		closeCreated(90)
 		s.fail(w, r, err)
 		return
 	}
@@ -459,11 +482,18 @@ func (s *Server) newTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(attached, &sess)
 	if sess.SessionID == "" {
+		closeCreated(91)
 		s.fail(w, r, &CDPError{Message: "no session for that target"})
+		return
+	}
+	if reason := newURLRefusal(target); reason != "" {
+		closeCreated(92)
+		s.fail(w, r, &CDPError{Message: reason})
 		return
 	}
 	if target != "about:blank" {
 		if _, err := callOn(st, 3, sess.SessionID, "Page.navigate", map[string]any{"url": target}, s.cfg.OpenTimeout); err != nil {
+			closeCreated(93)
 			s.fail(w, r, err)
 			return
 		}

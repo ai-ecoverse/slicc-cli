@@ -30,7 +30,7 @@ const (
 
 var guardExactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
-func guardSetVersion(t *testing.T) string {
+func guardSetVersion(t testing.TB) string {
 	t.Helper()
 	root := filepath.Join("..", "..")
 	b, err := os.ReadFile(filepath.Join(root, "package.json"))
@@ -304,10 +304,54 @@ type guardSkip struct {
 const guardC9MacReason = "not-applicable: on macOS the C9 controls hang inside Chrome (#344)"
 
 var guardWaivers = map[string]string{
-	"C3.tab-worker-leak":         "waived until slicc-browsers 1.21.2 relaxes the row (vectors owner)",
-	"C3.tab-service-worker-leak": "waived until slicc-browsers 1.21.2 relaxes the row (vectors owner)",
-	"C3.tab-attach":              "main empty-URL hold keeps window.open from settling on the guarded leg; runner folds that into control=fail (#260); stock Playwright/Puppeteer popup through the link guard passes",
-	"C3.tab-iframe-leak":         "control wants OOPIF iframeAttached; main's seven.guard.test is same-site with ordinary.guard.test so control stays false; seven.oopif.test would green this row but regresses C4.iframe-preattach frame-read on this cut-down head",
+	"C3.tab-worker-leak":         "guarded workerAttached true until slicc-browsers 1.21.2; control and live pass",
+	"C3.tab-service-worker-leak": "guarded workerAttached true until slicc-browsers 1.21.2; control and live pass",
+	"C3.tab-attach":              "guarded settle of window.open under main empty-URL hold; runner folds that into control=fail (#260); stock Playwright/Puppeteer popup through the link guard passes",
+	"C3.tab-iframe-leak":         "control iframeAttached false (seven.guard.test same-site with ordinary.guard.test); guarded pass with iframeAttached false; live pass",
+}
+
+func waivedGuardRow(r guardRow) (string, bool) {
+	reason, ok := guardWaivers[r.ID]
+	if !ok {
+		return "", false
+	}
+	switch r.ID {
+	case "C3.tab-iframe-leak":
+		if r.Control != "fail" || r.Guarded != "pass" || r.Live != "pass" {
+			return "", false
+		}
+		var obs struct {
+			Guarded map[string]any `json:"guarded"`
+		}
+		_ = json.Unmarshal(r.Observed, &obs)
+		if v, ok := obs.Guarded["iframeAttached"].(bool); ok && v {
+			return "", false
+		}
+		return reason, true
+	case "C3.tab-attach":
+		if r.Guarded != "fail" || (r.Control != "fail" && r.Control != "incomplete") {
+			return "", false
+		}
+		if !guardedSettleFailure(r) {
+			return "", false
+		}
+		return reason, true
+	case "C3.tab-worker-leak", "C3.tab-service-worker-leak":
+		if r.Control != "pass" || r.Guarded != "fail" || r.Live != "pass" {
+			return "", false
+		}
+		if !strings.Contains(string(r.Why), "workerAttached") {
+			return "", false
+		}
+		return reason, true
+	default:
+		return "", false
+	}
+}
+
+func guardedSettleFailure(r guardRow) bool {
+	blob := strings.ToLower(string(r.Why) + " " + strings.Join(r.Errors, " "))
+	return strings.Contains(blob, "settle") || strings.Contains(blob, `"leg":"guarded"`) || strings.Contains(blob, "leg\":\"guarded")
 }
 
 func guardVectorSet() []guardVector {
@@ -518,7 +562,7 @@ func TestCDPProtectVectorsIgnoreChromeUITargets(t *testing.T) {
 	}
 }
 
-func checkGuardSummary(t *testing.T, sum *guardSummary) {
+func checkGuardSummary(t testing.TB, sum *guardSummary) {
 	t.Helper()
 	if want := guardNPMPackage + "@" + guardSetVersion(t); sum.Set != want {
 		t.Errorf("the run used %s, want %s", sum.Set, want)
@@ -532,18 +576,18 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 	unsupported := map[string]int{}
 	for _, r := range sum.Results {
 		name := r.ID + " " + r.Target + " " + r.Variant
-		if r.ID == "C9.page-drivable" {
-			t.Logf("%s: mouse transport evidence=%s", name, r.Diagnostics)
-			checkMouseEvidence(t, r)
-		}
 		if skip, ok := guardSkips[r.ID]; ok {
 			if r.Control != "skip" || r.Guarded != "skip" || r.Live != "skip" || r.Reason != skip.Reason || r.Target != skip.Target {
 				t.Errorf("%s: the run skips it with %q, but it reported control %s, guarded %s, live %s, reason %q", name, skip.Reason, r.Control, r.Guarded, r.Live, r.Reason)
 			}
 			continue
 		}
+		if r.ID == "C9.page-drivable" {
+			t.Logf("%s: mouse transport evidence=%s", name, r.Diagnostics)
+			checkMouseEvidence(t, r)
+		}
 		if len(r.Errors) != 0 {
-			if reason, ok := guardWaivers[r.ID]; ok {
+			if reason, ok := waivedGuardRow(r); ok {
 				t.Logf("%s: WAIVED (%s): unexpected errors kept: %v", name, reason, r.Errors)
 			} else {
 				t.Errorf("%s: unexpected errors: %v", name, r.Errors)
@@ -571,7 +615,7 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 				t.Errorf("%s: skipped with %q", name, r.Reason)
 			}
 		case r.Control != "pass" || r.Guarded != "pass" || r.Live != "pass":
-			if reason, ok := guardWaivers[r.ID]; ok {
+			if reason, ok := waivedGuardRow(r); ok {
 				t.Logf("%s: WAIVED (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, reason, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
 				continue
 			}
@@ -586,7 +630,7 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 			passed[r.ID]++
 			continue
 		}
-		if _, ok := guardWaivers[r.ID]; ok && r.Control != "skip" && r.Control != "not-run" {
+		if _, ok := waivedGuardRow(r); ok {
 			waivedFail[r.ID] = true
 		}
 	}
@@ -613,9 +657,7 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 			continue
 		}
 		if passed[v.ID] == 0 && unsupported[v.ID] == 0 && !waivedFail[v.ID] {
-			if _, waived := guardWaivers[v.ID]; !waived {
-				t.Errorf("%s: no row of the vector passed", v.ID)
-			}
+			t.Errorf("%s: no row of the vector passed", v.ID)
 			continue
 		}
 		ran = append(ran, fmt.Sprintf("%s=%d", v.ID, passed[v.ID]))
@@ -630,7 +672,7 @@ func checkGuardSummary(t *testing.T, sum *guardSummary) {
 			if r.Control == "skip" || r.Control == "not-run" {
 				continue
 			}
-			if _, ok := guardWaivers[r.ID]; !ok {
+			if _, ok := waivedGuardRow(r); !ok {
 				onlyWaived = false
 				break
 			}
