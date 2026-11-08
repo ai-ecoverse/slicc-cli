@@ -14,7 +14,6 @@ import (
 type Handler func(*Stream)
 
 type Options struct {
-	RelayOnly        bool
 	AllocationBudget *AllocationBudget
 	Hello            Hello
 	Handlers         map[string]Handler

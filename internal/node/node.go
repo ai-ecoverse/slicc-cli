@@ -17,7 +17,6 @@ import (
 )
 
 type Config struct {
-	RelayOnly    bool
 	Name         string
 	Host         string
 	Version      string
@@ -37,7 +36,7 @@ type Node struct {
 	caps       []string
 	handlers   map[string]link.Handler
 	sshHostKey string
-	api        *webrtc.API
+	api        *link.API
 	helloHooks []func(*link.Hello)
 	subs       subscribers
 	origins    sync.Map
@@ -154,12 +153,12 @@ func (n *Node) Options() link.Options {
 	for k, v := range n.handlers {
 		handlers[k] = n.counted(k, v)
 	}
-	return link.Options{RelayOnly: n.cfg.RelayOnly, Hello: n.Hello(), Handlers: handlers, Logf: n.cfg.Logf, Certificates: n.cfg.Certificates}
+	return link.Options{Hello: n.Hello(), Handlers: handlers, Logf: n.cfg.Logf, Certificates: n.cfg.Certificates}
 }
 
-func (n *Node) API() *webrtc.API {
+func (n *Node) API() *link.API {
 	if n.api == nil {
-		n.api = link.NewAPI(link.APIOptions{Logf: n.cfg.Logf, Loopback: true, RelayOnly: n.cfg.RelayOnly})
+		n.api = link.NewAPI(link.APIOptions{Logf: n.cfg.Logf, Loopback: true})
 	}
 	return n.api
 }

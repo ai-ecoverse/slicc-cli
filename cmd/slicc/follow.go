@@ -53,7 +53,6 @@ stdin, and with @<file> from the first line of that file, so it stays out of
 the command line, where ps shows it to every user of this machine.
 
 flags:
-  --relay-only         use only TURN over TLS/TCP, without ICE interface discovery
   --native-screen      native app view provider through inherited private bootstrap (off by default)
   --native-screen-proof  content-free verifier diagnostics (requires --native-screen --json)
   --exit               offer this machine's network to seven (tcp, resolve,
@@ -77,7 +76,6 @@ machine can read, and unless :ro, change the folders listed.
 ` + debugPortsHelp
 
 type followFlags struct {
-	relayOnly         bool
 	exit              bool
 	nativeScreen      bool
 	nativeScreenProof bool
@@ -126,7 +124,6 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	f.compute = compute
 	fs := flag.NewFlagSet("follow", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.BoolVar(&f.relayOnly, "relay-only", false, "")
 	fs.BoolVar(&f.exit, "exit", false, "")
 	fs.BoolVar(&f.nativeScreen, "native-screen", false, "")
 	fs.BoolVar(&f.nativeScreenProof, "native-screen-proof", false, "")
@@ -298,7 +295,7 @@ func newFollowRunUsing(joinURL string, ff followFlags, st *stopper, stderr io.Wr
 	}
 	r.node = node.New(node.Config{
 		Name: ff.name, Host: ff.name, Version: version, Mode: "remote", Policy: pol, Hosts: ff.hosts.hosts, Exit: ff.exit,
-		RelayOnly: ff.relayOnly, Logf: logf, Status: r.nodeStatus, Certificates: []webrtc.Certificate{cert},
+		Logf: logf, Status: r.nodeStatus, Certificates: []webrtc.Certificate{cert},
 	})
 	r.node.Subscribe(func(e node.Event) {
 		switch {

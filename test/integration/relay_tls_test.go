@@ -20,7 +20,7 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-func TestRelayOnlyTLSDataRoundTrip(t *testing.T) {
+func TestAutomaticRelayTLSDataRoundTrip(t *testing.T) {
 	if root := os.Getenv("SLICC_TEST_RELAY_ROOT"); root != "" {
 		relayTLSDataRoundTrip(t, root, os.Getenv("SLICC_TEST_RELAY_URL"))
 		return
@@ -63,7 +63,7 @@ func TestRelayOnlyTLSDataRoundTrip(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestRelayOnlyTLSDataRoundTrip$", "-test.timeout=35s")
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestAutomaticRelayTLSDataRoundTrip$", "-test.timeout=35s")
 	cmd.Env = append(os.Environ(), "SLICC_TEST_RELAY_ROOT="+root,
 		"SLICC_TEST_RELAY_URL=turns:"+listener.Addr().String()+"?transport=tcp",
 		"GODEBUG="+os.Getenv("GODEBUG")+",x509usefallbackroots=1")
@@ -84,11 +84,10 @@ func relayTLSDataRoundTrip(t *testing.T, root, url string) {
 	}
 	x509.SetFallbackRoots(pool)
 	cfg := webrtc.Configuration{
-		ICETransportPolicy: webrtc.ICETransportPolicyRelay,
 		ICEServers: []webrtc.ICEServer{{URLs: []string{url},
 			Username: "synthetic-user", Credential: "synthetic-password"}},
 	}
-	api := link.NewAPI(link.APIOptions{RelayOnly: true, Logf: t.Logf})
+	api := link.NewAPI(link.APIOptions{Discovery: failedInterfaceDiscovery(), Logf: t.Logf})
 	a, err := api.NewPeerConnection(cfg)
 	if err != nil {
 		t.Fatal(err)
