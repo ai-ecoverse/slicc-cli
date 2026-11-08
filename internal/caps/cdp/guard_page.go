@@ -342,53 +342,11 @@ func workerType(typ string) bool {
 	return false
 }
 
-func wideAutoAttach(params map[string]any) bool {
-	if params == nil {
-		return false
-	}
-	raw := params["filter"]
-	if raw == nil {
-		return true
-	}
-	filter, ok := raw.([]any)
-	if !ok {
-		return false
-	}
-	for _, typ := range autoAttachWorkers {
-		if admitsAutoAttachType(filter, typ) {
-			return true
-		}
-	}
-	return false
-}
-
-func excludeAutoAttachWorkers(filter []any) []any {
-	out := make([]any, 0, len(filter)+len(autoAttachWorkers))
-	for _, entry := range filter {
-		p, _ := entry.(map[string]any)
-		if p == nil {
-			continue
-		}
-		t, hasType := p["type"].(string)
-		exclude, _ := p["exclude"].(bool)
-		if hasType && !exclude && workerType(t) {
-			continue
-		}
-		if len(p) == 0 {
-			for _, typ := range autoAttachWorkers {
-				out = append(out, map[string]any{"type": typ, "exclude": true})
-			}
-		}
-		out = append(out, entry)
-	}
-	return out
-}
-
 func resolveAutoAttachBoth(sessionType string, filter []any) []any {
 	if !admitsAutoAttachType(filter, "tab") || !admitsAutoAttachType(filter, "page") {
 		return filter
 	}
-	if sessionType != "" && sessionType != "browser" && sessionType != "tab" {
+	if sessionType != "" && sessionType != "browser" {
 		return append([]any{
 			map[string]any{"type": "browser", "exclude": true},
 			map[string]any{"type": "tab", "exclude": true},
@@ -402,7 +360,7 @@ func (g *guard) narrowAutoAttachLocked(c *command) {
 		return
 	}
 	on, _ := c.params["autoAttach"].(bool)
-	if !on || !wideAutoAttach(c.params) {
+	if !on {
 		return
 	}
 	raw := c.params["filter"]
@@ -417,7 +375,7 @@ func (g *guard) narrowAutoAttachLocked(c *command) {
 	if s := g.sessions[c.session]; s != nil {
 		sessionType = s.typ
 	}
-	c.params["filter"] = resolveAutoAttachBoth(sessionType, excludeAutoAttachWorkers(filter))
+	c.params["filter"] = resolveAutoAttachBoth(sessionType, filter)
 }
 
 func (g *guard) laterDocumentRuleLocked(c *command) string {

@@ -386,7 +386,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	fix := startGuardFixture(t)
 	srv := guardPageServer(t, pkg, fix.port)
 	fp := strconv.Itoa(fix.port)
-	seven := "http://seven.guard.test:" + fp
+	seven := "http://seven.oopif.test:" + fp
 	targets := map[string]string{
 		"seven":              seven,
 		"vault":              "http://vault.sliccy.ai:" + fp,

@@ -86,7 +86,7 @@ func (g *guard) expireHold(sessionID string) [][]byte {
 		return nil
 	}
 	delete(g.held, sessionID)
-	if h.typ == "page" || h.typ == "tab" {
+	if (h.typ == "page" || h.typ == "tab") && !h.waiting {
 		g.logf("cdp: releasing an auto-attached session with no URL as blank target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		g.sessions[h.id] = &session{id: h.id, target: h.target, parent: h.parent, typ: h.typ}
 		send := g.touchLocked(h.target, h.typ)
