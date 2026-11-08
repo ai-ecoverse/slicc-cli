@@ -378,8 +378,6 @@ func excludeAutoAttachWorkers(filter []any) []any {
 			for _, typ := range autoAttachWorkers {
 				out = append(out, map[string]any{"type": typ, "exclude": true})
 			}
-			out = append(out, map[string]any{"type": "tab"})
-			continue
 		}
 		out = append(out, entry)
 	}
@@ -399,7 +397,6 @@ func (g *guard) narrowAutoAttachLocked(c *command) {
 	}
 	raw := c.params["filter"]
 	if raw == nil {
-		c.params["filter"] = append([]any{}, autoAttachTabOnly...)
 		return
 	}
 	filter, ok := raw.([]any)
