@@ -60,7 +60,12 @@ type flowProc struct {
 
 func startFlow(t *testing.T, env []string, args ...string) *flowProc {
 	t.Helper()
-	cmd := exec.Command(binary, args...)
+	return startFlowBinary(t, binary, env, args...)
+}
+
+func startFlowBinary(t *testing.T, bin string, env []string, args ...string) *flowProc {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
 	cmd.Env = env
 	prepareInterruptible(cmd)
 	stdout, err := cmd.StdoutPipe()

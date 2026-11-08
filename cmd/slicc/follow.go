@@ -211,9 +211,12 @@ const (
 	evUp followEventKind = iota + 1
 	evDown
 	evUnlink
+	evFailed
 )
 
 type followEvent struct {
+	err    error
+	nonce  string
 	reason string
 	kind   followEventKind
 	name   string
@@ -295,8 +298,13 @@ func newFollowRunUsing(joinURL string, ff followFlags, st *stopper, stderr io.Wr
 		Logf: logf, Status: r.nodeStatus, Certificates: []webrtc.Certificate{cert},
 	})
 	r.node.Subscribe(func(e node.Event) {
-		if e.Kind == node.EventConnecting {
+		switch {
+		case e.Kind == node.EventConnecting:
 			r.onLink(e.Link)
+		case e.Kind == node.EventLinkDown && e.Link == nil && e.Err != nil:
+			if conn := r.currentConn(); conn != nil {
+				r.emit(followEvent{kind: evFailed, conn: conn, nonce: conn.Session().BootstrapID(), err: e.Err})
+			}
 		}
 	})
 	if ff.exit {
@@ -571,6 +579,13 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 				_ = stopServing(cancel, served)
 				r.lost(up, ev.reason, "")
 				return 0, r.after(up)
+			case evFailed:
+				if ev.nonce != conn.Session().BootstrapID() {
+					continue
+				}
+				_ = stopServing(cancel, served)
+				r.lost(up, "", r.redactErr(ev.err))
+				return r.failed(ctx, ev.err, up)
 			case evUnlink:
 				_ = stopServing(cancel, served)
 				return r.unlink(ev.name), outcomeStop
@@ -631,15 +646,15 @@ func (r *followRun) failed(ctx context.Context, err error, up bool) (int, follow
 	if code == "UNLINKED" {
 		return r.unlink(""), outcomeStop
 	}
-	telemetry.ReportError(telemetry.Signal, err)
-	r.ctl.Update(func(s *ctl.Status) { s.Code, s.Error = code, r.f.Redact(err.Error()) })
+	msg := r.f.Redact(err.Error())
+	telemetry.ReportError(telemetry.Signal, errors.New(msg))
+	r.ctl.Update(func(s *ctl.Status) { s.Code, s.Error = code, msg })
 	if msg, ok := fatalFollowCodes[code]; ok {
 		r.ctl.Update(func(s *ctl.Status) { s.State, s.RetryAt = ctl.StateStopped, nil })
 		r.status("%s (%s)", msg, code)
 		r.out.fail(msg, code, false)
 		return 1, outcomeStop
 	}
-	msg := r.f.Redact(err.Error())
 	r.status("%s", msg)
 	r.out.fail(msg, code, true)
 	r.reason, r.code = msg, code
