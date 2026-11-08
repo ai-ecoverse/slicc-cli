@@ -202,6 +202,19 @@ export function guardStart(getLink, opts) {
     }
     for (const v of set.vectors) {
       if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];
+      if (v.id === 'C3.tab-iframe-leak') {
+        const rewrite = (value) => {
+          if (typeof value === 'string') return value.replaceAll('{seven}', '{sevenOopif}');
+          if (Array.isArray(value)) return value.map(rewrite);
+          if (value && typeof value === 'object') {
+            const out = {};
+            for (const [key, child] of Object.entries(value)) out[key] = rewrite(child);
+            return out;
+          }
+          return value;
+        };
+        Object.assign(v, rewrite(v));
+      }
       if (v.id === 'C3.tab-protected' || v.id === 'C3.tab-protected.synthetic') {
         v.liveCheck = {
           any: [

@@ -310,7 +310,6 @@ var guardWaivers = map[string]string{
 	"C3.tab-worker-leak":         "guarded workerAttached true until slicc-browsers 1.21.2; control and live pass",
 	"C3.tab-service-worker-leak": "guarded workerAttached true until slicc-browsers 1.21.2; control and live pass",
 	"C3.tab-attach":              "guarded settle of window.open under main empty-URL hold; runner folds that into control=fail (#260); stock Playwright/Puppeteer popup through the link guard passes",
-	"C3.tab-iframe-leak":         "control iframeAttached false (seven.guard.test same-site with ordinary.guard.test); guarded pass with iframeAttached false; live pass",
 }
 
 func waivedGuardRow(r guardRow) (string, bool) {
@@ -319,18 +318,6 @@ func waivedGuardRow(r guardRow) (string, bool) {
 		return "", false
 	}
 	switch r.ID {
-	case "C3.tab-iframe-leak":
-		if r.Control != "fail" || r.Guarded != "pass" || r.Live != "pass" {
-			return "", false
-		}
-		var obs struct {
-			Guarded map[string]any `json:"guarded"`
-		}
-		_ = json.Unmarshal(r.Observed, &obs)
-		if v, ok := obs.Guarded["iframeAttached"].(bool); ok && v {
-			return "", false
-		}
-		return reason, true
 	case "C3.tab-attach":
 		if r.Guarded != "fail" || (r.Control != "fail" && r.Control != "incomplete") {
 			return "", false
@@ -354,6 +341,17 @@ func waivedGuardRow(r guardRow) (string, bool) {
 
 func guardedSettleFailure(r guardRow) bool {
 	return guardSettleToken.MatchString(string(r.Why) + " " + strings.Join(r.Errors, " "))
+}
+
+func logTabIframeLeakEvidence(t testing.TB, r guardRow) {
+	t.Helper()
+	var obs struct {
+		Control map[string]any `json:"control"`
+		Guarded map[string]any `json:"guarded"`
+	}
+	_ = json.Unmarshal(r.Observed, &obs)
+	t.Logf("C3.tab-iframe-leak verdict: id=%s target=%s variant=%s control=%s guarded=%s live=%s control.iframeAttached=%v guarded.iframeAttached=%v observed=%s",
+		r.ID, r.Target, r.Variant, r.Control, r.Guarded, r.Live, obs.Control["iframeAttached"], obs.Guarded["iframeAttached"], r.Observed)
 }
 
 func guardVectorSet() []guardVector {
@@ -440,8 +438,10 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	srv := guardPageServer(t, pkg, fix.port)
 	fp := strconv.Itoa(fix.port)
 	seven := "http://seven.guard.test:" + fp
+	sevenOopif := "http://seven.oopif.test:" + fp
 	targets := map[string]string{
 		"seven":              seven,
+		"sevenOopif":         sevenOopif,
 		"vault":              "http://vault.sliccy.ai:" + fp,
 		"vault-x":            "http://vault-x.sliccy.ai:" + fp,
 		"apex":               "http://sliccy.ai:" + fp,
@@ -465,7 +465,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	for _, g := range gates[1:] {
 		args = append(args, "--cdp-extra", g.srv.URL)
 	}
-	args = append(args, "--origin", srv.URL, "--origin", seven, "--name", "it-node")
+	args = append(args, "--origin", srv.URL, "--origin", seven, "--origin", sevenOopif, "--name", "it-node")
 	env := &linkEnv{t: t, b: chromes[0], origin: srv.URL}
 	env.a = startAttach(t, args...)
 	env.p = chromes[0].openPage(t, srv.URL+"/index.html")
@@ -587,6 +587,9 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 		if r.ID == "C9.page-drivable" {
 			t.Logf("%s: mouse transport evidence=%s", name, r.Diagnostics)
 			checkMouseEvidence(t, r)
+		}
+		if r.ID == "C3.tab-iframe-leak" {
+			logTabIframeLeakEvidence(t, r)
 		}
 		if len(r.Errors) != 0 {
 			if reason, ok := waivedGuardRow(r); ok {
