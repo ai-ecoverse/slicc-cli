@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -56,7 +57,7 @@ func isolatedEnv(t *testing.T, extra ...string) []string {
 			continue
 		}
 		switch key {
-		case "HOME", "XDG_CACHE_HOME", "LOCALAPPDATA", "USERPROFILE":
+		case "HOME", "XDG_CACHE_HOME", "LOCALAPPDATA", "USERPROFILE", "GH_TOKEN", "GITHUB_TOKEN":
 			continue
 		}
 		env = append(env, kv)
@@ -68,6 +69,7 @@ func isolatedEnv(t *testing.T, extra ...string) []string {
 		"XDG_CACHE_HOME="+filepath.Join(home, "cache"),
 		"LOCALAPPDATA="+filepath.Join(home, "cache"),
 		"SLICC_UPDATE_API_BASE=http://127.0.0.1:1",
+		"SLICC_UPDATE_WEB_BASE=http://127.0.0.1:1",
 		"SLICC_TELEMETRY_URL=http://127.0.0.1:1/",
 	)
 	return append(env, extra...)
@@ -96,8 +98,12 @@ type fakeGitHub struct {
 	sums         string
 	status       int
 	requests     atomic.Int32
+	api          atomic.Int32
 	sig          *fakeSigstore
 	attestations []byte
+	bundle       []byte
+	noWeb        bool
+	auth         sync.Map
 }
 
 func newFakeGitHub(t *testing.T, tag string, payload []byte, options ...func(*fakeGitHub)) *fakeGitHub {
@@ -127,13 +133,46 @@ func withAttestations(list []byte) func(*fakeGitHub) {
 	return func(f *fakeGitHub) { f.attestations = list }
 }
 
+func withSumsBundle(t *testing.T, o bundleOptions) func(*fakeGitHub) {
+	return func(f *fakeGitHub) {
+		sum := sha256.Sum256([]byte(f.sums))
+		f.bundle = f.sig.bundle(t, hex.EncodeToString(sum[:]), o)
+	}
+}
+
+func withoutWeb(f *fakeGitHub) { f.noWeb = true }
+
 func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	f.requests.Add(1)
+	f.auth.Store(r.URL.Path, r.Header.Get("Authorization"))
+	if strings.HasPrefix(r.URL.Path, "/repos/") {
+		f.api.Add(1)
+	}
 	if f.status != http.StatusOK {
+		if f.status == http.StatusForbidden && strings.HasPrefix(r.URL.Path, "/repos/") {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+		}
 		http.Error(w, "unavailable", f.status)
 		return
 	}
+	download := "/ai-ecoverse/slicc-cli/releases/download/" + f.tag + "/"
 	switch r.URL.Path {
+	case "/ai-ecoverse/slicc-cli/releases/latest":
+		if f.noWeb {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/ai-ecoverse/slicc-cli/releases/tag/"+f.tag, http.StatusFound)
+	case download + assetName():
+		http.Redirect(w, r, "/dl/"+assetName(), http.StatusFound)
+	case download + "SHA256SUMS":
+		_, _ = w.Write([]byte(f.sums))
+	case download + "SHA256SUMS.sigstore.json":
+		if f.bundle == nil {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(f.bundle)
 	case "/repos/ai-ecoverse/slicc-cli/releases/latest":
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tag_name": f.tag,
@@ -158,7 +197,7 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeGitHub) env(t *testing.T, extra ...string) []string {
-	return isolatedEnv(t, append([]string{"SLICC_UPDATE_API_BASE=" + f.URL, f.sig.env()}, extra...)...)
+	return isolatedEnv(t, append([]string{"SLICC_UPDATE_API_BASE=" + f.URL, "SLICC_UPDATE_WEB_BASE=" + f.URL, f.sig.env()}, extra...)...)
 }
 
 func newRelease(t *testing.T, version string) []byte {

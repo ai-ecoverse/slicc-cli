@@ -88,6 +88,12 @@ func newJerkReleases(t *testing.T, tag string, payload []byte) *fakeReleases {
 		payload, sums, attestations, attested := f.payload, f.sums, f.attestations, f.attested
 		f.mu.Unlock()
 		switch r.URL.Path {
+		case "/" + f.repo + "/releases/latest":
+			http.Redirect(w, r, "/"+f.repo+"/releases/tag/"+f.tag, http.StatusFound)
+		case "/" + f.repo + "/releases/download/" + f.tag + "/" + f.asset:
+			_, _ = w.Write(payload)
+		case "/" + f.repo + "/releases/download/" + f.tag + "/SHA256SUMS":
+			_, _ = w.Write([]byte(sums))
 		case "/repos/" + f.repo + "/releases/latest":
 			_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": f.tag, "assets": []map[string]string{
 				{"name": f.asset, "browser_download_url": f.URL + "/dl/asset"},
@@ -115,7 +121,7 @@ func newJerkReleases(t *testing.T, tag string, payload []byte) *fakeReleases {
 
 func installEnv(t *testing.T, f *fakeReleases) ([]string, string) {
 	t.Helper()
-	env := isolatedEnv(t, "SLICC_UPDATE_API_BASE="+f.URL, f.sig.env())
+	env := isolatedEnv(t, "SLICC_UPDATE_API_BASE="+f.URL, "SLICC_UPDATE_WEB_BASE="+f.URL, f.sig.env())
 	home := ""
 	for _, kv := range env {
 		if v, ok := strings.CutPrefix(kv, "HOME="); ok {

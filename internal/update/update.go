@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,9 +24,12 @@ import (
 
 const (
 	DefaultAPIBase = "https://api.github.com"
+	DefaultWebBase = "https://github.com"
 	Repo           = "ai-ecoverse/slicc-cli"
 	APIBaseEnv     = "SLICC_UPDATE_API_BASE"
+	WebBaseEnv     = "SLICC_UPDATE_WEB_BASE"
 	ChecksumsName  = "SHA256SUMS"
+	BundleName     = ChecksumsName + ".sigstore.json"
 	userAgent      = "slicc-cli"
 	maxBinaryBytes = 512 << 20
 	maxSumsBytes   = 1 << 20
@@ -38,6 +42,7 @@ type Release struct {
 	AssetName    string
 	AssetURL     string
 	ChecksumsURL string
+	BundleURL    string
 }
 
 type Checker struct {
@@ -49,6 +54,8 @@ type Checker struct {
 	ChecksumOnly bool
 	Root         *attest.TrustedRoot
 	APIBase      string
+	WebBase      string
+	Token        string
 	HTTP         *http.Client
 	GOOS         string
 	GOARCH       string
@@ -56,21 +63,36 @@ type Checker struct {
 }
 
 func NewChecker() *Checker {
-	base := os.Getenv(APIBaseEnv)
-	if base == "" {
-		base = DefaultAPIBase
-	}
 	return &Checker{
 		Repo:     Repo,
 		Binary:   "slicc",
 		Ref:      ReleaseRef,
 		Pipeline: true,
-		APIBase:  strings.TrimRight(base, "/"),
+		APIBase:  baseFromEnv(APIBaseEnv, DefaultAPIBase),
+		WebBase:  baseFromEnv(WebBaseEnv, DefaultWebBase),
+		Token:    tokenFromEnv(),
 		HTTP:     &http.Client{Timeout: 5 * time.Minute},
 		GOOS:     runtime.GOOS,
 		GOARCH:   runtime.GOARCH,
 		Verify:   VerifyVersion,
 	}
+}
+
+func baseFromEnv(key, fallback string) string {
+	base := os.Getenv(key)
+	if base == "" {
+		base = fallback
+	}
+	return strings.TrimRight(base, "/")
+}
+
+func tokenFromEnv() string {
+	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
+		if token := strings.TrimSpace(os.Getenv(key)); token != "" {
+			return token
+		}
+	}
+	return ""
 }
 
 func AssetName(goos, goarch string) string {
@@ -93,6 +115,59 @@ type githubRelease struct {
 }
 
 func (c *Checker) Latest(ctx context.Context) (*Release, error) {
+	rel, webErr := c.latestFromWeb(ctx)
+	if webErr == nil {
+		return rel, nil
+	}
+	rel, err := c.latestFromAPI(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w (and %s/%s/releases/latest: %v)", err, c.WebBase, c.Repo, webErr)
+	}
+	return rel, nil
+}
+
+func (c *Checker) latestFromWeb(ctx context.Context) (*Release, error) {
+	if c.WebBase == "" {
+		return nil, errors.New("no web base")
+	}
+	releases := c.WebBase + "/" + c.Repo + "/releases"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releases+"/latest", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	client := *c.HTTP
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, maxSumsBytes))
+	res.Body.Close()
+	if res.StatusCode < 300 || res.StatusCode > 399 {
+		return nil, &statusError{code: res.StatusCode}
+	}
+	loc, err := res.Location()
+	if err != nil {
+		return nil, fmt.Errorf("HTTP %d without a location", res.StatusCode)
+	}
+	i := strings.LastIndex(loc.Path, "/releases/tag/")
+	if i < 0 {
+		return nil, fmt.Errorf("redirected to %s, not to a release tag", loc.Redacted())
+	}
+	tag := loc.Path[i+len("/releases/tag/"):]
+	if !IsReleaseVersion(tag) {
+		return nil, fmt.Errorf("the latest release has an unexpected tag %q", tag)
+	}
+	download := releases + "/download/" + url.PathEscape(tag) + "/"
+	rel := &Release{Version: Normalize(tag), AssetName: NamedAsset(c.Binary, c.GOOS, c.GOARCH)}
+	rel.AssetURL = download + url.PathEscape(rel.AssetName)
+	rel.ChecksumsURL = download + ChecksumsName
+	rel.BundleURL = download + BundleName
+	return rel, nil
+}
+
+func (c *Checker) latestFromAPI(ctx context.Context) (*Release, error) {
 	body, err := c.get(ctx, c.APIBase+"/repos/"+c.Repo+"/releases/latest", maxSumsBytes, "application/vnd.github+json")
 	if err != nil {
 		return nil, fmt.Errorf("asking GitHub for the latest release: %w", err)
@@ -111,6 +186,8 @@ func (c *Checker) Latest(ctx context.Context) (*Release, error) {
 			rel.AssetURL = a.URL
 		case ChecksumsName:
 			rel.ChecksumsURL = a.URL
+		case BundleName:
+			rel.BundleURL = a.URL
 		}
 	}
 	if rel.AssetURL == "" {
@@ -147,15 +224,43 @@ func (c *Checker) open(ctx context.Context, url, accept string) (*http.Response,
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
+	api := c.APIBase != "" && strings.HasPrefix(url, c.APIBase+"/repos/")
+	if api && c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	res, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
 		res.Body.Close()
-		return nil, fmt.Errorf("HTTP %d", res.StatusCode)
+		e := &statusError{code: res.StatusCode}
+		if api && (res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusTooManyRequests) && res.Header.Get("X-RateLimit-Remaining") == "0" {
+			e.hint = "GitHub's API rate limit is used up"
+			if c.Token == "" {
+				e.hint += "; set GH_TOKEN or GITHUB_TOKEN for a higher one"
+			}
+		}
+		return nil, e
 	}
 	return res, nil
+}
+
+type statusError struct {
+	code int
+	hint string
+}
+
+func (e *statusError) Error() string {
+	if e.hint != "" {
+		return fmt.Sprintf("HTTP %d (%s)", e.code, e.hint)
+	}
+	return fmt.Sprintf("HTTP %d", e.code)
+}
+
+func isNotFound(err error) bool {
+	var s *statusError
+	return errors.As(err, &s) && s.code == http.StatusNotFound
 }
 
 func ParseChecksums(data []byte) map[string]string {
@@ -223,7 +328,7 @@ func (c *Checker) download(ctx context.Context, rel *Release, dest string) error
 	}
 	if !c.ChecksumOnly {
 		sumsDigest := sha256.Sum256(sums)
-		if err := c.attested(ctx, rel.AssetName, got, hex.EncodeToString(sumsDigest[:])); err != nil {
+		if err := c.attested(ctx, rel, got, hex.EncodeToString(sumsDigest[:])); err != nil {
 			return err
 		}
 	}
@@ -234,7 +339,7 @@ func (c *Checker) Identity() attest.Identity {
 	return attest.Identity{Repo: c.Repo, Ref: c.Ref, Pipeline: c.Pipeline, Workflows: c.Workflows}
 }
 
-func (c *Checker) attested(ctx context.Context, asset, digest, sumsDigest string) error {
+func (c *Checker) attested(ctx context.Context, rel *Release, digest, sumsDigest string) error {
 	root := c.Root
 	if root == nil {
 		var err error
@@ -242,7 +347,15 @@ func (c *Checker) attested(ctx context.Context, asset, digest, sumsDigest string
 			return err
 		}
 	}
-	err := c.attestedBy(ctx, root, asset, digest)
+	var bundleErr error
+	if rel.BundleURL != "" {
+		if bundleErr = c.bundled(ctx, root, rel.BundleURL, sumsDigest); bundleErr == nil {
+			return nil
+		} else if isNotFound(bundleErr) {
+			bundleErr = nil
+		}
+	}
+	err := c.attestedBy(ctx, root, rel.AssetName, digest)
 	if err == nil {
 		return nil
 	}
@@ -253,7 +366,21 @@ func (c *Checker) attested(ctx context.Context, asset, digest, sumsDigest string
 			err = sumsErr
 		}
 	}
+	if bundleErr != nil {
+		return fmt.Errorf("%w; and %w", bundleErr, err)
+	}
 	return err
+}
+
+func (c *Checker) bundled(ctx context.Context, root *attest.TrustedRoot, url, digest string) error {
+	body, err := c.get(ctx, url, maxAttestBytes, "")
+	if err != nil {
+		return fmt.Errorf("downloading %s: %w", BundleName, err)
+	}
+	if err := attest.Verify(body, digest, c.Identity(), root); err != nil {
+		return fmt.Errorf("%s (the release's attestation of %s) doesn't verify for %s: %w", BundleName, ChecksumsName, c.Identity(), err)
+	}
+	return nil
 }
 
 var errNoAttestation = errors.New("no attestation")
