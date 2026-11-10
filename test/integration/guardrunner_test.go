@@ -380,6 +380,11 @@ func tabIframeLeakFromDiagnostics(raw json.RawMessage) (tabIframeLeakEvidence, e
 	return wrap.IframeLeak, nil
 }
 
+func tabIframeLeakObserverMissesFrame(diagnostics json.RawMessage) bool {
+	ev, err := tabIframeLeakFromDiagnostics(diagnostics)
+	return err == nil && len(ev.Frames) == 0
+}
+
 func tabIframeLeakGuardedHidesFrame(observed, diagnostics json.RawMessage) error {
 	var sides map[string]map[string]any
 	if err := json.Unmarshal(observed, &sides); err != nil {
@@ -396,6 +401,9 @@ func tabIframeLeakGuardedHidesFrame(observed, diagnostics json.RawMessage) error
 	ev, err := tabIframeLeakFromDiagnostics(diagnostics)
 	if err != nil {
 		return err
+	}
+	if len(ev.Frames) == 0 {
+		return fmt.Errorf("unguarded observer never saw the framed target (incomplete)")
 	}
 	if ev.IframeAttached || len(ev.Attached) != 0 || len(ev.Sessions) != 0 {
 		return fmt.Errorf("guarded attached or opened a session for the framed target: attached=%v sessions=%v", ev.Attached, ev.Sessions)
