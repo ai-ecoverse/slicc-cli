@@ -69,6 +69,12 @@ func TestInterfaceDiscoveryFailures(t *testing.T) {
 		"error": func() ([]*transport.Interface, error) { return nil, errors.New("synthetic failure") },
 		"panic": func() ([]*transport.Interface, error) { panic("synthetic panic") },
 		"empty": func() ([]*transport.Interface, error) { return nil, nil },
+		"invalid first": func() ([]*transport.Interface, error) {
+			return append([]*transport.Interface{nil}, syntheticInterfaces()...), nil
+		},
+		"invalid last": func() ([]*transport.Interface, error) {
+			return append(syntheticInterfaces(), nil), nil
+		},
 		"no addresses": func() ([]*transport.Interface, error) {
 			return []*transport.Interface{transport.NewInterface(net.Interface{Index: 1, Name: "empty"})}, nil
 		},

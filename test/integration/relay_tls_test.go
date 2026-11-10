@@ -20,6 +20,8 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+const relayTLSHelperFlag = "-slicc-relay-tls-helper"
+
 func TestAutomaticRelayTLSDataRoundTrip(t *testing.T) {
 	if root := os.Getenv("SLICC_TEST_RELAY_ROOT"); root != "" {
 		relayTLSDataRoundTrip(t, root, os.Getenv("SLICC_TEST_RELAY_URL"))
@@ -63,7 +65,7 @@ func TestAutomaticRelayTLSDataRoundTrip(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestAutomaticRelayTLSDataRoundTrip$", "-test.timeout=35s")
+	cmd := exec.CommandContext(ctx, exe, relayTLSHelperFlag)
 	cmd.Env = append(os.Environ(), "SLICC_TEST_RELAY_ROOT="+root,
 		"SLICC_TEST_RELAY_URL=turns:"+listener.Addr().String()+"?transport=tcp",
 		"GODEBUG="+os.Getenv("GODEBUG")+",x509usefallbackroots=1")

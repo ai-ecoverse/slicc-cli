@@ -108,6 +108,9 @@ func (d *InterfaceDiscovery) run(p *interfaceProbe) {
 			return
 		}
 		addresses, err := iface.Addrs()
+		if errors.Is(err, transport.ErrNoAddressAssigned) {
+			continue
+		}
 		if err != nil {
 			p.err = errors.New("interface address probe failed")
 			return
