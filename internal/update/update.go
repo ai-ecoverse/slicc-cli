@@ -303,7 +303,7 @@ func (c *Checker) download(ctx context.Context, rel *Release, dest string) error
 	}
 	want := ParseChecksums(sums)[rel.AssetName]
 	if want == "" {
-		return fmt.Errorf("%s has no entry for %s", ChecksumsName, rel.AssetName)
+		return fmt.Errorf("release %s has no %s (its %s has no line for it)", rel.Version, rel.AssetName, ChecksumsName)
 	}
 	res, err := c.open(ctx, rel.AssetURL, "")
 	if err != nil {

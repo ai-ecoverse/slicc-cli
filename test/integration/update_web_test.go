@@ -115,3 +115,16 @@ func TestUpdateNamesTheRateLimit(t *testing.T) {
 		t.Fatalf("with a token: %+v", r)
 	}
 }
+
+func TestUpdateNamesAReleaseWithoutThisPlatformsAsset(t *testing.T) {
+	gh := newFakeGitHub(t, "v1.1.0", newRelease(t, "1.1.0"), withSums(strings.Repeat("0", 64)+"  slicc-other-arch\n"))
+	bin := buildVersion(t, "1.0.0", t.TempDir())
+	r := runBin(t, gh.env(t), bin, "update")
+	if r.code != 1 || !strings.Contains(r.stderr, "release 1.1.0 has no "+assetName()+" (its SHA256SUMS has no line for it)") {
+		t.Fatalf("%+v", r)
+	}
+	assertUntouched(t, bin)
+	if gh.asked("/ai-ecoverse/slicc-cli/releases/download/v1.1.0/" + assetName()) {
+		t.Fatal("downloaded an asset SHA256SUMS doesn't list")
+	}
+}
