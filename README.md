@@ -139,7 +139,7 @@ Six's `--version`, `version`, `--profile` and `--mount` are seven flags too, and
 **Environment variables.**
 - **Gone:** `PORT`, `CHROME_PATH`, `SLICC_USER_DATA_DIR`, `SLICC_CDP_LAUNCH_TIMEOUT_MS`, `WORKER_BASE_URL`, `SLICC_TRAY_WORKER_BASE_URL`, `SLICC_SECRETS_FILE`, `E2B_API_KEY`, `SLICC_JOIN_FILE`, `CHROME_USER_DATA_DIR`, `SLICC_CHROME_GPU`, `SLICC_CHROME_MOCK_KEYCHAIN`, `SLICC_BRIDGE_TOKEN`, `SLICC_PROMPT_SETTLE`, `SLICC_ABORT_CONFIRM`, `SLICC_NO_TUI` (use `--plain`), `SLICC_LOG_LEVEL`, `SLICC_LOG_FORMAT`, `COLUMNS`, `SLICC_INSTALL_DIR`.
 - **Kept:** `SLICC_DEBUG`, `SLICC_NO_TELEMETRY`, `SLICC_NO_UPDATE_CHECK`, `SLICC_UPDATE_API_BASE`, `OPTEL_RATE`, `OPTEL_DEBUG`, `NO_COLOR`.
-- **New:** `SLICC_TELEMETRY_URL`, `SLICC_LAUNCHER` (set by npm), `SLICC_DISCOVERY` (tests).
+- **New:** `SLICC_UPDATE_WEB_BASE`, `SLICC_TELEMETRY_URL`, `SLICC_LAUNCHER` (set by npm), `SLICC_DISCOVERY` (tests).
 
 **Files.**
 - **Not read:** `~/.slicc/secrets.env`, `~/.slicc/session-id`, `~/.slicc/logs/` and `~/.slicc/cloud-sessions.json`.
@@ -256,7 +256,7 @@ fnox (secrets on a real OS) is upstream jdx/fnox: install it from https://fnox.j
 - slicc checks the download against `SHA256SUMS` and verifies its attestation (see [Attestations](#attestations)), then installs it only once its `--version` names the release's version, through a rename next to the old one (as `slicc update` does);
 - it says `installed <name> <version> at <path> (SHA256SUMS and the build provenance attestation by <identity>)`, or `<name> <version> is already installed at <path>`;
 - `--checksum-only` skips the attestation, with a warning, and says `SHA256SUMS only; the attestation wasn't checked`;
-- the GitHub API base follows `SLICC_UPDATE_API_BASE`, as for `update`.
+- it finds the release, its files and its attestation as `update` does (see [Where the release comes from](#updates)), with the same `SLICC_UPDATE_WEB_BASE`, `SLICC_UPDATE_API_BASE` and token.
 
 Only a user runs `slicc install`. Nothing on a link starts an install.
 
@@ -264,7 +264,7 @@ Only a user runs `slicc install`. Nothing on a link starts an install.
 
 `slicc update` and `slicc install` verify the GitHub build provenance attestation of every binary they download, after its `SHA256SUMS` check, and refuse it when that fails. A release without an attestation fails too. `--checksum-only` is the only way around it, and it warns.
 
-**Where the attestation comes from.** `GET /repos/<repo>/attestations/sha256:<digest>` on the GitHub API, first for the binary's digest. When the binary has none, slicc looks up the digest of the release's `SHA256SUMS` instead: an attestation over `SHA256SUMS` covers the binary through its line there, which slicc has already checked. slicc accepts the binary when one of the bundles verifies.
+**Where the attestation comes from.** First the release's own `SHA256SUMS.sigstore.json`, the Sigstore bundle of the attestation over `SHA256SUMS` that the release pipeline attaches to the release after it attests (slicc-shared-web's `pipeline.yml` from ai-ecoverse/slicc-shared-web#470 on, once `ci.yml` pins it), downloaded like any release file, so no GitHub API call is needed. When the release has no such file (a release made before that, or in the minute before the pipeline attaches it) or its bundle doesn't verify, slicc asks `GET /repos/<repo>/attestations/sha256:<digest>` on the GitHub API, first for the binary's digest, then, when the binary has none, for the digest of the release's `SHA256SUMS`: an attestation over `SHA256SUMS` covers the binary through its line there, which slicc has already checked. Where the bundle comes from doesn't matter for trust: every bundle is verified as below, and slicc accepts the binary when one of them verifies. When none does, the error names the release's bundle as well as the API's answer.
 
 **What is verified** (`internal/attest`, standard library only), for a Sigstore bundle v0.3 with one DSSE envelope, one Fulcio certificate and one Rekor (v1) entry:
 1. the envelope is an in-toto statement whose predicate type is `https://slsa.dev/provenance/v1`, with a subject whose SHA-256 is the file's;
@@ -293,6 +293,8 @@ Errors name the step that failed (`attestation identity: …`). A bundle from a 
 
 `slicc update [--check] [--checksum-only]` replaces the running binary (symlinks resolved), wherever it is, such as `~/.local/bin/slicc` from `install.sh`, with the latest GitHub release of `ai-ecoverse/slicc-cli`. It downloads the asset for this OS and CPU, checks it against the release's `SHA256SUMS`, and verifies its build provenance attestation (see [Attestations](#attestations)); `--checksum-only` skips the attestation, with a warning. The new binary has to answer `--version` with the release's version before anything is replaced. The swap is a rename next to the old binary; on Windows the running binary is first moved aside to `<name>.old`, which the next run deletes. `slicc update --check` only reports.
 
+**Where the release comes from.** The GitHub API allows 60 requests an hour per IP address without a token, which a shared network or CI runner uses up, so `update`, `install` and the notice don't need it. They ask `https://github.com/<repo>/releases/latest` without following its redirect, take the version from the `/releases/tag/v<version>` it points to (a tag that isn't `v` and dot-separated numbers is refused), and download `SHA256SUMS`, `<asset>` and `SHA256SUMS.sigstore.json` from `https://github.com/<repo>/releases/download/v<version>/`, the same files `install.sh` takes. A release whose `SHA256SUMS` has no line for this platform's asset is refused with `release <version> has no <asset>` before the asset is downloaded. Only the tag is read from the redirect; the download URLs are built from the base, never taken from the answer. When github.com doesn't name a release, they fall back to `GET /repos/<repo>/releases/latest` on the API. With `GH_TOKEN` (or else `GITHUB_TOKEN`) set, every API request carries it as a bearer token (5,000 requests an hour); it goes to `/repos/` on the API base only, never to github.com or a download. When the API answers 403 or 429 with no requests left, the error says `GitHub's API rate limit is used up`, and without a token adds `set GH_TOKEN or GITHUB_TOKEN for a higher one`.
+
 **The version.** A release build has its version linked in (`-X main.version=<version>`). Without one, `slicc` reads its Go build info: a binary built by `go install …@<version>` (or `go run`) from a downloaded module, with a checksum in the build info, reports that module version without the leading `v`. Anything else built from a checkout reports `dev`.
 
 `update` refuses, with exit code 1:
@@ -319,7 +321,9 @@ Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from th
 | --- | --- |
 | `SLICC_NO_TELEMETRY=1` | send no telemetry |
 | `SLICC_NO_UPDATE_CHECK=1` | no update notice and no background check |
-| `SLICC_UPDATE_API_BASE` | GitHub API base for `update`, `install` and the notice (default `https://api.github.com`), for mirrors and tests |
+| `SLICC_UPDATE_WEB_BASE` | GitHub base for `update`, `install` and the notice to find the latest release and download its files (default `https://github.com`), for mirrors and tests |
+| `SLICC_UPDATE_API_BASE` | GitHub API base for `update`, `install` and the notice when the release or its attestation isn't found on the web base (default `https://api.github.com`), for mirrors and tests |
+| `GH_TOKEN`, `GITHUB_TOKEN` | a token sent to the GitHub API (only) by `update`, `install` and the notice, for its higher rate limit (see [Updates](#updates)) |
 | `SLICC_SIGSTORE_TRUSTED_ROOT` | a Sigstore `trusted_root.json` to verify attestations against instead of the embedded one, for tests (see [Attestations](#attestations)) |
 | `SLICC_TELEMETRY_URL` | telemetry collector base (default `https://rum.hlx.page/`) |
 | `OPTEL_RATE`, `OPTEL_DEBUG` | go-optel's sampling rate and beacon logging |
@@ -2627,7 +2631,7 @@ PRs merge through the merge queue, which requires `ci / integration` and `ci / r
 3. `@semantic-release/github` tags and creates the GitHub release with every binary, `install.sh` and `SHA256SUMS`.
 4. `scripts/npm-publish.mjs` (publish) publishes the platform packages, then the launcher and `wasi-slicc`, through npm trusted publishing from `ci.yml` (OIDC, with provenance), then `sliccy` with `--tag next`. Versions already on npm are skipped. After any real publish error, it checks `npm view <package>@<version> version` again and accepts an exact published version, including when a retry reports a package-version conflict. If the version is still absent and publishing reports `TLOG_CREATE_ENTRY_ERROR` or a transparency-log HTTP 409, it retries with provenance, up to three total attempts with 5- and 10-second backoffs, then fails. Other errors fail after the registry check; dry-run errors fail immediately. Before publishing `sliccy`, it checks that every exact-pinned `optionalDependencies` version is on the registry, waits up to `SLICC_REGISTRY_WAIT_SECONDS` (default 900) for freshly published ones, and fails otherwise (exit code 3), so a `sliccy` version never points at missing platform packages.
 
-After a release, the pipeline attests the build provenance of `artifacts/release/SHA256SUMS` (`attest` in `ci.yml`), which `slicc update` checks (see [Attestations](#attestations)), and `after-release` runs `scripts/go-warm.sh <version>`: it asks `proxy.golang.org` for the module at `v<version>` (`go list -m` with a scratch module cache) and asks `pkg.go.dev` to fetch it. Both only warn.
+After a release, the pipeline attests the build provenance of `artifacts/release/SHA256SUMS` (`attest` in `ci.yml`) and, from the pipeline release that ai-ecoverse/slicc-shared-web#470 lands in, attaches the attestation's bundle to the release as `SHA256SUMS.sigstore.json`, both of which `slicc update` checks (see [Attestations](#attestations)), and `after-release` runs `scripts/go-warm.sh <version>`: it asks `proxy.golang.org` for the module at `v<version>` (`go list -m` with a scratch module cache) and asks `pkg.go.dev` to fetch it. Both only warn.
 
 **Go module versions.** In Go a pushed tag is the release: `proxy.golang.org` caches it, `sum.golang.org` records its hash for good, and `pkg.go.dev` indexes it.
 - **Never move or delete a pushed tag.** The checksum database would then reject that version for every user. A bad version gets a `retract` directive in `go.mod`, and a new release.
