@@ -99,6 +99,15 @@ func closeEndpoint(t *testing.T, endpoint, home, profile string) {
 	t.Errorf("the browser at %s did not close", endpoint)
 }
 
+func ctlDir(t *testing.T) string {
+	t.Helper()
+	dir, err := ctl.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func ttyExit(t *testing.T, p *ttyProc) {
 	t.Helper()
 	select {
@@ -147,22 +156,32 @@ func TestDashboardUpdateKeyRestartsWithoutClosingTheBrowser(t *testing.T) {
 	mark := len(p.text())
 	p.keys(t, "u")
 	p.wait(t, mark, "updating slicc 1.0.0 to 1.1.0")
-	p.wait(t, mark, "updated to slicc 1.1.0 (SHA256SUMS and attestation checked); restarting")
-	fresh := p.wait(t, mark, "slicc · looking for browsers…")
-	mark += strings.LastIndex(fresh, "slicc · looking for browsers…")
-	again := p.wait(t, mark, `linked with "link test page"`)
+	restarting := "updated to slicc 1.1.0 (SHA256SUMS and attestation checked); restarting"
+	seen := p.wait(t, mark, restarting)
+	mark += strings.Index(seen, restarting) + len(restarting)
+	path := filepath.Join(ctlDir(t), strconv.Itoa(p.cmd.Process.Pid)+".sock")
+	var st *ctl.Status
+	for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if got, err := ctl.Query(context.Background(), path); err == nil && got.Version == "1.1.0" && got.Links > 0 {
+			st = got
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the restarted process never linked seven")
+		}
+	}
+	if st.Seven != "link test page" {
+		t.Fatalf("the process after the restart: %+v", st)
+	}
+	again := p.wait(t, mark, "launched · CDP :")
 	if m := dashLaunched.FindStringSubmatch(again); m == nil || "http://127.0.0.1:"+m[1] != endpoint {
 		t.Fatalf("after the restart the dashboard doesn't own the browser at %s:\n%s", endpoint, again)
 	}
-	if strings.Contains(again, "choose where seven runs") {
+	if strings.Contains(p.since(mark), "choose where seven runs") {
 		t.Fatal("the restart showed the picker")
 	}
 	if got := versionOf(t, bin); got != "slicc 1.1.0" {
 		t.Fatalf("binary after u: %q", got)
-	}
-	st, err := ctl.Query(context.Background(), ctlSocket(t, p.cmd.Process.Pid))
-	if err != nil || st.Version != "1.1.0" {
-		t.Fatalf("the process after the restart: %+v, %v", st, err)
 	}
 	p.keys(t, "q")
 	ttyExit(t, p)
