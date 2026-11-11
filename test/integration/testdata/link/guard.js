@@ -75,12 +75,10 @@ function bareOrigin(url) {
 }
 
 function resetFrameLeak(frameLeak) {
-  frameLeak.ids.clear();
   frameLeak.attached.length = 0;
   frameLeak.listings.length = 0;
   frameLeak.attachAttempts.length = 0;
   frameLeak.sessions.length = 0;
-  frameLeak.observer = frameLeak.observer;
 }
 
 function frameHostMatch(frameLeak, url) {
@@ -95,24 +93,53 @@ function frameHostMatch(frameLeak, url) {
   });
 }
 
-function noteFrameTarget(frameLeak, info) {
+function rememberFrame(frameLeak, targetId, url, origin) {
+  const prev = frameLeak.ids.get(targetId);
+  frameLeak.ids.set(targetId, {
+    url: url || prev?.url || '',
+    origin: origin || prev?.origin || '',
+  });
+  frameLeak.pending?.delete(targetId);
+}
+
+function noteFrameTarget(frameLeak, info, { attached } = {}) {
   if (!frameLeak || !info?.targetId) return;
   const url = typeof info.url === 'string' ? info.url : '';
+  const type = info.type ?? '';
   if (url && frameHostMatch(frameLeak, url)) {
     const origin = bareOrigin(url);
     if (!origin) return;
-    frameLeak.ids.set(info.targetId, { url, origin });
-    frameLeak.pending?.delete(info.targetId);
+    rememberFrame(frameLeak, info.targetId, url, origin);
     return;
   }
-  if (info.type === 'iframe' && (!url || url === 'about:blank')) {
+  if (attached && type === 'iframe') {
+    rememberFrame(frameLeak, info.targetId, url, bareOrigin(url));
+    return;
+  }
+  if (type === 'iframe' && (!url || url === 'about:blank')) {
     (frameLeak.pending ??= new Set()).add(info.targetId);
+  }
+}
+
+function harvestFrameTargets(frameLeak) {
+  const events = frameLeak?.observer?.events;
+  if (!Array.isArray(events)) return;
+  for (const e of events) {
+    const info = e.params?.targetInfo;
+    if (!info) continue;
+    if (e.method === 'Target.attachedToTarget') noteFrameTarget(frameLeak, info, { attached: true });
+    else if (e.method === 'Target.targetCreated' || e.method === 'Target.targetInfoChanged') noteFrameTarget(frameLeak, info);
   }
 }
 
 function noteClientListing(frameLeak, source, info) {
   if (!frameLeak || !info?.targetId || !frameLeak.ids.has(info.targetId)) return;
-  const origin = frameLeak.ids.get(info.targetId).origin;
+  const meta = frameLeak.ids.get(info.targetId);
+  let origin = meta.origin;
+  if (!origin) {
+    origin = bareOrigin(info.url ?? '');
+    if (origin) rememberFrame(frameLeak, info.targetId, info.url ?? meta.url, origin);
+  }
   frameLeak.listings.push({
     source,
     targetId: info.targetId,
@@ -169,7 +196,7 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
     noteSession(name, e);
     const info = e.params?.targetInfo;
     if (frameLeak && (e.method === 'Target.attachedToTarget' || e.method === 'Target.targetCreated' || e.method === 'Target.targetInfoChanged')) {
-      if (name === 'unguarded') noteFrameTarget(frameLeak, info);
+      if (name === 'unguarded') noteFrameTarget(frameLeak, info, { attached: e.method === 'Target.attachedToTarget' });
       else {
         if (e.method === 'Target.attachedToTarget' && frameLeak.ids.has(info?.targetId)) {
           frameLeak.attached.push({ targetId: info.targetId, type: info.type ?? '', url: info.url ?? '', sessionId: e.params.sessionId ?? '' });
@@ -201,6 +228,7 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
     return result;
   };
   const refreshFrames = async () => {
+    harvestFrameTargets(frameLeak);
     if (!frameLeak?.observer?.send) return;
     try {
       const listed = await frameLeak.observer.send('Target.getTargets', { filter: [{}] });
@@ -238,6 +266,7 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
     }
   };
   const probeAttach = async () => {
+    harvestFrameTargets(frameLeak);
     if (!frameLeak.ids.size) {
       frameLeak.snapshot = frameLeakEvidence(frameLeak);
       return;
@@ -534,7 +563,9 @@ export function guardStart(getLink, opts) {
         if (evidence) { row.diagnostics = evidence; mouseDiagnostics.delete(rowKey(row)); }
         const frameLeak = frameLeakByRow.get(rowKey(row));
         if (frameLeak) {
-          const iframeLeak = frameLeak.snapshot ?? frameLeakEvidence(frameLeak);
+          harvestFrameTargets(frameLeak);
+          const iframeLeak =
+            frameLeak.snapshot?.frames?.length > 0 ? frameLeak.snapshot : frameLeakEvidence(frameLeak);
           row.diagnostics = { ...(row.diagnostics && typeof row.diagnostics === 'object' ? row.diagnostics : {}), iframeLeak };
           const incomplete = frameLeakIncomplete(iframeLeak);
           const fail = frameLeakFailure(iframeLeak);
