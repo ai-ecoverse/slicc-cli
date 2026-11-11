@@ -9,24 +9,67 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/signal"
 	"github.com/pion/ice/v4"
 	pionlogging "github.com/pion/logging"
+	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 )
 
 const ReceiveBuffer = 4 << 20
 
 type APIOptions struct {
-	Logf     func(format string, args ...any)
-	Loopback bool
+	Logf      func(format string, args ...any)
+	Loopback  bool
+	Discovery *InterfaceDiscovery
 }
 
-func NewAPI(opts APIOptions) *webrtc.API {
+type API struct {
+	opts APIOptions
+}
+
+type PeerConnectionFactory interface {
+	NewPeerConnection(webrtc.Configuration) (*webrtc.PeerConnection, error)
+}
+
+func NewAPI(opts APIOptions) *API {
+	if opts.Discovery == nil {
+		opts.Discovery = defaultInterfaceDiscovery
+	}
+	return &API{opts: opts}
+}
+
+func (a *API) NewPeerConnection(cfg webrtc.Configuration) (*webrtc.PeerConnection, error) {
+	return a.NewPeerConnectionContext(context.Background(), cfg)
+}
+
+func (a *API) NewPeerConnectionContext(ctx context.Context, cfg webrtc.Configuration) (*webrtc.PeerConnection, error) {
+	relays := tlsRelayServers(cfg.ICEServers)
+	interfaces, probeErr := a.opts.Discovery.interfaces(ctx, len(relays) == 0)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	se := webrtc.SettingEngine{}
 	se.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
+	if probeErr != nil {
+		cfg.ICETransportPolicy = webrtc.ICETransportPolicyRelay
+		cfg.ICEServers = relays
+		if len(cfg.ICEServers) == 0 {
+			return nil, fmt.Errorf("link: interface discovery failed (%v); fallback requires a TURN-over-TLS TCP server with credentials", probeErr)
+		}
+		if a.opts.Logf != nil {
+			a.opts.Logf("link: interface discovery failed (%v); using TURN over TLS/TCP", probeErr)
+		}
+		se.SetNet(&relayNet{})
+		se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	} else {
+		se.SetNet(&discoveryNet{discovery: a.opts.Discovery, ctx: ctx, interfaces: interfaces, refreshed: time.Now(), loopback: a.opts.Loopback})
+		if !hasMulticastInterface(interfaces, a.opts.Loopback) {
+			se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+		}
+	}
 	se.SetSCTPMaxReceiveBufferSize(ReceiveBuffer)
-	se.SetIncludeLoopbackCandidate(opts.Loopback)
+	se.SetIncludeLoopbackCandidate(a.opts.Loopback)
 	se.SetICETimeouts(5*time.Second, 15*time.Second, 2*time.Second)
-	se.LoggerFactory = PionLoggerFactory(opts.Logf)
-	return webrtc.NewAPI(webrtc.WithSettingEngine(se))
+	se.LoggerFactory = PionLoggerFactory(a.opts.Logf)
+	return webrtc.NewAPI(webrtc.WithSettingEngine(se)).NewPeerConnection(cfg)
 }
 
 func PionLoggerFactory(logf func(format string, args ...any)) pionlogging.LoggerFactory {
@@ -69,12 +112,33 @@ func (l pionLogger) Warnf(format string, a ...any)  { l.emitf("warn", format, a.
 func (l pionLogger) Error(msg string)               { l.emit("error", msg) }
 func (l pionLogger) Errorf(format string, a ...any) { l.emitf("error", format, a...) }
 
-func Answer(ctx context.Context, api *webrtc.API, offer signal.Message, send func(context.Context, signal.Message) error, opts Options) (*Link, error) {
+func Answer(ctx context.Context, api PeerConnectionFactory, offer signal.Message, send func(context.Context, signal.Message) error, opts Options) (*Link, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var description sdp.SessionDescription
+	if err := description.UnmarshalString(offer.SDP); err != nil {
+		return nil, fmt.Errorf("link: offer: %w", err)
+	}
 	cfg := webrtc.Configuration{Certificates: opts.Certificates}
 	for _, s := range offer.ICEServers {
 		cfg.ICEServers = append(cfg.ICEServers, webrtc.ICEServer{URLs: s.URLs, Username: s.Username, Credential: s.Credential})
 	}
-	pc, err := api.NewPeerConnection(cfg)
+	if api == nil {
+		api = NewAPI(APIOptions{Logf: opts.Logf})
+	}
+	var pc *webrtc.PeerConnection
+	var err error
+	if contextual, ok := api.(interface {
+		NewPeerConnectionContext(context.Context, webrtc.Configuration) (*webrtc.PeerConnection, error)
+	}); ok {
+		pc, err = contextual.NewPeerConnectionContext(ctx, cfg)
+	} else {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		pc, err = api.NewPeerConnection(cfg)
+	}
 	if err != nil {
 		return nil, err
 	}

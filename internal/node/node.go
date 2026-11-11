@@ -36,7 +36,7 @@ type Node struct {
 	caps       []string
 	handlers   map[string]link.Handler
 	sshHostKey string
-	api        *webrtc.API
+	api        *link.API
 	helloHooks []func(*link.Hello)
 	subs       subscribers
 	origins    sync.Map
@@ -156,7 +156,7 @@ func (n *Node) Options() link.Options {
 	return link.Options{Hello: n.Hello(), Handlers: handlers, Logf: n.cfg.Logf, Certificates: n.cfg.Certificates}
 }
 
-func (n *Node) API() *webrtc.API {
+func (n *Node) API() *link.API {
 	if n.api == nil {
 		n.api = link.NewAPI(link.APIOptions{Logf: n.cfg.Logf, Loopback: true})
 	}

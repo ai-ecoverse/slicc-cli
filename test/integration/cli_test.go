@@ -13,6 +13,14 @@ import (
 var binary string
 
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == relayTLSHelperFlag {
+		if os.Getenv("SLICC_TEST_RELAY_ROOT") == "" || os.Getenv("SLICC_TEST_RELAY_URL") == "" {
+			fmt.Fprintln(os.Stderr, "TLS relay helper requires its parent's local fixture")
+			os.Exit(1)
+		}
+		os.Args = []string{os.Args[0], "-test.run=^TestAutomaticRelayTLSDataRoundTrip$", "-test.count=1", "-test.timeout=35s"}
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "slicc-cli-it-")
 	if err != nil {
 		panic(err)

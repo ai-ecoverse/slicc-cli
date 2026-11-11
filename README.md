@@ -1231,6 +1231,8 @@ A command that can't start exits 127 with the reason on stderr.
 
 ## Remote setup: `slicc <join-url> follow`
 
+The initial ICE interface snapshot probe and its refreshes are bounded and panic-safe. If discovery fails or returns no addresses, slicc automatically uses offered TURN-over-TLS TCP servers with credentials, and reports an error if no suitable relay is offered. A probe that times out reuses the last good snapshot; without one, it switches to that relay only when a suitable relay is offered, and otherwise waits for the probe to finish. This fallback disables host and server-reflexive candidates and mDNS and retains certificate verification and existing sharing restrictions. Go cannot forcibly cancel an OS enumeration already in progress; a stuck call is limited to one shared in-flight probe across reconnects, and later bounded waits on that probe return immediately after its deadline. Healthy discovery retains normal ICE transports and refreshes interface snapshots through the same guarded probe, retaining the last good snapshot if a later probe fails or times out. mDNS is disabled when no interface is eligible; otherwise the healthy path retains Pion’s mDNS behavior, including its own OS address queries, which are outside this probe guard. This does not enable network, compute, browser or filesystem sharing; other sharing features may independently require interface access.
+
 ```
 slicc <join-url> follow [--exit] [--allow <rule>]... [--deny <rule>]... [--expose-debug-port <port>]... [--name <name>] [--cdp <url>]...
              [--runner <argv…> [--]] [--shell <argv…> [--]] [--eval <argv…> [--]] [--eval-quiet <dur>] [--sftp | --no-sftp]
