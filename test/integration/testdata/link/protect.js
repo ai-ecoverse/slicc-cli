@@ -488,8 +488,11 @@ export function protectTest(getLink, describe) {
         out.closed = out['Target.closeTarget'].ok && !targetInfos.some((t) => t.targetId === targetId);
         return out;
       }),
-    closeProtected: (browser, ordinaryURL, protectedURL, hostId, browserId) =>
+    closeProtected: (browser, ordinaryURL, protectedURL, hostId, browserId, untouchedId) =>
       run(browser, async (c) => {
+        const untouched = untouchedId
+          ? await outcome(c.send('Target.closeTarget', { targetId: untouchedId }))
+          : { ok: false, error: { message: 'no untouched target' } };
         const { targetId, sessionId } = await c.attachTo(ordinaryURL);
         await c.send('Page.enable', {}, sessionId);
         const locked = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
@@ -504,6 +507,7 @@ export function protectTest(getLink, describe) {
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
         const { targetInfos } = await c.send('Target.getTargets');
         const closed = close.ok && close.result?.success === true && !targetInfos.some((t) => t.targetId === targetId);
+        const untouchedGone = untouchedId ? !targetInfos.some((t) => t.targetId === untouchedId) : false;
         const host = await outcome(c.send('Target.closeTarget', { targetId: hostId }));
         const browserTarget = browserId
           ? await outcome(c.send('Target.closeTarget', { targetId: browserId }))
@@ -514,7 +518,7 @@ export function protectTest(getLink, describe) {
         } catch {
           up = false;
         }
-        return { detached, attach, activate, evaluate, close, closed, host, browserTarget, up };
+        return { untouched, untouchedGone, detached, attach, activate, evaluate, close, closed, host, browserTarget, up };
       }),
     autoAttach: (browser, plainURL) =>
       run(browser, async (c) => {

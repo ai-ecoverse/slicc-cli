@@ -200,7 +200,7 @@ func (e *unparsedEnv) testLoadedForm(t *testing.T, u, marker string, cookie, opt
 	}
 	var r map[string]json.RawMessage
 	e.evalJSON(t, "linkTest.protect.attach("+jsArgs("chrome", made.TargetID)+")", &r)
-	for _, m := range []string{"Target.attachToTarget", "Target.activateTarget", "Browser.getWindowForTarget"} {
+	for _, m := range []string{"Target.attachToTarget", "Target.activateTarget", "Target.closeTarget", "Browser.getWindowForTarget"} {
 		var o cdpOutcome
 		_ = json.Unmarshal(r[m], &o)
 		if o.Error.Message != refusedText {
@@ -209,13 +209,6 @@ func (e *unparsedEnv) testLoadedForm(t *testing.T, u, marker string, cookie, opt
 	}
 	if strings.Contains(string(r["info"]), marker) {
 		t.Errorf("Target.getTargetInfo shows the tab as %s", r["info"])
-	}
-	var close cdpOutcome
-	_ = json.Unmarshal(r["Target.closeTarget"], &close)
-	var closed bool
-	_ = json.Unmarshal(r["closed"], &closed)
-	if !close.OK || !closed {
-		t.Errorf("closing the unparseable tab: close=%s closed=%v", r["Target.closeTarget"], closed)
 	}
 }
 

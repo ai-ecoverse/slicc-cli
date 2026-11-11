@@ -195,11 +195,37 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 		if g.targetUnconfirmedLocked(id) {
 			return g.confirmReasonLocked(g.navTargets[id])
 		}
+		if g.targetProtectedLocked(id) && !g.streamTouchedLocked(id) {
+			return refusedTarget
+		}
 		return ""
 	case "browser":
 		return refusedTarget
 	}
 	return g.targetReasonLocked(id)
+}
+
+func (g *guard) streamTouchedLocked(id string) bool {
+	seen := map[string]bool{}
+	for id != "" && !seen[id] {
+		seen[id] = true
+		if g.navTargets[id] != nil {
+			return true
+		}
+		t := g.targets[id]
+		if t == nil {
+			return false
+		}
+		switch {
+		case t.opener != "":
+			id = t.opener
+		case t.openerFrame != "":
+			id = t.openerFrame
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (g *guard) sessionUnconfirmedLocked(id string) bool {

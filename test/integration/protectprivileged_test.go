@@ -123,21 +123,14 @@ func (e *protectEnv) testPrivilegedTabs(t *testing.T) {
 		}
 		var r map[string]json.RawMessage
 		e.evalJSON(t, "linkTest.protect.attach("+jsArgs("chrome", created.TargetID)+")", &r)
-		for _, m := range []string{"Target.attachToTarget", "Target.activateTarget", "Browser.getWindowForTarget"} {
+		for _, m := range []string{"Target.attachToTarget", "Target.activateTarget", "Target.closeTarget", "Browser.getWindowForTarget"} {
 			var o cdpOutcome
 			_ = json.Unmarshal(r[m], &o)
 			if !o.refused() {
 				t.Errorf("%s on the %s tab: %s", m, tc.url, r[m])
 			}
 		}
-		var close cdpOutcome
-		_ = json.Unmarshal(r["Target.closeTarget"], &close)
-		var closed bool
-		_ = json.Unmarshal(r["closed"], &closed)
-		if !close.OK || !closed {
-			t.Errorf("closing the %s tab: close=%s closed=%v", tc.url, r["Target.closeTarget"], closed)
-			e.unguardedCall(t, "Target.closeTarget", map[string]any{"targetId": created.TargetID}, nil)
-		}
+		e.unguardedCall(t, "Target.closeTarget", map[string]any{"targetId": created.TargetID}, nil)
 	}
 }
 

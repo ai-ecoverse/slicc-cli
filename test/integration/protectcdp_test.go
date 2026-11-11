@@ -420,7 +420,7 @@ func (e *protectEnv) testNotFound(t *testing.T) {
 	_ = s.Detach(ctx)
 	var a map[string]json.RawMessage
 	e.evalJSON(t, "linkTest.protect.attach("+jsArgs("chrome", id)+")", &a)
-	for _, m := range []string{"Target.attachToTarget", "Target.activateTarget"} {
+	for _, m := range []string{"Target.attachToTarget", "Target.activateTarget", "Target.closeTarget"} {
 		var o cdpOutcome
 		_ = json.Unmarshal(a[m], &o)
 		if !o.refused() {
@@ -432,18 +432,13 @@ func (e *protectEnv) testNotFound(t *testing.T) {
 	if info.URL != e.seven || info.Title != e.seven {
 		t.Fatalf("seven's 404 page is listed as %+v", info)
 	}
-	var close cdpOutcome
-	_ = json.Unmarshal(a["Target.closeTarget"], &close)
-	var closed bool
-	_ = json.Unmarshal(a["closed"], &closed)
-	if !close.OK || !closed {
-		t.Fatalf("closing seven's 404 page: close=%s closed=%v", a["Target.closeTarget"], closed)
-	}
 }
 
 func (e *protectEnv) testCloseProtected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	untouched, s := e.directTab(t, e.seven+"/frame.html?n=untouched-close")
+	_ = s.Detach(ctx)
 	var browserID string
 	infos, err := e.b.client.Targets(ctx)
 	if err != nil {
@@ -455,6 +450,8 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 		}
 	}
 	var r struct {
+		Untouched     cdpOutcome `json:"untouched"`
+		UntouchedGone bool       `json:"untouchedGone"`
 		Detached      bool       `json:"detached"`
 		Attach        cdpOutcome `json:"attach"`
 		Activate      cdpOutcome `json:"activate"`
@@ -465,20 +462,35 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 		BrowserTarget cdpOutcome `json:"browserTarget"`
 		Up            bool       `json:"up"`
 	}
-	e.evalJSON(t, "linkTest.protect.closeProtected("+jsArgs("chrome", e.allowed+"/?n=close-protected", e.seven+"/frame.html?n=close-protected", e.p.target, browserID)+")", &r)
+	e.evalJSON(t, "linkTest.protect.closeProtected("+jsArgs("chrome", e.allowed+"/?n=close-protected", e.seven+"/frame.html?n=close-protected", e.p.target, browserID, untouched)+")", &r)
 	switch {
+	case !r.Untouched.refused() || r.UntouchedGone:
+		t.Fatalf("closing a protected tab this stream never touched: %+v", r)
 	case !r.Detached:
 		t.Fatalf("navigating onto seven didn't lock the tab: %+v", r)
 	case !r.Attach.refused() || !r.Activate.refused() || !r.Evaluate.refused():
 		t.Fatalf("attach, activate or evaluate on the protected tab: %+v", r)
 	case !r.Close.OK || !r.Closed:
-		t.Fatalf("closing the protected tab: %+v", r)
+		t.Fatalf("closing the touched protected tab: %+v", r)
 	case !r.Host.refused():
 		t.Fatalf("closing the link's own seven page: %+v", r.Host)
 	case browserID != "" && !r.BrowserTarget.refused():
 		t.Fatalf("closing the browser target: %+v", r.BrowserTarget)
 	case !r.Up:
 		t.Fatal("the link went down")
+	}
+	still, err := e.b.client.Targets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ti := range still {
+		if ti.TargetID == untouched {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the untouched protected tab was closed")
 	}
 	var up bool
 	e.p.eval("linkTest.status().up", &up)
