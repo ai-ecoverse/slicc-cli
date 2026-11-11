@@ -87,12 +87,15 @@ const enableFeatures = "--enable-features="
 
 var EnabledFeatures = []string{"ForceForegroundPriorityForAllTabs"}
 
+var ChromiumSwitches = []string{"--silent-debugger-extension-api"}
+
 func ChromiumArgs(profileDir, startURL string, headless, sevenFlags bool, extra []string) []string {
-	args := make([]string, 0, len(catalog.Launch.ChromiumArgs)+len(ThrowawaySwitches)+len(SevenSwitches)+len(extra)+5)
+	args := make([]string, 0, len(catalog.Launch.ChromiumArgs)+len(ThrowawaySwitches)+len(SevenSwitches)+len(extra)+6)
 	for _, a := range catalog.Launch.ChromiumArgs {
 		args = append(args, strings.ReplaceAll(a, "{profile}", profileDir))
 	}
 	args = append(args, enableFeatures+strings.Join(EnabledFeatures, ","))
+	args = append(args, ChromiumSwitches...)
 	if Throwaway(profileDir) {
 		args = append(args, ThrowawaySwitches...)
 	}

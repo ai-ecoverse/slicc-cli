@@ -211,7 +211,7 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		g.logf("cdp: attach counted as touch without a known target target=%s", attached)
 	case kindScript:
 		if id, _ := res["identifier"].(string); id != "" {
-			g.scripts[id] = true
+			g.scripts[admittedScriptKey(session, id)] = true
 		}
 	}
 	return nil

@@ -322,22 +322,36 @@ func ledgerID(entry map[string]any) (int64, bool) {
 func (c *gateConnection) ledgerEntry(id int64, method, session string) map[string]any {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for i := len(c.ledger) - 1; i >= 0; i-- {
-		entry := c.ledger[i]
-		got, ok := ledgerID(entry)
-		if !ok || got != id {
-			continue
+	match := func(entry map[string]any, byID bool) bool {
+		if byID {
+			got, ok := ledgerID(entry)
+			if !ok || got != id {
+				return false
+			}
 		}
 		if method != "" && entry["method"] != method {
-			continue
+			return false
 		}
 		if session != "" {
 			s, _ := entry["sessionId"].(string)
 			if s != session {
-				continue
+				return false
 			}
 		}
-		return entry
+		return true
+	}
+	for i := len(c.ledger) - 1; i >= 0; i-- {
+		if match(c.ledger[i], true) {
+			return c.ledger[i]
+		}
+	}
+	if method == "" {
+		return nil
+	}
+	for i := len(c.ledger) - 1; i >= 0; i-- {
+		if match(c.ledger[i], false) {
+			return c.ledger[i]
+		}
 	}
 	return nil
 }

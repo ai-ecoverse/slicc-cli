@@ -318,6 +318,11 @@ func assertOneSwitch(t *testing.T, cmdline, prefix, want string) {
 func assertEnabledFeatures(t *testing.T, cmdline, want string) {
 	t.Helper()
 	assertOneSwitch(t, cmdline, "--enable-features=", want)
+	for _, s := range browser.ChromiumSwitches {
+		if !slices.Contains(strings.Fields(cmdline), s) {
+			t.Errorf("%s missing from the command line:\n%s", s, cmdline)
+		}
+	}
 }
 
 func TestChromiumArgsMergeBlinkFeatures(t *testing.T) {
