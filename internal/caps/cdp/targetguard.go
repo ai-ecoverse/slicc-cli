@@ -192,9 +192,6 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 	}
 	switch t.typ {
 	case "page", "tab":
-		if g.targetUnconfirmedLocked(id) {
-			return g.confirmReasonLocked(g.navTargets[id])
-		}
 		if g.targetProtectedLocked(id) && !g.streamTouchedLocked(id) {
 			return refusedTarget
 		}

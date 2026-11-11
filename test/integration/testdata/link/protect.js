@@ -499,7 +499,7 @@ export function protectTest(getLink, describe) {
           () => true,
           () => false,
         );
-        await c.send('Page.navigate', { url: protectedURL }, sessionId);
+        await c.send('Runtime.evaluate', { expression: later(protectedURL) }, sessionId);
         const detached = await locked;
         const evaluate = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
         const attach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
