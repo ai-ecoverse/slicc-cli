@@ -435,10 +435,27 @@ func (e *protectEnv) testNotFound(t *testing.T) {
 }
 
 func (e *protectEnv) testCloseProtected(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	untouched, s := e.directTab(t, e.seven+"/frame.html?n=untouched-close")
 	_ = s.Detach(ctx)
+	var res struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := e.b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": e.seven + "/frame.html?n=close-protected"}, &res); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.b.closeTarget(res.TargetID) })
+	seed, err := e.b.client.Attach(ctx, res.TargetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, seed, e.seven+"/frame.html")
+	if err := seed.Call(ctx, "Page.navigate", map[string]any{"url": e.allowed + "/?n=close-protected"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, seed, e.allowed)
+	_ = seed.Detach(ctx)
 	var browserID string
 	infos, err := e.b.client.Targets(ctx)
 	if err != nil {
@@ -462,12 +479,12 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 		BrowserTarget cdpOutcome `json:"browserTarget"`
 		Up            bool       `json:"up"`
 	}
-	e.evalJSONWithObserver(t, "linkTest.protect.closeProtected("+jsArgs("chrome", e.allowed+"/?n=close-protected", e.seven+"/frame.html?n=close-protected", e.p.target, browserID, untouched)+")", &r)
+	e.evalJSONWithObserver(t, "linkTest.protect.closeProtected("+jsArgs("chrome", res.TargetID, e.p.target, browserID, untouched)+")", &r)
 	switch {
 	case !r.Untouched.refused() || r.UntouchedGone:
 		t.Fatalf("closing a protected tab this stream never touched: %+v", r)
 	case !r.Detached:
-		t.Fatalf("observer navigation onto seven didn't lock the tab: %+v", r)
+		t.Fatalf("history restore onto seven didn't lock the tab: %+v", r)
 	case !r.Attach.refused() || !r.Activate.refused() || !r.Evaluate.refused():
 		t.Fatalf("attach, activate or evaluate on the protected tab: %+v", r)
 	case !r.Close.OK || !r.TabGone:

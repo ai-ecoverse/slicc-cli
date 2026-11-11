@@ -488,18 +488,18 @@ export function protectTest(getLink, describe) {
         out.closed = out['Target.closeTarget'].ok && !targetInfos.some((t) => t.targetId === targetId);
         return out;
       }),
-    closeProtected: (browser, ordinaryURL, protectedURL, hostId, browserId, untouchedId) =>
+    closeProtected: (browser, targetId, hostId, browserId, untouchedId) =>
       run(browser, async (c) => {
         const untouched = untouchedId
           ? await outcome(c.send('Target.closeTarget', { targetId: untouchedId }))
           : { ok: false, error: { message: 'no untouched target' } };
-        const { targetId, sessionId } = await c.attachTo(ordinaryURL);
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
         await c.send('Page.enable', {}, sessionId);
         const locked = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
           () => true,
           () => false,
         );
-        await observerNavigation(targetId, { url: protectedURL });
+        await observerNavigation(targetId, { delta: -1 });
         const detached = await locked;
         const evaluate = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
         const attach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
