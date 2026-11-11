@@ -692,7 +692,7 @@ func (g *guard) scanString(k, s string, c *command) string {
 	case k == "frameId":
 		return g.scanFrameID(s, c)
 	case idKeys[k]:
-		return g.targetReasonLocked(s)
+		return g.idReasonLocked(k, s, c)
 	case k == "sessionId" && s != "" && (s == g.relaySession || g.navSessions[s] != nil):
 		return refusedTarget
 	case k == "sessionId" && g.sessionRefusedLocked(s) && c.method != "Target.detachFromTarget":
@@ -703,6 +703,13 @@ func (g *guard) scanString(k, s string, c *command) string {
 		return g.requestRule(s, c)
 	}
 	return ""
+}
+
+func (g *guard) idReasonLocked(k, s string, c *command) string {
+	if c.method == "Target.closeTarget" && k == "targetId" {
+		return g.closeTargetReasonLocked(s)
+	}
+	return g.targetReasonLocked(s)
 }
 
 func (g *guard) requestRule(id string, c *command) string {

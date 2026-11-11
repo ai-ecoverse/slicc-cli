@@ -179,6 +179,29 @@ func (g *guard) targetReasonLocked(id string) string {
 	return ""
 }
 
+func (g *guard) closeTargetReasonLocked(id string) string {
+	if id == "" {
+		return ""
+	}
+	if g.hostTargetLocked(id) {
+		return refusedTarget
+	}
+	t := g.targets[id]
+	if t == nil || t.gone {
+		return g.targetReasonLocked(id)
+	}
+	switch t.typ {
+	case "page", "tab":
+		if g.targetUnconfirmedLocked(id) {
+			return g.confirmReasonLocked(g.navTargets[id])
+		}
+		return ""
+	case "browser":
+		return refusedTarget
+	}
+	return g.targetReasonLocked(id)
+}
+
 func (g *guard) sessionUnconfirmedLocked(id string) bool {
 	s := g.sessions[id]
 	return s != nil && g.targetUnconfirmedLocked(s.target)

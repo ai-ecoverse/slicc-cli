@@ -46,13 +46,14 @@ type Registry struct {
 	onAdd   func(ctx context.Context, id string, hostports []string)
 	onCheck func(ctx context.Context, id string, hostports []string)
 
-	mu        sync.Mutex
-	protected *protect.Origins
-	entries   []*entry
-	known     map[string]string
-	taken     map[string]bool
-	gone      map[string]*entry
-	links     map[*link.Link]*pusher
+	mu         sync.Mutex
+	protected  *protect.Origins
+	hostTarget func() string
+	entries    []*entry
+	known      map[string]string
+	taken      map[string]bool
+	gone       map[string]*entry
+	links      map[*link.Link]*pusher
 
 	version      int
 	helloVersion int
@@ -82,6 +83,22 @@ func (r *Registry) Protect(origins []string) error {
 	r.protected = o
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *Registry) SetHostTarget(fn func() string) {
+	r.mu.Lock()
+	r.hostTarget = fn
+	r.mu.Unlock()
+}
+
+func (r *Registry) hostTargetID() string {
+	r.mu.Lock()
+	fn := r.hostTarget
+	r.mu.Unlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
 }
 
 func (r *Registry) origins() *protect.Origins {

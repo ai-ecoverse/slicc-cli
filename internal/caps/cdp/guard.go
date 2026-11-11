@@ -97,6 +97,7 @@ type guard struct {
 	documentsOnly         bool
 	verifiesInput         bool
 	lost                  bool
+	hostTarget            func() string
 	targets               map[string]*target
 	tombstones            []string
 	sessions              map[string]*session
@@ -358,6 +359,19 @@ func (g *guard) setRelaySession(id string) {
 	g.mu.Lock()
 	g.relaySession = id
 	g.mu.Unlock()
+}
+
+func (g *guard) setHostTarget(fn func() string) {
+	g.mu.Lock()
+	g.hostTarget = fn
+	g.mu.Unlock()
+}
+
+func (g *guard) hostTargetLocked(id string) bool {
+	if id == "" || g.hostTarget == nil {
+		return false
+	}
+	return g.hostTarget() == id
 }
 
 func (g *guard) openerState(t *target) protect.Opener {

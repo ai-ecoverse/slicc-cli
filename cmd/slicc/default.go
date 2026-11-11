@@ -269,7 +269,12 @@ func registerCaps(lc *liveCaps, origins []string, st *stopper, logf func(string,
 			}
 			return out
 		}
-		return flow.Caps{Release: func() { unwatch(); closeCtl(); cancel(); closeSSH(); closeMounts() }, Live: live, Unlisted: unlisted}, nil
+		return flow.Caps{
+			Release:       func() { unwatch(); closeCtl(); cancel(); closeSSH(); closeMounts() },
+			Live:          live,
+			Unlisted:      unlisted,
+			SetHostTarget: reg.SetHostTarget,
+		}, nil
 	}
 }
 

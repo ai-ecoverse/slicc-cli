@@ -110,6 +110,7 @@ func TestCDPProtectsSevensOrigin(t *testing.T) {
 	t.Run("auto-attach skips the seven tab", env.testAutoAttach)
 	t.Run("an error page for seven's URL doesn't lock the tab", env.testErrorPage)
 	t.Run("seven's 404 page is seven's document", env.testNotFound)
+	t.Run("a protected tab can be closed through the guard", env.testCloseProtected)
 	t.Run("commands racing a restore of seven's document never run in it", env.testRestoreRace)
 	t.Run("a blank popup from seven is seven's", env.testPopup)
 	t.Run("history entries on seven are refused", env.testHistory)
@@ -272,6 +273,11 @@ func (e *protectEnv) testAttach(t *testing.T) {
 			t.Fatalf("%s on the seven tab: %s", m, r[m])
 		}
 	}
+	var closed bool
+	_ = json.Unmarshal(r["closed"], &closed)
+	if closed {
+		t.Fatal("closing the link's own seven page succeeded")
+	}
 	var info struct {
 		URL   string `json:"url"`
 		Title string `json:"title"`
@@ -363,8 +369,10 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 		t.Fatalf("an error page for seven's URL locked the tab: %+v", r)
 	case r.Listed == nil || r.Listed.URL != e.seven || r.Listed.Title != e.seven || r.Info.URL != e.seven || r.Info.Title != e.seven || r.Leaked:
 		t.Fatalf("the error page's attempted URL was listed in full: %+v", r)
-	case !r.Locked || !r.After.refused() || !r.Reattach.refused() || !r.Close.refused():
+	case !r.Locked || !r.After.refused() || !r.Reattach.refused():
 		t.Fatalf("seven's document, restored into the same tab, didn't lock it: %+v", r)
+	case !r.Close.OK:
+		t.Fatalf("closing the locked restored tab: %+v", r.Close)
 	case r.ListedFailed == nil || r.ListedFailed.URL != e.seven || r.ListedFailed.Title != e.seven:
 		t.Fatalf("a tab on an error page for seven's URL is listed as %+v", r.ListedFailed)
 	case !r.Wiped.OK || r.Landed == nil || r.Landed.Unreachable != "" || r.ListedError == nil || r.ListedError.URL != blankedURL || r.ListedError.Title != "blocked":
@@ -412,7 +420,7 @@ func (e *protectEnv) testNotFound(t *testing.T) {
 	_ = s.Detach(ctx)
 	var a map[string]json.RawMessage
 	e.evalJSON(t, "linkTest.protect.attach("+jsArgs("chrome", id)+")", &a)
-	for _, m := range []string{"Target.attachToTarget", "Target.activateTarget", "Target.closeTarget"} {
+	for _, m := range []string{"Target.attachToTarget", "Target.activateTarget"} {
 		var o cdpOutcome
 		_ = json.Unmarshal(a[m], &o)
 		if !o.refused() {
@@ -423,6 +431,59 @@ func (e *protectEnv) testNotFound(t *testing.T) {
 	_ = json.Unmarshal(a["info"], &info)
 	if info.URL != e.seven || info.Title != e.seven {
 		t.Fatalf("seven's 404 page is listed as %+v", info)
+	}
+	var close cdpOutcome
+	_ = json.Unmarshal(a["Target.closeTarget"], &close)
+	var closed bool
+	_ = json.Unmarshal(a["closed"], &closed)
+	if !close.OK || !closed {
+		t.Fatalf("closing seven's 404 page: close=%s closed=%v", a["Target.closeTarget"], closed)
+	}
+}
+
+func (e *protectEnv) testCloseProtected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var browserID string
+	infos, err := e.b.client.Targets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ti := range infos {
+		if ti.Type == "browser" {
+			browserID = ti.TargetID
+		}
+	}
+	var r struct {
+		Detached      bool       `json:"detached"`
+		Attach        cdpOutcome `json:"attach"`
+		Activate      cdpOutcome `json:"activate"`
+		Evaluate      cdpOutcome `json:"evaluate"`
+		Close         cdpOutcome `json:"close"`
+		Closed        bool       `json:"closed"`
+		Host          cdpOutcome `json:"host"`
+		BrowserTarget cdpOutcome `json:"browserTarget"`
+		Up            bool       `json:"up"`
+	}
+	e.evalJSON(t, "linkTest.protect.closeProtected("+jsArgs("chrome", e.allowed+"/?n=close-protected", e.seven+"/frame.html?n=close-protected", e.p.target, browserID)+")", &r)
+	switch {
+	case !r.Detached:
+		t.Fatalf("navigating onto seven didn't lock the tab: %+v", r)
+	case !r.Attach.refused() || !r.Activate.refused() || !r.Evaluate.refused():
+		t.Fatalf("attach, activate or evaluate on the protected tab: %+v", r)
+	case !r.Close.OK || !r.Closed:
+		t.Fatalf("closing the protected tab: %+v", r)
+	case !r.Host.refused():
+		t.Fatalf("closing the link's own seven page: %+v", r.Host)
+	case browserID != "" && !r.BrowserTarget.refused():
+		t.Fatalf("closing the browser target: %+v", r.BrowserTarget)
+	case !r.Up:
+		t.Fatal("the link went down")
+	}
+	var up bool
+	e.p.eval("linkTest.status().up", &up)
+	if !up {
+		t.Fatal("the link went down after the close")
 	}
 }
 
@@ -453,13 +514,12 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 		t.Fatalf("the race never ran: %+v", r)
 	case len(r.Leaked) > 0:
 		t.Fatalf("commands ran in seven's restored document: %+v", r)
-	case !r.Detached || !r.After.refused() || !r.Reattach.refused() || !r.Close.refused():
+	case !r.Detached || !r.After.refused() || !r.Reattach.refused():
 		t.Fatalf("seven's restored document didn't lock the tab: %+v", r)
+	case !r.Close.OK:
+		t.Fatalf("closing the restored locked tab: %+v", r.Close)
 	}
-	if href := (&navEnv{linkEnv: e.linkEnv}).directHref(t, id); href != doc {
-		t.Fatalf("history.back left the tab at %q, not seven's document restored from the back/forward cache", href)
-	}
-	t.Logf("%d probes attempted, %d unanswered after 1s, and %d attaches raced the restore", r.Probes, r.Stuck, r.Attaches)
+	t.Logf("%d probes attempted, %d unanswered after 1s, and %d attaches raced the restore; close ok", r.Probes, r.Stuck, r.Attaches)
 }
 
 func (e *protectEnv) testPopup(t *testing.T) {

@@ -203,7 +203,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err := browser.Guard(ctx, pol, browser.Options{Status: status}, cdpPorts(append([]string{f.cdp}, f.extra...)...), f.expose, logf); err != nil {
 		return fail(err, 1)
 	}
-	browsers, err := cdpBrowsers(ctx, f.cdp, f.extra, f.origins, pol, f.hosts.hosts, logf, status)
+	browsers, err := cdpBrowsersFor(ctx, f.cdp, f.extra, f.origins, pol, f.hosts.hosts, logf, status, conn)
 	if err != nil {
 		return fail(err, 1)
 	}

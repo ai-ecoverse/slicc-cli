@@ -39,6 +39,7 @@ type CDPOptions struct {
 	Tab           func(url string) bool
 	Logf          func(format string, args ...any)
 	Status        func(format string, args ...any)
+	OnHostTarget  func(id string)
 	SetupTimeout  time.Duration
 	RetryMin      time.Duration
 	RetryMax      time.Duration
@@ -48,11 +49,12 @@ type CDPOptions struct {
 type CDP struct {
 	opts CDPOptions
 
-	mu      sync.Mutex
-	session *cdp.Session
-	ctxID   int
-	nonce   string
-	origin  string
+	mu         sync.Mutex
+	session    *cdp.Session
+	ctxID      int
+	nonce      string
+	origin     string
+	hostTarget string
 
 	reloads []time.Time
 	avoid   string
@@ -133,6 +135,22 @@ func (c *CDP) Close() error {
 	c.finish(ErrClosed)
 	<-c.ran
 	return nil
+}
+
+func (c *CDP) HostTarget() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hostTarget
+}
+
+func (c *CDP) setHostTarget(id string) {
+	c.mu.Lock()
+	c.hostTarget = id
+	fn := c.opts.OnHostTarget
+	c.mu.Unlock()
+	if fn != nil {
+		fn(id)
+	}
 }
 
 const detachTimeout = 2 * time.Second
@@ -370,8 +388,10 @@ func (c *CDP) serveTarget(ctx context.Context, sub *cdp.Subscription, t cdp.Targ
 		return false, err
 	}
 	c.avoid = ""
+	c.setHostTarget(t.TargetID)
 	w := &watch{c: c, s: s, targetID: t.TargetID, mainFrame: t.TargetID}
 	err = w.loop(ctx, sub, early)
+	c.setHostTarget("")
 	c.detach(s)
 	return true, err
 }

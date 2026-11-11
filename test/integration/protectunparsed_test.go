@@ -200,7 +200,7 @@ func (e *unparsedEnv) testLoadedForm(t *testing.T, u, marker string, cookie, opt
 	}
 	var r map[string]json.RawMessage
 	e.evalJSON(t, "linkTest.protect.attach("+jsArgs("chrome", made.TargetID)+")", &r)
-	for _, m := range []string{"Target.attachToTarget", "Target.activateTarget", "Target.closeTarget", "Browser.getWindowForTarget"} {
+	for _, m := range []string{"Target.attachToTarget", "Target.activateTarget", "Browser.getWindowForTarget"} {
 		var o cdpOutcome
 		_ = json.Unmarshal(r[m], &o)
 		if o.Error.Message != refusedText {
@@ -209,6 +209,13 @@ func (e *unparsedEnv) testLoadedForm(t *testing.T, u, marker string, cookie, opt
 	}
 	if strings.Contains(string(r["info"]), marker) {
 		t.Errorf("Target.getTargetInfo shows the tab as %s", r["info"])
+	}
+	var close cdpOutcome
+	_ = json.Unmarshal(r["Target.closeTarget"], &close)
+	var closed bool
+	_ = json.Unmarshal(r["closed"], &closed)
+	if !close.OK || !closed {
+		t.Errorf("closing the unparseable tab: close=%s closed=%v", r["Target.closeTarget"], closed)
 	}
 }
 
@@ -316,12 +323,12 @@ func (e *unparsedEnv) testErrorPageForHole(t *testing.T) {
 		Close    cdpOutcome `json:"close"`
 	}
 	e.evalJSON(t, "linkTest.protect.leaveFor("+jsArgs("chrome", e.allowed+"/?n=hole-error", e.hole)+")", &r)
-	defer e.b.closeTarget(r.TargetID)
-	if href := (&navEnv{linkEnv: e.linkEnv}).directHref(t, r.TargetID); !strings.HasPrefix(href, "chrome-error://") {
-		t.Fatalf("the tab is at %q, not on Chrome's error page for %q", href, e.hole)
-	}
-	if !r.Detached || !r.After.refused() || !r.Close.refused() {
+	if !r.Detached || !r.After.refused() {
 		t.Fatalf("an error page for %q left the tab drivable: %+v", e.hole, r)
+	}
+	if !r.Close.OK {
+		t.Fatalf("closing the locked error page for %q: %+v", e.hole, r.Close)
+		defer e.b.closeTarget(r.TargetID)
 	}
 }
 
