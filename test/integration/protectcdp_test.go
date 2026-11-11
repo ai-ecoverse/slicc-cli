@@ -435,10 +435,48 @@ func (e *protectEnv) testNotFound(t *testing.T) {
 }
 
 func (e *protectEnv) testCloseProtected(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	untouched, s := e.directTab(t, e.seven+"/frame.html?n=untouched-close")
 	_ = s.Detach(ctx)
+	ordinary, opener := e.directTab(t, e.allowed+"/?n=close-opener")
+	priorURL := e.seven + "/frame.html?n=prior-close"
+	var opened struct {
+		Result struct {
+			Value bool `json:"value"`
+		} `json:"result"`
+	}
+	if err := opener.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "Boolean(window.open(" + strconv.Quote(priorURL) + ", '_blank'))", "returnByValue": true, "userGesture": true}, &opened); err != nil || !opened.Result.Value {
+		t.Fatalf("window.open before attach: %+v %v", opened, err)
+	}
+	prior := ""
+	deadline := time.Now().Add(10 * time.Second)
+	for prior == "" && time.Now().Before(deadline) {
+		var listed struct {
+			TargetInfos []struct {
+				TargetID string `json:"targetId"`
+				Type     string `json:"type"`
+				OpenerID string `json:"openerId"`
+			} `json:"targetInfos"`
+		}
+		if err := e.b.client.Call(ctx, "", "Target.getTargets", nil, &listed); err != nil {
+			t.Fatal(err)
+		}
+		for _, ti := range listed.TargetInfos {
+			if ti.OpenerID == ordinary && ti.Type == "page" {
+				prior = ti.TargetID
+				break
+			}
+		}
+		if prior == "" {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if prior == "" {
+		t.Fatal("no protected popup opened before attach")
+	}
+	t.Cleanup(func() { e.b.closeTarget(prior) })
+	_ = opener.Detach(ctx)
 	var res struct {
 		TargetID string `json:"targetId"`
 	}
@@ -466,6 +504,7 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 			browserID = ti.TargetID
 		}
 	}
+	postURL := e.seven + "/frame.html?n=post-close"
 	var r struct {
 		Untouched     cdpOutcome `json:"untouched"`
 		UntouchedGone bool       `json:"untouchedGone"`
@@ -475,11 +514,15 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 		Evaluate      cdpOutcome `json:"evaluate"`
 		Close         cdpOutcome `json:"close"`
 		TabGone       bool       `json:"tabGone"`
+		Prior         cdpOutcome `json:"prior"`
+		PriorGone     bool       `json:"priorGone"`
+		Post          cdpOutcome `json:"post"`
+		PostGone      bool       `json:"postGone"`
 		Host          cdpOutcome `json:"host"`
 		BrowserTarget cdpOutcome `json:"browserTarget"`
 		Up            bool       `json:"up"`
 	}
-	e.evalJSONWithObserver(t, "linkTest.protect.closeProtected("+jsArgs("chrome", res.TargetID, e.p.target, browserID, untouched)+")", &r)
+	e.evalJSONWithObserver(t, "linkTest.protect.closeProtected("+jsArgs("chrome", res.TargetID, ordinary, prior, postURL, e.p.target, browserID, untouched)+")", &r)
 	switch {
 	case !r.Untouched.refused() || r.UntouchedGone:
 		t.Fatalf("closing a protected tab this stream never touched: %+v", r)
@@ -489,6 +532,10 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 		t.Fatalf("attach, activate or evaluate on the protected tab: %+v", r)
 	case !r.Close.OK || !r.TabGone:
 		t.Fatalf("closing the touched protected tab: %+v", r)
+	case !r.Prior.refused() || r.PriorGone:
+		t.Fatalf("closing a protected popup opened before the stream attached to its opener: %+v", r)
+	case !r.Post.OK || !r.PostGone:
+		t.Fatalf("closing a popup opened after the stream attached to its opener: %+v", r)
 	case !r.Host.refused():
 		t.Fatalf("closing the link's own seven page: %+v", r.Host)
 	case browserID != "" && !r.BrowserTarget.refused():
@@ -500,14 +547,20 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	untouchedStill, priorStill := false, false
 	for _, ti := range still {
 		if ti.TargetID == untouched {
-			found = true
+			untouchedStill = true
+		}
+		if ti.TargetID == prior {
+			priorStill = true
 		}
 	}
-	if !found {
+	if !untouchedStill {
 		t.Fatal("the untouched protected tab was closed")
+	}
+	if !priorStill {
+		t.Fatal("the pre-attach protected popup was closed")
 	}
 	var up bool
 	e.p.eval("linkTest.status().up", &up)

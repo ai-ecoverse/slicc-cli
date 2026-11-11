@@ -100,6 +100,8 @@ type guard struct {
 	hostTarget            func() string
 	targets               map[string]*target
 	tombstones            []string
+	opened                map[string]bool
+	openedOrder           []string
 	sessions              map[string]*session
 	hidden                map[string]bool
 	refused               map[string]bool
@@ -193,6 +195,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		logf:                  logf,
 		knownRedirects:        map[string]*assetSet{},
 		targets:               map[string]*target{},
+		opened:                map[string]bool{},
 		sessions:              map[string]*session{},
 		hidden:                map[string]bool{},
 		refused:               map[string]bool{},

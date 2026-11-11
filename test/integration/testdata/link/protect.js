@@ -488,7 +488,7 @@ export function protectTest(getLink, describe) {
         out.closed = out['Target.closeTarget'].ok && !targetInfos.some((t) => t.targetId === targetId);
         return out;
       }),
-    closeProtected: (browser, targetId, hostId, browserId, untouchedId) =>
+    closeProtected: (browser, targetId, ordinaryId, priorId, postURL, hostId, browserId, untouchedId) =>
       run(browser, async (c) => {
         const untouched = untouchedId
           ? await outcome(c.send('Target.closeTarget', { targetId: untouchedId }))
@@ -505,9 +505,23 @@ export function protectTest(getLink, describe) {
         const attach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
         const activate = await outcome(c.send('Target.activateTarget', { targetId }));
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
-        const { targetInfos } = await c.send('Target.getTargets');
+        let targetInfos = (await c.send('Target.getTargets')).targetInfos;
         const tabGone = close.ok && close.result?.success === true && !targetInfos.some((t) => t.targetId === targetId);
         const untouchedGone = untouchedId ? !targetInfos.some((t) => t.targetId === untouchedId) : false;
+        const ordinary = await c.send('Target.attachToTarget', { targetId: ordinaryId, flatten: true });
+        await c.send('Page.enable', {}, ordinary.sessionId);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        const prior = priorId
+          ? await outcome(c.send('Target.closeTarget', { targetId: priorId }))
+          : { ok: false, error: { message: 'no prior popup' } };
+        const priorGone = priorId ? !(await c.send('Target.getTargets')).targetInfos.some((t) => t.targetId === priorId) : false;
+        const opened = c.waitEvent((e) => e.method === 'Target.targetCreated' && e.params.targetInfo.openerId === ordinaryId, 20000);
+        await outcome(c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(postURL)}, '_blank'))`, returnByValue: true, userGesture: true }, ordinary.sessionId));
+        const postId = (await opened).params.targetInfo.targetId;
+        await sleep(500);
+        const post = await outcome(c.send('Target.closeTarget', { targetId: postId }));
+        targetInfos = (await c.send('Target.getTargets')).targetInfos;
+        const postGone = post.ok && post.result?.success === true && !targetInfos.some((t) => t.targetId === postId);
         const host = await outcome(c.send('Target.closeTarget', { targetId: hostId }));
         const browserTarget = browserId
           ? await outcome(c.send('Target.closeTarget', { targetId: browserId }))
@@ -518,7 +532,7 @@ export function protectTest(getLink, describe) {
         } catch {
           up = false;
         }
-        return { untouched, untouchedGone, detached, attach, activate, evaluate, close, tabGone, host, browserTarget, up };
+        return { untouched, untouchedGone, detached, attach, activate, evaluate, close, tabGone, prior, priorGone, post, postGone, host, browserTarget, up };
       }),
     autoAttach: (browser, plainURL) =>
       run(browser, async (c) => {

@@ -192,7 +192,7 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 	}
 	switch t.typ {
 	case "page", "tab":
-		if g.targetProtectedLocked(id) && !g.streamTouchedLocked(id) {
+		if g.targetProtectedLocked(id) && !g.streamClosableLocked(id) {
 			return refusedTarget
 		}
 		return ""
@@ -202,27 +202,38 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 	return g.targetReasonLocked(id)
 }
 
-func (g *guard) streamTouchedLocked(id string) bool {
-	seen := map[string]bool{}
-	for id != "" && !seen[id] {
-		seen[id] = true
-		if g.navTargets[id] != nil {
-			return true
-		}
-		t := g.targets[id]
-		if t == nil {
-			return false
-		}
-		switch {
-		case t.opener != "":
-			id = t.opener
-		case t.openerFrame != "":
-			id = t.openerFrame
-		default:
-			return false
-		}
+func (g *guard) streamClosableLocked(id string) bool {
+	return g.navTargets[id] != nil || g.opened[id]
+}
+
+func (g *guard) noteStreamOpenedLocked(info targetInfo) {
+	if info.TargetID == "" || info.Type != "page" && info.Type != "tab" {
+		return
 	}
-	return false
+	if _, known := g.targets[info.TargetID]; known {
+		return
+	}
+	parent := info.OpenerID
+	if parent == "" {
+		parent = info.OpenerFrameID
+	}
+	if parent == "" || g.navTargets[parent] == nil && !g.opened[parent] {
+		return
+	}
+	g.markStreamOpenedLocked(info.TargetID)
+}
+
+func (g *guard) markStreamOpenedLocked(id string) {
+	if id == "" || g.opened[id] {
+		return
+	}
+	g.opened[id] = true
+	g.openedOrder = append(g.openedOrder, id)
+	for len(g.openedOrder) > maxTombstones {
+		old := g.openedOrder[0]
+		g.openedOrder = g.openedOrder[1:]
+		delete(g.opened, old)
+	}
 }
 
 func (g *guard) sessionUnconfirmedLocked(id string) bool {
