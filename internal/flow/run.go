@@ -56,6 +56,7 @@ type Config struct {
 	Emit     func(Event)
 	Logf     func(format string, args ...any)
 	Keep     func() bool
+	Adopt    map[string]bool
 }
 
 type Relink struct {
@@ -70,11 +71,17 @@ type launched struct {
 	b  *browser.Browser
 }
 
+type adopted struct {
+	id     string
+	target string
+}
+
 type run struct {
 	cfg      Config
 	origins  []string
 	mu       sync.Mutex
 	launched []launched
+	adopted  []adopted
 	browsers []Browser
 	client   *cdp.Client
 	allowed  *signal.Origins
@@ -223,6 +230,7 @@ func (r *run) setupHost(ctx context.Context, e browser.Entry) error {
 		br.CDP, br.WebSocketURL, br.Launched = b.CDP, b.WebSocketURL, true
 	} else {
 		br.CDP, br.WebSocketURL = e.Endpoint.CDP, e.Endpoint.WebSocketURL
+		br.Launched = r.adopt(e.ID, br)
 	}
 	target := br.WebSocketURL
 	if target == "" {
@@ -237,7 +245,7 @@ func (r *run) setupHost(ctx context.Context, e browser.Entry) error {
 	r.client = client
 	r.browsers = append(r.browsers, br)
 	r.emit(Event{Event: Attached, Browser: e.ID, Name: e.Name, Version: e.Version, Role: RoleSeven, Launched: br.Launched, CDP: br.CDP, WebSocketURL: br.WebSocketURL})
-	if br.Launched {
+	if e.Kind == browser.KindInstalled {
 		return nil
 	}
 	opened, err := r.ensureTab(ctx)
@@ -249,6 +257,32 @@ func (r *run) setupHost(ctx context.Context, e browser.Entry) error {
 		r.emit(Event{Event: ForeignBrowser, Browser: e.ID, Name: e.Name, Profile: SixLabel(e), CDP: br.CDP, OpenedTab: &opened})
 	case r.foreign(e):
 		r.emit(Event{Event: ForeignBrowser, Browser: e.ID, Name: e.Name, Profile: ProfileLabel(*e.Endpoint), CDP: br.CDP, OpenedTab: &opened})
+	}
+	return nil
+}
+
+func (r *run) adopt(id string, br Browser) bool {
+	if !r.cfg.Adopt[browser.EndpointKey(br.CDP)] {
+		return false
+	}
+	target := br.WebSocketURL
+	if target == "" {
+		target = br.CDP
+	}
+	r.mu.Lock()
+	r.adopted = append(r.adopted, adopted{id: id, target: target})
+	r.mu.Unlock()
+	return true
+}
+
+func closeAdopted(ctx context.Context, target string) error {
+	c, err := cdp.Dial(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.Call(ctx, "", "Browser.close", nil, nil); err != nil && ctx.Err() != nil {
+		return err
 	}
 	return nil
 }
@@ -320,6 +354,7 @@ func (r *run) setupExtra(ctx context.Context, e browser.Entry) error {
 		br.CDP, br.WebSocketURL, br.Launched = b.CDP, b.WebSocketURL, true
 	} else {
 		br.CDP, br.WebSocketURL = e.Endpoint.CDP, e.Endpoint.WebSocketURL
+		br.Launched = r.adopt(e.ID, br)
 	}
 	r.browsers = append(r.browsers, br)
 	r.emit(Event{Event: Attached, Browser: e.ID, Name: e.Name, Version: e.Version, Role: RoleExtra, Launched: br.Launched, CDP: br.CDP, WebSocketURL: br.WebSocketURL})
@@ -624,10 +659,14 @@ func (r *run) cleanup() {
 	}
 	r.mu.Lock()
 	list := r.launched
-	r.launched = nil
+	adopt := r.adopted
+	r.launched, r.adopted = nil, nil
 	r.mu.Unlock()
 	if r.cfg.Keep != nil && r.cfg.Keep() {
 		kept := []string{}
+		for _, a := range adopt {
+			kept = append(kept, a.id)
+		}
 		for _, l := range list {
 			kept = append(kept, l.id)
 		}
@@ -637,6 +676,7 @@ func (r *run) cleanup() {
 	var ids []string
 	var wg sync.WaitGroup
 	errs := make([]error, len(list))
+	aerrs := make([]error, len(adopt))
 	for i := len(list) - 1; i >= 0; i-- {
 		wg.Add(1)
 		go func(i int) {
@@ -646,7 +686,23 @@ func (r *run) cleanup() {
 			errs[i] = list[i].b.Close(ctx)
 		}(i)
 	}
+	for i := range adopt {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			aerrs[i] = closeAdopted(ctx, adopt[i].target)
+		}(i)
+	}
 	wg.Wait()
+	for i, a := range adopt {
+		if aerrs[i] != nil {
+			r.emit(Event{Event: Error, Browser: a.id, Message: aerrs[i].Error()})
+			continue
+		}
+		ids = append(ids, a.id)
+	}
 	for i, l := range list {
 		if errs[i] != nil {
 			r.emit(Event{Event: Error, Browser: l.id, Message: errs[i].Error()})

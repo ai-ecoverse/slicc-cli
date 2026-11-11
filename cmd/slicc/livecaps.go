@@ -39,6 +39,14 @@ func newLiveCaps(cf computeFlags, mounts []hostfs.Mount, jerk bool, kernel int) 
 	return &liveCaps{given: cf, compute: cf, mounts: mounts, jerk: jerk, kernel: kernel, relink: make(chan flow.Relink, 1)}
 }
 
+func (lc *liveCaps) restore(s tui.Settings, warnf func(string, ...any)) {
+	mounts := loadFolders(s.Folders, warnf)
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.jerk, lc.kernel, lc.mounts = s.Jerk, s.Kernel, mounts
+	lc.compute = computeFor(lc.given, s.Shell)
+}
+
 func (lc *liveCaps) snapshot() capsSnapshot {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()

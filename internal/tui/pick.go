@@ -292,6 +292,13 @@ func (m Model) goChoice() (tea.Model, tea.Cmd) {
 			profiles[e.ID] = p
 		}
 	}
+	return m.start(sel, profiles)
+}
+
+func (m Model) start(sel []browser.Entry, profiles map[string]string) (tea.Model, tea.Cmd) {
+	if len(sel) == 0 {
+		return m, nil
+	}
 	notice := m.dash.notice
 	m.went = true
 	m.mode = ModeDashboard

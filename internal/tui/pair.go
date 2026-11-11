@@ -12,6 +12,8 @@ func (m Model) pairKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "q":
 		return m.quit()
+	case "u":
+		return m.update()
 	case "enter":
 		if m.cfg.NewPairing != nil {
 			m.cfg.NewPairing()
@@ -77,12 +79,13 @@ func (m Model) pairView(b []string) string {
 	}
 	b = append(b, "")
 	if m.mode == ModeClosing {
-		b = append(b, "  "+st.warn.Render("closing…"))
+		b = append(b, "  "+st.warn.Render(m.closing))
 	} else {
 		pairs := [][2]string{{"↵", "new pairing URL"}}
 		if d.pairURL != "" {
 			pairs = append(pairs, [2]string{"y", "copy it"})
 		}
+		pairs = append(pairs, m.updateKey()...)
 		b = append(b, m.keyBar(append(pairs, [2]string{"q", "quit"})...))
 	}
 	return strings.Join(b, "\n") + "\n"

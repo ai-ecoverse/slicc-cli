@@ -52,6 +52,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "capabilities" {
 		return runCapabilities(args[1:], stdout, stderr)
 	}
+	resumed = takeResume()
 	companionsOnPath()
 	defer startup(args, stderr)()
 	if isDefault(args) {
@@ -105,5 +106,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	code := run(os.Args[1:], os.Stdout, os.Stderr)
+	if restart != nil {
+		code = restart.exec(os.Stderr)
+	}
+	os.Exit(code)
 }

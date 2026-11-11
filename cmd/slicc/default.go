@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
@@ -42,6 +44,8 @@ opens seven in it and links it. In a terminal it shows a picker and then a
 dashboard. Without a terminal, or with --yes, --browser, --plain or --json,
 it takes the best match and prints status lines on stderr. q, Ctrl-C or
 SIGTERM says bye to seven, closes the browsers this run launched and exits.
+In the dashboard, d detaches instead and leaves them running, and u updates
+slicc (as slicc update does) and restarts it without closing them.
 With no SLICC profile and no CDP endpoint (and no --browser, --cdp or
 --profile), slicc links seven in your default browser instead, as slicc
 pair does; in a terminal (or with --open) it opens the pairing URL there.
@@ -302,15 +306,25 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	if os.Getenv("SLICC_DEBUG") != "" && !interactive {
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
-	mounts := hostfs.Load(f.mounts, func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) })
+	resume := resumed
+	if !interactive {
+		resume = nil
+	}
+	warnf := func(format string, a ...any) { fmt.Fprintf(stderr, "slicc: "+format+"\n", a...) }
+	mounts := hostfs.Load(f.mounts, warnf)
 	lc := newLiveCaps(f.compute, mounts, !f.noJerk, f.kernel)
+	if resume != nil && resume.Settings != nil && !resume.Pair {
+		lc.restore(*resume.Settings, warnf)
+	}
+	caps := lc.snapshot()
 	st := &stopper{}
 	cfg := flow.Config{
-		Page: f.chosenPage(), Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: f.kernel, Name: f.name, Version: version,
-		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(lc, pageOrigins(f.page, f.origins), st, logf), Keep: st.kept, Compute: f.compute.dashboard(), Logf: logf,
+		Page: f.chosenPage(), Origins: f.origins, Profile: f.profile, Headless: f.headless, Kernel: caps.kernel, Name: f.name, Version: version,
+		Allow: f.allow, Deny: f.deny, Expose: f.expose, Register: registerCaps(lc, pageOrigins(f.page, f.origins), st, logf), Keep: st.kept, Compute: caps.compute.dashboard(), Logf: logf,
+		Adopt: resume.adopt(),
 	}
 	origins, _ := flow.PageOrigins(f.page, f.origins)
-	cfg.Browser = browser.Options{CDPURLs: f.cdp, Origins: origins}
+	cfg.Browser = browser.Options{CDPURLs: append(slices.Clone(f.cdp), resume.cdps()...), Origins: origins}
 	if interactive {
 		cfg.Chosen = true
 		var pair pairFunc
@@ -319,7 +333,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 				return servePairIn(ctx, f, mounts, st, emit, renew)
 			}
 		}
-		return runTUI(cfg, pair, lc, st, stdout, stderr)
+		return runTUI(cfg, pair, lc, st, tuiRun{args: args, resume: resume}, stdout, stderr)
 	}
 	cfg.Chosen = len(f.browsers) > 0 || f.six != nil
 	return runPlain(cfg, f, mounts, st, stdout, stderr)
@@ -477,13 +491,20 @@ type pairFunc func(ctx context.Context, emit func(flow.Event), renew <-chan stru
 
 var errPairFailed = errors.New("pairing seven in the default browser failed")
 
-func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, st *stopper, stdout, stderr io.Writer) int {
+type tuiRun struct {
+	args   []string
+	resume *resumeState
+}
+
+func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, st *stopper, tr tuiRun, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	st.set(cancel)
 	var p *tea.Program
 	var started sync.WaitGroup
 	var failed error
+	var wantRestart atomic.Bool
+	sess := &session{}
 	renew := make(chan struct{}, 1)
 	tcfg := tui.Config{
 		Profile:  cfg.Profile,
@@ -500,6 +521,16 @@ func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, st *stopper, stdout, s
 			default:
 			}
 		},
+		Detach: func(restart bool) {
+			if restart {
+				wantRestart.Store(true)
+			}
+			st.detach()
+		},
+	}
+	exe, updatable := updatableExe()
+	if updatable {
+		tcfg.Update = func() { go dashboardUpdate(ctx, exe, func(m tea.Msg) { p.Send(m) }) }
 	}
 	cfg.Relink = lc.relink
 	if j, _ := jerk.Find(jerkDirs()...); j != nil {
@@ -515,7 +546,11 @@ func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, st *stopper, stdout, s
 		fc := cfg
 		fc.Profiles = c.Profiles
 		events := make(chan tea.Msg, 4096)
-		fc.Emit = func(e flow.Event) { events <- tui.EventMsg(e) }
+		sess.pair = len(c.Entries) > 0 && flow.IsPair(c.Entries[0])
+		fc.Emit = func(e flow.Event) {
+			sess.see(e)
+			events <- tui.EventMsg(e)
+		}
 		started.Add(1)
 		go func() {
 			for m := range events {
@@ -543,7 +578,12 @@ func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, st *stopper, stdout, s
 		if pair != nil {
 			entries = flow.WithPair(cfg.Browser, entries)
 		}
-		p.Send(tui.EntriesMsg(flow.WithSixRows(cfg.Browser, entries)))
+		entries = flow.WithSixRows(cfg.Browser, entries)
+		if c, ok := tr.resume.choice(entries); ok {
+			p.Send(tui.GoMsg(c))
+			return
+		}
+		p.Send(tui.EntriesMsg(entries))
 	}()
 	_, err := p.Run()
 	cancel()
@@ -555,6 +595,25 @@ func runTUI(cfg flow.Config, pair pairFunc, lc *liveCaps, st *stopper, stdout, s
 	if failed != nil {
 		fmt.Fprintf(stderr, "slicc: %v\n", failed)
 		return 1
+	}
+	if !st.kept() {
+		return 0
+	}
+	return afterDetach(sess, wantRestart.Load(), exe, tr.args, lc, stderr)
+}
+
+func afterDetach(sess *session, restarting bool, exe string, args []string, lc *liveCaps, stderr io.Writer) int {
+	if restarting {
+		if err := planRestart(exe, args, sess.resume(lc.settings(true))); err != nil {
+			fmt.Fprintf(stderr, "slicc: restarting: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if kept := sess.keptIDs(); len(kept) > 0 {
+		fmt.Fprintf(stderr, "slicc: detached; left %s running; run slicc to link seven there again\n", strings.Join(kept, ", "))
+	} else {
+		fmt.Fprintf(stderr, "slicc: detached\n")
 	}
 	return 0
 }
