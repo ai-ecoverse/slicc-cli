@@ -41,7 +41,8 @@ func (a *API) NewPeerConnection(cfg webrtc.Configuration) (*webrtc.PeerConnectio
 }
 
 func (a *API) NewPeerConnectionContext(ctx context.Context, cfg webrtc.Configuration) (*webrtc.PeerConnection, error) {
-	interfaces, probeErr := a.opts.Discovery.Interfaces(ctx)
+	relays := tlsRelayServers(cfg.ICEServers)
+	interfaces, probeErr := a.opts.Discovery.interfaces(ctx, len(relays) == 0)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -49,7 +50,7 @@ func (a *API) NewPeerConnectionContext(ctx context.Context, cfg webrtc.Configura
 	se.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
 	if probeErr != nil {
 		cfg.ICETransportPolicy = webrtc.ICETransportPolicyRelay
-		cfg.ICEServers = tlsRelayServers(cfg.ICEServers)
+		cfg.ICEServers = relays
 		if len(cfg.ICEServers) == 0 {
 			return nil, fmt.Errorf("link: interface discovery failed (%v); fallback requires a TURN-over-TLS TCP server with credentials", probeErr)
 		}

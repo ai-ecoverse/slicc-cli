@@ -46,6 +46,10 @@ var defaultInterfaceDiscovery = NewInterfaceDiscovery(func() ([]*transport.Inter
 }, interfaceProbeTimeout)
 
 func (d *InterfaceDiscovery) Interfaces(ctx context.Context) ([]*transport.Interface, error) {
+	return d.interfaces(ctx, false)
+}
+
+func (d *InterfaceDiscovery) interfaces(ctx context.Context, patient bool) ([]*transport.Interface, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -94,7 +98,22 @@ func (d *InterfaceDiscovery) Interfaces(ctx context.Context) ([]*transport.Inter
 		if last != nil {
 			return last, nil
 		}
+		if patient {
+			return awaitProbe(ctx, p)
+		}
 		return nil, wait.Err()
+	}
+}
+
+func awaitProbe(ctx context.Context, p *interfaceProbe) ([]*transport.Interface, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.done:
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return p.interfaces, p.err
 	}
 }
 

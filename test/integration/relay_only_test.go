@@ -114,9 +114,14 @@ func TestInterfaceDiscoveryTimeoutAndBoundedRepeatedFailures(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 40 {
 		wg.Go(func() {
-			pc, err := api.NewPeerConnection(webrtc.Configuration{})
-			if pc != nil || err == nil || !strings.Contains(err.Error(), "requires a TURN-over-TLS TCP server") {
-				t.Errorf("expected bounded automatic fallback: pc=%v err=%v", pc, err)
+			pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: []webrtc.ICEServer{{URLs: []string{"turns:127.0.0.1:1?transport=tcp"}, Username: "synthetic-user", Credential: "synthetic-password"}}})
+			if err != nil {
+				t.Errorf("expected bounded automatic fallback: %v", err)
+				return
+			}
+			defer func() { _ = pc.Close() }()
+			if pc.GetConfiguration().ICETransportPolicy != webrtc.ICETransportPolicyRelay {
+				t.Error("timed-out discovery with a TLS relay did not fall back to relay only")
 			}
 		})
 	}
@@ -127,6 +132,32 @@ func TestInterfaceDiscoveryTimeoutAndBoundedRepeatedFailures(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("hung discovery did not return promptly: %s", elapsed)
 	}
+}
+
+func TestInterfaceDiscoveryTimeoutWithoutTLSRelayWaitsForLateResult(t *testing.T) {
+	var calls atomic.Int32
+	discovery := link.NewInterfaceDiscovery(func() ([]*transport.Interface, error) {
+		calls.Add(1)
+		time.Sleep(300 * time.Millisecond)
+		return syntheticInterfaces(), nil
+	}, 20*time.Millisecond)
+	api := link.NewAPI(link.APIOptions{Discovery: discovery, Loopback: true})
+	start := time.Now()
+	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:127.0.0.1:3478", "turn:127.0.0.1:3478?transport=udp"}, Username: "synthetic-user", Credential: "synthetic-password"}}})
+	if err != nil {
+		t.Fatalf("timed-out discovery without a TLS relay failed instead of waiting: %v", err)
+	}
+	defer func() { _ = pc.Close() }()
+	if elapsed := time.Since(start); elapsed < 250*time.Millisecond {
+		t.Fatalf("peer connection did not wait for the late probe: %s", elapsed)
+	}
+	if cfg := pc.GetConfiguration(); cfg.ICETransportPolicy != webrtc.ICETransportPolicyAll || len(cfg.ICEServers) != 1 || len(cfg.ICEServers[0].URLs) != 2 {
+		t.Fatalf("late successful discovery changed ICE configuration: %+v", cfg)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("late success spawned %d probes", calls.Load())
+	}
+	assertDirectDataRoundTrip(t, api)
 }
 
 func TestInterfaceDiscoveryCancellation(t *testing.T) {
