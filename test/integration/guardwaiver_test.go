@@ -28,25 +28,6 @@ func (r *recordTB) Fatalf(format string, args ...any) {
 func (r *recordTB) Failed() bool { return len(r.errs) > 0 }
 
 func TestGuardWaiversAcceptOnlyDocumentedLegs(t *testing.T) {
-	iframeOK := guardRow{
-		ID: "C3.tab-iframe-leak", Control: "fail", Guarded: "pass", Live: "pass",
-		Why:      json.RawMessage(`"control iframeAttached: got false, want true"`),
-		Observed: json.RawMessage(`{"control":{"admitted":true,"iframeExists":true,"iframeAttached":false},"guarded":{"admitted":true,"iframeExists":true,"iframeAttached":false}}`),
-	}
-	if _, ok := waivedGuardRow(iframeOK); !ok {
-		t.Fatal(iframeOK)
-	}
-	iframeLeak := iframeOK
-	iframeLeak.Observed = json.RawMessage(`{"control":{"admitted":true,"iframeExists":true,"iframeAttached":false},"guarded":{"admitted":true,"iframeExists":true,"iframeAttached":true}}`)
-	if _, ok := waivedGuardRow(iframeLeak); ok {
-		t.Fatal("accepted guarded iframeAttached true", iframeLeak)
-	}
-	iframeGuardedFail := iframeOK
-	iframeGuardedFail.Guarded = "fail"
-	if _, ok := waivedGuardRow(iframeGuardedFail); ok {
-		t.Fatal("accepted guarded fail on iframe-leak", iframeGuardedFail)
-	}
-
 	attachOK := guardRow{
 		ID: "C3.tab-attach", Control: "fail", Guarded: "fail", Live: "fail",
 		Why:    json.RawMessage(`"settle: no request for child"`),
@@ -91,17 +72,15 @@ func TestGuardWaiversAcceptOnlyDocumentedLegs(t *testing.T) {
 		t.Fatal(swOK)
 	}
 
-	rec := &recordTB{TB: t}
-	checkGuardSummary(rec, &guardSummary{
-		Set:     guardNPMPackage + "@" + guardSetVersion(t),
-		Pass:    false,
-		Missing: json.RawMessage(`[]`),
-		Results: []guardRow{iframeLeak},
-	})
-	if len(rec.errs) == 0 {
-		t.Fatal("checkGuardSummary accepted a guarded iframeAttached leak on a waived id")
+	iframePass := guardRow{
+		ID: "C3.tab-iframe-leak", Control: "pass", Guarded: "pass", Live: "pass",
+		Observed: json.RawMessage(`{"control":{"admitted":true,"iframeExists":true,"iframeAttached":true},"guarded":{"admitted":true,"iframeExists":true,"iframeAttached":false}}`),
 	}
-	rec = &recordTB{TB: t}
+	if _, ok := waivedGuardRow(iframePass); ok {
+		t.Fatal("C3.tab-iframe-leak must not be waived", iframePass)
+	}
+
+	rec := &recordTB{TB: t}
 	checkGuardSummary(rec, &guardSummary{
 		Set:     guardNPMPackage + "@" + guardSetVersion(t),
 		Pass:    false,
