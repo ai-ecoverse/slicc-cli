@@ -359,11 +359,26 @@ func (m Model) dashView() string {
 	}
 	b = append(b, "")
 	if m.mode == ModeClosing {
-		b = append(b, "  "+st.warn.Render("closing…"))
+		b = append(b, "  "+st.warn.Render(m.closing))
 	} else {
-		b = append(b, m.keyBar([2]string{"c", "capabilities"}, [2]string{"m", "share a folder"}, [2]string{"q", "quit"}))
+		pairs := [][2]string{{"c", "capabilities"}, {"m", "share a folder"}}
+		if m.cfg.Detach != nil {
+			pairs = append(pairs, [2]string{"d", "detach"})
+		}
+		pairs = append(pairs, m.updateKey()...)
+		b = append(b, m.keyBar(append(pairs, [2]string{"q", "quit"})...))
 	}
 	return strings.Join(b, "\n") + "\n"
+}
+
+func (m Model) updateKey() [][2]string {
+	switch {
+	case m.cfg.Update == nil:
+		return nil
+	case m.updating:
+		return [][2]string{{"u", "updating…"}}
+	}
+	return [][2]string{{"u", "update"}}
 }
 
 func (m Model) dashCaps() []string {

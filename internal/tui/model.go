@@ -20,6 +20,8 @@ type Config struct {
 	Dir      func(browser.Entry, string) string
 	Start    func(Choice)
 	Stop     func()
+	Detach   func(restart bool)
+	Update   func()
 	Color    bool
 	Notice   string
 	Now      func() time.Time
@@ -45,6 +47,14 @@ type EventMsg flow.Event
 type DoneMsg struct{ Err error }
 
 type NoticeMsg string
+
+type GoMsg Choice
+
+type UpdateMsg struct {
+	Line    string
+	Failed  bool
+	Restart bool
+}
 
 type tickMsg time.Time
 
@@ -86,6 +96,8 @@ type Model struct {
 	last     string
 	used     map[string]time.Time
 	note     string
+	updating bool
+	closing  string
 }
 
 func New(cfg Config) Model {
@@ -150,6 +162,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NoticeMsg:
 		m.dash.notice = string(msg)
 		return m, nil
+	case GoMsg:
+		if m.mode != ModeDiscover && m.mode != ModePick {
+			return m, nil
+		}
+		return m.start(msg.Entries, msg.Profiles)
+	case UpdateMsg:
+		return m.updated(msg)
 	case EventMsg:
 		m.dash.apply(flow.Event(msg), m.cfg.Now())
 		return m, nil
@@ -215,6 +234,10 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.openCaps()
 		case "m", "a":
 			return m.startInput(inputFolder, -1, "")
+		case "d":
+			return m.detach(false, "detaching…")
+		case "u":
+			return m.update()
 		}
 	case ModeCaps:
 		return m.capsKey(k)
@@ -225,7 +248,7 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) quit() (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case ModeDashboard, ModeCaps:
-		m.mode = ModeClosing
+		m.mode, m.closing = ModeClosing, "closing…"
 		if m.cfg.Stop != nil {
 			m.cfg.Stop()
 		}
@@ -236,6 +259,46 @@ func (m Model) quit() (tea.Model, tea.Cmd) {
 	m.mode = ModeDone
 	return m, tea.Quit
 }
+
+func (m Model) detach(restart bool, closing string) (tea.Model, tea.Cmd) {
+	if m.cfg.Detach == nil || (m.mode != ModeDashboard && m.mode != ModeCaps) {
+		return m, nil
+	}
+	m.mode, m.closing = ModeClosing, closing
+	m.cfg.Detach(restart)
+	return m, nil
+}
+
+func (m Model) update() (tea.Model, tea.Cmd) {
+	if m.cfg.Update == nil || m.updating {
+		return m, nil
+	}
+	m.updating = true
+	m.dash.log(m.cfg.Now(), "looking for a newer slicc")
+	m.cfg.Update()
+	return m, nil
+}
+
+func (m Model) updated(u UpdateMsg) (tea.Model, tea.Cmd) {
+	m.updating = false
+	lv := levelInfo
+	switch {
+	case u.Failed:
+		lv = levelBad
+	case u.Restart:
+		lv = levelGood
+	}
+	if u.Line != "" {
+		m.dash.note(m.cfg.Now(), lv, u.Line)
+	}
+	if u.Restart {
+		m.dash.notice = ""
+		return m.detach(true, "restarting…")
+	}
+	return m, nil
+}
+
+func (m Model) Updating() bool { return m.updating }
 
 const sixUnpicked = "SLICC six's profile is never picked for you; move to it, or select it with space"
 

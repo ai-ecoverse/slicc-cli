@@ -33,7 +33,12 @@ type ttyProc struct {
 
 func startTTY(t *testing.T, env []string, args ...string) *ttyProc {
 	t.Helper()
-	cmd := exec.Command(binary, args...)
+	return startTTYBin(t, binary, env, args...)
+}
+
+func startTTYBin(t *testing.T, bin string, env []string, args ...string) *ttyProc {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
 	cmd.Env = overrideEnv(env, map[string]string{"TERM": "xterm-256color", "NO_COLOR": "1", "SLICC_NO_TELEMETRY": "1"})
 	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 60, Cols: 250})
 	if err != nil {
