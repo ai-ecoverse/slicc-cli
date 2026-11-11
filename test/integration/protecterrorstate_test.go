@@ -231,9 +231,14 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 					continue
 				}
 				control := name == "reload" || name == "navigate" || name == "reset" || name == "pageClose" || name == "close" || name == "earlyAttach" || name == "earlyClose"
+				streamClose := name == "close" || name == "earlyClose"
 				if usable && control {
 					if !answer.OK {
 						t.Errorf("error target recovery %s: %+v", name, answer)
+					}
+				} else if streamClose {
+					if !answer.OK {
+						t.Errorf("stream-touched Target.closeTarget while quarantined: %+v", answer)
 					}
 				} else if !answer.refused() {
 					t.Errorf("quarantined %s: %+v", name, answer)

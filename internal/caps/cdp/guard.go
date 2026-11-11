@@ -23,6 +23,8 @@ const (
 	refusedLoadResource = "Network.loadNetworkResource follows redirects inside the browser, so it could load seven's pages"
 	LostGrace           = 2 * time.Second
 	maxTombstones       = 4096
+	maxOpenedSeen       = 4096
+	OpenedSeenBoundEnv  = "SLICC_CDP_OPENED_SEEN"
 	maxRefused          = 4096
 	maxMarked           = 65536
 	relayIDBase         = 1879048192
@@ -101,8 +103,18 @@ type guard struct {
 	documentsOnly         bool
 	verifiesInput         bool
 	lost                  bool
+	hostTarget            func() string
 	targets               map[string]*target
 	tombstones            []string
+	opened                map[string]bool
+	openedOrder           []string
+	listed                map[string]bool
+	touchSeq              int
+	touchedAt             map[string]int
+	openedSeenAt          map[string]int
+	openedSeenOrder       []string
+	openedIneligible      map[string]bool
+	openedWait            map[string]string
 	sessions              map[string]*session
 	hidden                map[string]bool
 	refused               map[string]bool
@@ -196,6 +208,12 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		logf:                  logf,
 		knownRedirects:        map[string]*assetSet{},
 		targets:               map[string]*target{},
+		opened:                map[string]bool{},
+		listed:                map[string]bool{},
+		touchedAt:             map[string]int{},
+		openedSeenAt:          map[string]int{},
+		openedIneligible:      map[string]bool{},
+		openedWait:            map[string]string{},
 		sessions:              map[string]*session{},
 		hidden:                map[string]bool{},
 		refused:               map[string]bool{},
@@ -364,6 +382,19 @@ func (g *guard) setRelaySession(id string) {
 	g.mu.Unlock()
 }
 
+func (g *guard) setHostTarget(fn func() string) {
+	g.mu.Lock()
+	g.hostTarget = fn
+	g.mu.Unlock()
+}
+
+func (g *guard) hostTargetLocked(id string) bool {
+	if id == "" || g.hostTarget == nil {
+		return false
+	}
+	return g.hostTarget() == id
+}
+
 func (g *guard) openerState(t *target) protect.Opener {
 	if t.openerFrame != "" {
 		if f, ok := g.targets[t.openerFrame]; ok && f.protected {
@@ -459,6 +490,7 @@ func (g *guard) observeAll(infos []targetInfo) {
 		}
 		if _, ok := g.targets[info.TargetID]; !ok {
 			fresh[info.TargetID] = true
+			g.listed[info.TargetID] = true
 		}
 		g.record(info)
 	}
@@ -529,6 +561,7 @@ func (g *guard) destroyedLocked(id string) {
 	g.dropHeldLocked(id)
 	g.forgetWorldsLocked(id)
 	g.forgetWorldRequestsLocked(id)
+	g.forgetOpenedSeenLocked(id)
 	t, ok := g.targets[id]
 	if !ok || t.gone {
 		return

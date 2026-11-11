@@ -80,6 +80,7 @@ func (r *Registry) serve(s *link.Stream) {
 		return
 	}
 	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), reader: reader, parked: map[parkKey][]parkedMessage{}}
+	rl.g.setHostTarget(r.hostTargetID)
 	rl.g.reserveBytes = func(n int) (*link.Reservation, bool) {
 		r := s.ReserveAllocation(n, false)
 		if r == nil {

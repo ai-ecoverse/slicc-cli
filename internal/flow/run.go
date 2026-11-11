@@ -447,6 +447,9 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 		Logf:    r.cfg.Logf,
 		Status:  func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) },
 	})
+	if caps.SetHostTarget != nil {
+		caps.SetHostTarget(sig.HostTarget)
+	}
 	r.emit(Event{Event: Serving, Caps: n.Caps(), Policy: pol.Summary(), Compute: r.cfg.Compute})
 	defer r.watchBrowsers(lctx, caps.Live, caps.Unlisted)()
 	err = n.Serve(lctx, sig)
@@ -484,9 +487,10 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 }
 
 type Caps struct {
-	Release  func()
-	Live     func() map[string]bool
-	Unlisted map[string]bool
+	Release       func()
+	Live          func() map[string]bool
+	Unlisted      map[string]bool
+	SetHostTarget func(func() string)
 }
 
 const (

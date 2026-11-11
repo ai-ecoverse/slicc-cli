@@ -110,7 +110,11 @@ func (g *guard) callbackLocked(sessionID, method string, params any, fn func(m m
 }
 
 func (g *guard) touchLocked(targetID, typ string) [][]byte {
-	if targetID == "" || !guarded(typ) || g.relaySession == "" {
+	if targetID == "" {
+		return nil
+	}
+	g.markTouchedLocked(targetID)
+	if !guarded(typ) || g.relaySession == "" {
 		return nil
 	}
 	if _, ok := g.navTargets[targetID]; ok {

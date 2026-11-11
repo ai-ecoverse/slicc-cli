@@ -475,7 +475,6 @@ export function protectTest(getLink, describe) {
         for (const [method, params] of [
           ['Target.attachToTarget', { targetId, flatten: true }],
           ['Target.activateTarget', { targetId }],
-          ['Target.closeTarget', { targetId }],
           ['Target.exposeDevToolsProtocol', { targetId }],
           ['Target.sendMessageToTarget', { targetId, message: '{}' }],
           ['Browser.getWindowForTarget', { targetId }],
@@ -484,7 +483,81 @@ export function protectTest(getLink, describe) {
         }
         const info = await c.send('Target.getTargetInfo', { targetId });
         out.info = { url: info.targetInfo.url, title: info.targetInfo.title };
+        out['Target.closeTarget'] = await outcome(c.send('Target.closeTarget', { targetId }));
+        const { targetInfos } = await c.send('Target.getTargets');
+        out.closed = out['Target.closeTarget'].ok && !targetInfos.some((t) => t.targetId === targetId);
         return out;
+      }),
+    closeProtectedOpenedSeenBound: (browser, ordinaryId, priorId, flood) =>
+      run(browser, async (c) => {
+        await c.send('Target.attachToTarget', { targetId: ordinaryId, flatten: true });
+        for (let i = 0; i < flood; i += 1) {
+          const created = await outcome(c.send('Target.createTarget', { url: 'about:blank' }));
+          if (created.ok && created.result?.targetId) {
+            await outcome(c.send('Target.closeTarget', { targetId: created.result.targetId }));
+          }
+        }
+        await c.send('Target.setDiscoverTargets', { discover: false });
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await sleep(500);
+        const close = await outcome(c.send('Target.closeTarget', { targetId: priorId }));
+        const gone = !(await c.send('Target.getTargets')).targetInfos.some((t) => t.targetId === priorId);
+        return { close, gone };
+      }),
+    closeProtected: (browser, targetId, ordinaryId, priorId, postURL, hostId, browserId, untouchedId) =>
+      run(browser, async (c) => {
+        const untouched = untouchedId
+          ? await outcome(c.send('Target.closeTarget', { targetId: untouchedId }))
+          : { ok: false, error: { message: 'no untouched target' } };
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Page.enable', {}, sessionId);
+        const locked = c.waitEvent((e) => e.method === 'Target.detachedFromTarget' && e.params.sessionId === sessionId, 20000).then(
+          () => true,
+          () => false,
+        );
+        await observerNavigation(targetId, { delta: -1 });
+        const detached = await locked;
+        const evaluate = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
+        const attach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const activate = await outcome(c.send('Target.activateTarget', { targetId }));
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        let targetInfos = (await c.send('Target.getTargets')).targetInfos;
+        const tabGone = close.ok && close.result?.success === true && !targetInfos.some((t) => t.targetId === targetId);
+        const untouchedGone = untouchedId ? !targetInfos.some((t) => t.targetId === untouchedId) : false;
+        const ordinary = await c.send('Target.attachToTarget', { targetId: ordinaryId, flatten: true });
+        await c.send('Page.enable', {}, ordinary.sessionId);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        const prior = priorId
+          ? await outcome(c.send('Target.closeTarget', { targetId: priorId }))
+          : { ok: false, error: { message: 'no prior popup' } };
+        const priorGone = priorId ? !(await c.send('Target.getTargets')).targetInfos.some((t) => t.targetId === priorId) : false;
+        const known = new Set((await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId));
+        if (priorId) known.add(priorId);
+        const opened = c.waitEvent(
+          (e) =>
+            e.method === 'Target.targetCreated' &&
+            e.params.targetInfo.openerId === ordinaryId &&
+            e.params.targetInfo.type === 'page' &&
+            !known.has(e.params.targetInfo.targetId),
+          20000,
+        );
+        await outcome(c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(postURL)}, '_blank'))`, returnByValue: true, userGesture: true }, ordinary.sessionId));
+        const postId = (await opened).params.targetInfo.targetId;
+        await sleep(500);
+        const post = await outcome(c.send('Target.closeTarget', { targetId: postId }));
+        targetInfos = (await c.send('Target.getTargets')).targetInfos;
+        const postGone = post.ok && post.result?.success === true && !targetInfos.some((t) => t.targetId === postId);
+        const host = await outcome(c.send('Target.closeTarget', { targetId: hostId }));
+        const browserTarget = browserId
+          ? await outcome(c.send('Target.closeTarget', { targetId: browserId }))
+          : { ok: false, error: { message: 'no browser target' } };
+        let up = true;
+        try {
+          await c.send('Target.getTargets');
+        } catch {
+          up = false;
+        }
+        return { untouched, untouchedGone, detached, attach, activate, evaluate, close, tabGone, prior, priorGone, post, postGone, host, browserTarget, up };
       }),
     autoAttach: (browser, plainURL) =>
       run(browser, async (c) => {

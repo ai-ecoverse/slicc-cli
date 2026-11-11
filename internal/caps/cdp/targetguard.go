@@ -2,6 +2,9 @@ package cdp
 
 import (
 	"encoding/json"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -177,6 +180,194 @@ func (g *guard) targetReasonLocked(id string) string {
 		return g.confirmReasonLocked(g.navTargets[id])
 	}
 	return ""
+}
+
+func (g *guard) closeTargetReasonLocked(id string) string {
+	if id == "" {
+		return ""
+	}
+	if g.hostTargetLocked(id) {
+		g.logf("cdp: closeTarget refused target=%s why=host", id)
+		return refusedTarget
+	}
+	t := g.targets[id]
+	if t == nil || t.gone {
+		return g.targetReasonLocked(id)
+	}
+	switch t.typ {
+	case "page", "tab":
+		if g.targetProtectedLocked(id) && !g.streamClosableLocked(id) {
+			why := "not-touched-or-opened"
+			if g.openedIneligible[id] {
+				why = "opened-ineligible"
+			} else if _, ok := g.openedSeenAt[id]; ok {
+				why = "seen-not-opened"
+			}
+			g.logf("cdp: closeTarget refused target=%s type=%s why=%s touched=%t opened=%t seenAt=%d touchSeq=%d opener=%s openerFrame=%s", id, t.typ, why, g.navTargets[id] != nil, g.opened[id], g.openedSeenAt[id], g.touchSeq, t.opener, t.openerFrame)
+			return refusedTarget
+		}
+		return ""
+	case "browser":
+		g.logf("cdp: closeTarget refused target=%s why=browser", id)
+		return refusedTarget
+	}
+	g.logf("cdp: closeTarget refused target=%s type=%s why=non-page", id, t.typ)
+	return g.targetReasonLocked(id)
+}
+
+func (g *guard) streamClosableLocked(id string) bool {
+	return g.navTargets[id] != nil || g.opened[id]
+}
+
+func openedSeenBound() int {
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(OpenedSeenBoundEnv)))
+	if err != nil || n <= 0 {
+		return maxOpenedSeen
+	}
+	return min(n, maxOpenedSeen)
+}
+
+func (g *guard) noteStreamOpenedLocked(info targetInfo) {
+	if info.TargetID == "" || g.listed[info.TargetID] || g.opened[info.TargetID] || g.openedIneligible[info.TargetID] {
+		return
+	}
+	typ := info.Type
+	if typ == "" {
+		if t := g.targets[info.TargetID]; t != nil {
+			typ = t.typ
+		}
+	}
+	if typ != "page" && typ != "tab" {
+		return
+	}
+	first := false
+	if _, seen := g.openedSeenAt[info.TargetID]; !seen {
+		if g.targets[info.TargetID] != nil {
+			g.openedIneligible[info.TargetID] = true
+			delete(g.openedWait, info.TargetID)
+			g.logf("cdp: stream-opened ineligible known-without-sight target=%s type=%s touchSeq=%d", info.TargetID, typ, g.touchSeq)
+			return
+		}
+		if !g.markOpenedSeenLocked(info.TargetID) {
+			g.openedIneligible[info.TargetID] = true
+			delete(g.openedWait, info.TargetID)
+			g.logf("cdp: stream-opened ineligible sight-bound target=%s type=%s touchSeq=%d bound=%d", info.TargetID, typ, g.touchSeq, openedSeenBound())
+			return
+		}
+		first = true
+	}
+	parent := info.OpenerID
+	if parent == "" {
+		parent = info.OpenerFrameID
+	}
+	if parent == "" {
+		if first {
+			g.logf("cdp: stream-opened first sight target=%s type=%s opener= openerFrame= seenAt=%d touchSeq=%d openerTouched=false", info.TargetID, typ, g.openedSeenAt[info.TargetID], g.touchSeq)
+		}
+		return
+	}
+	parentTouch, ok := g.touchedAt[parent]
+	if first {
+		g.logf("cdp: stream-opened first sight target=%s type=%s opener=%s openerFrame=%s seenAt=%d touchSeq=%d openerTouched=%t parentTouch=%d", info.TargetID, typ, info.OpenerID, info.OpenerFrameID, g.openedSeenAt[info.TargetID], g.touchSeq, ok, parentTouch)
+	}
+	if !ok {
+		g.openedWait[info.TargetID] = parent
+		return
+	}
+	if parentTouch > g.openedSeenAt[info.TargetID] {
+		g.openedIneligible[info.TargetID] = true
+		delete(g.openedWait, info.TargetID)
+		g.logf("cdp: stream-opened ineligible target=%s opener=%s seenAt=%d parentTouch=%d", info.TargetID, parent, g.openedSeenAt[info.TargetID], parentTouch)
+		return
+	}
+	delete(g.openedWait, info.TargetID)
+	g.markStreamOpenedLocked(info.TargetID)
+	g.logf("cdp: stream-opened marked target=%s opener=%s seenAt=%d parentTouch=%d", info.TargetID, parent, g.openedSeenAt[info.TargetID], parentTouch)
+}
+
+func (g *guard) forgetOpenedSeenLocked(id string) {
+	if id == "" {
+		return
+	}
+	delete(g.openedSeenAt, id)
+	delete(g.openedIneligible, id)
+	delete(g.openedWait, id)
+}
+
+func (g *guard) trimOpenedSeenLocked() {
+	for len(g.openedSeenOrder) > 0 {
+		old := g.openedSeenOrder[0]
+		t := g.targets[old]
+		if t != nil && !t.gone {
+			return
+		}
+		g.openedSeenOrder = g.openedSeenOrder[1:]
+		delete(g.openedSeenAt, old)
+		delete(g.openedIneligible, old)
+		delete(g.openedWait, old)
+	}
+}
+
+func (g *guard) markOpenedSeenLocked(id string) bool {
+	if id == "" {
+		return false
+	}
+	if _, ok := g.openedSeenAt[id]; ok {
+		return true
+	}
+	g.trimOpenedSeenLocked()
+	if len(g.openedSeenOrder) >= openedSeenBound() {
+		return false
+	}
+	g.openedSeenAt[id] = g.touchSeq
+	g.openedSeenOrder = append(g.openedSeenOrder, id)
+	return true
+}
+
+func (g *guard) markTouchedLocked(id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := g.touchedAt[id]; ok {
+		return
+	}
+	g.touchSeq++
+	g.touchedAt[id] = g.touchSeq
+	g.logf("cdp: stream touch target=%s touchSeq=%d", id, g.touchSeq)
+	g.recheckOpenedWaitLocked(id)
+}
+
+func (g *guard) recheckOpenedWaitLocked(opener string) {
+	parentTouch := g.touchedAt[opener]
+	for id, wait := range g.openedWait {
+		if wait != opener || g.opened[id] || g.openedIneligible[id] {
+			continue
+		}
+		seenAt := g.openedSeenAt[id]
+		if parentTouch > seenAt {
+			g.openedIneligible[id] = true
+			delete(g.openedWait, id)
+			g.logf("cdp: stream-opened ineligible on touch target=%s opener=%s seenAt=%d parentTouch=%d", id, opener, seenAt, parentTouch)
+			continue
+		}
+		delete(g.openedWait, id)
+		g.markStreamOpenedLocked(id)
+		g.logf("cdp: stream-opened marked on touch target=%s opener=%s seenAt=%d parentTouch=%d", id, opener, seenAt, parentTouch)
+	}
+}
+
+func (g *guard) markStreamOpenedLocked(id string) {
+	if id == "" || g.opened[id] {
+		return
+	}
+	g.markTouchedLocked(id)
+	g.opened[id] = true
+	g.openedOrder = append(g.openedOrder, id)
+	for len(g.openedOrder) > maxTombstones {
+		old := g.openedOrder[0]
+		g.openedOrder = g.openedOrder[1:]
+		delete(g.opened, old)
+	}
 }
 
 func (g *guard) sessionUnconfirmedLocked(id string) bool {

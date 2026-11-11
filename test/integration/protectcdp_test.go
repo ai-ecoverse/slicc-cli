@@ -81,7 +81,17 @@ func setupProtect(t *testing.T) *protectEnv {
 	return setupProtectOn(t, launchBrowser(t))
 }
 
+func setupProtectAttachEnv(t *testing.T, attachEnv []string) *protectEnv {
+	t.Helper()
+	return setupProtectOnEnv(t, launchBrowser(t), attachEnv)
+}
+
 func setupProtectOn(t *testing.T, b *chromeProc, gated ...bool) *protectEnv {
+	t.Helper()
+	return setupProtectOnEnv(t, b, nil, gated...)
+}
+
+func setupProtectOnEnv(t *testing.T, b *chromeProc, attachEnv []string, gated ...bool) *protectEnv {
 	t.Helper()
 	srv := pageServer(t)
 	plain := plainServer(t)
@@ -96,7 +106,7 @@ func setupProtectOn(t *testing.T, b *chromeProc, gated ...bool) *protectEnv {
 		env.gate = newGuardGate(t, endpoint, srv.URL)
 		endpoint = env.gate.srv.URL
 	}
-	env.a = startAttach(t, "--cdp", endpoint, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
+	env.a = startAttachEnv(t, false, attachEnv, "--cdp", endpoint, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	return env
@@ -110,6 +120,7 @@ func TestCDPProtectsSevensOrigin(t *testing.T) {
 	t.Run("auto-attach skips the seven tab", env.testAutoAttach)
 	t.Run("an error page for seven's URL doesn't lock the tab", env.testErrorPage)
 	t.Run("seven's 404 page is seven's document", env.testNotFound)
+	t.Run("a protected tab can be closed through the guard", env.testCloseProtected)
 	t.Run("commands racing a restore of seven's document never run in it", env.testRestoreRace)
 	t.Run("a blank popup from seven is seven's", env.testPopup)
 	t.Run("history entries on seven are refused", env.testHistory)
@@ -272,6 +283,11 @@ func (e *protectEnv) testAttach(t *testing.T) {
 			t.Fatalf("%s on the seven tab: %s", m, r[m])
 		}
 	}
+	var closed bool
+	_ = json.Unmarshal(r["closed"], &closed)
+	if closed {
+		t.Fatal("closing the link's own seven page succeeded")
+	}
 	var info struct {
 		URL   string `json:"url"`
 		Title string `json:"title"`
@@ -363,8 +379,10 @@ func (e *protectEnv) testErrorPage(t *testing.T) {
 		t.Fatalf("an error page for seven's URL locked the tab: %+v", r)
 	case r.Listed == nil || r.Listed.URL != e.seven || r.Listed.Title != e.seven || r.Info.URL != e.seven || r.Info.Title != e.seven || r.Leaked:
 		t.Fatalf("the error page's attempted URL was listed in full: %+v", r)
-	case !r.Locked || !r.After.refused() || !r.Reattach.refused() || !r.Close.refused():
+	case !r.Locked || !r.After.refused() || !r.Reattach.refused():
 		t.Fatalf("seven's document, restored into the same tab, didn't lock it: %+v", r)
+	case !r.Close.OK:
+		t.Fatalf("closing the locked restored tab: %+v", r.Close)
 	case r.ListedFailed == nil || r.ListedFailed.URL != e.seven || r.ListedFailed.Title != e.seven:
 		t.Fatalf("a tab on an error page for seven's URL is listed as %+v", r.ListedFailed)
 	case !r.Wiped.OK || r.Landed == nil || r.Landed.Unreachable != "" || r.ListedError == nil || r.ListedError.URL != blankedURL || r.ListedError.Title != "blocked":
@@ -426,6 +444,193 @@ func (e *protectEnv) testNotFound(t *testing.T) {
 	}
 }
 
+func (e *protectEnv) testCloseProtected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	untouched, s := e.directTab(t, e.seven+"/frame.html?n=untouched-close")
+	_ = s.Detach(ctx)
+	ordinary, opener := e.directTab(t, e.allowed+"/?n=close-opener")
+	priorURL := e.seven + "/frame.html?n=prior-close"
+	var opened struct {
+		Result struct {
+			Value bool `json:"value"`
+		} `json:"result"`
+	}
+	if err := opener.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "Boolean(window.open(" + strconv.Quote(priorURL) + ", '_blank'))", "returnByValue": true, "userGesture": true}, &opened); err != nil || !opened.Result.Value {
+		t.Fatalf("window.open before attach: %+v %v", opened, err)
+	}
+	prior := ""
+	deadline := time.Now().Add(10 * time.Second)
+	for prior == "" && time.Now().Before(deadline) {
+		var listed struct {
+			TargetInfos []struct {
+				TargetID string `json:"targetId"`
+				Type     string `json:"type"`
+				OpenerID string `json:"openerId"`
+			} `json:"targetInfos"`
+		}
+		if err := e.b.client.Call(ctx, "", "Target.getTargets", nil, &listed); err != nil {
+			t.Fatal(err)
+		}
+		for _, ti := range listed.TargetInfos {
+			if ti.OpenerID == ordinary && ti.Type == "page" {
+				prior = ti.TargetID
+				break
+			}
+		}
+		if prior == "" {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if prior == "" {
+		t.Fatal("no protected popup opened before attach")
+	}
+	t.Cleanup(func() { e.b.closeTarget(prior) })
+	_ = opener.Detach(ctx)
+	var res struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := e.b.client.Call(ctx, "", "Target.createTarget", map[string]any{"url": e.seven + "/frame.html?n=close-protected"}, &res); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.b.closeTarget(res.TargetID) })
+	seed, err := e.b.client.Attach(ctx, res.TargetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, seed, e.seven+"/frame.html")
+	if err := seed.Call(ctx, "Page.navigate", map[string]any{"url": e.allowed + "/?n=close-protected"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitHref(t, seed, e.allowed)
+	_ = seed.Detach(ctx)
+	var browserID string
+	infos, err := e.b.client.Targets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ti := range infos {
+		if ti.Type == "browser" {
+			browserID = ti.TargetID
+		}
+	}
+	postURL := e.seven + "/frame.html?n=post-close"
+	var r struct {
+		Untouched     cdpOutcome `json:"untouched"`
+		UntouchedGone bool       `json:"untouchedGone"`
+		Detached      bool       `json:"detached"`
+		Attach        cdpOutcome `json:"attach"`
+		Activate      cdpOutcome `json:"activate"`
+		Evaluate      cdpOutcome `json:"evaluate"`
+		Close         cdpOutcome `json:"close"`
+		TabGone       bool       `json:"tabGone"`
+		Prior         cdpOutcome `json:"prior"`
+		PriorGone     bool       `json:"priorGone"`
+		Post          cdpOutcome `json:"post"`
+		PostGone      bool       `json:"postGone"`
+		Host          cdpOutcome `json:"host"`
+		BrowserTarget cdpOutcome `json:"browserTarget"`
+		Up            bool       `json:"up"`
+	}
+	e.evalJSONWithObserver(t, "linkTest.protect.closeProtected("+jsArgs("chrome", res.TargetID, ordinary, prior, postURL, e.p.target, browserID, untouched)+")", &r)
+	switch {
+	case !r.Untouched.refused() || r.UntouchedGone:
+		t.Fatalf("closing a protected tab this stream never touched: %+v", r)
+	case !r.Detached:
+		t.Fatalf("history restore onto seven didn't lock the tab: %+v", r)
+	case !r.Attach.refused() || !r.Activate.refused() || !r.Evaluate.refused():
+		t.Fatalf("attach, activate or evaluate on the protected tab: %+v", r)
+	case !r.Close.OK || !r.TabGone:
+		t.Fatalf("closing the touched protected tab: %+v", r)
+	case !r.Prior.refused() || r.PriorGone:
+		t.Fatalf("closing a protected popup opened before the stream attached to its opener: %+v", r)
+	case !r.Post.OK || !r.PostGone:
+		t.Fatalf("closing a popup opened after the stream attached to its opener: %+v", r)
+	case !r.Host.refused():
+		t.Fatalf("closing the link's own seven page: %+v", r.Host)
+	case browserID != "" && !r.BrowserTarget.refused():
+		t.Fatalf("closing the browser target: %+v", r.BrowserTarget)
+	case !r.Up:
+		t.Fatal("the link went down")
+	}
+	still, err := e.b.client.Targets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untouchedStill, priorStill := false, false
+	for _, ti := range still {
+		if ti.TargetID == untouched {
+			untouchedStill = true
+		}
+		if ti.TargetID == prior {
+			priorStill = true
+		}
+	}
+	if !untouchedStill {
+		t.Fatal("the untouched protected tab was closed")
+	}
+	if !priorStill {
+		t.Fatal("the pre-attach protected popup was closed")
+	}
+	var up bool
+	e.p.eval("linkTest.status().up", &up)
+	if !up {
+		t.Fatal("the link went down after the close")
+	}
+}
+
+func TestCDPCloseProtectedOpenedSeenBound(t *testing.T) {
+	env := setupProtectAttachEnv(t, []string{"SLICC_CDP_OPENED_SEEN=2"})
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	ordinary, opener := env.directTab(t, env.allowed+"/?n=seen-bound-opener")
+	priorURL := env.seven + "/frame.html?n=seen-bound-prior"
+	var opened struct {
+		Result struct {
+			Value bool `json:"value"`
+		} `json:"result"`
+	}
+	if err := opener.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "Boolean(window.open(" + strconv.Quote(priorURL) + ", '_blank'))", "returnByValue": true, "userGesture": true}, &opened); err != nil || !opened.Result.Value {
+		t.Fatalf("window.open before attach: %+v %v", opened, err)
+	}
+	prior := ""
+	deadline := time.Now().Add(10 * time.Second)
+	for prior == "" && time.Now().Before(deadline) {
+		var listed struct {
+			TargetInfos []struct {
+				TargetID string `json:"targetId"`
+				Type     string `json:"type"`
+				OpenerID string `json:"openerId"`
+			} `json:"targetInfos"`
+		}
+		if err := env.b.client.Call(ctx, "", "Target.getTargets", nil, &listed); err != nil {
+			t.Fatal(err)
+		}
+		for _, ti := range listed.TargetInfos {
+			if ti.OpenerID == ordinary && ti.Type == "page" {
+				prior = ti.TargetID
+				break
+			}
+		}
+		if prior == "" {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if prior == "" {
+		t.Fatal("no protected popup opened before attach")
+	}
+	t.Cleanup(func() { env.b.closeTarget(prior) })
+	_ = opener.Detach(ctx)
+	var r struct {
+		Close cdpOutcome `json:"close"`
+		Gone  bool       `json:"gone"`
+	}
+	env.evalJSON(t, "linkTest.protect.closeProtectedOpenedSeenBound("+jsArgs("chrome", ordinary, prior, 6)+")", &r)
+	if !r.Close.refused() || r.Gone {
+		t.Fatalf("pre-attach popup closable after opened-seen flood and rediscover: %+v", r)
+	}
+}
+
 func (e *protectEnv) testRestoreRace(t *testing.T) {
 	doc := e.seven + "/frame.html?n=race"
 	id, s := e.directTab(t, doc)
@@ -453,13 +658,12 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 		t.Fatalf("the race never ran: %+v", r)
 	case len(r.Leaked) > 0:
 		t.Fatalf("commands ran in seven's restored document: %+v", r)
-	case !r.Detached || !r.After.refused() || !r.Reattach.refused() || !r.Close.refused():
+	case !r.Detached || !r.After.refused() || !r.Reattach.refused():
 		t.Fatalf("seven's restored document didn't lock the tab: %+v", r)
+	case !r.Close.OK:
+		t.Fatalf("closing the restored locked tab: %+v", r.Close)
 	}
-	if href := (&navEnv{linkEnv: e.linkEnv}).directHref(t, id); href != doc {
-		t.Fatalf("history.back left the tab at %q, not seven's document restored from the back/forward cache", href)
-	}
-	t.Logf("%d probes attempted, %d unanswered after 1s, and %d attaches raced the restore", r.Probes, r.Stuck, r.Attaches)
+	t.Logf("%d probes attempted, %d unanswered after 1s, and %d attaches raced the restore; close ok", r.Probes, r.Stuck, r.Attaches)
 }
 
 func (e *protectEnv) testPopup(t *testing.T) {

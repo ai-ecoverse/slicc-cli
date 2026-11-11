@@ -110,6 +110,17 @@ func cdpBrowsers(ctx context.Context, seven string, extra, origins []string, pol
 	return r, nil
 }
 
+func cdpBrowsersFor(ctx context.Context, seven string, extra, origins []string, pol *policy.Policy, hosts *policy.Hosts, logf, status func(string, ...any), conn any) (*capcdp.Registry, error) {
+	r, err := cdpBrowsers(ctx, seven, extra, origins, pol, hosts, logf, status)
+	if err != nil {
+		return nil, err
+	}
+	if host, ok := conn.(interface{ HostTarget() string }); ok {
+		r.SetHostTarget(host.HostTarget)
+	}
+	return r, nil
+}
+
 func followBrowsers(n *node.Node, r *capcdp.Registry, status func(string, ...any)) {
 	if r.Len() == 0 {
 		return
