@@ -351,7 +351,7 @@ func (rl *relay) readBrowser(ctx context.Context) (websocket.MessageType, []byte
 }
 
 func (rl *relay) expireLater(sessionID string) {
-	time.AfterFunc(HoldTimeout, func() {
+	time.AfterFunc(holdTimeout(), func() {
 		for _, msg := range rl.g.expireHold(sessionID) {
 			_ = rl.conn.Write(context.Background(), websocket.MessageText, msg)
 		}

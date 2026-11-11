@@ -5,7 +5,14 @@ import (
 	"time"
 )
 
-const HoldTimeout = 10 * time.Second
+const (
+	HoldTimeout    = 10 * time.Second
+	HoldTimeoutEnv = "SLICC_CDP_HOLD_TIMEOUT"
+)
+
+func holdTimeout() time.Duration {
+	return envDuration(HoldTimeoutEnv, HoldTimeout)
+}
 
 type heldSession struct {
 	id      string
