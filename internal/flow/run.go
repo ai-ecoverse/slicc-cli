@@ -281,7 +281,9 @@ func closeAdopted(ctx context.Context, target string) error {
 		return err
 	}
 	defer func() { _ = c.Close() }()
-	if err := c.Call(ctx, "", "Browser.close", nil, nil); err != nil && ctx.Err() != nil {
+	err = c.Call(ctx, "", "Browser.close", nil, nil)
+	var refused *cdp.Error
+	if err != nil && (errors.As(err, &refused) || ctx.Err() != nil) {
 		return err
 	}
 	return nil

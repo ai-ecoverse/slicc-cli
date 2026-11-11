@@ -423,19 +423,21 @@ func (c *Checker) Apply(ctx context.Context, rel *Release, exe string) error {
 }
 
 func swap(goos, staging, exe string) error {
-	parked := false
+	parked := ""
 	if _, err := os.Stat(exe); goos == "windows" && err == nil {
 		old := exe + ".old"
-		_ = os.Remove(old)
+		if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
+			old = fmt.Sprintf("%s.old-%d", exe, time.Now().UnixNano())
+		}
 		if err := rename(exe, old); err != nil {
 			_ = os.Remove(staging)
 			return fmt.Errorf("moving the running binary aside: %w", err)
 		}
-		parked = true
+		parked = old
 	}
 	if err := rename(staging, exe); err != nil {
-		if parked {
-			_ = rename(exe+".old", exe)
+		if parked != "" {
+			_ = rename(parked, exe)
 		}
 		_ = os.Remove(staging)
 		return fmt.Errorf("replacing the binary: %w", err)
@@ -445,4 +447,13 @@ func swap(goos, staging, exe string) error {
 
 func RemoveStale(exe string) {
 	_ = os.Remove(exe + ".old")
+	more, _ := filepath.Glob(globEscape(exe) + ".old-*")
+	for _, p := range more {
+		_ = os.Remove(p)
+	}
+}
+
+func globEscape(p string) string {
+	r := strings.NewReplacer("[", "[[]", "*", "[*]", "?", "[?]")
+	return r.Replace(p)
 }

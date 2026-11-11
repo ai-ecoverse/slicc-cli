@@ -131,9 +131,10 @@ func (s *session) see(e flow.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch e.Event {
-	case flow.Attached:
-		b := seenBrowser{id: e.Browser, name: e.Name, cdp: e.CDP, seven: e.Role == flow.RoleSeven, launched: e.Launched}
+	case flow.Launched, flow.Attached:
+		b := seenBrowser{id: e.Browser, name: e.Name, cdp: e.CDP, seven: e.Role == flow.RoleSeven, launched: e.Launched || e.Event == flow.Launched}
 		if i := slices.IndexFunc(s.browsers, func(o seenBrowser) bool { return o.id == e.Browser }); i >= 0 {
+			b.launched = b.launched || s.browsers[i].launched
 			s.browsers[i] = b
 		} else {
 			s.browsers = append(s.browsers, b)
