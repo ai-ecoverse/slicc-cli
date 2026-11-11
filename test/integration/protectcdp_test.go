@@ -81,7 +81,17 @@ func setupProtect(t *testing.T) *protectEnv {
 	return setupProtectOn(t, launchBrowser(t))
 }
 
+func setupProtectAttachEnv(t *testing.T, attachEnv []string) *protectEnv {
+	t.Helper()
+	return setupProtectOnEnv(t, launchBrowser(t), attachEnv)
+}
+
 func setupProtectOn(t *testing.T, b *chromeProc, gated ...bool) *protectEnv {
+	t.Helper()
+	return setupProtectOnEnv(t, b, nil, gated...)
+}
+
+func setupProtectOnEnv(t *testing.T, b *chromeProc, attachEnv []string, gated ...bool) *protectEnv {
 	t.Helper()
 	srv := pageServer(t)
 	plain := plainServer(t)
@@ -96,7 +106,7 @@ func setupProtectOn(t *testing.T, b *chromeProc, gated ...bool) *protectEnv {
 		env.gate = newGuardGate(t, endpoint, srv.URL)
 		endpoint = env.gate.srv.URL
 	}
-	env.a = startAttach(t, "--cdp", endpoint, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
+	env.a = startAttachEnv(t, false, attachEnv, "--cdp", endpoint, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	return env
@@ -566,6 +576,58 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 	e.p.eval("linkTest.status().up", &up)
 	if !up {
 		t.Fatal("the link went down after the close")
+	}
+}
+
+func TestCDPCloseProtectedOpenedSeenBound(t *testing.T) {
+	env := setupProtectAttachEnv(t, []string{"SLICC_CDP_OPENED_SEEN=2"})
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	ordinary, opener := env.directTab(t, env.allowed+"/?n=seen-bound-opener")
+	priorURL := env.seven + "/frame.html?n=seen-bound-prior"
+	var opened struct {
+		Result struct {
+			Value bool `json:"value"`
+		} `json:"result"`
+	}
+	if err := opener.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "Boolean(window.open(" + strconv.Quote(priorURL) + ", '_blank'))", "returnByValue": true, "userGesture": true}, &opened); err != nil || !opened.Result.Value {
+		t.Fatalf("window.open before attach: %+v %v", opened, err)
+	}
+	prior := ""
+	deadline := time.Now().Add(10 * time.Second)
+	for prior == "" && time.Now().Before(deadline) {
+		var listed struct {
+			TargetInfos []struct {
+				TargetID string `json:"targetId"`
+				Type     string `json:"type"`
+				OpenerID string `json:"openerId"`
+			} `json:"targetInfos"`
+		}
+		if err := env.b.client.Call(ctx, "", "Target.getTargets", nil, &listed); err != nil {
+			t.Fatal(err)
+		}
+		for _, ti := range listed.TargetInfos {
+			if ti.OpenerID == ordinary && ti.Type == "page" {
+				prior = ti.TargetID
+				break
+			}
+		}
+		if prior == "" {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if prior == "" {
+		t.Fatal("no protected popup opened before attach")
+	}
+	t.Cleanup(func() { env.b.closeTarget(prior) })
+	_ = opener.Detach(ctx)
+	var r struct {
+		Close cdpOutcome `json:"close"`
+		Gone  bool       `json:"gone"`
+	}
+	env.evalJSON(t, "linkTest.protect.closeProtectedOpenedSeenBound("+jsArgs("chrome", ordinary, prior, 6)+")", &r)
+	if !r.Close.refused() || r.Gone {
+		t.Fatalf("pre-attach popup closable after opened-seen flood and rediscover: %+v", r)
 	}
 }
 

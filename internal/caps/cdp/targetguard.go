@@ -2,6 +2,9 @@ package cdp
 
 import (
 	"encoding/json"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -216,6 +219,14 @@ func (g *guard) streamClosableLocked(id string) bool {
 	return g.navTargets[id] != nil || g.opened[id]
 }
 
+func openedSeenBound() int {
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(OpenedSeenBoundEnv)))
+	if err != nil || n <= 0 {
+		return maxOpenedSeen
+	}
+	return min(n, maxOpenedSeen)
+}
+
 func (g *guard) noteStreamOpenedLocked(info targetInfo) {
 	if info.TargetID == "" || g.listed[info.TargetID] || g.opened[info.TargetID] || g.openedIneligible[info.TargetID] {
 		return
@@ -231,7 +242,18 @@ func (g *guard) noteStreamOpenedLocked(info targetInfo) {
 	}
 	first := false
 	if _, seen := g.openedSeenAt[info.TargetID]; !seen {
-		g.markOpenedSeenLocked(info.TargetID)
+		if g.targets[info.TargetID] != nil {
+			g.openedIneligible[info.TargetID] = true
+			delete(g.openedWait, info.TargetID)
+			g.logf("cdp: stream-opened ineligible known-without-sight target=%s type=%s touchSeq=%d", info.TargetID, typ, g.touchSeq)
+			return
+		}
+		if !g.markOpenedSeenLocked(info.TargetID) {
+			g.openedIneligible[info.TargetID] = true
+			delete(g.openedWait, info.TargetID)
+			g.logf("cdp: stream-opened ineligible sight-bound target=%s type=%s touchSeq=%d bound=%d", info.TargetID, typ, g.touchSeq, openedSeenBound())
+			return
+		}
 		first = true
 	}
 	parent := info.OpenerID
@@ -263,22 +285,43 @@ func (g *guard) noteStreamOpenedLocked(info targetInfo) {
 	g.logf("cdp: stream-opened marked target=%s opener=%s seenAt=%d parentTouch=%d", info.TargetID, parent, g.openedSeenAt[info.TargetID], parentTouch)
 }
 
-func (g *guard) markOpenedSeenLocked(id string) {
+func (g *guard) forgetOpenedSeenLocked(id string) {
 	if id == "" {
 		return
 	}
-	if _, ok := g.openedSeenAt[id]; ok {
-		return
-	}
-	g.openedSeenAt[id] = g.touchSeq
-	g.openedSeenOrder = append(g.openedSeenOrder, id)
-	for len(g.openedSeenOrder) > maxTombstones {
+	delete(g.openedSeenAt, id)
+	delete(g.openedIneligible, id)
+	delete(g.openedWait, id)
+}
+
+func (g *guard) trimOpenedSeenLocked() {
+	for len(g.openedSeenOrder) > 0 {
 		old := g.openedSeenOrder[0]
+		t := g.targets[old]
+		if t != nil && !t.gone {
+			return
+		}
 		g.openedSeenOrder = g.openedSeenOrder[1:]
 		delete(g.openedSeenAt, old)
 		delete(g.openedIneligible, old)
 		delete(g.openedWait, old)
 	}
+}
+
+func (g *guard) markOpenedSeenLocked(id string) bool {
+	if id == "" {
+		return false
+	}
+	if _, ok := g.openedSeenAt[id]; ok {
+		return true
+	}
+	g.trimOpenedSeenLocked()
+	if len(g.openedSeenOrder) >= openedSeenBound() {
+		return false
+	}
+	g.openedSeenAt[id] = g.touchSeq
+	g.openedSeenOrder = append(g.openedSeenOrder, id)
+	return true
 }
 
 func (g *guard) markTouchedLocked(id string) {

@@ -23,6 +23,8 @@ const (
 	refusedLoadResource = "Network.loadNetworkResource follows redirects inside the browser, so it could load seven's pages"
 	LostGrace           = 2 * time.Second
 	maxTombstones       = 4096
+	maxOpenedSeen       = 4096
+	OpenedSeenBoundEnv  = "SLICC_CDP_OPENED_SEEN"
 	maxRefused          = 4096
 	maxMarked           = 65536
 	relayIDBase         = 1879048192
@@ -559,6 +561,7 @@ func (g *guard) destroyedLocked(id string) {
 	g.dropHeldLocked(id)
 	g.forgetWorldsLocked(id)
 	g.forgetWorldRequestsLocked(id)
+	g.forgetOpenedSeenLocked(id)
 	t, ok := g.targets[id]
 	if !ok || t.gone {
 		return

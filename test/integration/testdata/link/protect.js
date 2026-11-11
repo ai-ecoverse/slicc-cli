@@ -488,6 +488,22 @@ export function protectTest(getLink, describe) {
         out.closed = out['Target.closeTarget'].ok && !targetInfos.some((t) => t.targetId === targetId);
         return out;
       }),
+    closeProtectedOpenedSeenBound: (browser, ordinaryId, priorId, flood) =>
+      run(browser, async (c) => {
+        await c.send('Target.attachToTarget', { targetId: ordinaryId, flatten: true });
+        for (let i = 0; i < flood; i += 1) {
+          const created = await outcome(c.send('Target.createTarget', { url: 'about:blank' }));
+          if (created.ok && created.result?.targetId) {
+            await outcome(c.send('Target.closeTarget', { targetId: created.result.targetId }));
+          }
+        }
+        await c.send('Target.setDiscoverTargets', { discover: false });
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await sleep(500);
+        const close = await outcome(c.send('Target.closeTarget', { targetId: priorId }));
+        const gone = !(await c.send('Target.getTargets')).targetInfos.some((t) => t.targetId === priorId);
+        return { close, gone };
+      }),
     closeProtected: (browser, targetId, ordinaryId, priorId, postURL, hostId, browserId, untouchedId) =>
       run(browser, async (c) => {
         const untouched = untouchedId
