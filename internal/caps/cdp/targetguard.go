@@ -207,7 +207,7 @@ func (g *guard) streamClosableLocked(id string) bool {
 }
 
 func (g *guard) noteStreamOpenedLocked(info targetInfo) {
-	if info.TargetID == "" || g.listed[info.TargetID] || g.opened[info.TargetID] || g.openerJudged[info.TargetID] {
+	if info.TargetID == "" || g.listed[info.TargetID] || g.opened[info.TargetID] || g.openedIneligible[info.TargetID] {
 		return
 	}
 	typ := info.Type
@@ -219,6 +219,9 @@ func (g *guard) noteStreamOpenedLocked(info targetInfo) {
 	if typ != "page" && typ != "tab" {
 		return
 	}
+	if _, seen := g.openedSeenAt[info.TargetID]; !seen {
+		g.markOpenedSeenLocked(info.TargetID)
+	}
 	parent := info.OpenerID
 	if parent == "" {
 		parent = info.OpenerFrameID
@@ -226,30 +229,47 @@ func (g *guard) noteStreamOpenedLocked(info targetInfo) {
 	if parent == "" {
 		return
 	}
-	g.markOpenerJudgedLocked(info.TargetID)
-	if g.navTargets[parent] == nil && !g.opened[parent] {
+	parentTouch, ok := g.touchedAt[parent]
+	if !ok || parentTouch > g.openedSeenAt[info.TargetID] {
+		g.openedIneligible[info.TargetID] = true
 		return
 	}
 	g.markStreamOpenedLocked(info.TargetID)
 }
 
-func (g *guard) markOpenerJudgedLocked(id string) {
-	if id == "" || g.openerJudged[id] {
+func (g *guard) markOpenedSeenLocked(id string) {
+	if id == "" {
 		return
 	}
-	g.openerJudged[id] = true
-	g.openerJudgedOrder = append(g.openerJudgedOrder, id)
-	for len(g.openerJudgedOrder) > maxTombstones {
-		old := g.openerJudgedOrder[0]
-		g.openerJudgedOrder = g.openerJudgedOrder[1:]
-		delete(g.openerJudged, old)
+	if _, ok := g.openedSeenAt[id]; ok {
+		return
 	}
+	g.openedSeenAt[id] = g.touchSeq
+	g.openedSeenOrder = append(g.openedSeenOrder, id)
+	for len(g.openedSeenOrder) > maxTombstones {
+		old := g.openedSeenOrder[0]
+		g.openedSeenOrder = g.openedSeenOrder[1:]
+		delete(g.openedSeenAt, old)
+		delete(g.openedIneligible, old)
+	}
+}
+
+func (g *guard) markTouchedLocked(id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := g.touchedAt[id]; ok {
+		return
+	}
+	g.touchSeq++
+	g.touchedAt[id] = g.touchSeq
 }
 
 func (g *guard) markStreamOpenedLocked(id string) {
 	if id == "" || g.opened[id] {
 		return
 	}
+	g.markTouchedLocked(id)
 	g.opened[id] = true
 	g.openedOrder = append(g.openedOrder, id)
 	for len(g.openedOrder) > maxTombstones {

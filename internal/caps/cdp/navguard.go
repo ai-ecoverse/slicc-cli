@@ -122,6 +122,7 @@ func (g *guard) touchLocked(targetID, typ string) [][]byte {
 	}
 	nt.awayAt = g.reads.away(nt.start)
 	g.navTargets[targetID] = nt
+	g.markTouchedLocked(targetID)
 	sent := time.Now()
 	msg := g.callbackLocked(g.relaySession, "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, func(m message) [][]byte {
 		if took := time.Since(sent); took > slowGuard {
