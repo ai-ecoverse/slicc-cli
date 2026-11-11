@@ -207,20 +207,43 @@ func (g *guard) streamClosableLocked(id string) bool {
 }
 
 func (g *guard) noteStreamOpenedLocked(info targetInfo) {
-	if info.TargetID == "" || info.Type != "page" && info.Type != "tab" {
+	if info.TargetID == "" || g.listed[info.TargetID] || g.opened[info.TargetID] || g.openerJudged[info.TargetID] {
 		return
 	}
-	if _, known := g.targets[info.TargetID]; known {
+	typ := info.Type
+	if typ == "" {
+		if t := g.targets[info.TargetID]; t != nil {
+			typ = t.typ
+		}
+	}
+	if typ != "page" && typ != "tab" {
 		return
 	}
 	parent := info.OpenerID
 	if parent == "" {
 		parent = info.OpenerFrameID
 	}
-	if parent == "" || g.navTargets[parent] == nil && !g.opened[parent] {
+	if parent == "" {
+		return
+	}
+	g.markOpenerJudgedLocked(info.TargetID)
+	if g.navTargets[parent] == nil && !g.opened[parent] {
 		return
 	}
 	g.markStreamOpenedLocked(info.TargetID)
+}
+
+func (g *guard) markOpenerJudgedLocked(id string) {
+	if id == "" || g.openerJudged[id] {
+		return
+	}
+	g.openerJudged[id] = true
+	g.openerJudgedOrder = append(g.openerJudgedOrder, id)
+	for len(g.openerJudgedOrder) > maxTombstones {
+		old := g.openerJudgedOrder[0]
+		g.openerJudgedOrder = g.openerJudgedOrder[1:]
+		delete(g.openerJudged, old)
+	}
 }
 
 func (g *guard) markStreamOpenedLocked(id string) {

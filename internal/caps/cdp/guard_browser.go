@@ -254,9 +254,7 @@ func (g *guard) relayEventLocked(m *message) browserVerdict {
 	_ = json.Unmarshal(m.Params, &p)
 	switch m.Method {
 	case "Target.targetCreated", "Target.targetInfoChanged":
-		if m.Method == "Target.targetCreated" {
-			g.noteStreamOpenedLocked(p.TargetInfo)
-		}
+		g.noteStreamOpenedLocked(p.TargetInfo)
 		send := g.observeLocked(p.TargetInfo)
 		if p.TargetInfo.URL == "" || len(g.held) == 0 {
 			return browserVerdict{send: send}
@@ -340,9 +338,7 @@ func (g *guard) withParams(m *message, data []byte, fn func(p map[string]any) (k
 func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
 		info, obj := toInfo(p["targetInfo"])
-		if m.Method == "Target.targetCreated" {
-			g.noteStreamOpenedLocked(info)
-		}
+		g.noteStreamOpenedLocked(info)
 		send := g.infoLocked(p["targetInfo"])
 		return listed(info), obj != nil && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL)), send
 	})
@@ -382,6 +378,7 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if t, ok := g.targets[info.TargetID]; ok && info.URL == "" && t.url != "" {
 		info.URL = t.url
 	}
+	g.noteStreamOpenedLocked(info)
 	send := g.observeLocked(info)
 	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" {
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID, target: info.TargetID, waiting: p.WaitingForDebugger})...)}

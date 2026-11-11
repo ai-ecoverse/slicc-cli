@@ -102,6 +102,9 @@ type guard struct {
 	tombstones            []string
 	opened                map[string]bool
 	openedOrder           []string
+	listed                map[string]bool
+	openerJudged          map[string]bool
+	openerJudgedOrder     []string
 	sessions              map[string]*session
 	hidden                map[string]bool
 	refused               map[string]bool
@@ -196,6 +199,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		knownRedirects:        map[string]*assetSet{},
 		targets:               map[string]*target{},
 		opened:                map[string]bool{},
+		listed:                map[string]bool{},
+		openerJudged:          map[string]bool{},
 		sessions:              map[string]*session{},
 		hidden:                map[string]bool{},
 		refused:               map[string]bool{},
@@ -472,6 +477,7 @@ func (g *guard) observeAll(infos []targetInfo) {
 		}
 		if _, ok := g.targets[info.TargetID]; !ok {
 			fresh[info.TargetID] = true
+			g.listed[info.TargetID] = true
 		}
 		g.record(info)
 	}
