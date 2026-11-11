@@ -57,10 +57,20 @@ func startTTYBin(t *testing.T, bin string, env []string, args ...string) *ttyPro
 			}
 		}
 	}()
-	go func() { p.done <- cmd.Wait() }()
+	exited := make(chan struct{})
+	go func() {
+		p.done <- cmd.Wait()
+		close(exited)
+	}()
 	t.Cleanup(func() {
-		if cmd.ProcessState == nil {
+		select {
+		case <-exited:
+		default:
 			_ = cmd.Process.Kill()
+			select {
+			case <-exited:
+			case <-time.After(10 * time.Second):
+			}
 		}
 		_ = tty.Close()
 		if t.Failed() {
