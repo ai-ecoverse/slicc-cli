@@ -108,6 +108,7 @@ type guard struct {
 	openedSeenAt          map[string]int
 	openedSeenOrder       []string
 	openedIneligible      map[string]bool
+	openedWait            map[string]string
 	sessions              map[string]*session
 	hidden                map[string]bool
 	refused               map[string]bool
@@ -206,6 +207,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		touchedAt:             map[string]int{},
 		openedSeenAt:          map[string]int{},
 		openedIneligible:      map[string]bool{},
+		openedWait:            map[string]string{},
 		sessions:              map[string]*session{},
 		hidden:                map[string]bool{},
 		refused:               map[string]bool{},

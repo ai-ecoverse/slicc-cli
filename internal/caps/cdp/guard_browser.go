@@ -203,10 +203,12 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		id, _ := res["targetId"].(string)
 		return g.touchLocked(id, "page")
 	case kindAttach:
+		g.markTouchedLocked(attached)
 		if t, ok := g.targets[attached]; ok {
 			g.attachAnsweredLocked(session, res, t)
 			return g.touchLocked(attached, t.typ)
 		}
+		g.logf("cdp: attach counted as touch without a known target target=%s", attached)
 	case kindScript:
 		if id, _ := res["identifier"].(string); id != "" {
 			g.scripts[id] = true
