@@ -457,20 +457,20 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 		Activate      cdpOutcome `json:"activate"`
 		Evaluate      cdpOutcome `json:"evaluate"`
 		Close         cdpOutcome `json:"close"`
-		Closed        bool       `json:"closed"`
+		TabGone       bool       `json:"tabGone"`
 		Host          cdpOutcome `json:"host"`
 		BrowserTarget cdpOutcome `json:"browserTarget"`
 		Up            bool       `json:"up"`
 	}
-	e.evalJSON(t, "linkTest.protect.closeProtected("+jsArgs("chrome", e.allowed+"/?n=close-protected", e.seven+"/frame.html?n=close-protected", e.p.target, browserID, untouched)+")", &r)
+	e.evalJSONWithObserver(t, "linkTest.protect.closeProtected("+jsArgs("chrome", e.allowed+"/?n=close-protected", e.seven+"/frame.html?n=close-protected", e.p.target, browserID, untouched)+")", &r)
 	switch {
 	case !r.Untouched.refused() || r.UntouchedGone:
 		t.Fatalf("closing a protected tab this stream never touched: %+v", r)
 	case !r.Detached:
-		t.Fatalf("navigating onto seven didn't lock the tab: %+v", r)
+		t.Fatalf("observer navigation onto seven didn't lock the tab: %+v", r)
 	case !r.Attach.refused() || !r.Activate.refused() || !r.Evaluate.refused():
 		t.Fatalf("attach, activate or evaluate on the protected tab: %+v", r)
-	case !r.Close.OK || !r.Closed:
+	case !r.Close.OK || !r.TabGone:
 		t.Fatalf("closing the touched protected tab: %+v", r)
 	case !r.Host.refused():
 		t.Fatalf("closing the link's own seven page: %+v", r.Host)

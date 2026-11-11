@@ -499,14 +499,14 @@ export function protectTest(getLink, describe) {
           () => true,
           () => false,
         );
-        await c.send('Runtime.evaluate', { expression: later(protectedURL) }, sessionId);
+        await observerNavigation(targetId, { url: protectedURL });
         const detached = await locked;
         const evaluate = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId));
         const attach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
         const activate = await outcome(c.send('Target.activateTarget', { targetId }));
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
         const { targetInfos } = await c.send('Target.getTargets');
-        const closed = close.ok && close.result?.success === true && !targetInfos.some((t) => t.targetId === targetId);
+        const tabGone = close.ok && close.result?.success === true && !targetInfos.some((t) => t.targetId === targetId);
         const untouchedGone = untouchedId ? !targetInfos.some((t) => t.targetId === untouchedId) : false;
         const host = await outcome(c.send('Target.closeTarget', { targetId: hostId }));
         const browserTarget = browserId
@@ -518,7 +518,7 @@ export function protectTest(getLink, describe) {
         } catch {
           up = false;
         }
-        return { untouched, untouchedGone, detached, attach, activate, evaluate, close, closed, host, browserTarget, up };
+        return { untouched, untouchedGone, detached, attach, activate, evaluate, close, tabGone, host, browserTarget, up };
       }),
     autoAttach: (browser, plainURL) =>
       run(browser, async (c) => {
