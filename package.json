@@ -43,7 +43,7 @@
   "devDependencies": {
     "@ai-ecoverse/slicc-browsers": "1.21.1",
     "@ai-ecoverse/slicc-cdp": "1.47.5",
-    "@ai-ecoverse/slicc-kernel": "1.178.2",
+    "@ai-ecoverse/slicc-kernel": "1.178.3",
     "@ai-ecoverse/slicc-shared-web": "2.14.2",
     "@semantic-release/exec": "7.1.0",
     "lefthook": "2.2.2",
