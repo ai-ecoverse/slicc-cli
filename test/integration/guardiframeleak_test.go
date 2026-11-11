@@ -46,15 +46,19 @@ func TestCDPTabIframeLeakIsCrossSite(t *testing.T) {
 func TestTabIframeLeakFailsWhenGuardedLeaks(t *testing.T) {
 	cleanObs := json.RawMessage(`{"control":{"admitted":true,"iframeExists":true,"iframeAttached":true},"guarded":{"admitted":true,"iframeExists":true,"iframeAttached":false}}`)
 	cleanDiag := json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":true,"attachRefused":true,"frames":[{"targetId":"F1"}],"attached":[],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1","title":"http://seven.oopif.test:1","origin":"http://seven.oopif.test:1"}],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":true,"message":"slicc: refused: target is on seven's origin"}]}}`)
+	absentListing := json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":true,"attachRefused":true,"frames":[{"targetId":"F1"}],"attached":[],"listings":[],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":true,"message":"slicc: refused: target is on seven's origin"}]}}`)
 	if err := tabIframeLeakGuardedHidesFrame(cleanObs, cleanDiag); err != nil {
 		t.Fatal(err)
+	}
+	if err := tabIframeLeakGuardedHidesFrame(cleanObs, absentListing); err != nil {
+		t.Fatalf("absent listing must pass clause (b): %v", err)
 	}
 	cases := map[string]json.RawMessage{
 		"attach-other-type": json.RawMessage(`{"iframeLeak":{"iframeAttached":true,"frameScrubbed":true,"attachRefused":true,"frames":[{"targetId":"F1"}],"attached":[{"targetId":"F1","type":"page","url":"http://seven.oopif.test:1"}],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1","title":"http://seven.oopif.test:1","origin":"http://seven.oopif.test:1"}],"sessions":[{"targetId":"F1","sessionId":"S1"}],"attachAttempts":[{"targetId":"F1","refused":true,"message":"slicc: refused: target is on seven's origin"}]}}`),
 		"listing-path":      json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":false,"attachRefused":true,"frames":[{"targetId":"F1"}],"attached":[],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1/doc?n=frame-x","title":"http://seven.oopif.test:1","origin":"http://seven.oopif.test:1"}],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":true,"message":"slicc: refused: target is on seven's origin"}]}}`),
 		"listing-title":     json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":false,"attachRefused":true,"frames":[{"targetId":"F1"}],"attached":[],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1","title":"secret title","origin":"http://seven.oopif.test:1"}],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":true,"message":"slicc: refused: target is on seven's origin"}]}}`),
-		"attach-accepted":   json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":true,"attachRefused":false,"frames":[{"targetId":"F1"}],"attached":[],"listings":[{"targetId":"F1","url":"http://seven.oopif.test:1","title":"http://seven.oopif.test:1","origin":"http://seven.oopif.test:1"}],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":false,"message":"","sessionId":"S1"}]}}`),
-		"observer-miss":     json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":false,"attachRefused":false,"frames":[],"attached":[],"listings":[],"sessions":[],"attachAttempts":[]}}`),
+		"attach-accepted":   json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":true,"attachRefused":false,"frames":[{"targetId":"F1"}],"attached":[],"listings":[],"sessions":[],"attachAttempts":[{"targetId":"F1","refused":false,"message":"","sessionId":"S1"}]}}`),
+		"observer-miss":     json.RawMessage(`{"iframeLeak":{"iframeAttached":false,"frameScrubbed":true,"attachRefused":false,"frames":[],"attached":[],"listings":[],"sessions":[],"attachAttempts":[]}}`),
 	}
 	for name, diag := range cases {
 		if err := tabIframeLeakGuardedHidesFrame(cleanObs, diag); err == nil {

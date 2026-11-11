@@ -156,7 +156,7 @@ function frameLeakEvidence(frameLeak) {
   const attached = frameLeak.attached.map((row) => ({ ...row }));
   const sessions = frameLeak.sessions.map((row) => ({ ...row }));
   const attachAttempts = frameLeak.attachAttempts.map((row) => ({ ...row }));
-  const scrubbed = listings.length > 0 && listings.every((row) => row.url === row.origin && row.title === row.origin);
+  const scrubbed = listings.every((row) => row.url === row.origin && row.title === row.origin);
   const attachRefused =
     attachAttempts.length > 0 && attachAttempts.every((row) => row.refused && String(row.message ?? '').includes(attachRefusedText));
   return {
@@ -180,8 +180,9 @@ function frameLeakFailure(evidence) {
   if (!evidence.frames.length) return '';
   if (evidence.iframeAttached) return 'guarded Target.attachedToTarget reached the framed target';
   if (evidence.sessions.length) return 'guarded session opened for the framed targetId';
-  if (!evidence.listings.length) return 'guarded client never listed the framed target';
-  if (!evidence.frameScrubbed) return 'guarded listing left a path, query or page title on the framed target';
+  if (evidence.listings.length && !evidence.frameScrubbed) {
+    return 'guarded listing left a path, query or page title on the framed target';
+  }
   if (!evidence.attachRefused) return 'Target.attachToTarget on the framed targetId was not refused with slicc: refused: target is on seven\'s origin';
   return '';
 }

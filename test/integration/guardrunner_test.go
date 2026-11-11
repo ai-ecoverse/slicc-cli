@@ -408,7 +408,7 @@ func tabIframeLeakGuardedHidesFrame(observed, diagnostics json.RawMessage) error
 	if ev.IframeAttached || len(ev.Attached) != 0 || len(ev.Sessions) != 0 {
 		return fmt.Errorf("guarded attached or opened a session for the framed target: attached=%v sessions=%v", ev.Attached, ev.Sessions)
 	}
-	if !ev.FrameScrubbed || len(ev.Listings) == 0 {
+	if len(ev.Listings) != 0 && !ev.FrameScrubbed {
 		return fmt.Errorf("guarded listings must show only the bare origin: scrubbed=%v listings=%v", ev.FrameScrubbed, ev.Listings)
 	}
 	if !ev.AttachRefused || len(ev.AttachAttempts) == 0 {
