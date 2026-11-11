@@ -515,7 +515,16 @@ export function protectTest(getLink, describe) {
           ? await outcome(c.send('Target.closeTarget', { targetId: priorId }))
           : { ok: false, error: { message: 'no prior popup' } };
         const priorGone = priorId ? !(await c.send('Target.getTargets')).targetInfos.some((t) => t.targetId === priorId) : false;
-        const opened = c.waitEvent((e) => e.method === 'Target.targetCreated' && e.params.targetInfo.openerId === ordinaryId, 20000);
+        const known = new Set((await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId));
+        if (priorId) known.add(priorId);
+        const opened = c.waitEvent(
+          (e) =>
+            e.method === 'Target.targetCreated' &&
+            e.params.targetInfo.openerId === ordinaryId &&
+            e.params.targetInfo.type === 'page' &&
+            !known.has(e.params.targetInfo.targetId),
+          20000,
+        );
         await outcome(c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(postURL)}, '_blank'))`, returnByValue: true, userGesture: true }, ordinary.sessionId));
         const postId = (await opened).params.targetInfo.targetId;
         await sleep(500);
