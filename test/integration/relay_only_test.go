@@ -64,20 +64,18 @@ func TestInterfaceDiscoverySuccessAndRefresh(t *testing.T) {
 	}
 }
 
+func staticProbe(interfaces []*transport.Interface, err error) func() ([]*transport.Interface, error) {
+	return func() ([]*transport.Interface, error) { return interfaces, err }
+}
+
 func TestInterfaceDiscoveryFailures(t *testing.T) {
 	for name, probe := range map[string]func() ([]*transport.Interface, error){
-		"error": func() ([]*transport.Interface, error) { return nil, errors.New("synthetic failure") },
-		"panic": func() ([]*transport.Interface, error) { panic("synthetic panic") },
-		"empty": func() ([]*transport.Interface, error) { return nil, nil },
-		"invalid first": func() ([]*transport.Interface, error) {
-			return append([]*transport.Interface{nil}, syntheticInterfaces()...), nil
-		},
-		"invalid last": func() ([]*transport.Interface, error) {
-			return append(syntheticInterfaces(), nil), nil
-		},
-		"no addresses": func() ([]*transport.Interface, error) {
-			return []*transport.Interface{transport.NewInterface(net.Interface{Index: 1, Name: "empty"})}, nil
-		},
+		"error":         staticProbe(nil, errors.New("synthetic failure")),
+		"panic":         func() ([]*transport.Interface, error) { panic("synthetic panic") },
+		"empty":         staticProbe(nil, nil),
+		"invalid first": staticProbe(append([]*transport.Interface{nil}, syntheticInterfaces()...), nil),
+		"invalid last":  staticProbe(append(syntheticInterfaces(), nil), nil),
+		"no addresses":  staticProbe([]*transport.Interface{transport.NewInterface(net.Interface{Index: 1, Name: "empty"})}, nil),
 	} {
 		t.Run(name, func(t *testing.T) {
 			discovery := link.NewInterfaceDiscovery(probe, time.Second)
@@ -368,6 +366,50 @@ func TestInterfaceDiscoveryLateSuccess(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("late success spawned %d probes", calls.Load())
+	}
+}
+
+func TestInterfaceDiscoverySlowRefreshKeepsLastGoodSnapshot(t *testing.T) {
+	first := make(chan struct{})
+	finished := make(chan struct{})
+	hung := make(chan struct{})
+	defer close(hung)
+	var calls atomic.Int32
+	discovery := link.NewInterfaceDiscovery(func() ([]*transport.Interface, error) {
+		if calls.Add(1) == 1 {
+			<-first
+			defer close(finished)
+			return syntheticInterfaces(), nil
+		}
+		<-hung
+		return nil, errors.New("synthetic late probe")
+	}, 20*time.Millisecond)
+	if _, err := discovery.Interfaces(context.Background()); err == nil {
+		t.Fatal("hung first probe unexpectedly succeeded")
+	}
+	close(first)
+	<-finished
+	time.Sleep(1100 * time.Millisecond)
+	start := time.Now()
+	interfaces, err := discovery.Interfaces(context.Background())
+	if err != nil || len(interfaces) != 1 {
+		t.Fatalf("slow refresh lost the last good snapshot: interfaces=%d err=%v", len(interfaces), err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("slow refresh was not bounded: %s", elapsed)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected one refresh probe, got %d probes", calls.Load())
+	}
+	api := link.NewAPI(link.APIOptions{Discovery: discovery, Loopback: true})
+	cfg := webrtc.Configuration{ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:127.0.0.1:3478"}}}}
+	pc, err := api.NewPeerConnection(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pc.Close() }()
+	if actual := pc.GetConfiguration(); actual.ICETransportPolicy != webrtc.ICETransportPolicyAll || !reflect.DeepEqual(actual.ICEServers, cfg.ICEServers) {
+		t.Fatalf("slow refresh after a good snapshot changed ICE configuration: %+v", actual)
 	}
 }
 

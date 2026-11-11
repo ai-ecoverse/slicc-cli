@@ -27,6 +27,7 @@ type InterfaceDiscovery struct {
 	probe   func() ([]*transport.Interface, error)
 	timeout time.Duration
 	running *interfaceProbe
+	last    []*transport.Interface
 }
 
 func NewInterfaceDiscovery(probe func() ([]*transport.Interface, error), timeout time.Duration) *InterfaceDiscovery {
@@ -84,6 +85,15 @@ func (d *InterfaceDiscovery) Interfaces(ctx context.Context) ([]*transport.Inter
 		}
 		return p.interfaces, p.err
 	case <-wait.Done():
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		d.mu.Lock()
+		last := d.last
+		d.mu.Unlock()
+		if last != nil {
+			return last, nil
+		}
 		return nil, wait.Err()
 	}
 }
@@ -118,6 +128,9 @@ func (d *InterfaceDiscovery) run(p *interfaceProbe) {
 		hasAddresses = hasAddresses || len(addresses) > 0
 	}
 	if hasAddresses {
+		d.mu.Lock()
+		d.last = p.interfaces
+		d.mu.Unlock()
 		return
 	}
 	p.interfaces = nil
