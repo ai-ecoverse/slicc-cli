@@ -44,14 +44,14 @@ function describeSessions(row) {
 }
 
 async function noteForwarded(gateURL, forwarded, msg) {
-  if (!gateURL || !msg || !Number.isInteger(msg.id)) return;
+  if (!gateURL || !msg || !msg.method) return;
   try {
     const r = await fetch(gateURL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         action: 'forwarded',
-        wireId: msg.id,
+        wireId: Number.isInteger(msg.id) ? msg.id : 0,
         method: msg.method,
         sessionId: msg.sessionId ?? '',
       }),

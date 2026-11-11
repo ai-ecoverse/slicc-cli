@@ -1163,6 +1163,18 @@ export function protectTest(getLink, describe) {
         await c.send('Browser.getBrowserCommandLine');
         return { completed: await done, events: c.events.map((e) => JSON.stringify(e)) };
       }),
+    holdTimeoutHide: (browser) =>
+      run(browser, async (c) => {
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        const start = Date.now();
+        const mark = c.events.length;
+        await c.send('Browser.getBrowserCommandLine');
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const attached = c.events
+          .slice(mark)
+          .filter((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'HELD').length;
+        return { ms: Date.now() - start, attached };
+      }),
     navHang: (browser, opener, hang, wait) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(opener);
@@ -1779,6 +1791,21 @@ export function protectTest(getLink, describe) {
           list: (await c.send('Target.getTargets')).targetInfos,
           events: c.events.filter((e) => ['Target.targetCreated', 'Target.targetInfoChanged'].includes(e.method)).map((e) => ({ method: e.method, info: e.params.targetInfo })),
           text: c.events.filter((e) => ['Page.frameNavigated', 'Console.messageAdded'].includes(e.method)).map((e) => e.method === 'Page.frameNavigated' ? e.params.frame.name : e.params.message.text),
+        };
+      }),
+    iframeListingScrub: (browser) =>
+      run(browser, async (c) => {
+        const done = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === 'IFRAME', 15000);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await done;
+        const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === 'IFRAME');
+        const { targetInfo: info } = await c.send('Target.getTargetInfo', { targetId: 'IFRAME' });
+        return {
+          listed,
+          info,
+          events: c.events
+            .filter((e) => ['Target.targetCreated', 'Target.targetInfoChanged'].includes(e.method) && e.params.targetInfo.targetId === 'IFRAME')
+            .map((e) => ({ method: e.method, url: e.params.targetInfo.url, title: e.params.targetInfo.title })),
         };
       }),
     extraInfo: (browser, last) =>

@@ -124,6 +124,11 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 func (g *guard) admitLocked(c *command) pageVerdict {
 	g.narrowBindingLocked(c)
 	g.stripIsolatedWorldLocked(c)
+	if c.method == "Page.removeScriptToEvaluateOnNewDocument" {
+		if id, _ := c.params["identifier"].(string); id != "" {
+			delete(g.scripts, admittedScriptKey(c.session, id))
+		}
+	}
 	k := callKey{c.session, c.id}
 	kind := resultKind(c.method)
 	g.pending[k] = kind
@@ -311,7 +316,7 @@ func (g *guard) laterDocumentRuleLocked(c *command) string {
 			return ""
 		}
 	case "Page.removeScriptToEvaluateOnNewDocument":
-		if id, _ := c.params["identifier"].(string); id != "" && g.scripts[id] {
+		if id, _ := c.params["identifier"].(string); id != "" && g.scripts[admittedScriptKey(c.session, id)] {
 			return ""
 		}
 	case "Runtime.addBinding":

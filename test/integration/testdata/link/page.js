@@ -566,6 +566,8 @@ globalThis.linkTest = {
   cdp: cdpTest(() => state.link, describe),
   playwrightRelay: (url, browser) => import('./playwright.js').then((m) => m.playwrightRelay(() => state.link, url, browser)),
   laterAdmission: (opts) => import('./persistent.js').then((m) => m.laterAdmissionProof(() => state.link, opts)),
+  stockIsolatedWorld: (opts) => import('./stocksetup.js').then((m) => m.stockIsolatedWorld(() => state.link, opts)),
+  stockScriptRemoveTwice: (opts) => import('./stocksetup.js').then((m) => m.stockScriptRemoveTwice(() => state.link, opts)),
   stickyAdmission: (opts) => import('./sticky.js').then((m) => m.stickyAdmissionProof(() => state.link, opts)),
   clientResource: (opts) => import('./client-resource.js').then((m) => m.clientResourceRow(() => state.link, opts)),
   errorContent: (opts) => import('./errorcontent.js').then((m) => m.errorContent(() => state.link, opts)),

@@ -37,6 +37,10 @@ type callKey struct {
 	id      int64
 }
 
+func admittedScriptKey(session, identifier string) string {
+	return session + "\x00" + identifier
+}
+
 type callKind int
 
 const (

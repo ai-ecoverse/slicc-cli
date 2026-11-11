@@ -209,7 +209,7 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		}
 	case kindScript:
 		if id, _ := res["identifier"].(string); id != "" {
-			g.scripts[id] = true
+			g.scripts[admittedScriptKey(session, id)] = true
 		}
 	}
 	return nil
