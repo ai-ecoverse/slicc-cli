@@ -3,6 +3,7 @@ package cdp
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
@@ -250,6 +251,88 @@ func TestIframeHoldBrowserLevelChromeErrorReleasesForConfirm(t *testing.T) {
 	}
 	if !g.listingHiddenLocked(targetInfo{TargetID: "CHILD", Type: "iframe", URL: frame.url}) {
 		t.Fatal("browser-level chrome-error iframe with unknown ancestry was listable")
+	}
+}
+
+func chromeErrorConfirmMessage(target, parent, unreachable string) message {
+	frame := map[string]any{"id": target, "url": "chrome-error://chromewebdata/", "securityOrigin": "://", "unreachableUrl": unreachable}
+	if parent != "" {
+		frame["parentId"] = parent
+	}
+	raw, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": frame}})
+	return message{Result: raw}
+}
+
+func chromeErrorConfirmGuard(t *testing.T, parent string) (*guard, *target, *navTarget) {
+	t.Helper()
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "SEVEN", Type: "page", URL: "https://seven.sliccy.ai/doc"}, {TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	frame := &target{id: "CHILD", typ: "iframe", url: "chrome-error://chromewebdata/", shown: true}
+	g.targets["CHILD"] = frame
+	g.sessions["S-child"] = &session{id: "S-child", target: "CHILD", typ: "iframe"}
+	if parent == "HELD" {
+		g.targets["MID"] = &target{id: "MID", typ: "iframe", url: "https://ordinary.test/mid"}
+		g.held["S-mid"] = &heldSession{id: "S-mid", target: "MID", typ: "iframe"}
+	}
+	confirm := &navTarget{ready: make(chan struct{}), start: time.Now()}
+	nt := &navTarget{target: "CHILD", session: "GUARD", iframe: true, confirm: confirm}
+	g.navTargets["CHILD"] = nt
+	return g, frame, nt
+}
+
+func TestIframeHoldChromeErrorFrameTreeProtectedParent(t *testing.T) {
+	g, frame, nt := chromeErrorConfirmGuard(t, "SEVEN")
+	_ = g.confirmedTargetLocked(nt, nt.confirm, 0, chromeErrorConfirmMessage("CHILD", "SEVEN", "https://ordinary.test/fail"))
+	if g.frameParents["CHILD"] != "SEVEN" {
+		t.Fatalf("frame-tree parent was not recorded: %q", g.frameParents["CHILD"])
+	}
+	if !frame.protected || !nt.confirm.done || !nt.confirm.failed {
+		t.Fatalf("chrome-error under seven was not protected: protected=%v done=%v failed=%v", frame.protected, nt.confirm.done, nt.confirm.failed)
+	}
+	if !g.sessionRefusedLocked("S-child") {
+		t.Fatal("client session remained admitted under seven")
+	}
+	e := reviewCommand(g, `{"id":2,"sessionId":"S-child","method":"Runtime.evaluate","params":{"expression":"window.parent.postMessage({type:'test'}, '*')"}}`)
+	if len(e.forward) > 0 {
+		t.Errorf("evaluate forwarded under seven: %s", e.forward)
+	}
+}
+
+func TestIframeHoldChromeErrorFrameTreeHeldOrUnknownParent(t *testing.T) {
+	for _, parent := range []string{"HELD", "UNKNOWN"} {
+		t.Run(parent, func(t *testing.T) {
+			id := parent
+			if parent == "HELD" {
+				id = "MID"
+			}
+			g, frame, nt := chromeErrorConfirmGuard(t, parent)
+			_ = g.confirmedTargetLocked(nt, nt.confirm, 0, chromeErrorConfirmMessage("CHILD", id, "https://ordinary.test/fail"))
+			if !frame.protected || !nt.confirm.failed {
+				t.Fatalf("chrome-error with %s parent was released: protected=%v failed=%v parent=%q", parent, frame.protected, nt.confirm.failed, g.frameParents["CHILD"])
+			}
+			if !g.sessionRefusedLocked("S-child") {
+				t.Fatal("client session remained admitted")
+			}
+		})
+	}
+}
+
+func TestIframeHoldChromeErrorFrameTreeOrdinaryOrMissingParent(t *testing.T) {
+	for _, parent := range []string{"", "PAGE"} {
+		name := parent
+		if name == "" {
+			name = "none"
+		}
+		t.Run(name, func(t *testing.T) {
+			g, frame, nt := chromeErrorConfirmGuard(t, parent)
+			_ = g.confirmedTargetLocked(nt, nt.confirm, 0, chromeErrorConfirmMessage("CHILD", parent, "https://ordinary.test/fail"))
+			if frame.protected || nt.confirm.failed {
+				t.Fatalf("chrome-error with ordinary/missing parent stayed blocked: protected=%v failed=%v parent=%q", frame.protected, nt.confirm.failed, g.frameParents["CHILD"])
+			}
+			if !nt.confirm.done {
+				t.Fatal("confirmation did not settle")
+			}
+		})
 	}
 }
 
