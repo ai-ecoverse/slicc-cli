@@ -69,11 +69,14 @@ const observerHref = async (targetId) => {
 
 const waitGone = async (c, targetId, close) => {
   if (!close?.ok) return false;
-  for (let tries = 0; tries < 50; tries += 1) {
+  const destroyed = (e) => e.method === 'Target.targetDestroyed' && e.params?.targetId === targetId;
+  const deadline = Date.now() + 10000;
+  for (;;) {
+    if (c.events.some(destroyed)) return true;
     if (!(await c.send('Target.getTargets')).targetInfos.some((t) => t.targetId === targetId)) return true;
+    if (Date.now() >= deadline) return false;
     await sleep(100);
   }
-  return false;
 };
 
 const observerScriptIDs = async (scriptTargets) => {
@@ -575,9 +578,9 @@ export function protectTest(getLink, describe) {
         const attach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
         const activate = await outcome(c.send('Target.activateTarget', { targetId }));
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
-        let targetInfos = (await c.send('Target.getTargets')).targetInfos;
-        const tabGone = close.ok && close.result?.success === true && !targetInfos.some((t) => t.targetId === targetId);
+        const targetInfos = (await c.send('Target.getTargets')).targetInfos;
         const untouchedGone = untouchedId ? !targetInfos.some((t) => t.targetId === untouchedId) : false;
+        const tabGone = close.ok && close.result?.success === true && (await waitGone(c, targetId, close));
         const ordinary = await c.send('Target.attachToTarget', { targetId: ordinaryId, flatten: true });
         await c.send('Page.enable', {}, ordinary.sessionId);
         await c.send('Target.setDiscoverTargets', { discover: true });
@@ -599,8 +602,7 @@ export function protectTest(getLink, describe) {
         const postId = (await opened).params.targetInfo.targetId;
         await sleep(500);
         const post = await outcome(c.send('Target.closeTarget', { targetId: postId }));
-        targetInfos = (await c.send('Target.getTargets')).targetInfos;
-        const postGone = post.ok && post.result?.success === true && !targetInfos.some((t) => t.targetId === postId);
+        const postGone = post.ok && post.result?.success === true && (await waitGone(c, postId, post));
         const host = await outcome(c.send('Target.closeTarget', { targetId: hostId }));
         const browserTarget = browserId
           ? await outcome(c.send('Target.closeTarget', { targetId: browserId }))
