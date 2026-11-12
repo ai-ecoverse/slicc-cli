@@ -184,3 +184,66 @@ func TestIframeHoldOrdinaryUnderOrdinary(t *testing.T) {
 		t.Fatalf("ordinary iframe was refused: %q", g.targetReasonLocked("F"))
 	}
 }
+
+func TestIframeHoldURLLessStaysPendingUntilURL(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/"}
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	frame := &target{id: "F", typ: "iframe", url: "", parentFrame: "FRAME-plain", shown: false}
+	g.targets["F"] = frame
+	g.held["S-F"] = &heldSession{id: "S-F", parent: "S-page", target: "F", typ: "iframe", params: map[string]any{"sessionId": "S-F"}, waiting: true}
+	if g.iframeUnresolvedLocked(frame) {
+		t.Fatal("known parent made a URL-less iframe ancestry-unresolved")
+	}
+	if !g.iframePendingLocked(frame) {
+		t.Fatal("URL-less iframe under a known parent was not pending")
+	}
+	settled := g.settleHeldWorkersLocked()
+	if len(settled.page) != 0 || g.held["S-F"] == nil {
+		t.Fatalf("settle delivered a URL-less iframe: page=%d held=%v", len(settled.page), g.held["S-F"] != nil)
+	}
+	frame.url = "https://ordinary.test/embed"
+	frame.protected = g.decide(frame, false)
+	settled = g.settleHeldWorkersLocked()
+	if g.held["S-F"] != nil || len(settled.page) == 0 {
+		t.Fatalf("settle did not deliver after URL: held=%v page=%d", g.held["S-F"] != nil, len(settled.page))
+	}
+}
+
+func TestIframeHoldBrowserLevelNilParentReleasesOnURL(t *testing.T) {
+	g := iframeHoldGuard(t)
+	frame := &target{id: "CHILD", typ: "iframe", url: "https://ordinary.test/embed", shown: false}
+	g.targets["CHILD"] = frame
+	g.held["S-child"] = &heldSession{id: "S-child", parent: "", target: "CHILD", typ: "iframe", params: map[string]any{"sessionId": "S-child"}, waiting: false}
+	if g.iframeUnresolvedLocked(frame) {
+		t.Fatal("browser-level iframe with no parent target stayed ancestry-unresolved after URL")
+	}
+	if g.iframePendingLocked(frame) {
+		t.Fatal("browser-level iframe with a URL stayed pending")
+	}
+	settled := g.settleHeldWorkersLocked()
+	if g.held["S-child"] != nil || len(settled.page) == 0 {
+		t.Fatalf("settle did not deliver browser-level iframe: held=%v page=%d", g.held["S-child"] != nil, len(settled.page))
+	}
+}
+
+func TestIframeHoldProtectedAncestorHidesURLLess(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["SEVEN"] = &target{id: "SEVEN", typ: "page", url: "https://seven.sliccy.ai/doc", protected: true}
+	g.sessions["S-seven"] = &session{id: "S-seven", target: "SEVEN", typ: "page"}
+	frame := &target{id: "F", typ: "iframe", url: "", parentFrame: "FRAME-seven", shown: false}
+	g.targets["F"] = frame
+	g.noteFrameParentLocked("FRAME-seven", "SEVEN")
+	g.noteFrameParentLocked("F", "FRAME-seven")
+	g.held["S-F"] = &heldSession{id: "S-F", parent: "S-seven", target: "F", typ: "iframe", params: map[string]any{"sessionId": "S-F"}, waiting: true}
+	settled := g.settleHeldWorkersLocked()
+	if g.held["S-F"] != nil {
+		t.Fatal("URL-less iframe under seven stayed held instead of hiding")
+	}
+	if !frame.protected {
+		t.Fatal("URL-less iframe under seven was not protected on settle")
+	}
+	if len(settled.page) != 0 {
+		t.Fatalf("protected URL-less iframe was delivered to the page: %d events", len(settled.page))
+	}
+}

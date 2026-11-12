@@ -32,7 +32,7 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 		return nil
 	}
 	if info.Type == "iframe" && g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
-		g.logf("cdp: holding an auto-attached iframe until its parent chain is known target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
+		g.logf("cdp: holding an auto-attached iframe until its parent target is known target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 		return nil
 	}
 	g.logf("cdp: holding an auto-attached session until its target has a URL target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
@@ -54,7 +54,7 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 		if workerTypes[h.typ] && g.workerUnresolvedLocked(g.targets[targetID]) {
 			continue
 		}
-		if h.typ == "iframe" && g.iframeUnresolvedLocked(g.targets[targetID]) {
+		if h.typ == "iframe" && g.iframePendingLocked(g.targets[targetID]) {
 			continue
 		}
 		part := g.deliverHeldLocked(h)
@@ -78,7 +78,7 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 		g.logf("cdp: released an auto-attached worker after its URL or creator frame was known target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, waiting)
 	case h.typ == "iframe":
 		waiting = h.waiting
-		g.logf("cdp: released an auto-attached iframe after its parent chain was known target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, waiting)
+		g.logf("cdp: released an auto-attached iframe after its URL and parent target were known target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, waiting)
 	default:
 		g.logf("cdp: released an auto-attached session after its target got a URL target=%s session=%s parent=%s", h.target, h.id, h.parent)
 	}
@@ -134,7 +134,7 @@ func (g *guard) settleHeldWorkersLocked() browserVerdict {
 		if workerTypes[h.typ] && g.workerUnresolvedLocked(t) {
 			continue
 		}
-		if h.typ == "iframe" && g.iframeUnresolvedLocked(t) {
+		if h.typ == "iframe" && g.iframePendingLocked(t) {
 			continue
 		}
 		part := g.deliverHeldLocked(h)

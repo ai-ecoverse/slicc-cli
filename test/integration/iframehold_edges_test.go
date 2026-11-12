@@ -29,7 +29,7 @@ func TestCDPIframeHoldAncestorEdges(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestIframeHold(OrdinaryURLUnderSeven|SrcdocUnderSeven|NestedUnderSevenOrdinary|OrdinaryURLUnderVault|SrcdocUnderVault|NestedUnderVaultSrcdoc|UnknownParentTargetStaysHeld|InProcessFrameUnderOrdinaryParent|RecordedFrameUnderSeven|StickyAfterAncestorNavigatesAway|OrdinaryUnderOrdinary)$", "./internal/caps/cdp")
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestIframeHold(OrdinaryURLUnderSeven|SrcdocUnderSeven|NestedUnderSevenOrdinary|OrdinaryURLUnderVault|SrcdocUnderVault|NestedUnderVaultSrcdoc|UnknownParentTargetStaysHeld|InProcessFrameUnderOrdinaryParent|RecordedFrameUnderSeven|StickyAfterAncestorNavigatesAway|OrdinaryUnderOrdinary|URLLessStaysPendingUntilURL|BrowserLevelNilParentReleasesOnURL|ProtectedAncestorHidesURLLess)$", "./internal/caps/cdp")
 	command.Dir = root
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("iframe hold ancestor edges: %v\n%s", err, output)

@@ -605,9 +605,19 @@ func (g *guard) iframeUnresolvedLocked(t *target) bool {
 	}
 	parent := g.iframeParentTargetLocked(t)
 	if parent == nil {
-		return true
+		return false
 	}
 	return g.targetUnconfirmedLocked(parent.id)
+}
+
+func (g *guard) iframePendingLocked(t *target) bool {
+	if t == nil || t.gone || t.typ != "iframe" || t.protected || g.explicit[t.id] > 0 {
+		return false
+	}
+	if g.iframeUnresolvedLocked(t) {
+		return true
+	}
+	return t.url == ""
 }
 
 func (g *guard) iframeHeldLocked(id string) bool {
