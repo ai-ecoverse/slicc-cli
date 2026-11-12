@@ -1414,6 +1414,24 @@ export function protectTest(getLink, describe) {
           })),
         };
       }),
+    dataWorkerFrames: (browser) =>
+      run(browser, async (c) => {
+        const snapshot = (events) => events.map((e) => ({
+          method: e.method,
+          sessionId: e.sessionId || e.params?.sessionId || '',
+          targetId: e.params?.targetInfo?.targetId || e.params?.targetId || '',
+        }));
+        const plain = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'S-data-plain', 5000);
+        const mark = c.events.length;
+        await c.send('Browser.getHistogram', { name: 'arm-data-worker' });
+        await plain;
+        return {
+          events: snapshot(c.events.slice(mark)),
+          list: (await c.send('Target.getTargets')).targetInfos,
+          plainAttach: await outcome(c.send('Target.attachToTarget', { targetId: 'W-data-plain', flatten: true })),
+          sevenAttach: await outcome(c.send('Target.attachToTarget', { targetId: 'W-data-seven', flatten: true })),
+        };
+      }),
     unresolvedWorkerTimeout: (browser) =>
       run(browser, async (c) => {
         const start = Date.now();

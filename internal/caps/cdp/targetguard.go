@@ -173,13 +173,21 @@ func (g *guard) confirmReasonLocked(nt *navTarget) string {
 }
 
 func (g *guard) targetReasonLocked(id string) string {
-	if g.targetProtectedLocked(id) || g.workerConcealedLocked(id) || g.workerUnshownLocked(id) {
+	if g.targetProtectedLocked(id) || g.workerConcealedLocked(id) {
+		return refusedTarget
+	}
+	if t := g.targets[id]; t != nil && workerTypes[t.typ] && !t.shown && g.workerUnresolvedLocked(t) {
 		return refusedTarget
 	}
 	if g.targetUnconfirmedLocked(id) {
 		return g.confirmReasonLocked(g.navTargets[id])
 	}
 	return ""
+}
+
+type touchReservation struct {
+	target string
+	seq    int
 }
 
 func (g *guard) closeTargetReasonLocked(id string) string {
@@ -333,37 +341,83 @@ func (g *guard) markOpenedSeenLocked(id string) bool {
 }
 
 func (g *guard) trimTouchedLocked() {
-	for len(g.touchedOrder) > maxTombstones {
-		old := g.touchedOrder[0]
-		g.touchedOrder = g.touchedOrder[1:]
+	kept := g.touchedOrder[:0]
+	for _, old := range g.touchedOrder {
+		t := g.targets[old]
+		if t != nil && !t.gone {
+			kept = append(kept, old)
+			continue
+		}
 		delete(g.touchedAt, old)
 	}
+	g.touchedOrder = kept
 }
 
-func (g *guard) noteWireTouchLocked(id string) {
+func (g *guard) noteWireTouchLocked(k callKey, id string) {
 	if id == "" {
 		return
 	}
 	if _, ok := g.touchedAt[id]; ok {
 		return
 	}
-	if _, ok := g.pendingTouch[id]; ok {
+	if _, ok := g.pendingTouch[k]; ok {
 		return
 	}
 	g.touchSeq++
-	g.pendingTouch[id] = g.touchSeq
+	g.pendingTouch[k] = touchReservation{target: id, seq: g.touchSeq}
 }
 
-func (g *guard) dropPendingTouchLocked(id string) {
-	delete(g.pendingTouch, id)
+func (g *guard) dropPendingTouchLocked(k callKey) {
+	delete(g.pendingTouch, k)
+}
+
+func (g *guard) pendingTouchSeqLocked(id string) (int, bool) {
+	best := 0
+	found := false
+	for _, r := range g.pendingTouch {
+		if r.target != id {
+			continue
+		}
+		if !found || r.seq < best {
+			best = r.seq
+			found = true
+		}
+	}
+	return best, found
+}
+
+func (g *guard) clearPendingTouchForTargetLocked(id string) {
+	for k, r := range g.pendingTouch {
+		if r.target == id {
+			delete(g.pendingTouch, k)
+		}
+	}
+}
+
+func (g *guard) preserveOpenedSeenLocked(id string) bool {
+	seenAt, ok := g.openedSeenAt[id]
+	if !ok {
+		return false
+	}
+	parent, waiting := g.openedWait[id]
+	if !waiting || parent == "" {
+		return false
+	}
+	if seq, ok := g.pendingTouchSeqLocked(parent); ok && seq <= seenAt {
+		return true
+	}
+	if touch, ok := g.touchedAt[parent]; ok && touch <= seenAt {
+		return true
+	}
+	return false
 }
 
 func (g *guard) markTouchedLocked(id string) {
 	if id == "" {
 		return
 	}
-	seq, pending := g.pendingTouch[id]
-	delete(g.pendingTouch, id)
+	seq, pending := g.pendingTouchSeqLocked(id)
+	g.clearPendingTouchForTargetLocked(id)
 	if _, ok := g.touchedAt[id]; ok {
 		return
 	}

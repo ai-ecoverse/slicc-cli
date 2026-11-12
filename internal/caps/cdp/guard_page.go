@@ -150,7 +150,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	if t := c.str("targetId"); c.method == "Target.attachToTarget" && t != "" {
 		g.attachCalls[k] = t
 		g.explicit[t]++
-		g.noteWireTouchLocked(t)
+		g.noteWireTouchLocked(k, t)
 	}
 	v := pageVerdict{forward: c.bytes(), cmd: c}
 	v.send = append(v.send, g.releaseOnAutoAttachStopLocked(c)...)

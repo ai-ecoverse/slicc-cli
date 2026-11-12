@@ -112,7 +112,7 @@ type guard struct {
 	listed                map[string]bool
 	touchSeq              int
 	touchedAt             map[string]int
-	pendingTouch          map[string]int
+	pendingTouch          map[callKey]touchReservation
 	touchedOrder          []string
 	openedSeenAt          map[string]int
 	openedSeenOrder       []string
@@ -217,7 +217,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		opened:                map[string]bool{},
 		listed:                map[string]bool{},
 		touchedAt:             map[string]int{},
-		pendingTouch:          map[string]int{},
+		pendingTouch:          map[callKey]touchReservation{},
 		openedSeenAt:          map[string]int{},
 		openedIneligible:      map[string]bool{},
 		openedWait:            map[string]string{},
@@ -468,7 +468,7 @@ func parentFrameOf(info targetInfo) string {
 }
 
 func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
-	if id == "" || protect.Inheriting(raw) {
+	if id == "" || protect.Inheriting(raw) || raw == "null" {
 		return nil
 	}
 	if _, ok := g.childFrames[id]; !ok && len(g.childFrames) >= 4096 {
@@ -476,6 +476,13 @@ func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
 	}
 	g.childFrames[id] = raw
 	return g.redecideWorkersLocked(id)
+}
+
+func (g *guard) forgetChildFrameLocked(id string) {
+	if id == "" {
+		return
+	}
+	delete(g.childFrames, id)
 }
 
 func (g *guard) redecideWorkersLocked(creator string) [][]byte {
@@ -582,8 +589,14 @@ func (g *guard) workerConcealedLocked(id string) bool {
 
 func (g *guard) workerCreatorUnprotectedLocked(t *target) bool {
 	known := func(id string) bool {
-		c := g.targets[id]
-		return id != "" && c != nil && !c.gone && !c.protected
+		if id == "" {
+			return false
+		}
+		if c := g.targets[id]; c != nil && !c.gone && !c.protected {
+			return true
+		}
+		raw := g.childFrames[id]
+		return raw != "" && raw != "null" && !protect.Inheriting(raw) && !g.o.Loaded(raw)
 	}
 	return known(t.openerFrame) || known(t.opener) || known(t.parentFrame)
 }
@@ -745,6 +758,7 @@ func (g *guard) destroyedLocked(id string) {
 	delete(g.frameProbeAttempts, id)
 	delete(g.frameProbed, id)
 	delete(g.frames, id)
+	g.forgetChildFrameLocked(id)
 	g.forgetExtensionFrameURLLocked("", id)
 	g.forgetExtensionProbeWorldsForTargetLocked(id)
 	g.navForgetLocked(id)

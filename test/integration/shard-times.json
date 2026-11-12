@@ -518,6 +518,9 @@
     "TestWasiWatch": 6.5,
     "TestWatchJSONAndThinking": 2.1,
     "TestWatchLocalResumesWithoutDuplicates": 3.9,
-    "TestWatchOverTheTrayReconnects": 5.2
+    "TestWatchOverTheTrayReconnects": 5.2,
+    "TestCDPCloseProtectedAvailabilityEdges": 2.0,
+    "TestCDPWorkerHoldFollowUpEdges": 2.0,
+    "TestCDPDeliversDataWorkersFromOrdinarySubFrames": 20.0
   }
 }
