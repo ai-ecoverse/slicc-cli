@@ -504,16 +504,7 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 	}
 	waitHref(t, seed, e.allowed)
 	_ = seed.Detach(ctx)
-	var browserID string
-	infos, err := e.b.client.Targets(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, ti := range infos {
-		if ti.Type == "browser" {
-			browserID = ti.TargetID
-		}
-	}
+	browserID := e.browserTargetID(t)
 	postURL := e.seven + "/frame.html?n=post-close"
 	var r struct {
 		Untouched     cdpOutcome `json:"untouched"`
@@ -548,7 +539,7 @@ func (e *protectEnv) testCloseProtected(t *testing.T) {
 		t.Fatalf("closing a popup opened after the stream attached to its opener: %+v", r)
 	case !r.Host.refused():
 		t.Fatalf("closing the link's own seven page: %+v", r.Host)
-	case browserID != "" && !r.BrowserTarget.refused():
+	case !r.BrowserTarget.refused():
 		t.Fatalf("closing the browser target: %+v", r.BrowserTarget)
 	case !r.Up:
 		t.Fatal("the link went down")
@@ -631,6 +622,76 @@ func TestCDPCloseProtectedOpenedSeenBound(t *testing.T) {
 	}
 }
 
+func TestCDPCloseProtectedOpenedSeenAfterTrim(t *testing.T) {
+	env := setupProtectAttachEnv(t, []string{"SLICC_CDP_OPENED_SEEN=2"})
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	ordinary, opener := env.directTab(t, env.allowed+"/?n=seen-trim-opener")
+	_ = opener.Detach(ctx)
+	postURL := env.seven + "/frame.html?n=seen-trim-post"
+	var r struct {
+		Close  cdpOutcome `json:"close"`
+		Gone   bool       `json:"gone"`
+		PostID string     `json:"postId"`
+	}
+	env.evalJSON(t, "linkTest.protect.closeProtectedOpenedSeenAfterTrim("+jsArgs("chrome", ordinary, postURL, 4)+")", &r)
+	if r.PostID != "" {
+		t.Cleanup(func() { env.b.closeTarget(r.PostID) })
+	}
+	if !r.Close.OK || !r.Gone {
+		t.Fatalf("post-attach popup not closable after gone first-sights were trimmed under a live one: %+v", r)
+	}
+}
+
+func TestCDPCloseProtectedUntouchedRefused(t *testing.T) {
+	env := setupProtect(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	untouched, s := env.directTab(t, env.seven+"/frame.html?n=untouched-only")
+	_ = s.Detach(ctx)
+	var r struct {
+		Close cdpOutcome `json:"close"`
+		Gone  bool       `json:"gone"`
+	}
+	env.evalJSON(t, "linkTest.protect.closeTarget("+jsArgs("chrome", untouched)+")", &r)
+	if !r.Close.refused() || r.Gone {
+		t.Fatalf("closing an untouched protected tab with closeProtected declared: %+v", r)
+	}
+	still, err := env.b.client.Targets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ti := range still {
+		if ti.TargetID == untouched {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("the untouched protected tab was closed")
+	}
+}
+
+func (e *protectEnv) browserTargetID(t *testing.T) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var info struct {
+		TargetInfo struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+		} `json:"targetInfo"`
+	}
+	if err := e.b.client.Call(ctx, "", "Target.getTargetInfo", map[string]any{}, &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.TargetInfo.TargetID == "" || info.TargetInfo.Type != "browser" {
+		t.Fatalf("Target.getTargetInfo without targetId: %+v", info.TargetInfo)
+	}
+	return info.TargetInfo.TargetID
+}
+
 func (e *protectEnv) testRestoreRace(t *testing.T) {
 	doc := e.seven + "/frame.html?n=race"
 	id, s := e.directTab(t, doc)
@@ -650,7 +711,6 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 		Detached bool       `json:"detached"`
 		After    cdpOutcome `json:"after"`
 		Reattach cdpOutcome `json:"reattach"`
-		Close    cdpOutcome `json:"close"`
 	}
 	e.evalJSONWithObserver(t, "linkTest.protect.restoreRace("+jsArgs("chrome", id, e.seven)+")", &r)
 	switch {
@@ -660,8 +720,17 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 		t.Fatalf("commands ran in seven's restored document: %+v", r)
 	case !r.Detached || !r.After.refused() || !r.Reattach.refused():
 		t.Fatalf("seven's restored document didn't lock the tab: %+v", r)
-	case !r.Close.OK:
-		t.Fatalf("closing the restored locked tab: %+v", r.Close)
+	}
+	if href := (&navEnv{linkEnv: e.linkEnv}).directHref(t, id); href != doc {
+		t.Fatalf("history.back did not restore seven's document: %q want %q", href, doc)
+	}
+	var close struct {
+		Close cdpOutcome `json:"close"`
+		Gone  bool       `json:"gone"`
+	}
+	e.evalJSON(t, "linkTest.protect.closeTarget("+jsArgs("chrome", id)+")", &close)
+	if !close.Close.OK || !close.Gone {
+		t.Fatalf("closing the restored locked tab: %+v", close)
 	}
 	t.Logf("%d probes attempted, %d unanswered after 1s, and %d attaches raced the restore; close ok", r.Probes, r.Stuck, r.Attaches)
 }

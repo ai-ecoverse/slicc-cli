@@ -295,17 +295,18 @@ func (g *guard) forgetOpenedSeenLocked(id string) {
 }
 
 func (g *guard) trimOpenedSeenLocked() {
-	for len(g.openedSeenOrder) > 0 {
-		old := g.openedSeenOrder[0]
+	kept := g.openedSeenOrder[:0]
+	for _, old := range g.openedSeenOrder {
 		t := g.targets[old]
 		if t != nil && !t.gone {
-			return
+			kept = append(kept, old)
+			continue
 		}
-		g.openedSeenOrder = g.openedSeenOrder[1:]
 		delete(g.openedSeenAt, old)
 		delete(g.openedIneligible, old)
 		delete(g.openedWait, old)
 	}
+	g.openedSeenOrder = kept
 }
 
 func (g *guard) markOpenedSeenLocked(id string) bool {
@@ -324,6 +325,14 @@ func (g *guard) markOpenedSeenLocked(id string) bool {
 	return true
 }
 
+func (g *guard) trimTouchedLocked() {
+	for len(g.touchedOrder) > maxTombstones {
+		old := g.touchedOrder[0]
+		g.touchedOrder = g.touchedOrder[1:]
+		delete(g.touchedAt, old)
+	}
+}
+
 func (g *guard) markTouchedLocked(id string) {
 	if id == "" {
 		return
@@ -333,6 +342,8 @@ func (g *guard) markTouchedLocked(id string) {
 	}
 	g.touchSeq++
 	g.touchedAt[id] = g.touchSeq
+	g.touchedOrder = append(g.touchedOrder, id)
+	g.trimTouchedLocked()
 	g.logf("cdp: stream touch target=%s touchSeq=%d", id, g.touchSeq)
 	g.recheckOpenedWaitLocked(id)
 }

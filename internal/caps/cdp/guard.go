@@ -111,6 +111,7 @@ type guard struct {
 	listed                map[string]bool
 	touchSeq              int
 	touchedAt             map[string]int
+	touchedOrder          []string
 	openedSeenAt          map[string]int
 	openedSeenOrder       []string
 	openedIneligible      map[string]bool

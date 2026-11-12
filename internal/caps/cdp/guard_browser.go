@@ -178,6 +178,9 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		var send [][]byte
 		for _, item := range list {
 			info, _ := toInfo(item)
+			if info.TargetID != "" && !g.opened[info.TargetID] {
+				g.listed[info.TargetID] = true
+			}
 			send = append(send, g.infoLocked(item)...)
 			if listed(info) {
 				kept = append(kept, item)
