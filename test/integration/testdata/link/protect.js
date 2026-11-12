@@ -2103,6 +2103,8 @@ export function protectTest(getLink, describe) {
           list: (await c.send('Target.getTargets')).targetInfos,
           framedAttach: await attach('W-framed'),
           sharedAttach: await attach('W-shared'),
+          staleAttach: await attach('W-stale'),
+          opaqueAttach: await attach('W-opaque'),
           serviceAttach: await attach('W-service'),
           framedInfo: await info('W-framed'),
           ordinaryInfo: await info('W-ordinary'),
@@ -2115,6 +2117,29 @@ export function protectTest(getLink, describe) {
             text: e.params?.message?.text || e.params?.entry?.text || e.params?.args?.[0]?.value || '',
           })),
         };
+      }),
+    closeProtectedKeptFake: (browser) =>
+      run(browser, async (c) => {
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        const touch = async (targetId) => {
+          const attached = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+          if (!attached.ok) return attached;
+          const sessionId = attached.result.sessionId;
+          await outcome(c.send('Page.enable', {}, sessionId));
+          await outcome(c.send('Target.detachFromTarget', { sessionId }));
+          return attached;
+        };
+        await touch('P-ordinary');
+        await touch('T-os');
+        await touch('T-vault');
+        await touch('T-error');
+        const os = await outcome(c.send('Target.closeTarget', { targetId: 'T-os' }));
+        const osGone = await waitGone(c, 'T-os', os);
+        const vault = await outcome(c.send('Target.closeTarget', { targetId: 'T-vault' }));
+        const vaultGone = await waitGone(c, 'T-vault', vault);
+        const error = await outcome(c.send('Target.closeTarget', { targetId: 'T-error' }));
+        const errorGone = await waitGone(c, 'T-error', error);
+        return { os, osGone, vault, vaultGone, error, errorGone };
       }),
     workerListing: (browser) =>
       run(browser, async (c) => {

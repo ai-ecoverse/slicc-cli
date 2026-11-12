@@ -340,6 +340,80 @@ func TestIframeHoldAttachSessionDisagreesProtected(t *testing.T) {
 	}
 }
 
+func TestIframeHoldOrdinaryNestedAttachReachesOwner(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.noteFrameParentLocked("MID", "P")
+	g.noteFrameParentLocked("INNER", "MID")
+	g.noteChildFrameLocked("MID", "https://ordinary.test/mid")
+	g.noteChildFrameLocked("INNER", "https://ordinary.test/inner")
+	raw, _ := json.Marshal(map[string]any{"method": "Target.attachedToTarget", "sessionId": "S-P", "params": map[string]any{"sessionId": "S-X", "waitingForDebugger": false, "targetInfo": map[string]any{"targetId": "X", "type": "iframe", "url": "https://cross.test/embed", "parentFrameId": "INNER", "parentId": "P"}}})
+	v := g.fromBrowser(raw)
+	if len(v.page) == 0 && len(v.forward) == 0 {
+		t.Fatalf("ordinary nested iframe was not delivered: forward=%s page=%s disputed=%v parent=%q", v.forward, v.page, g.ancestryDisputed["X"], g.frameParents["INNER"])
+	}
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("ordinary nested iframe treated as disputed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"].protected)
+	}
+	if g.listingHiddenLocked(targetInfo{TargetID: "X", Type: "iframe", URL: "https://cross.test/embed", ParentFrameID: "INNER"}) || g.targetReasonLocked("X") != "" {
+		t.Fatal("ordinary nested iframe was hidden or unattachable")
+	}
+}
+
+func TestIframeHoldAttachChainMissesOwnerDisputed(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "SEVEN", Type: "page", URL: "https://seven.sliccy.ai/doc"}, {TargetID: "P", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.noteFrameParentLocked("INNER", "SEVEN")
+	raw, _ := json.Marshal(map[string]any{"method": "Target.attachedToTarget", "sessionId": "S-P", "params": map[string]any{"sessionId": "S-X", "waitingForDebugger": false, "targetInfo": map[string]any{"targetId": "X", "type": "iframe", "url": "https://ordinary.test/embed", "parentFrameId": "INNER", "parentId": "P"}}})
+	v := g.fromBrowser(raw)
+	if len(v.forward) > 0 || len(v.page) > 0 {
+		t.Errorf("disputed attach delivered: forward=%s page=%s parent=%q", v.forward, v.page, g.frameParents["INNER"])
+	}
+	if g.frameParents["INNER"] != "SEVEN" {
+		t.Fatalf("recorded protected ancestry was rewritten: %q", g.frameParents["INNER"])
+	}
+	if !g.ancestryDisputed["X"] || !g.targets["X"].protected {
+		t.Fatalf("chain that misses the owner was not sticky protected: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"] != nil && g.targets["X"].protected)
+	}
+}
+
+func TestIframeHoldFrameParentsPrunedOnDestroy(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.noteFrameParentLocked("MID", "PAGE")
+	g.noteFrameParentLocked("INNER", "MID")
+	g.noteFrameParentLocked("OTHER", "PAGE")
+	g.destroyedLocked("MID")
+	if _, ok := g.frameParents["MID"]; ok {
+		t.Fatal("destroyed frame kept its own frameParents entry")
+	}
+	if _, ok := g.frameParents["INNER"]; ok {
+		t.Fatal("child frameParents entry survived parent destroy")
+	}
+	if g.frameParents["OTHER"] != "PAGE" {
+		t.Fatalf("unrelated frameParents entry changed: %q", g.frameParents["OTHER"])
+	}
+}
+
+func TestIframeHoldFrameParentsCapFailsClosed(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["P"] = &target{id: "P", typ: "page", url: "https://ordinary.test/"}
+	for i := 0; i < 4096; i++ {
+		if !g.noteFrameParentLocked("F"+itoa(int64(i)), "P") {
+			t.Fatalf("failed to fill frameParents before cap at %d", i)
+		}
+	}
+	if g.noteFrameParentLocked("OVERFLOW", "P") || !g.frameParentsFull {
+		t.Fatal("frameParents cap did not fail closed")
+	}
+	frame := &target{id: "X", typ: "iframe", url: "https://ordinary.test/embed", parentFrame: "OVERFLOW"}
+	g.targets["X"] = frame
+	if !g.iframeAncestryUnknownLocked(frame) || !g.listingHiddenLocked(targetInfo{TargetID: "X", Type: "iframe", URL: frame.url, ParentFrameID: "OVERFLOW"}) {
+		t.Fatal("iframe was not concealed after frameParents cap")
+	}
+}
+
 func TestIframeHoldExtensionFrameUnderOrdinaryKeepsMainRule(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}

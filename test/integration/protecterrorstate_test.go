@@ -90,11 +90,11 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 		{name: "delayed error snapshot", order: "target-only", state: "error", held: true},
 		{name: "snapshot invalidated by a protected commit", order: "target-only", state: "error", held: true, changes: true},
 		{name: "ordinary snapshot invalidated by a new target hint", order: "target-only", state: "ordinary", held: true, changes: true, hint: true},
-		{name: "loading flags without error commit or stop events", order: "target-only", state: "error", loading: true},
-		{name: "unsure loading flags with held error snapshot and missing events", order: "target-only", state: "error", held: true, loading: true, unsure: true},
-		{name: "loading flags with ordinary snapshot", order: "target-only", state: "ordinary", loading: true, unsure: true},
-		{name: "loading flags with held protected snapshot", order: "target-only", state: "protected", held: true, loading: true, unsure: true},
-		{name: "loading flags with unknown snapshot", order: "target-only", state: "unknown", loading: true, unsure: true},
+		{name: "unknown in-flight with error-page snapshot stays closable", order: "target-only", state: "error", loading: true},
+		{name: "held unknown in-flight with error-page snapshot stays closable", order: "target-only", state: "error", held: true, loading: true, unsure: true},
+		{name: "unknown in-flight with ordinary snapshot refuses close", order: "target-only", state: "ordinary", loading: true, unsure: true},
+		{name: "held unknown in-flight with protected snapshot refuses close", order: "target-only", state: "protected", held: true, loading: true, unsure: true},
+		{name: "unknown in-flight with unknown snapshot refuses close", order: "target-only", state: "unknown", loading: true, unsure: true},
 		{name: "browser session commands with held error snapshot", order: "target-only", state: "error", held: true, browser: true},
 		{name: "browser session commands with held protected snapshot", order: "target-only", state: "protected", held: true, browser: true},
 		{name: "browser session commands with held unknown snapshot", order: "target-only", state: "unknown", held: true, browser: true},
@@ -220,6 +220,9 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 			if tc.changes {
 				usable = false
 			}
+			errorPageSnapshot := (tc.state == "error" || tc.state == "protected-origin") && !tc.changes
+			unknownPending := tc.loading || tc.unsure
+			closeRefused := unknownPending && !errorPageSnapshot
 			for name, answer := range result.Answers {
 				if name == "before" {
 					continue
@@ -232,13 +235,21 @@ func TestCDPProtectedErrorTargetUsesFreshBrowserState(t *testing.T) {
 				}
 				control := name == "reload" || name == "navigate" || name == "reset" || name == "pageClose" || name == "close" || name == "earlyAttach" || name == "earlyClose"
 				streamClose := name == "close" || name == "earlyClose"
+				if streamClose {
+					if closeRefused {
+						if answer.OK {
+							t.Errorf("Target.closeTarget during unknown in-flight with non-error snapshot: %+v", answer)
+						}
+						continue
+					}
+					if !answer.OK {
+						t.Errorf("stream-touched Target.closeTarget: %+v", answer)
+					}
+					continue
+				}
 				if usable && control {
 					if !answer.OK {
 						t.Errorf("error target recovery %s: %+v", name, answer)
-					}
-				} else if streamClose {
-					if !answer.OK {
-						t.Errorf("stream-touched Target.closeTarget while quarantined: %+v", answer)
 					}
 				} else if !answer.refused() {
 					t.Errorf("quarantined %s: %+v", name, answer)

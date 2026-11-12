@@ -137,11 +137,13 @@ type guard struct {
 	navTargets            map[string]*navTarget
 	navSessions           map[string]*navTarget
 	unknown               map[string]*navTarget
+	keptURLLatch          map[string]bool
 	gone                  map[string]bool
 	goneOrder             []string
 	held                  map[string]*heldSession
 	childFrames           map[string]string
 	frameParents          map[string]string
+	frameParentsFull      bool
 	ancestryDisputed      map[string]bool
 	blockedChildren       map[string]string
 	explicit              map[string]int
@@ -239,6 +241,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		navTargets:            map[string]*navTarget{},
 		navSessions:           map[string]*navTarget{},
 		unknown:               map[string]*navTarget{},
+		keptURLLatch:          map[string]bool{},
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
 		childFrames:           map[string]string{},
@@ -465,21 +468,22 @@ func (g *guard) frameParentOfLocked(id string) string {
 	return g.frameParents[id]
 }
 
-func (g *guard) noteFrameParentLocked(id, parent string) {
+func (g *guard) noteFrameParentLocked(id, parent string) bool {
 	if id == "" || parent == "" || id == parent {
-		return
+		return false
 	}
 	if prev, ok := g.frameParents[id]; ok {
-		if prev != parent {
-			return
-		}
-	} else if len(g.frameParents) >= 4096 {
-		return
+		return prev == parent
+	}
+	if len(g.frameParents) >= 4096 {
+		g.frameParentsFull = true
+		return false
 	}
 	g.frameParents[id] = parent
 	if t := g.targets[id]; t != nil && t.parentFrame == "" {
 		t.parentFrame = parent
 	}
+	return true
 }
 
 func (g *guard) forgetFrameParentLocked(id string) {
@@ -488,6 +492,43 @@ func (g *guard) forgetFrameParentLocked(id string) {
 	}
 	delete(g.frameParents, id)
 	delete(g.ancestryDisputed, id)
+	if g.frameParentsFull && len(g.frameParents) < 4096 {
+		g.frameParentsFull = false
+	}
+}
+
+func (g *guard) pruneFrameParentsLocked(id string) {
+	if id == "" {
+		return
+	}
+	var drop []string
+	for child, parent := range g.frameParents {
+		if child == id || parent == id {
+			drop = append(drop, child)
+		}
+	}
+	for _, child := range drop {
+		g.forgetFrameParentLocked(child)
+	}
+}
+
+func (g *guard) frameParentChainReachesLocked(start, owner string) bool {
+	if start == "" || owner == "" {
+		return false
+	}
+	seen := map[string]bool{}
+	id := start
+	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
+		if id == owner {
+			return true
+		}
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		id = g.frameParentOfLocked(id)
+	}
+	return false
 }
 
 func (g *guard) iframeAncestorStartLocked(t *target) string {
@@ -507,17 +548,21 @@ func (g *guard) noteIframeAttachParentLocked(info targetInfo) {
 	}
 	pf := parentFrameOf(info)
 	if pf != "" && pf != owner.id {
-		if prev, ok := g.frameParents[pf]; ok && prev != owner.id {
+		if _, ok := g.frameParents[pf]; ok {
+			if !g.frameParentChainReachesLocked(pf, owner.id) {
+				g.ancestryDisputed[info.TargetID] = true
+			}
+		} else if !g.noteFrameParentLocked(pf, owner.id) {
 			g.ancestryDisputed[info.TargetID] = true
-		} else {
-			g.noteFrameParentLocked(pf, owner.id)
 		}
 	}
 	parent := pf
 	if parent == "" {
 		parent = owner.id
 	}
-	g.noteFrameParentLocked(info.TargetID, parent)
+	if !g.noteFrameParentLocked(info.TargetID, parent) && g.frameParents[info.TargetID] != parent {
+		g.ancestryDisputed[info.TargetID] = true
+	}
 }
 
 func (g *guard) iframeParentFromFramesLocked(t *target) *target {
@@ -629,6 +674,9 @@ func (g *guard) iframeAncestryUnknownLocked(t *target) bool {
 	}
 	if g.extensionFrameTargetLocked(t) {
 		return false
+	}
+	if g.frameParentsFull {
+		return true
 	}
 	if g.attachParent != "" {
 		return g.sessionOwnerLocked(g.attachParent) == nil
@@ -1012,11 +1060,11 @@ func (g *guard) workerConcealedLocked(id string) bool {
 }
 
 func (g *guard) workerCreatorUnprotectedLocked(t *target) bool {
-	known := func(id string) bool {
-		c := g.targets[id]
-		return id != "" && c != nil && !c.gone && !c.protected
+	if t.openerFrame != "" || t.parentFrame != "" {
+		return false
 	}
-	return known(t.openerFrame) || known(t.opener) || known(t.parentFrame)
+	c := g.targets[t.opener]
+	return t.opener != "" && c != nil && !c.gone && !c.protected
 }
 
 func (g *guard) sessionOwnerLocked(id string) *target {
@@ -1183,6 +1231,7 @@ func (g *guard) destroyedLocked(id string) {
 	delete(g.frameProbed, id)
 	delete(g.frames, id)
 	g.forgetChildFrameLocked(id)
+	g.pruneFrameParentsLocked(id)
 	g.forgetExtensionFrameURLLocked("", id)
 	g.forgetExtensionProbeWorldsForTargetLocked(id)
 	g.navForgetLocked(id)

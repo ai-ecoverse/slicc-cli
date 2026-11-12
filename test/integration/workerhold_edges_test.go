@@ -29,7 +29,7 @@ func TestCDPWorkerHoldFollowUpEdges(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestWorkerHold(NullOriginDoesNotOverwriteFrame|PrunesGoneFrames|DataWorkerFromOrdinarySubFrame|DataWorkerFromProtectedSubFrame|AttachOrdinaryUnshownByID|AttachUnresolvedStillRefused|StickyProtectedAfterCreatorNavigatesAway|UnknownParentFrameStaysHeld)$", "./internal/caps/cdp")
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestWorkerHold(NullOriginDoesNotOverwriteFrame|PrunesGoneFrames|DataWorkerFromOrdinarySubFrame|DataWorkerFromProtectedSubFrame|AttachOrdinaryUnshownByID|AttachUnresolvedStillRefused|StickyProtectedAfterCreatorNavigatesAway|UnknownParentFrameStaysHeld|DataWorkerOrdinaryOpenerStaleFrame|DataWorkerOrdinaryOpenerOpaqueFrame)$", "./internal/caps/cdp")
 	command.Dir = root
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("worker hold follow-up edges: %v\n%s", err, output)

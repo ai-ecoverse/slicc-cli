@@ -47,36 +47,45 @@ func (g *guard) startsUnheld(c *command) bool {
 }
 
 type navTarget struct {
-	target           string
-	session          string
-	start            time.Time
-	progress         time.Time
-	awayAt           time.Duration
-	reason           string
-	ready            chan struct{}
-	pending          int
-	done             bool
-	failed           bool
-	loading          map[string]int
-	started          int
-	unsure           bool
-	errorURL         string
-	documentURL      string
-	failedURLs       []string
-	commits          int
-	failCommit       int
-	worker           bool
-	iframe           bool
-	shared           bool
-	historyLocked    bool
-	protectedHistory map[string]string
-	confirm          *navTarget
-	confirming       bool
-	revision         int
-	documentsOnly    bool
-	documentsAsked   bool
-	framesGate       chan struct{}
-	framesReads      int
+	target            string
+	session           string
+	start             time.Time
+	progress          time.Time
+	awayAt            time.Duration
+	reason            string
+	ready             chan struct{}
+	pending           int
+	done              bool
+	failed            bool
+	loading           map[string]int
+	started           int
+	unsure            bool
+	errorURL          string
+	documentURL       string
+	navigationURL     string
+	securityOrigin    string
+	keptOrigin        string
+	failedURLs        []string
+	commits           int
+	failCommit        int
+	navGen            int
+	errorNavGen       int
+	errorRecorded     bool
+	closeProofGen     int
+	closeProofRev     int
+	closeProofPending bool
+	worker            bool
+	iframe            bool
+	shared            bool
+	historyLocked     bool
+	protectedHistory  map[string]string
+	confirm           *navTarget
+	confirming        bool
+	revision          int
+	documentsOnly     bool
+	documentsAsked    bool
+	framesGate        chan struct{}
+	framesReads       int
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -214,6 +223,9 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	send := g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
+	if m.Method == "Page.frameNavigated" {
+		g.noteKeptLatchLocked(nt)
+	}
 	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {
 		nt.revision++
 	}
@@ -296,6 +308,7 @@ func (g *guard) navForgetLocked(targetID string) {
 	}
 	g.forgetClientTargetLocked(targetID)
 	delete(g.navTargets, targetID)
+	delete(g.keptURLLatch, targetID)
 	delete(g.tainted, targetID)
 	delete(g.clean, targetID)
 	if nt.session != "" {
@@ -350,68 +363,92 @@ func (g *guard) navCheckLocked(sessionID string) string {
 	return refusedGuard
 }
 
-func (nt *navTarget) commitLocked(m *message) {
-	var p struct {
-		FrameID        string `json:"frameId"`
+type navCommitParams struct {
+	FrameID        string `json:"frameId"`
+	LoaderID       string `json:"loaderId"`
+	RequestID      string `json:"requestId"`
+	NavigationType string `json:"navigationType"`
+	Type           string `json:"type"`
+	URL            string `json:"url"`
+	Frame          struct {
+		ID             string `json:"id"`
+		ParentID       string `json:"parentId"`
 		LoaderID       string `json:"loaderId"`
-		RequestID      string `json:"requestId"`
-		NavigationType string `json:"navigationType"`
-		Type           string `json:"type"`
-		Frame          struct {
-			ID             string `json:"id"`
-			ParentID       string `json:"parentId"`
-			LoaderID       string `json:"loaderId"`
-			URL            string `json:"url"`
-			UnreachableURL string `json:"unreachableUrl"`
-		} `json:"frame"`
-	}
+		URL            string `json:"url"`
+		SecurityOrigin string `json:"securityOrigin"`
+		UnreachableURL string `json:"unreachableUrl"`
+	} `json:"frame"`
+}
+
+func (nt *navTarget) commitLocked(m *message) {
 	switch m.Method {
 	case "Page.frameStartedNavigating", "Page.frameNavigated", "Page.frameStoppedLoading", "Network.loadingFailed":
 	default:
 		return
 	}
+	var p navCommitParams
 	if json.Unmarshal(m.Params, &p) != nil {
 		nt.unsure = true
 		return
 	}
 	switch m.Method {
 	case "Page.frameStartedNavigating":
-		if p.FrameID != nt.target || sameDocument[p.NavigationType] {
-			return
-		}
-		if nt.loading == nil {
-			nt.loading = map[string]int{}
-		}
-		if p.LoaderID == "" || len(nt.loading) >= maxLoading {
-			nt.unsure = true
-			return
-		}
-		nt.started++
-		nt.loading[p.LoaderID] = nt.started
+		nt.commitStartedNavigatingLocked(p)
 	case "Network.loadingFailed":
 		delete(nt.loading, p.RequestID)
 	case "Page.frameStoppedLoading":
 		if p.FrameID == nt.target {
 			clear(nt.loading)
 			nt.unsure = false
+			nt.navigationURL = ""
 		}
 	case "Page.frameNavigated":
-		if p.Frame.ID != nt.target || (p.Frame.ParentID != "" && !nt.iframe) {
-			return
-		}
-		if p.Type == "BackForwardCacheRestore" {
-			clear(nt.loading)
-		}
-		if n, ok := nt.loading[p.Frame.LoaderID]; ok {
-			for l, m := range nt.loading {
-				if m <= n {
-					delete(nt.loading, l)
-				}
+		nt.commitFrameNavigatedLocked(p)
+	}
+}
+
+func (nt *navTarget) commitStartedNavigatingLocked(p navCommitParams) {
+	if p.FrameID != nt.target || sameDocument[p.NavigationType] {
+		return
+	}
+	nt.navGen++
+	nt.navigationURL = p.URL
+	if nt.loading == nil {
+		nt.loading = map[string]int{}
+	}
+	if p.LoaderID == "" || len(nt.loading) >= maxLoading {
+		nt.unsure = true
+		return
+	}
+	nt.started++
+	nt.loading[p.LoaderID] = nt.started
+}
+
+func (nt *navTarget) commitFrameNavigatedLocked(p navCommitParams) {
+	if p.Frame.ID != nt.target || (p.Frame.ParentID != "" && !nt.iframe) {
+		return
+	}
+	if p.Type == "BackForwardCacheRestore" {
+		clear(nt.loading)
+		nt.unsure = false
+	}
+	if n, ok := nt.loading[p.Frame.LoaderID]; ok {
+		for l, m := range nt.loading {
+			if m <= n {
+				delete(nt.loading, l)
 			}
 		}
-		nt.errorURL = p.Frame.UnreachableURL
-		nt.documentURL = p.Frame.URL
-		nt.commits++
+	}
+	nt.errorURL = p.Frame.UnreachableURL
+	nt.documentURL = p.Frame.URL
+	if p.Frame.SecurityOrigin != "" {
+		nt.securityOrigin = p.Frame.SecurityOrigin
+	}
+	nt.navigationURL = ""
+	nt.commits++
+	if chromeErrorDocument(p.Frame.URL) || p.Frame.UnreachableURL != "" {
+		nt.errorRecorded = true
+		nt.errorNavGen = nt.navGen
 	}
 }
 
