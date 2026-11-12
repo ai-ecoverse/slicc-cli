@@ -509,12 +509,35 @@ func (g *guard) noteIframeAttachParentLocked(info targetInfo) {
 	g.noteFrameParentLocked(info.TargetID, parent)
 }
 
+func (g *guard) iframeParentFromFramesLocked(t *target) *target {
+	if t == nil || t.id == "" {
+		return nil
+	}
+	for pageID, frames := range g.frames {
+		if frames == nil || !frames[t.id] {
+			continue
+		}
+		if p := g.targets[pageID]; p != nil && !p.gone && (p.typ == "page" || p.typ == "tab" || p.typ == "iframe") {
+			return p
+		}
+	}
+	return nil
+}
+
 func (g *guard) iframeParentTargetLocked(t *target) *target {
 	if t == nil {
 		return nil
 	}
 	if g.attachParent != "" {
 		if owner := g.sessionOwnerLocked(g.attachParent); owner != nil {
+			return owner
+		}
+	}
+	for _, h := range g.held {
+		if h == nil || h.target != t.id {
+			continue
+		}
+		if owner := g.sessionOwnerLocked(h.parent); owner != nil {
 			return owner
 		}
 	}
@@ -526,6 +549,9 @@ func (g *guard) iframeParentTargetLocked(t *target) *target {
 	}
 	if t.framePage != nil && !t.framePage.gone {
 		return t.framePage
+	}
+	if p := g.iframeParentFromFramesLocked(t); p != nil {
+		return p
 	}
 	seen := map[string]bool{t.id: true}
 	id := g.iframeAncestorStartLocked(t)
@@ -540,6 +566,44 @@ func (g *guard) iframeParentTargetLocked(t *target) *target {
 		id = g.frameParentOfLocked(id)
 	}
 	return nil
+}
+
+func (g *guard) iframeAncestryClassifiedLocked(t *target) bool {
+	if t == nil {
+		return false
+	}
+	if parent := g.iframeParentTargetLocked(t); parent != nil {
+		return g.creatorClassifiedLocked(parent.id)
+	}
+	seen := map[string]bool{t.id: true}
+	id := g.iframeAncestorStartLocked(t)
+	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		if g.creatorClassifiedLocked(id) {
+			return true
+		}
+		id = g.frameParentOfLocked(id)
+	}
+	return false
+}
+
+func (g *guard) iframeAncestryUnknownLocked(t *target) bool {
+	if t == nil || t.gone || t.typ != "iframe" || t.protected || g.explicit[t.id] > 0 {
+		return false
+	}
+	if g.attachParent != "" {
+		return g.sessionOwnerLocked(g.attachParent) == nil
+	}
+	if g.iframeParentTargetLocked(t) != nil {
+		return false
+	}
+	if g.iframeAncestorStartLocked(t) != "" {
+		return !g.iframeAncestryClassifiedLocked(t)
+	}
+	return false
 }
 
 func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
@@ -593,6 +657,9 @@ func (g *guard) iframeUnresolvedLocked(t *target) bool {
 	if t == nil || t.gone || t.typ != "iframe" || t.protected || g.explicit[t.id] > 0 {
 		return false
 	}
+	if g.iframeAncestryUnknownLocked(t) {
+		return true
+	}
 	if g.attachParent != "" {
 		owner := g.sessionOwnerLocked(g.attachParent)
 		if owner == nil {
@@ -629,6 +696,15 @@ func (g *guard) iframeHeldLocked(id string) bool {
 	return false
 }
 
+func (g *guard) targetHeldLocked(id string) bool {
+	for _, h := range g.held {
+		if h.target == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *guard) iframeConcealedLocked(id string) bool {
 	t := g.targets[id]
 	if t != nil && t.typ != "iframe" && !g.iframeHeldLocked(id) {
@@ -637,7 +713,42 @@ func (g *guard) iframeConcealedLocked(id string) bool {
 	if t == nil && !g.iframeHeldLocked(id) {
 		return false
 	}
-	return g.iframeHeldLocked(id) || g.iframeUnresolvedLocked(t)
+	return g.iframeHeldLocked(id) || g.iframeUnresolvedLocked(t) || g.iframeAncestryUnknownLocked(t)
+}
+
+func (g *guard) iframeFollowRefusedLocked(sessionID string) bool {
+	s := g.sessions[sessionID]
+	if s == nil {
+		return false
+	}
+	t := g.targets[s.target]
+	if t == nil || t.gone || t.typ != "iframe" {
+		return false
+	}
+	if t.protected || g.iframeFromProtectedAncestorLocked(t) {
+		return true
+	}
+	chain := g.iframePageLocked(t)
+	if chain == nil {
+		chain = g.iframeParentTargetLocked(t)
+	}
+	if chain != nil && (chain.protected || g.targetHeldLocked(chain.id)) {
+		return true
+	}
+	if s.parent == "" || g.browserSessions[s.parent] {
+		return false
+	}
+	if g.held[s.parent] != nil || g.hidden[s.parent] {
+		return true
+	}
+	owner := g.sessionOwnerLocked(s.parent)
+	if owner != nil && (owner.protected || g.targetHeldLocked(owner.id)) {
+		return true
+	}
+	if owner != nil && chain != nil && owner.id != chain.id {
+		return true
+	}
+	return false
 }
 
 func (g *guard) workerFromProtectedCreatorLocked(t *target) bool {

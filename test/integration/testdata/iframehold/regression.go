@@ -247,3 +247,69 @@ func TestIframeHoldProtectedAncestorHidesURLLess(t *testing.T) {
 		t.Fatalf("protected URL-less iframe was delivered to the page: %d events", len(settled.page))
 	}
 }
+
+func TestIframeHoldMissingParentIdFrameTreeUnderSeven(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["SEVEN"] = &target{id: "SEVEN", typ: "page", url: "https://seven.sliccy.ai/doc", protected: true}
+	g.frames["SEVEN"] = map[string]bool{"F": true}
+	g.noteFrameParentLocked("F", "SEVEN")
+	frame := &target{id: "F", typ: "iframe", url: "https://ordinary.test/embed", shown: false}
+	g.targets["F"] = frame
+	frame.protected = g.decide(frame, false)
+	if !frame.protected {
+		t.Fatal("missing parentId with frame-tree ancestry under seven was not protected")
+	}
+	if !g.listingHiddenLocked(targetInfo{TargetID: "F", Type: "iframe", URL: frame.url}) {
+		t.Fatal("missing parentId iframe under seven was listable")
+	}
+	if g.targetReasonLocked("F") == "" {
+		t.Fatal("missing parentId iframe under seven was attachable")
+	}
+}
+
+func TestIframeHoldBrowserAttachFollowsOwnerProtect(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
+	g.browserSessions["S-browser"] = true
+	frame := &target{id: "F", typ: "iframe", url: "https://ordinary.test/embed", parentFrame: "PAGE", shown: true}
+	g.targets["F"] = frame
+	g.sessions["S-F"] = &session{id: "S-F", target: "F", parent: "S-browser", typ: "iframe"}
+	if g.iframeFollowRefusedLocked("S-F") {
+		t.Fatal("ordinary browser-attached iframe was refused before its owner turned protected")
+	}
+	g.targets["PAGE"].url = "https://seven.sliccy.ai/doc"
+	g.targets["PAGE"].protected = true
+	_ = g.redecideIframesLocked("PAGE")
+	if !frame.protected {
+		t.Fatal("browser-attached iframe was not protected when its owner page turned protected")
+	}
+	if !g.sessionRefusedLocked("S-F") {
+		t.Fatal("browser-attached iframe session was not refused after owner turned protected")
+	}
+}
+
+func TestIframeHoldBrowserAttachOwnerHeldRefused(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
+	g.browserSessions["S-browser"] = true
+	frame := &target{id: "F", typ: "iframe", url: "https://ordinary.test/embed", parentFrame: "PAGE", shown: true}
+	g.targets["F"] = frame
+	g.sessions["S-F"] = &session{id: "S-F", target: "F", parent: "S-browser", typ: "iframe"}
+	g.held["S-page"] = &heldSession{id: "S-page", parent: "", target: "PAGE", typ: "page"}
+	if !g.iframeFollowRefusedLocked("S-F") {
+		t.Fatal("browser-attached iframe was not refused when its owner page was held")
+	}
+}
+
+func TestIframeHoldAttachSessionDisagreesProtected(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
+	g.targets["OTHER"] = &target{id: "OTHER", typ: "page", url: "https://ordinary.test/other"}
+	g.sessions["S-other"] = &session{id: "S-other", target: "OTHER", typ: "page"}
+	frame := &target{id: "F", typ: "iframe", url: "https://ordinary.test/embed", parentFrame: "PAGE", shown: true}
+	g.targets["F"] = frame
+	g.sessions["S-F"] = &session{id: "S-F", target: "F", parent: "S-other", typ: "iframe"}
+	if !g.iframeFollowRefusedLocked("S-F") {
+		t.Fatal("iframe whose attaching session disagreed with its parent chain was not refused")
+	}
+}

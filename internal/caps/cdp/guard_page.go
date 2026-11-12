@@ -263,7 +263,7 @@ func (g *guard) sessionRefusedLocked(id string) bool {
 		return true
 	}
 	if s, ok := g.sessions[id]; ok {
-		return s.refused || g.targetProtectedLocked(s.target)
+		return s.refused || g.targetProtectedLocked(s.target) || g.iframeFollowRefusedLocked(id)
 	}
 	return false
 }

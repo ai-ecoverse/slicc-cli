@@ -76,7 +76,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		return v
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
-		if m.Method == "Target.attachedToTarget" && g.attachedWorkerLocked(&m) {
+		if m.Method == "Target.attachedToTarget" && (g.attachedWorkerLocked(&m) || g.attachedIframeLocked(&m)) {
 			v := g.attachedEvent(&m, data)
 			v.forward = nil
 			v.page = nil
@@ -450,6 +450,14 @@ func (g *guard) attachedWorkerLocked(m *message) bool {
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	return workerTypes[p.TargetInfo.Type]
+}
+
+func (g *guard) attachedIframeLocked(m *message) bool {
+	var p struct {
+		TargetInfo targetInfo `json:"targetInfo"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	return p.TargetInfo.Type == "iframe"
 }
 
 func (g *guard) attachedHoldParams(m *message, pSession string, waiting bool, info targetInfo) map[string]any {

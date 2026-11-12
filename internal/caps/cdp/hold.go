@@ -21,6 +21,7 @@ type heldSession struct {
 	typ     string
 	params  map[string]any
 	waiting bool
+	resumed bool
 }
 
 func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo, waiting bool) [][]byte {
@@ -39,6 +40,7 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 	if !waiting {
 		return nil
 	}
+	h.resumed = true
 	return [][]byte{g.resumeLocked(sid, info.TargetID)}
 }
 
@@ -77,7 +79,7 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 		waiting = h.waiting
 		g.logf("cdp: released an auto-attached worker after its URL or creator frame was known target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, waiting)
 	case h.typ == "iframe":
-		waiting = h.waiting
+		waiting = h.waiting && !h.resumed
 		g.logf("cdp: released an auto-attached iframe after its URL and parent target were known target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, waiting)
 	default:
 		g.logf("cdp: released an auto-attached session after its target got a URL target=%s session=%s parent=%s", h.target, h.id, h.parent)
@@ -89,6 +91,18 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	v.send = append(v.send, g.touchLocked(h.target, h.typ)...)
 	if h.params == nil {
 		h.params = map[string]any{}
+	}
+	if t := g.targets[h.target]; t != nil {
+		if obj, _ := h.params["targetInfo"].(map[string]any); obj != nil {
+			obj["url"] = t.url
+			obj["type"] = t.typ
+			obj["targetId"] = t.id
+			if t.parentFrame != "" {
+				obj["parentFrameId"] = t.parentFrame
+			}
+		} else {
+			h.params["targetInfo"] = map[string]any{"targetId": t.id, "type": t.typ, "url": t.url, "parentFrameId": t.parentFrame}
+		}
 	}
 	if obj, _ := h.params["targetInfo"].(map[string]any); obj != nil {
 		ti, _ := toInfo(obj)

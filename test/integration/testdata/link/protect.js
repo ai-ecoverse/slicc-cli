@@ -1453,6 +1453,7 @@ export function protectTest(getLink, describe) {
             text: e.params?.args?.[0]?.value || '',
           }));
         const mark = c.events.length;
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
         await c.send('Browser.getHistogram', { name: 'arm-protected-iframe' });
         await new Promise((resolve) => setTimeout(resolve, 500));
         const infos = {};
