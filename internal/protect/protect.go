@@ -226,8 +226,24 @@ func (o *Origins) sevenOrExtra(u *whatwg.Url) bool {
 	return origin != "" && o != nil && slices.Contains(o.extra, origin)
 }
 
+func wrappedURL(raw string, inner *whatwg.Url) bool {
+	outer := parse(raw)
+	if outer == nil || inner == nil {
+		return false
+	}
+	if slices.Contains(rules.InnerSchemes, scheme(outer)) {
+		return true
+	}
+	return outer.Username() != "" || outer.Password() != ""
+}
+
+func liveVaultPath(path string) bool {
+	return path == "" || path == "/" || path == "/landing" || strings.HasPrefix(path, "/landing/")
+}
+
 func (o *Origins) Kept(raw string) bool {
-	u := unwrap(parse(raw))
+	outer := parse(raw)
+	u := unwrap(outer)
 	if u == nil {
 		return o.URL(raw)
 	}
@@ -235,7 +251,10 @@ func (o *Origins) Kept(raw string) bool {
 		return false
 	}
 	if vaultHost(hostOf(u)) {
-		return true
+		if wrappedURL(raw, u) || liveVaultPath(u.Pathname()) {
+			return true
+		}
+		return false
 	}
 	path := u.Pathname()
 	if !strings.HasPrefix(path, "/os/") || path == "/os/callback.html" {

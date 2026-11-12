@@ -169,7 +169,7 @@ func TestCloseProtectedTrimBeforeStoreKeepsTouchSeq(t *testing.T) {
 func TestCloseProtectedKeepsLiveSevenUIAndVault(t *testing.T) {
 	g := closeProtectedGuard(t)
 	g.targets["OS"] = &target{id: "OS", typ: "page", url: "https://seven.sliccy.ai/os/", protected: true}
-	g.targets["VAULT"] = &target{id: "VAULT", typ: "page", url: "https://vault.sliccy.ai/secret", protected: true}
+	g.targets["VAULT"] = &target{id: "VAULT", typ: "page", url: "https://vault.sliccy.ai/", protected: true}
 	g.targets["ERR"] = &target{id: "ERR", typ: "page", url: "https://vault.sliccy.ai/missing", protected: true}
 	g.navTargets["OS"] = &navTarget{target: "OS", ready: make(chan struct{}), done: true}
 	g.navTargets["VAULT"] = &navTarget{target: "VAULT", ready: make(chan struct{}), done: true}
@@ -217,13 +217,19 @@ func TestCloseProtectedCallbackAndOtherProtectedStillClosable(t *testing.T) {
 	g := closeProtectedGuard(t)
 	g.targets["CB"] = &target{id: "CB", typ: "page", url: "https://seven.sliccy.ai/os/callback.html", protected: true}
 	g.targets["FRAME"] = &target{id: "FRAME", typ: "page", url: "https://seven.sliccy.ai/frame", protected: true}
-	for _, id := range []string{"CB", "FRAME"} {
+	g.targets["DOC"] = &target{id: "DOC", typ: "page", url: "https://vault.sliccy.ai/doc?n=history", protected: true}
+	g.targets["EMPTY"] = &target{id: "EMPTY", typ: "page", url: "https://ordinary.test/", protected: true}
+	for _, id := range []string{"CB", "FRAME", "DOC", "EMPTY"} {
 		g.navTargets[id] = &navTarget{target: id, ready: make(chan struct{}), done: true}
 		close(g.navTargets[id].ready)
 	}
+	g.navTargets["EMPTY"].unsure = true
+	g.navTargets["EMPTY"].navigationURL = ""
+	g.navTargets["EMPTY"].documentURL = "https://ordinary.test/protected"
+	g.targets["EMPTY"].url = "https://ordinary.test/protected"
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	for _, id := range []string{"CB", "FRAME"} {
+	for _, id := range []string{"CB", "FRAME", "DOC", "EMPTY"} {
 		if g.closeTargetReasonLocked(id) != "" {
 			t.Fatalf("%s was not closable: %q", id, g.closeTargetReasonLocked(id))
 		}

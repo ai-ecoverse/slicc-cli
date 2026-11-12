@@ -75,6 +75,8 @@ func TestProtectKeptDocuments(t *testing.T) {
 		{"view-source:https://vault.sliccy.ai/x", true},
 		{"blob:https://vault.sliccy.ai/0b9e", true},
 		{"https://vault.sliccy.ai/", true},
+		{"https://vault.sliccy.ai/landing?k=1", true},
+		{"https://vault.sliccy.ai/doc?n=history", false},
 		{"https://vault-x.sliccy.ai/", true},
 		{"https://get.sliccy.ai/os/", false},
 		{"https://www.sliccy.ai:8443/os/", false},

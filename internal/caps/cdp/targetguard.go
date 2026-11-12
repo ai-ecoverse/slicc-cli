@@ -212,7 +212,7 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 			return refusedTarget
 		}
 		if g.keptCloseLocked(id) {
-			g.logf("cdp: closeTarget refused target=%s type=%s why=kept url=%s", id, t.typ, t.url)
+			g.logf("cdp: closeTarget refused target=%s type=%s why=kept", id, t.typ)
 			return refusedTarget
 		}
 		return ""
@@ -235,8 +235,8 @@ func (g *guard) keptCloseLocked(id string) bool {
 	}
 	nt := g.navTargets[id]
 	navigating := nt != nil && (nt.unsure || len(nt.loading) > 0)
-	if navigating {
-		return nt.navigationURL == "" || g.o.Kept(nt.navigationURL)
+	if navigating && nt.navigationURL != "" {
+		return g.o.Kept(nt.navigationURL) || g.o.SevenOrVaultHost(nt.navigationURL)
 	}
 	documentURL := t.url
 	if nt != nil && nt.documentURL != "" {

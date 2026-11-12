@@ -405,6 +405,7 @@ func (nt *navTarget) commitLocked(m *message) {
 		}
 		if p.Type == "BackForwardCacheRestore" {
 			clear(nt.loading)
+			nt.unsure = false
 		}
 		if n, ok := nt.loading[p.Frame.LoaderID]; ok {
 			for l, m := range nt.loading {
