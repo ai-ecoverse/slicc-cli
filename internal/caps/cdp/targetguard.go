@@ -173,7 +173,7 @@ func (g *guard) confirmReasonLocked(nt *navTarget) string {
 }
 
 func (g *guard) targetReasonLocked(id string) string {
-	if g.targetProtectedLocked(id) {
+	if g.targetProtectedLocked(id) || g.workerConcealedLocked(id) || g.workerUnshownLocked(id) {
 		return refusedTarget
 	}
 	if g.targetUnconfirmedLocked(id) {

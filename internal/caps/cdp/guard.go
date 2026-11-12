@@ -73,6 +73,7 @@ type target struct {
 	openerFrame      string
 	ctx              string
 	protected        bool
+	shown            bool
 	gone             bool
 	document         string
 	documentRevision uint64
@@ -119,6 +120,8 @@ type guard struct {
 	openedWait            map[string]string
 	sessions              map[string]*session
 	hidden                map[string]bool
+	hiddenOwner           map[string]string
+	attachParent          string
 	refused               map[string]bool
 	refusedOrder          []string
 	browserSessions       map[string]bool
@@ -137,6 +140,7 @@ type guard struct {
 	gone                  map[string]bool
 	goneOrder             []string
 	held                  map[string]*heldSession
+	childFrames           map[string]string
 	blockedChildren       map[string]string
 	explicit              map[string]int
 	attachCalls           map[callKey]string
@@ -219,6 +223,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		openedWait:            map[string]string{},
 		sessions:              map[string]*session{},
 		hidden:                map[string]bool{},
+		hiddenOwner:           map[string]string{},
 		refused:               map[string]bool{},
 		browserSessions:       map[string]bool{},
 		ownContexts:           map[string]bool{},
@@ -234,6 +239,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		unknown:               map[string]*navTarget{},
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
+		childFrames:           map[string]string{},
 		blockedChildren:       map[string]string{},
 		explicit:              map[string]int{},
 		attachCalls:           map[callKey]string{},
@@ -296,6 +302,7 @@ type targetInfo struct {
 	URL              string `json:"url"`
 	OpenerID         string `json:"openerId"`
 	ParentFrameID    string `json:"parentFrameId"`
+	ParentID         string `json:"parentId"`
 	OpenerFrameID    string `json:"openerFrameId"`
 	BrowserContextID string `json:"browserContextId"`
 }
@@ -310,6 +317,14 @@ func encode(v any) []byte {
 
 func refusal(id int64, sessionID, reason string) []byte {
 	m := map[string]any{"id": id, "error": map[string]any{"code": -32000, "message": "slicc: refused: " + reason}}
+	if sessionID != "" {
+		m["sessionId"] = sessionID
+	}
+	return encode(m)
+}
+
+func missingTarget(id int64, sessionID string) []byte {
+	m := map[string]any{"id": id, "error": map[string]any{"code": -32602, "message": "No target with given id found"}}
 	if sessionID != "" {
 		m["sessionId"] = sessionID
 	}
@@ -422,7 +437,168 @@ func (g *guard) decide(t *target, previous bool) bool {
 	if t.typ == "browser" {
 		return false
 	}
+	if g.workerFromProtectedCreatorLocked(t) {
+		return true
+	}
 	return g.o.TargetWith(t.url, t.typ, previous, g.openerState(t), g.evidenceLocked(t))
+}
+
+func (g *guard) workerFromProtectedCreatorLocked(t *target) bool {
+	if t == nil || !workerTypes[t.typ] {
+		return false
+	}
+	if g.creatorProtectedLocked(t.openerFrame) || g.creatorProtectedLocked(t.opener) || g.creatorProtectedLocked(t.parentFrame) {
+		return true
+	}
+	parent := g.attachParent
+	if parent != "" && (g.hidden[parent] || g.held[parent] != nil) {
+		return true
+	}
+	if owner := g.sessionOwnerLocked(parent); owner != nil && owner.protected {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(t.url), "data:") && !g.workerCreatorUnprotectedLocked(t)
+}
+
+func parentFrameOf(info targetInfo) string {
+	if info.ParentFrameID != "" {
+		return info.ParentFrameID
+	}
+	return info.ParentID
+}
+
+func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
+	if id == "" || protect.Inheriting(raw) {
+		return nil
+	}
+	if _, ok := g.childFrames[id]; !ok && len(g.childFrames) >= 4096 {
+		return nil
+	}
+	g.childFrames[id] = raw
+	return g.redecideWorkersLocked(id)
+}
+
+func (g *guard) redecideWorkersLocked(creator string) [][]byte {
+	if creator == "" {
+		return nil
+	}
+	var send [][]byte
+	for _, t := range g.targets {
+		if t == nil || t.gone || !workerTypes[t.typ] {
+			continue
+		}
+		if t.opener != creator && t.openerFrame != creator && t.parentFrame != creator {
+			continue
+		}
+		prev := t.protected
+		t.protected = g.decide(t, prev)
+		if t.protected && !prev {
+			send = append(send, g.protectLocked(t)...)
+		}
+	}
+	return send
+}
+
+func (g *guard) workerUnshownLocked(id string) bool {
+	t := g.targets[id]
+	return t != nil && !t.gone && workerTypes[t.typ] && !t.shown
+}
+
+func (g *guard) noteWorkerShownLocked(info targetInfo) {
+	if !workerTypes[info.Type] {
+		return
+	}
+	if t := g.targets[info.TargetID]; t != nil {
+		t.shown = true
+	}
+}
+
+func (g *guard) creatorProtectedLocked(id string) bool {
+	if id == "" {
+		return false
+	}
+	if g.targetProtectedLocked(id) {
+		return true
+	}
+	return g.o.Loaded(g.childFrames[id])
+}
+
+func (g *guard) creatorClassifiedLocked(id string) bool {
+	if id == "" {
+		return false
+	}
+	if t := g.targets[id]; t != nil && !t.gone && (t.protected || !protect.Inheriting(t.url)) {
+		return true
+	}
+	raw := g.childFrames[id]
+	return raw != "" && !protect.Inheriting(raw)
+}
+
+func (g *guard) workerCreatorClassifiedLocked(t *target) bool {
+	if t == nil {
+		return false
+	}
+	if t.openerFrame != "" {
+		return g.creatorClassifiedLocked(t.openerFrame)
+	}
+	if t.parentFrame != "" {
+		return g.creatorClassifiedLocked(t.parentFrame)
+	}
+	return t.opener != "" && g.creatorClassifiedLocked(t.opener)
+}
+
+func (g *guard) workerUnresolvedLocked(t *target) bool {
+	if t == nil || t.gone || !workerTypes[t.typ] || t.protected || g.explicit[t.id] > 0 {
+		return false
+	}
+	if g.o.URL(t.url) || protect.Unparseable(t.url) {
+		return false
+	}
+	if t.openerFrame != "" && !g.creatorClassifiedLocked(t.openerFrame) {
+		return true
+	}
+	return protect.Inheriting(t.url) && !g.workerCreatorClassifiedLocked(t)
+}
+
+func (g *guard) workerHeldLocked(id string) bool {
+	for _, h := range g.held {
+		if h.target == id && workerTypes[h.typ] {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) workerConcealedLocked(id string) bool {
+	t := g.targets[id]
+	if t != nil && !workerTypes[t.typ] && !g.workerHeldLocked(id) {
+		return false
+	}
+	if t == nil && !g.workerHeldLocked(id) {
+		return false
+	}
+	return g.workerHeldLocked(id) || g.workerUnresolvedLocked(t)
+}
+
+func (g *guard) workerCreatorUnprotectedLocked(t *target) bool {
+	known := func(id string) bool {
+		c := g.targets[id]
+		return id != "" && c != nil && !c.gone && !c.protected
+	}
+	return known(t.openerFrame) || known(t.opener) || known(t.parentFrame)
+}
+
+func (g *guard) sessionOwnerLocked(id string) *target {
+	if id == "" {
+		return nil
+	}
+	if s := g.sessions[id]; s != nil {
+		return g.targets[s.target]
+	}
+	if h := g.held[id]; h != nil {
+		return g.targets[h.target]
+	}
+	return g.targets[g.hiddenOwner[id]]
 }
 
 func (g *guard) record(info targetInfo) *target {
@@ -440,7 +616,11 @@ func (g *guard) record(info targetInfo) *target {
 		delete(g.frameProbed, t.id)
 		delete(g.frames, t.id)
 	}
-	if info.Type == "iframe" && (t.parentFrame != info.ParentFrameID || t.url != info.URL) {
+	parent := parentFrameOf(info)
+	if parent == "" {
+		parent = t.parentFrame
+	}
+	if info.Type == "iframe" && (t.parentFrame != parent || t.url != info.URL) {
 		for id, page := range g.targets {
 			if page.typ == "page" && page.ctx == info.BrowserContextID {
 				delete(g.frameProbeAttempts, id)
@@ -448,10 +628,10 @@ func (g *guard) record(info targetInfo) *target {
 			}
 		}
 	}
-	if t.parentFrame != info.ParentFrameID || t.ctx != info.BrowserContextID {
+	if t.parentFrame != parent || t.ctx != info.BrowserContextID {
 		t.framePage, t.frameDocument, t.frameOwner = nil, "", nil
 	}
-	t.parentFrame = info.ParentFrameID
+	t.parentFrame = parent
 	t.typ, t.url, t.opener, t.openerFrame, t.ctx = info.Type, info.URL, info.OpenerID, info.OpenerFrameID, info.BrowserContextID
 	g.bindIframeDocumentLocked(t)
 	return t
@@ -474,6 +654,7 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	if t.protected && !prev {
 		send = append(send, g.protectLocked(t)...)
 	}
+	send = append(send, g.redecideWorkersLocked(t.id)...)
 	if g.extensionFrameTargetLocked(t) {
 		if page := g.iframePageLocked(t); page != nil {
 			send = append(send, g.cutCastsLocked(page.id)...)
@@ -507,8 +688,10 @@ func (g *guard) observeAll(infos []targetInfo) {
 			return
 		}
 		done[t.id] = true
-		if op, ok := g.targets[t.opener]; ok && fresh[op.id] {
-			resolve(op)
+		for _, id := range []string{t.opener, t.openerFrame, t.parentFrame} {
+			if op, ok := g.targets[id]; ok && fresh[op.id] {
+				resolve(op)
+			}
 		}
 		t.protected = g.decide(t, t.protected)
 	}
@@ -518,11 +701,12 @@ func (g *guard) observeAll(infos []targetInfo) {
 }
 
 func (g *guard) markLocked(t *target) [][]byte {
-	if t.protected {
-		return nil
+	var send [][]byte
+	if !t.protected {
+		t.protected = true
+		send = append(send, g.protectLocked(t)...)
 	}
-	t.protected = true
-	return g.protectLocked(t)
+	return append(send, g.redecideWorkersLocked(t.id)...)
 }
 
 func (g *guard) protectLocked(t *target) [][]byte {

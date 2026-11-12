@@ -431,12 +431,26 @@ func setupFakeProtectEnv(t *testing.T, attachEnv []string, script func(seven, al
 	return setupFakeProtectEnvOn(t, launchBrowser(t), attachEnv, script)
 }
 
+func setupFakeProtectPage(t *testing.T, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
+	t.Helper()
+	return setupFakeProtectChoice(t, launchBrowser(t), nil, true, script)
+}
+
 func setupFakeProtectEnvOn(t *testing.T, b *chromeProc, attachEnv []string, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
+	t.Helper()
+	return setupFakeProtectChoice(t, b, attachEnv, false, script)
+}
+
+func setupFakeProtectChoice(t *testing.T, b *chromeProc, attachEnv []string, pageOrigin bool, script func(seven, allowed string) fakeScript) (*protectEnv, *fakeCDPBrowser) {
 	t.Helper()
 	srv := pageServer(t)
 	plain := plainServer(t)
 	allowed := strings.Replace(plain.URL, "127.0.0.1", "localhost", 1)
-	fake := newFakeCDPBrowser(t, script(plain.URL, allowed))
+	protected := plain.URL
+	if pageOrigin {
+		protected = srv.URL
+	}
+	fake := newFakeCDPBrowser(t, script(protected, allowed))
 	env := &protectEnv{linkEnv: &linkEnv{t: t, b: b, origin: srv.URL}, plain: plain, allowed: allowed, seven: srv.URL}
 	env.a = startAttachEnv(t, false, attachEnv, "--cdp", b.endpoint, "--cdp-extra", fake.srv.URL, "--origin", srv.URL, "--origin", plain.URL, "--name", "it-node")
 	env.p = b.openPage(t, srv.URL+"/index.html")

@@ -307,9 +307,7 @@ type guardSkip struct {
 const guardC9MacReason = "not-applicable: on macOS the C9 controls hang inside Chrome (#344)"
 
 var guardWaivers = map[string]string{
-	"C3.tab-worker-leak":         "guarded workerAttached true until slicc-browsers 1.21.2; control and live pass",
-	"C3.tab-service-worker-leak": "guarded workerAttached true until slicc-browsers 1.21.2; control and live pass",
-	"C3.tab-attach":              "guarded settle of window.open under main empty-URL hold; runner folds that into control=fail (#260); stock Playwright/Puppeteer popup through the link guard passes",
+	"C3.tab-attach": "guarded settle of window.open under main empty-URL hold; runner folds that into control=fail (#260); stock Playwright/Puppeteer popup through the link guard passes",
 }
 
 func waivedGuardRow(r guardRow) (string, bool) {
@@ -323,14 +321,6 @@ func waivedGuardRow(r guardRow) (string, bool) {
 			return "", false
 		}
 		if !guardedSettleFailure(r) {
-			return "", false
-		}
-		return reason, true
-	case "C3.tab-worker-leak", "C3.tab-service-worker-leak":
-		if r.Control != "pass" || r.Guarded != "fail" || r.Live != "pass" {
-			return "", false
-		}
-		if !strings.Contains(string(r.Why), "workerAttached") {
 			return "", false
 		}
 		return reason, true
@@ -516,9 +506,10 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	}
 	n := run.slots
 	rules := "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1,MAP sliccy.ai 127.0.0.1,MAP *.test 127.0.0.1"
+	secure := "--unsafely-treat-insecure-origin-as-secure=" + strings.Join([]string{targets["ordinary"], targets["seven"], targets["vault"], targets["sevenOopif"]}, ",")
 	chromes := make([]*chromeProc, n)
 	for i := range chromes {
-		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL)
+		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL, secure)
 	}
 	gates := make([]*guardGate, n)
 	for i, b := range chromes {
@@ -556,7 +547,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	opts := map[string]any{
 		"browsers":       slots,
 		"targets":        targets,
-		"capabilities":   map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "extensionFrame": true, "inboundDelay": true, "forwardAudit": true, "stockSetup": true, "closeProtected": true},
+		"capabilities":   map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "extensionFrame": true, "inboundDelay": true, "forwardAudit": true, "stockSetup": true, "closeProtected": true, "secureOrigin": true},
 		"variants":       []string{run.variant},
 		"parallel":       n,
 		"log":            "http://127.0.0.1:" + strconv.Itoa(fix.log),
@@ -673,8 +664,7 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 			}
 			switch {
 			case r.Reason == "not-supported:siteIsolationOff",
-				r.Reason == "not-supported:syntheticAutoAttach",
-				r.Reason == "not-supported:secureOrigin":
+				r.Reason == "not-supported:syntheticAutoAttach":
 				unsupported[r.ID]++
 				t.Logf("%s: skip %s", name, r.Reason)
 			case strings.HasPrefix(r.Reason, "not-applicable"):

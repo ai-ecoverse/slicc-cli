@@ -55,6 +55,11 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 			verdict.send = append(verdict.send, g.cutFrameCastsLocked()...)
 		}
 	}()
+	defer func() {
+		settled := g.settleHeldWorkersLocked()
+		verdict.send = append(verdict.send, settled.send...)
+		verdict.page = append(verdict.page, settled.page...)
+	}()
 	g.progressLocked(&m)
 	if m.ID != nil {
 		return g.answerLocked(&m, data)
@@ -71,6 +76,12 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		return v
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
+		if m.Method == "Target.attachedToTarget" && g.attachedWorkerLocked(&m) {
+			v := g.attachedEvent(&m, data)
+			v.forward = nil
+			v.page = nil
+			return v
+		}
 		return browserVerdict{}
 	}
 	if !errorPageEvent(m.Method) && (g.errorPageSessionLocked(m.SessionID) || g.sessionUnconfirmedLocked(m.SessionID)) {
@@ -171,13 +182,16 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if !ok {
 		return browserVerdict{forward: data}
 	}
-	acceptedAttach = true
-	send := g.applyResultKindLocked(kind, attached, m.SessionID, res)
+	send, hide := g.applyResultKindLocked(kind, attached, m.SessionID, res)
+	acceptedAttach = kind != kindAttach || !hide
+	if hide {
+		return browserVerdict{forward: missingTarget(*m.ID, m.SessionID), send: send}
+	}
 	m.Result = encode(res)
 	return browserVerdict{forward: encode(m), send: send}
 }
 
-func (g *guard) applyResultKindLocked(kind callKind, attached, session string, res map[string]any) [][]byte {
+func (g *guard) applyResultKindLocked(kind callKind, attached, session string, res map[string]any) ([][]byte, bool) {
 	switch kind {
 	case kindTargets:
 		list, _ := res["targetInfos"].([]any)
@@ -190,14 +204,21 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 				g.forgetOpenedSeenLocked(info.TargetID)
 			}
 			send = append(send, g.infoLocked(item)...)
-			if listed(info) {
+			if listed(info) && !g.protectedWorkerLocked(info) {
 				kept = append(kept, item)
+				g.noteWorkerShownLocked(info)
 			}
 		}
 		res["targetInfos"] = kept
-		return send
+		return send, false
 	case kindTargetInfo:
-		return g.infoLocked(res["targetInfo"])
+		info, _ := toInfo(res["targetInfo"])
+		send := g.infoLocked(res["targetInfo"])
+		hide := g.protectedWorkerLocked(info)
+		if !hide {
+			g.noteWorkerShownLocked(info)
+		}
+		return send, hide
 	case kindCookies:
 		res["cookies"] = g.filterCookies(res["cookies"])
 	case kindStreams:
@@ -212,12 +233,15 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		}
 	case kindCreate:
 		id, _ := res["targetId"].(string)
-		return g.touchLocked(id, "page")
+		return g.touchLocked(id, "page"), false
 	case kindAttach:
+		if g.workerUnshownLocked(attached) || g.workerConcealedLocked(attached) || g.protectedWorkerIDLocked(attached) {
+			return nil, true
+		}
 		g.markTouchedLocked(attached)
 		if t, ok := g.targets[attached]; ok {
 			g.attachAnsweredLocked(session, res, t)
-			return g.touchLocked(attached, t.typ)
+			return g.touchLocked(attached, t.typ), false
 		}
 		g.logf("cdp: attach counted as touch without a known target target=%s", attached)
 	case kindScript:
@@ -225,7 +249,7 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 			g.scripts[admittedScriptKey(session, id)] = true
 		}
 	}
-	return nil
+	return nil, false
 }
 
 func toInfo(v any) (targetInfo, map[string]any) {
@@ -353,8 +377,24 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 		info, obj := toInfo(p["targetInfo"])
 		g.noteStreamOpenedLocked(info)
 		send := g.infoLocked(p["targetInfo"])
-		return listed(info), obj != nil && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL)), send
+		if g.protectedWorkerLocked(info) {
+			return false, false, send
+		}
+		keep := listed(info)
+		if keep {
+			g.noteWorkerShownLocked(info)
+		}
+		return keep, obj != nil && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL)), send
 	})
+}
+
+func (g *guard) protectedWorkerLocked(info targetInfo) bool {
+	return workerTypes[info.Type] && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL) || g.workerConcealedLocked(info.TargetID))
+}
+
+func (g *guard) protectedWorkerIDLocked(id string) bool {
+	t := g.targets[id]
+	return t != nil && workerTypes[t.typ] && t.protected
 }
 
 func listed(info targetInfo) bool {
@@ -366,7 +406,7 @@ func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
 		TargetID string `json:"targetId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	if g.hiddenTargetLocked(p.TargetID) {
+	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && (g.protectedWorkerIDLocked(p.TargetID) || g.workerConcealedLocked(p.TargetID) || g.workerUnshownLocked(p.TargetID))) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}
@@ -375,6 +415,14 @@ func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
 func (g *guard) hiddenTargetLocked(id string) bool {
 	t, ok := g.targets[id]
 	return ok && protect.HiddenType(t.typ)
+}
+
+func (g *guard) attachedWorkerLocked(m *message) bool {
+	var p struct {
+		TargetInfo targetInfo `json:"targetInfo"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	return workerTypes[p.TargetInfo.Type]
 }
 
 func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
@@ -392,13 +440,28 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		info.URL = t.url
 	}
 	g.noteStreamOpenedLocked(info)
+	g.attachParent = m.SessionID
 	send := g.observeLocked(info)
-	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" {
+	g.attachParent = ""
+	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
+		if t := g.targets[info.TargetID]; t != nil {
+			t.protected = true
+		}
+	}
+	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" || workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID, target: info.TargetID, waiting: p.WaitingForDebugger})...)}
+	}
+	if g.workerUnresolvedLocked(g.targets[info.TargetID]) {
+		params := decodeParams(m.Params)
+		if params == nil {
+			params = map[string]any{"sessionId": p.SessionID, "waitingForDebugger": p.WaitingForDebugger, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID, "parentFrameId": info.ParentFrameID, "parentId": info.ParentID}}
+		}
+		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
 	}
 	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
 	}
+	g.noteWorkerShownLocked(info)
 	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
 	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
@@ -455,6 +518,7 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)
+		delete(g.hiddenOwner, p.SessionID)
 		g.forgetSessionLocked(p.SessionID)
 		return browserVerdict{page: g.takePendingPageLocked()}
 	}
@@ -485,6 +549,14 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 		} `json:"frame"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	var decided [][]byte
+	if p.Frame.ID != "" {
+		raw := p.Frame.URL
+		if protect.Inheriting(raw) {
+			raw = p.Frame.SecurityOrigin
+		}
+		decided = g.noteChildFrameLocked(p.Frame.ID, raw)
+	}
 	var cut [][]byte
 	if page := g.worldTargetLocked(m.SessionID); page != "" && p.Frame.ID != "" && p.Frame.ParentID != "" {
 		raw := p.Frame.URL
@@ -500,12 +572,12 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	}
 	t := g.sessionTargetLocked(m.SessionID)
 	if t == nil || (p.Frame.ParentID != "" && t.typ != "iframe") || p.Frame.ID != t.id {
-		return browserVerdict{forward: data, send: cut}
+		return browserVerdict{forward: data, send: append(decided, cut...)}
 	}
 	if g.o.Loaded(p.Frame.SecurityOrigin) {
-		return browserVerdict{send: g.markLocked(t)}
+		return browserVerdict{send: append(decided, g.markLocked(t)...)}
 	}
-	send := cut
+	send := append(decided, cut...)
 	if nt := g.navTargets[t.id]; nt != nil {
 		if (nt.confirm != nil && nt.confirm.done && nt.confirm.failed) || p.Type == "BackForwardCacheRestore" || p.Frame.UnreachableURL != "" || strings.HasPrefix(p.Frame.URL, "chrome-error:") || protect.Inheriting(p.Frame.URL) || protect.Unparseable(p.Frame.URL) {
 			g.beginConfirmLocked(nt)
@@ -520,16 +592,17 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 		Context execContext `json:"context"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	decided := g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)
 	t := g.sessionTargetLocked(m.SessionID)
 	switch {
 	case t == nil:
-		return browserVerdict{forward: data}
+		return browserVerdict{forward: data, send: decided}
 	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.Loaded(p.Context.Origin):
-		return browserVerdict{send: g.markLocked(t)}
+		return browserVerdict{send: append(decided, g.markLocked(t)...)}
 	case g.worldContextLocked(t.id, m.SessionID, p.Context):
-		return browserVerdict{send: g.cutCastsLocked(t.id)}
+		return browserVerdict{send: append(decided, g.cutCastsLocked(t.id)...)}
 	}
-	return browserVerdict{forward: data}
+	return browserVerdict{forward: data, send: decided}
 }
 
 func (g *guard) eventProtected(v any, depth int) bool {
