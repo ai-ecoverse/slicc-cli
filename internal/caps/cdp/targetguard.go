@@ -176,9 +176,6 @@ func (g *guard) targetReasonLocked(id string) string {
 	if g.targetProtectedLocked(id) || g.workerConcealedLocked(id) {
 		return refusedTarget
 	}
-	if t := g.targets[id]; t != nil && workerTypes[t.typ] && !t.shown && g.workerUnresolvedLocked(t) {
-		return refusedTarget
-	}
 	if g.targetUnconfirmedLocked(id) {
 		return g.confirmReasonLocked(g.navTargets[id])
 	}
@@ -425,15 +422,14 @@ func (g *guard) markTouchedLocked(id string) {
 		g.touchSeq++
 		seq = g.touchSeq
 	}
+	g.trimTouchedLocked()
 	g.touchedAt[id] = seq
 	g.touchedOrder = append(g.touchedOrder, id)
-	g.trimTouchedLocked()
 	g.logf("cdp: stream touch target=%s touchSeq=%d", id, seq)
-	g.recheckOpenedWaitLocked(id)
+	g.recheckOpenedWaitLocked(id, seq)
 }
 
-func (g *guard) recheckOpenedWaitLocked(opener string) {
-	parentTouch := g.touchedAt[opener]
+func (g *guard) recheckOpenedWaitLocked(opener string, parentTouch int) {
 	for id, wait := range g.openedWait {
 		if wait != opener || g.opened[id] || g.openedIneligible[id] {
 			continue

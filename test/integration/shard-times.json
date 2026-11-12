@@ -521,6 +521,6 @@
     "TestWatchOverTheTrayReconnects": 5.2,
     "TestCDPCloseProtectedAvailabilityEdges": 2.0,
     "TestCDPWorkerHoldFollowUpEdges": 2.0,
-    "TestCDPDeliversDataWorkersFromOrdinarySubFrames": 20.0
+    "TestCDPHidesDataWorkersFromOrdinarySubFrames": 20.0
   }
 }

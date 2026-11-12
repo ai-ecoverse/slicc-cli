@@ -1421,10 +1421,9 @@ export function protectTest(getLink, describe) {
           sessionId: e.sessionId || e.params?.sessionId || '',
           targetId: e.params?.targetInfo?.targetId || e.params?.targetId || '',
         }));
-        const plain = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'S-data-plain', 5000);
         const mark = c.events.length;
         await c.send('Browser.getHistogram', { name: 'arm-data-worker' });
-        await plain;
+        await new Promise((resolve) => setTimeout(resolve, 500));
         return {
           events: snapshot(c.events.slice(mark)),
           list: (await c.send('Target.getTargets')).targetInfos,

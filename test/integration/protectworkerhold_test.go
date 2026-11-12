@@ -580,7 +580,7 @@ func dataWorkerScript(seven, allowed string) fakeScript {
 	}
 }
 
-func TestCDPDeliversDataWorkersFromOrdinarySubFrames(t *testing.T) {
+func TestCDPHidesDataWorkersFromOrdinarySubFrames(t *testing.T) {
 	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
 		return dataWorkerScript(seven, allowed)
 	})
@@ -601,39 +601,32 @@ func TestCDPDeliversDataWorkersFromOrdinarySubFrames(t *testing.T) {
 	for _, item := range result.List {
 		listed[item.TargetID] = true
 	}
-	if !listed["W-data-plain"] || listed["W-data-seven"] {
+	if listed["W-data-plain"] || listed["W-data-seven"] {
 		t.Fatalf("data: worker listing: %+v", result.List)
 	}
-	plainSeen, sevenSeen := false, false
 	for _, event := range result.Events {
-		if event.SessionID == "S-data-plain" && event.Method == "Target.attachedToTarget" {
-			plainSeen = true
-		}
-		if event.SessionID == "S-data-seven" || event.TargetID == "W-data-seven" {
-			sevenSeen = true
+		if event.SessionID == "S-data-plain" || event.SessionID == "S-data-seven" || event.TargetID == "W-data-plain" || event.TargetID == "W-data-seven" {
+			t.Fatalf("sub-frame data: worker reached the client: %+v", event)
 		}
 	}
-	if !plainSeen {
-		t.Fatal("ordinary sub-frame data: worker was not delivered")
-	}
-	if sevenSeen {
-		t.Fatalf("protected sub-frame data: worker reached the client: %+v", result.Events)
-	}
-	if !result.PlainAttach.OK {
-		t.Fatalf("attach of ordinary data: worker: %+v", result.PlainAttach)
+	if result.PlainAttach.OK || result.PlainAttach.Error.Message != refusedText {
+		t.Fatalf("attach of ordinary sub-frame data: worker: %+v", result.PlainAttach)
 	}
 	if result.SevenAttach.OK || result.SevenAttach.Error.Message != refusedText {
 		t.Fatalf("attach of protected data: worker: %+v", result.SevenAttach)
 	}
 	got := fake.received()
-	detached := false
+	detachedPlain, detachedSeven := false, false
 	for _, line := range got {
-		if strings.Contains(line, "S-data-seven") && strings.Contains(line, "Target.detachFromTarget") {
-			detached = true
+		if strings.Contains(line, "Target.detachFromTarget") && strings.Contains(line, "S-data-plain") {
+			detachedPlain = true
+		}
+		if strings.Contains(line, "Target.detachFromTarget") && strings.Contains(line, "S-data-seven") {
+			detachedSeven = true
 		}
 	}
-	if !detached {
-		t.Fatal("protected data: worker was not detached")
+	if !detachedPlain || !detachedSeven {
+		t.Fatalf("sub-frame data: workers were not detached: plain=%t seven=%t", detachedPlain, detachedSeven)
 	}
 }
 

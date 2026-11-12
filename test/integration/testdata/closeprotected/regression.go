@@ -132,3 +132,36 @@ func TestCloseProtectedLiveTouchSurvivesFlood(t *testing.T) {
 		t.Fatalf("popup from a live opener was not closable after a touch flood: closable=%t reason=%q", closable, reason)
 	}
 }
+
+func TestCloseProtectedTrimBeforeStoreKeepsTouchSeq(t *testing.T) {
+	g := closeProtectedGuard(t)
+	for i := 0; i < maxTombstones; i++ {
+		id := fmt.Sprintf("T%d", i)
+		g.targets[id] = &target{id: id, typ: "page", url: "https://ordinary.test/", gone: true}
+		g.touchSeq++
+		g.touchedAt[id] = g.touchSeq
+		g.touchedOrder = append(g.touchedOrder, id)
+	}
+	_ = g.fromBrowser(popupCreated())
+	g.mu.Lock()
+	if g.openedWait["POPUP"] != "OPENER" {
+		t.Fatalf("popup was not waiting on opener touch: wait=%q opened=%v ineligible=%v", g.openedWait["POPUP"], g.opened["POPUP"], g.openedIneligible["POPUP"])
+	}
+	seenAt := g.openedSeenAt["POPUP"]
+	g.targets["OPENER"].gone = true
+	g.markTouchedLocked("OPENER")
+	touch, ok := g.touchedAt["OPENER"]
+	opened := g.opened["POPUP"]
+	ineligible := g.openedIneligible["POPUP"]
+	wait := g.openedWait["POPUP"]
+	g.mu.Unlock()
+	if !ok || touch == 0 {
+		t.Fatalf("opener touch was lost to trim before recheck: ok=%t touch=%d", ok, touch)
+	}
+	if opened || wait != "" || !ineligible {
+		t.Fatalf("lost touch seq made a pre-touch popup closable: opened=%v wait=%q ineligible=%v seenAt=%d touch=%d", opened, wait, ineligible, seenAt, touch)
+	}
+	if touch <= seenAt {
+		t.Fatalf("expected opener touch after popup sight: seenAt=%d touch=%d", seenAt, touch)
+	}
+}

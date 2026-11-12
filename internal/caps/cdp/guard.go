@@ -437,6 +437,9 @@ func (g *guard) decide(t *target, previous bool) bool {
 	if t.typ == "browser" {
 		return false
 	}
+	if workerTypes[t.typ] && previous {
+		return true
+	}
 	if g.workerFromProtectedCreatorLocked(t) {
 		return true
 	}
@@ -564,6 +567,12 @@ func (g *guard) workerUnresolvedLocked(t *target) bool {
 	if t.openerFrame != "" && !g.creatorClassifiedLocked(t.openerFrame) {
 		return true
 	}
+	if t.parentFrame != "" && !g.creatorClassifiedLocked(t.parentFrame) {
+		return true
+	}
+	if t.opener != "" && !g.creatorClassifiedLocked(t.opener) {
+		return true
+	}
 	return protect.Inheriting(t.url) && !g.workerCreatorClassifiedLocked(t)
 }
 
@@ -589,14 +598,8 @@ func (g *guard) workerConcealedLocked(id string) bool {
 
 func (g *guard) workerCreatorUnprotectedLocked(t *target) bool {
 	known := func(id string) bool {
-		if id == "" {
-			return false
-		}
-		if c := g.targets[id]; c != nil && !c.gone && !c.protected {
-			return true
-		}
-		raw := g.childFrames[id]
-		return raw != "" && raw != "null" && !protect.Inheriting(raw) && !g.o.Loaded(raw)
+		c := g.targets[id]
+		return id != "" && c != nil && !c.gone && !c.protected
 	}
 	return known(t.openerFrame) || known(t.opener) || known(t.parentFrame)
 }

@@ -254,9 +254,6 @@ func (g *guard) applyAttachResultLocked(attached, session string, res map[string
 	if g.workerConcealedLocked(attached) || g.protectedWorkerIDLocked(attached) {
 		return nil, true
 	}
-	if t := g.targets[attached]; t != nil && workerTypes[t.typ] && !t.shown && g.workerUnresolvedLocked(t) {
-		return nil, true
-	}
 	g.markTouchedLocked(attached)
 	if t, ok := g.targets[attached]; ok {
 		if workerTypes[t.typ] {

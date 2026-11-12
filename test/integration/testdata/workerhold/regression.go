@@ -41,11 +41,11 @@ func TestWorkerHoldDataWorkerFromOrdinarySubFrame(t *testing.T) {
 	w := &target{id: "W", typ: "worker", url: "data:text/javascript,1", parentFrame: "FRAME"}
 	g.targets["W"] = w
 	w.protected = g.decide(w, false)
-	if w.protected {
-		t.Fatal("data: worker from an ordinary sub-frame was protected")
+	if !w.protected {
+		t.Fatal("data: worker from an ordinary sub-frame was not protected")
 	}
-	if g.workerFromProtectedCreatorLocked(w) {
-		t.Fatal("ordinary sub-frame still counted as a protected creator for a data: worker")
+	if !g.workerFromProtectedCreatorLocked(w) {
+		t.Fatal("ordinary sub-frame data: worker was not treated as creator-protected")
 	}
 }
 
@@ -90,5 +90,51 @@ func TestWorkerHoldAttachUnresolvedStillRefused(t *testing.T) {
 	}
 	if strings.Contains(g.targets["W"].url, "ordinary") {
 		t.Fatal("unexpected")
+	}
+}
+
+func TestWorkerHoldStickyProtectedAfterCreatorNavigatesAway(t *testing.T) {
+	g := workerHoldGuard(t)
+	g.noteChildFrameLocked("FRAME", "https://seven.sliccy.ai/embed")
+	w := &target{id: "W", typ: "worker", url: "data:text/javascript,1", parentFrame: "FRAME", shown: false}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if !w.protected {
+		t.Fatal("worker was not protected from its creator")
+	}
+	_ = g.noteChildFrameLocked("FRAME", "https://ordinary.test/embed")
+	if !w.protected {
+		t.Fatal("redecide cleared a sticky protected worker after its creator navigated away")
+	}
+	if g.targetReasonLocked("W") == "" {
+		t.Fatal("sticky protected worker became attachable after its creator navigated away")
+	}
+	if !g.protectedWorkerIDLocked("W") {
+		t.Fatal("sticky protected worker became listable after its creator navigated away")
+	}
+	info := targetInfo{TargetID: "W", Type: "worker", URL: w.url, ParentFrameID: "FRAME"}
+	if !g.protectedWorkerLocked(info) {
+		t.Fatal("sticky protected worker was not filtered from listings")
+	}
+}
+
+func TestWorkerHoldUnknownParentFrameStaysHeld(t *testing.T) {
+	g := workerHoldGuard(t)
+	g.targets["OPENER"] = &target{id: "OPENER", typ: "page", url: "https://ordinary.test/"}
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js", opener: "OPENER", parentFrame: "FRAME-unknown", shown: false}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if w.protected {
+		t.Fatal("worker with an ordinary opener was protected before its parentFrame was known")
+	}
+	if !g.workerUnresolvedLocked(w) {
+		t.Fatal("unknown parentFrame did not keep the worker held")
+	}
+	if reason := g.targetReasonLocked("W"); reason == "" {
+		t.Fatal("worker with an unknown parentFrame was attachable by id")
+	}
+	_, hide := g.applyResultKindLocked(kindAttach, "W", "", map[string]any{"sessionId": "S-W"})
+	if !hide {
+		t.Fatal("attach of a worker with an unknown parentFrame was admitted")
 	}
 }
