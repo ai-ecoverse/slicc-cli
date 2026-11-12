@@ -68,6 +68,8 @@ type navTarget struct {
 	failedURLs       []string
 	commits          int
 	failCommit       int
+	navGen           int
+	errorNavGen      int
 	worker           bool
 	iframe           bool
 	shared           bool
@@ -357,47 +359,37 @@ func (g *guard) navCheckLocked(sessionID string) string {
 	return refusedGuard
 }
 
-func (nt *navTarget) commitLocked(m *message) {
-	var p struct {
-		FrameID        string `json:"frameId"`
+type navCommitParams struct {
+	FrameID        string `json:"frameId"`
+	LoaderID       string `json:"loaderId"`
+	RequestID      string `json:"requestId"`
+	NavigationType string `json:"navigationType"`
+	Type           string `json:"type"`
+	URL            string `json:"url"`
+	Frame          struct {
+		ID             string `json:"id"`
+		ParentID       string `json:"parentId"`
 		LoaderID       string `json:"loaderId"`
-		RequestID      string `json:"requestId"`
-		NavigationType string `json:"navigationType"`
-		Type           string `json:"type"`
 		URL            string `json:"url"`
-		Frame          struct {
-			ID             string `json:"id"`
-			ParentID       string `json:"parentId"`
-			LoaderID       string `json:"loaderId"`
-			URL            string `json:"url"`
-			SecurityOrigin string `json:"securityOrigin"`
-			UnreachableURL string `json:"unreachableUrl"`
-		} `json:"frame"`
-	}
+		SecurityOrigin string `json:"securityOrigin"`
+		UnreachableURL string `json:"unreachableUrl"`
+	} `json:"frame"`
+}
+
+func (nt *navTarget) commitLocked(m *message) {
 	switch m.Method {
 	case "Page.frameStartedNavigating", "Page.frameNavigated", "Page.frameStoppedLoading", "Network.loadingFailed":
 	default:
 		return
 	}
+	var p navCommitParams
 	if json.Unmarshal(m.Params, &p) != nil {
 		nt.unsure = true
 		return
 	}
 	switch m.Method {
 	case "Page.frameStartedNavigating":
-		if p.FrameID != nt.target || sameDocument[p.NavigationType] {
-			return
-		}
-		nt.navigationURL = p.URL
-		if nt.loading == nil {
-			nt.loading = map[string]int{}
-		}
-		if p.LoaderID == "" || len(nt.loading) >= maxLoading {
-			nt.unsure = true
-			return
-		}
-		nt.started++
-		nt.loading[p.LoaderID] = nt.started
+		nt.commitStartedNavigatingLocked(p)
 	case "Network.loadingFailed":
 		delete(nt.loading, p.RequestID)
 	case "Page.frameStoppedLoading":
@@ -407,27 +399,51 @@ func (nt *navTarget) commitLocked(m *message) {
 			nt.navigationURL = ""
 		}
 	case "Page.frameNavigated":
-		if p.Frame.ID != nt.target || (p.Frame.ParentID != "" && !nt.iframe) {
-			return
-		}
-		if p.Type == "BackForwardCacheRestore" {
-			clear(nt.loading)
-			nt.unsure = false
-		}
-		if n, ok := nt.loading[p.Frame.LoaderID]; ok {
-			for l, m := range nt.loading {
-				if m <= n {
-					delete(nt.loading, l)
-				}
+		nt.commitFrameNavigatedLocked(p)
+	}
+}
+
+func (nt *navTarget) commitStartedNavigatingLocked(p navCommitParams) {
+	if p.FrameID != nt.target || sameDocument[p.NavigationType] {
+		return
+	}
+	nt.navGen++
+	nt.navigationURL = p.URL
+	if nt.loading == nil {
+		nt.loading = map[string]int{}
+	}
+	if p.LoaderID == "" || len(nt.loading) >= maxLoading {
+		nt.unsure = true
+		return
+	}
+	nt.started++
+	nt.loading[p.LoaderID] = nt.started
+}
+
+func (nt *navTarget) commitFrameNavigatedLocked(p navCommitParams) {
+	if p.Frame.ID != nt.target || (p.Frame.ParentID != "" && !nt.iframe) {
+		return
+	}
+	if p.Type == "BackForwardCacheRestore" {
+		clear(nt.loading)
+		nt.unsure = false
+	}
+	if n, ok := nt.loading[p.Frame.LoaderID]; ok {
+		for l, m := range nt.loading {
+			if m <= n {
+				delete(nt.loading, l)
 			}
 		}
-		nt.errorURL = p.Frame.UnreachableURL
-		nt.documentURL = p.Frame.URL
-		if p.Frame.SecurityOrigin != "" {
-			nt.securityOrigin = p.Frame.SecurityOrigin
-		}
-		nt.navigationURL = ""
-		nt.commits++
+	}
+	nt.errorURL = p.Frame.UnreachableURL
+	nt.documentURL = p.Frame.URL
+	if p.Frame.SecurityOrigin != "" {
+		nt.securityOrigin = p.Frame.SecurityOrigin
+	}
+	nt.navigationURL = ""
+	nt.commits++
+	if chromeErrorDocument(p.Frame.URL) || p.Frame.UnreachableURL != "" {
+		nt.errorNavGen = nt.navGen
 	}
 }
 

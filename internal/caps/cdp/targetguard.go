@@ -189,6 +189,8 @@ type touchReservation struct {
 	seq    int
 }
 
+const closeProofPending = "\x00close-proof"
+
 func (g *guard) closeTargetReasonLocked(id string) string {
 	if id == "" {
 		return ""
@@ -213,11 +215,10 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 			g.logf("cdp: closeTarget refused target=%s type=%s why=%s touched=%t opened=%t seenAt=%d touchSeq=%d opener=%s openerFrame=%s", id, t.typ, why, g.navTargets[id] != nil, g.opened[id], g.openedSeenAt[id], g.touchSeq, t.opener, t.openerFrame)
 			return refusedTarget
 		}
-		if g.keptCloseLocked(id) {
-			g.logf("cdp: closeTarget refused target=%s type=%s why=kept", id, t.typ)
-			return refusedTarget
+		if g.closeNeedsProofLocked(id) {
+			return closeProofPending
 		}
-		return ""
+		return g.closeTargetFinalLocked(id)
 	case "browser":
 		g.logf("cdp: closeTarget refused target=%s why=browser", id)
 		return refusedTarget
@@ -226,8 +227,39 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 	return g.targetReasonLocked(id)
 }
 
+func (g *guard) closeTargetFinalLocked(id string) string {
+	if g.keptCloseLocked(id) {
+		g.logf("cdp: closeTarget refused target=%s type=%s why=kept", id, g.targets[id].typ)
+		return refusedTarget
+	}
+	return ""
+}
+
 func (g *guard) streamClosableLocked(id string) bool {
 	return g.navTargets[id] != nil || g.opened[id]
+}
+
+func (g *guard) closeNeedsProofLocked(id string) bool {
+	nt := g.navTargets[id]
+	if nt == nil || nt.session == "" {
+		return false
+	}
+	navigating := nt.unsure || len(nt.loading) > 0
+	if !navigating || nt.navigationURL != "" {
+		return false
+	}
+	t := g.targets[id]
+	documentURL := ""
+	if t != nil {
+		documentURL = t.url
+	}
+	if nt.documentURL != "" {
+		documentURL = nt.documentURL
+	}
+	if g.recordedProtectedErrorPageLocked(nt, documentURL) {
+		return false
+	}
+	return true
 }
 
 func (g *guard) keptCloseLocked(id string) bool {
@@ -240,7 +272,7 @@ func (g *guard) keptCloseLocked(id string) bool {
 	if nt != nil && nt.documentURL != "" {
 		documentURL = nt.documentURL
 	}
-	if g.recordedProtectedErrorPageLocked(nt, documentURL) {
+	if g.recordedProtectedErrorPageLocked(nt, documentURL) && !g.navigationAfterErrorLocked(nt) {
 		return false
 	}
 	navigating := nt != nil && (nt.unsure || len(nt.loading) > 0)
@@ -260,6 +292,13 @@ func (g *guard) recordedProtectedErrorPageLocked(nt *navTarget, documentURL stri
 	return nt != nil && nt.errorURL != "" && g.o.Loaded(nt.errorURL)
 }
 
+func (g *guard) navigationAfterErrorLocked(nt *navTarget) bool {
+	if nt == nil || nt.errorNavGen == 0 {
+		return false
+	}
+	return nt.navGen > nt.errorNavGen && (nt.unsure || len(nt.loading) > 0)
+}
+
 func (g *guard) noteErrorPageSnapshotLocked(nt *navTarget, url, origin, unreachable string) {
 	if nt == nil {
 		return
@@ -276,6 +315,35 @@ func (g *guard) noteErrorPageSnapshotLocked(nt *navTarget, url, origin, unreacha
 	if unreachable != "" {
 		nt.errorURL = unreachable
 	}
+	nt.errorNavGen = nt.navGen
+}
+
+func (g *guard) applyCloseProofLocked(id string, m message) bool {
+	nt := g.navTargets[id]
+	if nt == nil || m.Error != nil {
+		return false
+	}
+	var result struct {
+		FrameTree struct {
+			Frame struct {
+				ID             string `json:"id"`
+				ParentID       string `json:"parentId"`
+				URL            string `json:"url"`
+				SecurityOrigin string `json:"securityOrigin"`
+				UnreachableURL string `json:"unreachableUrl"`
+			} `json:"frame"`
+		} `json:"frameTree"`
+	}
+	if json.Unmarshal(m.Result, &result) != nil {
+		return false
+	}
+	frame := result.FrameTree.Frame
+	if frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
+		return false
+	}
+	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
+	g.noteErrorPageSnapshotLocked(nt, frame.URL, frame.SecurityOrigin, frame.UnreachableURL)
+	return true
 }
 
 func chromeErrorDocument(raw string) bool {

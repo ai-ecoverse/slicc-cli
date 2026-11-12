@@ -85,6 +85,9 @@ func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 		if v.extension != nil {
 			v = rl.resolveExtensionShown(v.extension)
 		}
+		if v.closeProof != nil {
+			v = rl.resolveCloseProof(v.closeProof)
+		}
 		if v.wait == nil {
 			break
 		}
@@ -167,6 +170,34 @@ func (rl *relay) resolveHistory(c *command) pageVerdict {
 	case <-rl.s.Done():
 	}
 	return rl.g.afterHistory(c, message{}, false)
+}
+
+func (rl *relay) resolveCloseProof(c *command) pageVerdict {
+	rl.g.mu.Lock()
+	targetID := c.str("targetId")
+	nt := rl.g.navTargets[targetID]
+	session := ""
+	if nt != nil {
+		session = nt.session
+	}
+	rl.g.mu.Unlock()
+	if session == "" {
+		return rl.g.afterCloseProof(c, message{}, false)
+	}
+	msg, call := rl.g.call(session, "Page.getFrameTree", nil)
+	defer rl.g.cancel(call)
+	ctx, cancel := context.WithTimeout(context.Background(), HistoryTimeout)
+	defer cancel()
+	if err := rl.conn.Write(ctx, websocket.MessageText, msg); err != nil {
+		return rl.g.afterCloseProof(c, message{}, false)
+	}
+	select {
+	case m := <-call.ch:
+		return rl.g.afterCloseProof(c, m, m.Error == nil)
+	case <-ctx.Done():
+	case <-rl.s.Done():
+	}
+	return rl.g.afterCloseProof(c, message{}, false)
 }
 
 const (

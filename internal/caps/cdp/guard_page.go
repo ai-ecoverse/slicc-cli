@@ -33,13 +33,14 @@ func (c *command) str(key string) string {
 }
 
 type pageVerdict struct {
-	forward   []byte
-	reply     []byte
-	send      [][]byte
-	history   *command
-	extension *command
-	cmd       *command
-	wait      <-chan struct{}
+	forward    []byte
+	reply      []byte
+	send       [][]byte
+	history    *command
+	extension  *command
+	closeProof *command
+	cmd        *command
+	wait       <-chan struct{}
 }
 
 func decodeObject(raw json.RawMessage) (map[string]any, bool) {
@@ -99,6 +100,9 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	if reason := g.checkLocked(c); reason != "" {
 		if reason == extensionShownPending {
 			return pageVerdict{extension: c}
+		}
+		if reason == closeProofPending {
+			return pageVerdict{closeProof: c}
 		}
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
@@ -217,6 +221,9 @@ func (g *guard) afterHistory(c *command, res message, ok bool) pageVerdict {
 		if reason == extensionShownPending {
 			return pageVerdict{extension: c}
 		}
+		if reason == closeProofPending {
+			return pageVerdict{closeProof: c}
+		}
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
 	}
@@ -225,6 +232,23 @@ func (g *guard) afterHistory(c *command, res message, ok bool) pageVerdict {
 	}
 	if g.needsExtensionShownProbeLocked(c) {
 		return pageVerdict{extension: c}
+	}
+	return g.admitLocked(c)
+}
+
+func (g *guard) afterCloseProof(c *command, res message, ok bool) pageVerdict {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	id := c.str("targetId")
+	if !ok || !g.applyCloseProofLocked(id, res) {
+		g.logf("cdp: closeTarget refused target=%s why=close-proof", id)
+		return pageVerdict{reply: refusal(c.id, c.session, refusedTarget)}
+	}
+	if reason := g.closeTargetFinalLocked(id); reason != "" {
+		return pageVerdict{reply: refusal(c.id, c.session, reason)}
+	}
+	if gate := g.framesGateLocked(c.session); gate != nil {
+		return pageVerdict{wait: gate}
 	}
 	return g.admitLocked(c)
 }
