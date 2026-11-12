@@ -71,6 +71,12 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		return v
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
+		if m.Method == "Target.attachedToTarget" && g.attachedWorkerLocked(&m) {
+			v := g.attachedEvent(&m, data)
+			v.forward = nil
+			v.page = nil
+			return v
+		}
 		return browserVerdict{}
 	}
 	if !errorPageEvent(m.Method) && (g.errorPageSessionLocked(m.SessionID) || g.sessionUnconfirmedLocked(m.SessionID)) {
@@ -383,6 +389,14 @@ func (g *guard) hiddenTargetLocked(id string) bool {
 	return ok && protect.HiddenType(t.typ)
 }
 
+func (g *guard) attachedWorkerLocked(m *message) bool {
+	var p struct {
+		TargetInfo targetInfo `json:"targetInfo"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	return workerTypes[p.TargetInfo.Type]
+}
+
 func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	var p struct {
 		SessionID          string     `json:"sessionId"`
@@ -398,8 +412,15 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		info.URL = t.url
 	}
 	g.noteStreamOpenedLocked(info)
+	g.attachParent = m.SessionID
 	send := g.observeLocked(info)
-	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" {
+	g.attachParent = ""
+	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
+		if t := g.targets[info.TargetID]; t != nil {
+			t.protected = true
+		}
+	}
+	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" || workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID, target: info.TargetID, waiting: p.WaitingForDebugger})...)}
 	}
 	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
@@ -461,6 +482,7 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)
+		delete(g.hiddenOwner, p.SessionID)
 		g.forgetSessionLocked(p.SessionID)
 		return browserVerdict{page: g.takePendingPageLocked()}
 	}

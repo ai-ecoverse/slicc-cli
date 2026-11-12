@@ -8,7 +8,7 @@ import (
 )
 
 func TestCDPHidesProtectedWorkersFromListings(t *testing.T) {
-	env, fake := setupFakeProtect(t, func(seven, allowed string) fakeScript {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
 		info := func(id, typ, raw string) string {
 			return fmt.Sprintf(`{"targetId":%q,"type":%q,"url":%q,"title":%q}`, id, typ, raw, raw)
 		}

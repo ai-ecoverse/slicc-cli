@@ -1858,6 +1858,30 @@ export function protectTest(getLink, describe) {
           received: JSON.stringify(c.events),
         };
       }),
+    framedWorker: (browser) =>
+      run(browser, async (c) => {
+        const done = c.waitEvent((e) => e.method === 'Console.messageAdded' && e.params.message.text === 'framed-worker-done', 15000);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await done;
+        const attach = async (targetId) => outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const info = async (targetId) => outcome(c.send('Target.getTargetInfo', { targetId }));
+        return {
+          list: (await c.send('Target.getTargets')).targetInfos,
+          framedAttach: await attach('W-framed'),
+          sharedAttach: await attach('W-shared'),
+          serviceAttach: await attach('W-service'),
+          framedInfo: await info('W-framed'),
+          ordinaryInfo: await info('W-ordinary'),
+          events: c.events.map((e) => ({
+            method: e.method,
+            sessionId: e.sessionId || '',
+            targetId: e.params?.targetInfo?.targetId || e.params?.targetId || '',
+            type: e.params?.targetInfo?.type || '',
+            url: e.params?.targetInfo?.url || e.params?.request?.url || e.params?.entry?.url || '',
+            text: e.params?.message?.text || e.params?.entry?.text || e.params?.args?.[0]?.value || '',
+          })),
+        };
+      }),
     workerListing: (browser) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Console.messageAdded' && e.params.message.text === 'worker-listing-done', 15000);

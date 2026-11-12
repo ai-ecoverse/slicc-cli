@@ -117,6 +117,8 @@ type guard struct {
 	openedWait            map[string]string
 	sessions              map[string]*session
 	hidden                map[string]bool
+	hiddenOwner           map[string]string
+	attachParent          string
 	refused               map[string]bool
 	refusedOrder          []string
 	browserSessions       map[string]bool
@@ -216,6 +218,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		openedWait:            map[string]string{},
 		sessions:              map[string]*session{},
 		hidden:                map[string]bool{},
+		hiddenOwner:           map[string]string{},
 		refused:               map[string]bool{},
 		browserSessions:       map[string]bool{},
 		ownContexts:           map[string]bool{},
@@ -427,7 +430,48 @@ func (g *guard) decide(t *target, previous bool) bool {
 	if t.typ == "browser" {
 		return false
 	}
+	if g.workerFromProtectedCreatorLocked(t) {
+		return true
+	}
 	return g.o.TargetWith(t.url, t.typ, previous, g.openerState(t), g.evidenceLocked(t))
+}
+
+func (g *guard) workerFromProtectedCreatorLocked(t *target) bool {
+	if t == nil || !workerTypes[t.typ] {
+		return false
+	}
+	if g.targetProtectedLocked(t.openerFrame) || g.targetProtectedLocked(t.opener) || g.targetProtectedLocked(t.parentFrame) {
+		return true
+	}
+	parent := g.attachParent
+	if parent != "" && (g.hidden[parent] || g.held[parent] != nil) {
+		return true
+	}
+	if owner := g.sessionOwnerLocked(parent); owner != nil && owner.protected {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(t.url), "data:") && !g.workerCreatorUnprotectedLocked(t)
+}
+
+func (g *guard) workerCreatorUnprotectedLocked(t *target) bool {
+	known := func(id string) bool {
+		c := g.targets[id]
+		return id != "" && c != nil && !c.gone && !c.protected
+	}
+	return known(t.openerFrame) || known(t.opener) || known(t.parentFrame)
+}
+
+func (g *guard) sessionOwnerLocked(id string) *target {
+	if id == "" {
+		return nil
+	}
+	if s := g.sessions[id]; s != nil {
+		return g.targets[s.target]
+	}
+	if h := g.held[id]; h != nil {
+		return g.targets[h.target]
+	}
+	return g.targets[g.hiddenOwner[id]]
 }
 
 func (g *guard) record(info targetInfo) *target {

@@ -74,8 +74,18 @@ func (g *guard) resumeLocked(sessionID, targetID string) []byte {
 	})
 }
 
+func (g *guard) noteHiddenLocked(id, target string) {
+	if id == "" {
+		return
+	}
+	g.hidden[id] = true
+	if target != "" {
+		g.hiddenOwner[id] = target
+	}
+}
+
 func (g *guard) hideLocked(h *heldSession) [][]byte {
-	g.hidden[h.id] = true
+	g.noteHiddenLocked(h.id, h.target)
 	g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 	var send [][]byte
 	if h.waiting {
@@ -103,7 +113,7 @@ func (g *guard) dropHeldLocked(targetID string) {
 	for sid, h := range g.held {
 		if h.target == targetID {
 			delete(g.held, sid)
-			g.hidden[sid] = true
+			g.noteHiddenLocked(sid, h.target)
 		}
 	}
 }
