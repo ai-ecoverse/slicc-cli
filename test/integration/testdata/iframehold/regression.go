@@ -350,6 +350,92 @@ func TestIframeHoldUnknownAncestryPropagatesToChild(t *testing.T) {
 	}
 }
 
+func iframeChainURL(i int) string {
+	host := "a.test"
+	if i%2 == 1 {
+		host = "b.test"
+	}
+	return "https://" + host + "/" + itoa(int64(i))
+}
+
+func TestIframeHoldDeepUnknownAncestryStaysHidden(t *testing.T) {
+	g := iframeHoldGuard(t)
+	infos := []targetInfo{
+		{TargetID: "SEVEN", Type: "page", URL: "https://seven.sliccy.ai/doc"},
+		{TargetID: "F0", Type: "iframe", URL: iframeChainURL(0), ParentFrameID: "INPROC"},
+	}
+	prev := "F0"
+	for i := 1; i <= 70; i++ {
+		id := "F" + itoa(int64(i))
+		infos = append(infos, targetInfo{TargetID: id, Type: "iframe", URL: iframeChainURL(i), ParentFrameID: prev})
+		prev = id
+	}
+	g.observeAll(infos)
+	bottom := "F70"
+	info := targetInfo{TargetID: bottom, Type: "iframe", URL: iframeChainURL(70), ParentFrameID: "F69"}
+	if !g.listingHiddenLocked(info) || g.targetReasonLocked(bottom) == "" {
+		t.Fatalf("70-deep iframe under unknown ancestry was shown: reason=%q", g.targetReasonLocked(bottom))
+	}
+	g.browserSessions["S-browser"] = true
+	g.sessions["S-bottom"] = &session{id: "S-bottom", target: bottom, parent: "S-browser", typ: "iframe"}
+	g.navTargets[bottom] = &navTarget{target: bottom, iframe: true, done: true}
+	if !g.sessionRefusedLocked("S-bottom") {
+		t.Fatal("browser-session attach under deep unknown ancestry remained admitted")
+	}
+	e := reviewCommand(g, `{"id":2,"sessionId":"S-bottom","method":"Runtime.evaluate","params":{"expression":"1"}}`)
+	if len(e.forward) > 0 {
+		t.Errorf("evaluate forwarded under deep unknown ancestry: %s", e.forward)
+	}
+	raw, _ := json.Marshal(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "S-root-bottom", "waitingForDebugger": false, "targetInfo": map[string]any{"targetId": bottom, "type": "iframe", "url": iframeChainURL(70), "parentFrameId": "F69"}}})
+	v := g.fromBrowser(raw)
+	if len(v.forward) > 0 || len(v.page) > 0 {
+		t.Errorf("browser-root attachedToTarget for deep unknown ancestry was delivered: forward=%s page=%s", v.forward, v.page)
+	}
+}
+
+func TestIframeHoldParentFrameCycleStaysHidden(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "SEVEN", Type: "page", URL: "https://seven.sliccy.ai/doc"},
+		{TargetID: "A", Type: "iframe", URL: "https://a.test/", ParentFrameID: "B"},
+		{TargetID: "B", Type: "iframe", URL: "https://b.test/", ParentFrameID: "A"},
+	})
+	for _, id := range []string{"A", "B"} {
+		url := "https://a.test/"
+		parent := "B"
+		if id == "B" {
+			url = "https://b.test/"
+			parent = "A"
+		}
+		info := targetInfo{TargetID: id, Type: "iframe", URL: url, ParentFrameID: parent}
+		if !g.listingHiddenLocked(info) || g.targetReasonLocked(id) == "" {
+			t.Fatalf("parentFrame cycle member %s was shown: reason=%q", id, g.targetReasonLocked(id))
+		}
+		g.sessions["S-"+id] = &session{id: "S-" + id, target: id, typ: "iframe"}
+		g.navTargets[id] = &navTarget{target: id, iframe: true, done: true}
+		if !g.sessionRefusedLocked("S-" + id) {
+			t.Fatalf("cycle member %s session remained admitted", id)
+		}
+	}
+}
+
+func TestIframeHoldOrdinaryDeepWithinLimitShown(t *testing.T) {
+	g := iframeHoldGuard(t)
+	infos := []targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}}
+	prev := "PAGE"
+	for i := 0; i < 32; i++ {
+		id := "F" + itoa(int64(i))
+		infos = append(infos, targetInfo{TargetID: id, Type: "iframe", URL: iframeChainURL(i), ParentFrameID: prev})
+		prev = id
+	}
+	g.observeAll(infos)
+	bottom := "F31"
+	info := targetInfo{TargetID: bottom, Type: "iframe", URL: iframeChainURL(31), ParentFrameID: "F30"}
+	if g.listingHiddenLocked(info) || g.targetReasonLocked(bottom) != "" {
+		t.Fatalf("ordinary deep chain within the limit was hidden: reason=%q", g.targetReasonLocked(bottom))
+	}
+}
+
 func TestIframeHoldChromeErrorFrameTreeOrdinaryOrMissingParent(t *testing.T) {
 	for _, parent := range []string{"", "PAGE"} {
 		name := parent

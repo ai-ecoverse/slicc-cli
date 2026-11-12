@@ -613,7 +613,7 @@ func (g *guard) iframeParentTargetLocked(t *target) *target {
 	id := g.iframeAncestorStartLocked(t)
 	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
 		if seen[id] {
-			break
+			return nil
 		}
 		seen[id] = true
 		if p := g.targets[id]; p != nil && !p.gone && (p.typ == "page" || p.typ == "tab" || p.typ == "iframe") {
@@ -710,7 +710,7 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 	id := g.iframeAncestorStartLocked(t)
 	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
 		if seen[id] {
-			return false
+			return true
 		}
 		seen[id] = true
 		if g.creatorProtectedLocked(id) {
@@ -718,7 +718,7 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 		}
 		id = g.frameParentOfLocked(id)
 	}
-	return false
+	return id != ""
 }
 
 func (g *guard) iframeAncestorPendingLocked(t *target) bool {
@@ -729,7 +729,7 @@ func (g *guard) iframeAncestorPendingLocked(t *target) bool {
 	id := g.iframeAncestorStartLocked(t)
 	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
 		if seen[id] {
-			break
+			return true
 		}
 		seen[id] = true
 		if g.targetHeldLocked(id) || g.targetUnconfirmedLocked(id) {
@@ -739,6 +739,9 @@ func (g *guard) iframeAncestorPendingLocked(t *target) bool {
 			return true
 		}
 		id = g.frameParentOfLocked(id)
+	}
+	if id != "" {
+		return true
 	}
 	if parent := g.iframeParentTargetLocked(t); parent != nil {
 		if g.targetHeldLocked(parent.id) || g.targetUnconfirmedLocked(parent.id) {
@@ -763,7 +766,7 @@ func (g *guard) iframeHasAncestorLocked(t *target, ancestor string) bool {
 	id := g.iframeAncestorStartLocked(t)
 	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
 		if seen[id] {
-			return false
+			return true
 		}
 		if id == ancestor {
 			return true
@@ -771,7 +774,7 @@ func (g *guard) iframeHasAncestorLocked(t *target, ancestor string) bool {
 		seen[id] = true
 		id = g.frameParentOfLocked(id)
 	}
-	return false
+	return id != ""
 }
 
 func (g *guard) iframeUnresolvedLocked(t *target) bool {
