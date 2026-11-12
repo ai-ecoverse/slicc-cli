@@ -68,6 +68,8 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		check.settle(true)
 		return nil
 	}
+	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
+	g.noteErrorPageSnapshotLocked(nt, frame.URL, frame.SecurityOrigin, frame.UnreachableURL)
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
 		check.settle(false)
 		return g.markLocked(t)
@@ -187,6 +189,8 @@ type touchReservation struct {
 	seq    int
 }
 
+const closeProofPending = "\x00close-proof"
+
 func (g *guard) closeTargetReasonLocked(id string) string {
 	if id == "" {
 		return ""
@@ -211,7 +215,10 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 			g.logf("cdp: closeTarget refused target=%s type=%s why=%s touched=%t opened=%t seenAt=%d touchSeq=%d opener=%s openerFrame=%s", id, t.typ, why, g.navTargets[id] != nil, g.opened[id], g.openedSeenAt[id], g.touchSeq, t.opener, t.openerFrame)
 			return refusedTarget
 		}
-		return ""
+		if g.closeNeedsProofLocked(id) {
+			return closeProofPending
+		}
+		return g.closeTargetFinalLocked(id)
 	case "browser":
 		g.logf("cdp: closeTarget refused target=%s why=browser", id)
 		return refusedTarget
@@ -220,8 +227,217 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 	return g.targetReasonLocked(id)
 }
 
+func (g *guard) closeTargetFinalLocked(id string) string {
+	if g.keptCloseLocked(id) {
+		g.logf("cdp: closeTarget refused target=%s type=%s why=kept", id, g.targets[id].typ)
+		return refusedTarget
+	}
+	return ""
+}
+
 func (g *guard) streamClosableLocked(id string) bool {
 	return g.navTargets[id] != nil || g.opened[id]
+}
+
+func (g *guard) closeNeedsProofLocked(id string) bool {
+	nt := g.navTargets[id]
+	if nt == nil || nt.session == "" {
+		return false
+	}
+	navigating := nt.unsure || len(nt.loading) > 0
+	if !navigating || nt.navigationURL != "" {
+		return false
+	}
+	t := g.targets[id]
+	documentURL := ""
+	if t != nil {
+		documentURL = t.url
+	}
+	if nt.documentURL != "" {
+		documentURL = nt.documentURL
+	}
+	if g.recordedProtectedErrorPageLocked(nt, documentURL) {
+		return false
+	}
+	return true
+}
+
+func (g *guard) keptCloseLocked(id string) bool {
+	t := g.targets[id]
+	if t == nil || t.gone {
+		return false
+	}
+	nt := g.navTargets[id]
+	documentURL := t.url
+	if nt != nil && nt.documentURL != "" {
+		documentURL = nt.documentURL
+	}
+	if g.recordedProtectedErrorPageLocked(nt, documentURL) && !g.navigationAfterErrorLocked(nt) {
+		return false
+	}
+	navigating := nt != nil && (nt.unsure || len(nt.loading) > 0)
+	if navigating && (nt.navigationURL == "" || g.o.Kept(nt.navigationURL)) {
+		return true
+	}
+	if g.o.Kept(t.url) || g.o.Kept(documentURL) {
+		return true
+	}
+	return g.keptInheritedLocked(t, documentURL)
+}
+
+func (g *guard) recordedProtectedErrorPageLocked(nt *navTarget, documentURL string) bool {
+	if chromeErrorDocument(documentURL) {
+		return true
+	}
+	return nt != nil && nt.errorURL != "" && g.o.Loaded(nt.errorURL)
+}
+
+func (g *guard) navigationAfterErrorLocked(nt *navTarget) bool {
+	if nt == nil || !nt.errorRecorded {
+		return false
+	}
+	return nt.navGen > nt.errorNavGen && (nt.unsure || len(nt.loading) > 0)
+}
+
+func (g *guard) noteErrorPageSnapshotLocked(nt *navTarget, url, origin, unreachable string) {
+	if nt == nil {
+		return
+	}
+	if !chromeErrorDocument(url) && (unreachable == "" || !g.o.Loaded(unreachable)) {
+		return
+	}
+	if url != "" {
+		nt.documentURL = url
+	}
+	if origin != "" {
+		nt.securityOrigin = origin
+	}
+	if unreachable != "" {
+		nt.errorURL = unreachable
+	}
+	nt.errorRecorded = true
+	nt.errorNavGen = nt.navGen
+}
+
+func (g *guard) applyCloseProofLocked(id string, m message, gen, rev int) bool {
+	nt := g.navTargets[id]
+	if nt == nil || m.Error != nil || nt.navGen != gen || nt.revision != rev {
+		return false
+	}
+	var result struct {
+		FrameTree struct {
+			Frame struct {
+				ID             string `json:"id"`
+				ParentID       string `json:"parentId"`
+				URL            string `json:"url"`
+				SecurityOrigin string `json:"securityOrigin"`
+				UnreachableURL string `json:"unreachableUrl"`
+			} `json:"frame"`
+		} `json:"frameTree"`
+	}
+	if json.Unmarshal(m.Result, &result) != nil {
+		return false
+	}
+	frame := result.FrameTree.Frame
+	if frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
+		return false
+	}
+	if nt.navGen != gen || nt.revision != rev {
+		return false
+	}
+	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
+	if chromeErrorDocument(frame.URL) || frame.UnreachableURL != "" && g.o.Loaded(frame.UnreachableURL) {
+		if frame.URL != "" {
+			nt.documentURL = frame.URL
+		}
+		if frame.SecurityOrigin != "" {
+			nt.securityOrigin = frame.SecurityOrigin
+		}
+		if frame.UnreachableURL != "" {
+			nt.errorURL = frame.UnreachableURL
+		}
+		nt.errorRecorded = true
+		nt.errorNavGen = gen
+	}
+	return true
+}
+
+func chromeErrorDocument(raw string) bool {
+	return strings.HasPrefix(raw, "chrome-error:") || raw == "chrome-error://chromewebdata/"
+}
+
+func (g *guard) keptInheritedLocked(t *target, documentURL string) bool {
+	if t == nil {
+		return false
+	}
+	inheriting := protect.Inheriting(documentURL) || opaqueOrNonHTTPDocument(documentURL)
+	nt := g.navTargets[t.id]
+	if nt != nil {
+		for _, origin := range []string{nt.securityOrigin, nt.keptOrigin} {
+			if origin != "" && (g.o.KeptInherited(documentURL, origin) || g.o.KeptInherited(t.url, origin)) {
+				return true
+			}
+		}
+	}
+	if g.keptURLLatch[t.id] && inheriting {
+		return true
+	}
+	if !inheriting && documentURL != "" && !protect.Inheriting(t.url) && t.url != "" {
+		return false
+	}
+	for _, id := range []string{t.opener, t.openerFrame} {
+		if id == "" {
+			continue
+		}
+		c := g.targets[id]
+		if c == nil || c.gone {
+			continue
+		}
+		if g.o.KeptInherited(documentURL, c.url) || g.o.KeptInherited(t.url, c.url) {
+			return true
+		}
+	}
+	return false
+}
+
+func opaqueOrNonHTTPDocument(raw string) bool {
+	return protect.Inheriting(raw) || raw == "" || strings.HasPrefix(raw, "about:") || (!strings.HasPrefix(raw, "http:") && !strings.HasPrefix(raw, "https:") && raw != "")
+}
+
+func (g *guard) noteFrameKeptLocked(nt *navTarget, url, origin string) {
+	if nt == nil {
+		return
+	}
+	if origin != "" {
+		nt.securityOrigin = origin
+	}
+	if url != "" {
+		nt.documentURL = url
+	}
+	g.noteKeptLatchLocked(nt)
+}
+
+func (g *guard) noteKeptLatchLocked(nt *navTarget) {
+	if nt == nil {
+		return
+	}
+	doc := nt.documentURL
+	origin := nt.securityOrigin
+	if chromeErrorDocument(doc) {
+		return
+	}
+	if g.o.Kept(doc) || g.o.Kept(origin) || origin != "" && g.o.KeptInherited(doc, origin) {
+		if origin != "" {
+			nt.keptOrigin = origin
+		}
+		g.keptURLLatch[nt.target] = true
+		return
+	}
+	if doc == "" || protect.Inheriting(doc) || opaqueOrNonHTTPDocument(doc) {
+		return
+	}
+	nt.keptOrigin = ""
+	delete(g.keptURLLatch, nt.target)
 }
 
 func openedSeenBound() int {
@@ -454,10 +670,52 @@ func (g *guard) markStreamOpenedLocked(id string) {
 	g.markTouchedLocked(id)
 	g.opened[id] = true
 	g.openedOrder = append(g.openedOrder, id)
+	g.latchOpenedKeptLocked(id)
 	for len(g.openedOrder) > maxTombstones {
 		old := g.openedOrder[0]
 		g.openedOrder = g.openedOrder[1:]
 		delete(g.opened, old)
+		delete(g.keptURLLatch, old)
+	}
+}
+
+func (g *guard) latchOpenedKeptLocked(id string) {
+	t := g.targets[id]
+	if t == nil {
+		return
+	}
+	if g.o.Kept(t.url) {
+		g.keptURLLatch[id] = true
+		return
+	}
+	if !protect.Inheriting(t.url) && t.url != "" && !opaqueOrNonHTTPDocument(t.url) {
+		return
+	}
+	for _, oid := range []string{t.openerFrame, t.opener} {
+		if oid == "" {
+			continue
+		}
+		c := g.targets[oid]
+		if c == nil || c.gone {
+			continue
+		}
+		origin := c.url
+		if ont := g.navTargets[oid]; ont != nil {
+			if ont.keptOrigin != "" {
+				origin = ont.keptOrigin
+			} else if ont.securityOrigin != "" {
+				origin = ont.securityOrigin
+			} else if ont.documentURL != "" {
+				origin = ont.documentURL
+			}
+		}
+		if g.o.Kept(origin) || g.o.Kept(c.url) || g.keptURLLatch[oid] || g.o.KeptInherited(t.url, origin) || g.o.KeptInherited(t.url, c.url) {
+			g.keptURLLatch[id] = true
+			if nt := g.navTargets[id]; nt != nil {
+				nt.keptOrigin = origin
+			}
+			return
+		}
 	}
 }
 

@@ -137,6 +137,7 @@ type guard struct {
 	navTargets            map[string]*navTarget
 	navSessions           map[string]*navTarget
 	unknown               map[string]*navTarget
+	keptURLLatch          map[string]bool
 	gone                  map[string]bool
 	goneOrder             []string
 	held                  map[string]*heldSession
@@ -237,6 +238,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		navTargets:            map[string]*navTarget{},
 		navSessions:           map[string]*navTarget{},
 		unknown:               map[string]*navTarget{},
+		keptURLLatch:          map[string]bool{},
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
 		childFrames:           map[string]string{},
@@ -597,11 +599,11 @@ func (g *guard) workerConcealedLocked(id string) bool {
 }
 
 func (g *guard) workerCreatorUnprotectedLocked(t *target) bool {
-	known := func(id string) bool {
-		c := g.targets[id]
-		return id != "" && c != nil && !c.gone && !c.protected
+	if t.openerFrame != "" || t.parentFrame != "" {
+		return false
 	}
-	return known(t.openerFrame) || known(t.opener) || known(t.parentFrame)
+	c := g.targets[t.opener]
+	return t.opener != "" && c != nil && !c.gone && !c.protected
 }
 
 func (g *guard) sessionOwnerLocked(id string) *target {

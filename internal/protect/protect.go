@@ -22,7 +22,10 @@ const (
 
 const maxUnwrap = 8
 
-var rules = sliccbrowsers.Default().ProtectedOrigins
+var (
+	rules = sliccbrowsers.Default().ProtectedOrigins
+	seven = sliccbrowsers.Default().Seven
+)
 
 const (
 	refusedPrefix      = "slicc: refused: "
@@ -198,6 +201,79 @@ func (o *Origins) URL(raw string) bool {
 	}
 	origin := originOf(u)
 	return origin != "" && o != nil && slices.Contains(o.extra, origin)
+}
+
+func vaultHost(host string) bool {
+	return host == "vault.sliccy.ai" || strings.HasPrefix(host, "vault-") && strings.HasSuffix(host, ".sliccy.ai")
+}
+
+func catalogSeven(u *whatwg.Url) bool {
+	if u == nil || scheme(u) != seven.OriginScheme || u.Port() != "" {
+		return false
+	}
+	label, ok := strings.CutSuffix(hostOf(u), ".sliccy.ai")
+	if !ok || label == "" || strings.Contains(label, ".") {
+		return false
+	}
+	return seven.IsSevenLabel(label)
+}
+
+func (o *Origins) sevenOrExtra(u *whatwg.Url) bool {
+	if catalogSeven(u) {
+		return true
+	}
+	origin := originOf(u)
+	return origin != "" && o != nil && slices.Contains(o.extra, origin)
+}
+
+func (o *Origins) Kept(raw string) bool {
+	u := unwrap(parse(raw))
+	if u == nil {
+		return o.URL(raw)
+	}
+	if s := scheme(u); s != "http" && s != "https" {
+		return false
+	}
+	if vaultHost(hostOf(u)) {
+		return true
+	}
+	path := u.Pathname()
+	if !strings.HasPrefix(path, "/os/") || path == "/os/callback.html" {
+		return false
+	}
+	return o.sevenOrExtra(u)
+}
+
+func (o *Origins) SevenOrVaultHost(raw string) bool {
+	u := unwrap(parse(raw))
+	if u == nil {
+		return false
+	}
+	if s := scheme(u); s != "http" && s != "https" {
+		return false
+	}
+	return vaultHost(hostOf(u)) || o.sevenOrExtra(u)
+}
+
+func (o *Origins) KeptInherited(url, origin string) bool {
+	if o.Kept(origin) {
+		return true
+	}
+	return (Inheriting(url) || opaqueDocument(url) || nonHTTPDocument(url)) && o.SevenOrVaultHost(origin)
+}
+
+func opaqueDocument(raw string) bool {
+	u := parse(raw)
+	return u != nil && scheme(u) == "about" && slices.Contains(rules.Inheriting, "about:"+strings.ToLower(u.Pathname()))
+}
+
+func nonHTTPDocument(raw string) bool {
+	u := parse(raw)
+	if u == nil {
+		return raw != ""
+	}
+	s := scheme(u)
+	return s != "http" && s != "https"
 }
 
 func (o *Origins) MayNameHost(raw string) bool {

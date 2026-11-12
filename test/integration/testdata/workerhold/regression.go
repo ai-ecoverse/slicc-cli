@@ -138,3 +138,29 @@ func TestWorkerHoldUnknownParentFrameStaysHeld(t *testing.T) {
 		t.Fatal("attach of a worker with an unknown parentFrame was admitted")
 	}
 }
+
+func TestWorkerHoldDataWorkerOrdinaryOpenerStaleFrame(t *testing.T) {
+	g := workerHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/"}
+	w := &target{id: "W", typ: "worker", url: "data:text/javascript,1", opener: "PAGE", openerFrame: "FRAME-stale"}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if !w.protected {
+		t.Fatal("data: worker with ordinary opener and stale openerFrame was ordinary")
+	}
+}
+
+func TestWorkerHoldDataWorkerOrdinaryOpenerOpaqueFrame(t *testing.T) {
+	g := workerHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/"}
+	g.targets["FRAME"] = &target{id: "FRAME", typ: "iframe", url: "://"}
+	w := &target{id: "W", typ: "worker", url: "data:text/javascript,1", opener: "PAGE", openerFrame: "FRAME"}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if !w.protected {
+		t.Fatal("data: worker with ordinary opener and opaque openerFrame was ordinary")
+	}
+	if g.targetReasonLocked("W") == "" {
+		t.Fatal("opaque-frame data: worker was attachable")
+	}
+}

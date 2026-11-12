@@ -15,6 +15,9 @@ func TestCDPHidesFramedProtectedWorkerSession(t *testing.T) {
 		framed := map[string]any{"targetId": "W-framed", "type": "worker", "url": blob, "openerId": "P-ordinary", "openerFrameId": "F-vault"}
 		framedChild := map[string]any{"targetId": "W-framed", "type": "worker", "url": blob, "openerId": "P-ordinary"}
 		shared := map[string]any{"targetId": "W-shared", "type": "shared_worker", "url": "data:text/javascript,postMessage('secret-framed')", "openerFrameId": "F-vault"}
+		stale := map[string]any{"targetId": "W-stale", "type": "worker", "url": "data:text/javascript,postMessage('secret-stale')", "openerId": "P-ordinary", "openerFrameId": "F-stale"}
+		opaque := map[string]any{"targetId": "W-opaque", "type": "worker", "url": "data:text/javascript,postMessage('secret-opaque')", "openerId": "P-ordinary", "openerFrameId": "F-opaque"}
+		opaqueFrame := map[string]any{"targetId": "F-opaque", "type": "iframe", "url": "://", "openerId": "P-ordinary"}
 		service := map[string]any{"targetId": "W-service", "type": "service_worker", "url": "", "openerId": "P-ordinary"}
 		ordinary := map[string]any{"targetId": "W-ordinary", "type": "worker", "url": allowed + "/worker.js", "openerId": "P-ordinary"}
 		attach := func(parent, session string, info map[string]any) string {
@@ -43,7 +46,7 @@ func TestCDPHidesFramedProtectedWorkerSession(t *testing.T) {
 			}
 		}
 		bodies := map[string]map[string]any{
-			"P-ordinary": page, "F-vault": iframe, "W-framed": framed, "W-shared": shared, "W-service": service, "W-ordinary": ordinary,
+			"P-ordinary": page, "F-vault": iframe, "F-opaque": opaqueFrame, "W-framed": framed, "W-shared": shared, "W-stale": stale, "W-opaque": opaque, "W-service": service, "W-ordinary": ordinary,
 		}
 		return func(method string, params json.RawMessage) (string, []string) {
 			switch method {
@@ -58,6 +61,10 @@ func TestCDPHidesFramedProtectedWorkerSession(t *testing.T) {
 				events = append(events, sessionEvents("S-framed-browser")...)
 				events = append(events, created(shared), attach("", "S-shared", shared))
 				events = append(events, sessionEvents("S-shared")...)
+				events = append(events, created(opaqueFrame), created(stale), attach("", "S-stale", stale))
+				events = append(events, sessionEvents("S-stale")...)
+				events = append(events, created(opaque), attach("", "S-opaque", opaque))
+				events = append(events, sessionEvents("S-opaque")...)
 				events = append(events, attach("S-iframe", "S-service", service))
 				events = append(events, sessionEvents("S-service")...)
 				events = append(events,
@@ -67,7 +74,7 @@ func TestCDPHidesFramedProtectedWorkerSession(t *testing.T) {
 				)
 				return "{}", events
 			case "Target.getTargets":
-				list := []any{page, iframe, framed, shared, service, ordinary}
+				list := []any{page, iframe, opaqueFrame, framed, shared, stale, opaque, service, ordinary}
 				raw, _ := json.Marshal(map[string]any{"targetInfos": list})
 				return string(raw), nil
 			case "Target.getTargetInfo":
@@ -93,6 +100,8 @@ func TestCDPHidesFramedProtectedWorkerSession(t *testing.T) {
 		} `json:"list"`
 		FramedAttach  cdpOutcome `json:"framedAttach"`
 		SharedAttach  cdpOutcome `json:"sharedAttach"`
+		StaleAttach   cdpOutcome `json:"staleAttach"`
+		OpaqueAttach  cdpOutcome `json:"opaqueAttach"`
 		ServiceAttach cdpOutcome `json:"serviceAttach"`
 		FramedInfo    cdpOutcome `json:"framedInfo"`
 		OrdinaryInfo  struct {
@@ -116,11 +125,11 @@ func TestCDPHidesFramedProtectedWorkerSession(t *testing.T) {
 	}
 	env.evalJSON(t, "linkTest.protect.framedWorker('chrome-2')", &result)
 	raw, _ := json.Marshal(result)
-	if strings.Contains(string(raw), "secret-framed") || strings.Contains(string(raw), "S-framed") || strings.Contains(string(raw), "S-shared") || strings.Contains(string(raw), "S-service") {
+	if strings.Contains(string(raw), "secret-framed") || strings.Contains(string(raw), "secret-stale") || strings.Contains(string(raw), "secret-opaque") || strings.Contains(string(raw), "S-framed") || strings.Contains(string(raw), "S-shared") || strings.Contains(string(raw), "S-stale") || strings.Contains(string(raw), "S-opaque") || strings.Contains(string(raw), "S-service") {
 		t.Fatalf("a protected worker session reached the client: %s", raw)
 	}
-	protected := map[string]bool{"W-framed": true, "W-shared": true, "W-service": true}
-	protectedSessions := map[string]bool{"S-iframe": true, "S-framed": true, "S-framed-browser": true, "S-shared": true, "S-service": true}
+	protected := map[string]bool{"W-framed": true, "W-shared": true, "W-stale": true, "W-opaque": true, "W-service": true}
+	protectedSessions := map[string]bool{"S-iframe": true, "S-framed": true, "S-framed-browser": true, "S-shared": true, "S-stale": true, "S-opaque": true, "S-service": true}
 	var ordinaryListed bool
 	for _, item := range result.List {
 		if protected[item.TargetID] {
@@ -136,7 +145,7 @@ func TestCDPHidesFramedProtectedWorkerSession(t *testing.T) {
 	if !ordinaryListed {
 		t.Fatalf("ordinary worker missing from getTargets: %+v", result.List)
 	}
-	for _, got := range []cdpOutcome{result.FramedAttach, result.SharedAttach, result.ServiceAttach} {
+	for _, got := range []cdpOutcome{result.FramedAttach, result.SharedAttach, result.StaleAttach, result.OpaqueAttach, result.ServiceAttach} {
 		if got.OK || got.Error.Message != refusedText {
 			t.Errorf("attach to a protected worker: %+v", got)
 		}
