@@ -147,6 +147,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	if t := c.str("targetId"); c.method == "Target.attachToTarget" && t != "" {
 		g.attachCalls[k] = t
 		g.explicit[t]++
+		g.noteWireTouchLocked(t)
 	}
 	v := pageVerdict{forward: c.bytes(), cmd: c}
 	if c.method == "DOM.getFrameOwner" {

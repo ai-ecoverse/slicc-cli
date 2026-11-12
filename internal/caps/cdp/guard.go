@@ -111,6 +111,8 @@ type guard struct {
 	listed                map[string]bool
 	touchSeq              int
 	touchedAt             map[string]int
+	pendingTouch          map[string]int
+	touchedOrder          []string
 	openedSeenAt          map[string]int
 	openedSeenOrder       []string
 	openedIneligible      map[string]bool
@@ -211,6 +213,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		opened:                map[string]bool{},
 		listed:                map[string]bool{},
 		touchedAt:             map[string]int{},
+		pendingTouch:          map[string]int{},
 		openedSeenAt:          map[string]int{},
 		openedIneligible:      map[string]bool{},
 		openedWait:            map[string]string{},
@@ -490,7 +493,10 @@ func (g *guard) observeAll(infos []targetInfo) {
 		}
 		if _, ok := g.targets[info.TargetID]; !ok {
 			fresh[info.TargetID] = true
+		}
+		if !g.opened[info.TargetID] {
 			g.listed[info.TargetID] = true
+			g.forgetOpenedSeenLocked(info.TargetID)
 		}
 		g.record(info)
 	}

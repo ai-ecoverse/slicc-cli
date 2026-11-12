@@ -61,6 +61,24 @@ const observerNavigation = async (targetId, params) => {
   await new Promise((resolve) => { window.protectObserverNext = resolve; });
 };
 
+const observerHref = async (targetId) => {
+  window.protectObserverRequest = { targetId, readHref: true };
+  await new Promise((resolve) => { window.protectObserverNext = resolve; });
+  return window.protectObserverHref;
+};
+
+const waitGone = async (c, targetId, close) => {
+  if (!close?.ok) return false;
+  const destroyed = (e) => e.method === 'Target.targetDestroyed' && e.params?.targetId === targetId;
+  const deadline = Date.now() + 10000;
+  for (;;) {
+    if (c.events.some(destroyed)) return true;
+    if (!(await c.send('Target.getTargets')).targetInfos.some((t) => t.targetId === targetId)) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(100);
+  }
+};
+
 const observerScriptIDs = async (scriptTargets) => {
   window.protectObserverRequest = { scriptTargets };
   return new Promise((resolve) => { window.protectObserverNext = resolve; });
@@ -501,8 +519,47 @@ export function protectTest(getLink, describe) {
         await c.send('Target.setDiscoverTargets', { discover: true });
         await sleep(500);
         const close = await outcome(c.send('Target.closeTarget', { targetId: priorId }));
-        const gone = !(await c.send('Target.getTargets')).targetInfos.some((t) => t.targetId === priorId);
+        const gone = await waitGone(c, priorId, close);
         return { close, gone };
+      }),
+    closeProtectedOpenedSeenAfterTrim: (browser, ordinaryId, postURL, flood) =>
+      run(browser, async (c) => {
+        const ordinary = await c.send('Target.attachToTarget', { targetId: ordinaryId, flatten: true });
+        await c.send('Page.enable', {}, ordinary.sessionId);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        const held = await c.send('Target.createTarget', { url: 'about:blank' });
+        for (let i = 0; i < flood; i += 1) {
+          const created = await outcome(c.send('Target.createTarget', { url: 'about:blank' }));
+          if (created.ok && created.result?.targetId) {
+            await outcome(c.send('Target.closeTarget', { targetId: created.result.targetId }));
+          }
+        }
+        const known = new Set((await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId));
+        known.add(held.targetId);
+        const opened = c.waitEvent(
+          (e) =>
+            e.method === 'Target.targetCreated' &&
+            e.params.targetInfo.openerId === ordinaryId &&
+            e.params.targetInfo.type === 'page' &&
+            !known.has(e.params.targetInfo.targetId),
+          20000,
+        );
+        await outcome(c.send('Runtime.evaluate', { expression: `Boolean(window.open(${JSON.stringify(postURL)}, '_blank'))`, returnByValue: true, userGesture: true }, ordinary.sessionId));
+        const postId = (await opened).params.targetInfo.targetId;
+        await sleep(500);
+        const close = await outcome(c.send('Target.closeTarget', { targetId: postId }));
+        const gone = await waitGone(c, postId, close);
+        await outcome(c.send('Target.closeTarget', { targetId: held.targetId }));
+        return { close, gone, postId };
+      }),
+    wireTouchClose: (browser, openerId, popupId, priorId) =>
+      run(browser, async (c) => {
+        await c.send('Target.attachToTarget', { targetId: openerId, flatten: true });
+        const close = await outcome(c.send('Target.closeTarget', { targetId: popupId }));
+        const gone = await waitGone(c, popupId, close);
+        const prior = await outcome(c.send('Target.closeTarget', { targetId: priorId }));
+        const priorGone = await waitGone(c, priorId, prior);
+        return { close, gone, prior, priorGone };
       }),
     closeProtected: (browser, targetId, ordinaryId, priorId, postURL, hostId, browserId, untouchedId) =>
       run(browser, async (c) => {
@@ -521,9 +578,9 @@ export function protectTest(getLink, describe) {
         const attach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
         const activate = await outcome(c.send('Target.activateTarget', { targetId }));
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
-        let targetInfos = (await c.send('Target.getTargets')).targetInfos;
-        const tabGone = close.ok && close.result?.success === true && !targetInfos.some((t) => t.targetId === targetId);
+        const targetInfos = (await c.send('Target.getTargets')).targetInfos;
         const untouchedGone = untouchedId ? !targetInfos.some((t) => t.targetId === untouchedId) : false;
+        const tabGone = close.ok && close.result?.success === true && (await waitGone(c, targetId, close));
         const ordinary = await c.send('Target.attachToTarget', { targetId: ordinaryId, flatten: true });
         await c.send('Page.enable', {}, ordinary.sessionId);
         await c.send('Target.setDiscoverTargets', { discover: true });
@@ -545,8 +602,7 @@ export function protectTest(getLink, describe) {
         const postId = (await opened).params.targetInfo.targetId;
         await sleep(500);
         const post = await outcome(c.send('Target.closeTarget', { targetId: postId }));
-        targetInfos = (await c.send('Target.getTargets')).targetInfos;
-        const postGone = post.ok && post.result?.success === true && !targetInfos.some((t) => t.targetId === postId);
+        const postGone = post.ok && post.result?.success === true && (await waitGone(c, postId, post));
         const host = await outcome(c.send('Target.closeTarget', { targetId: hostId }));
         const browserTarget = browserId
           ? await outcome(c.send('Target.closeTarget', { targetId: browserId }))
@@ -743,10 +799,11 @@ export function protectTest(getLink, describe) {
         for (let i = 0; i < 5; i += 1) await Promise.all([probe(sessionId), probe(sessionId)]);
         const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
         const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const href = await observerHref(targetId);
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
-        await sleep(2000);
+        const tabGone = await waitGone(c, targetId, close);
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
-        return { before, probes, stuck, attaches, leaked, detached, after, reattach, close };
+        return { before, probes, stuck, attaches, leaked, detached, after, reattach, href, close, tabGone };
       }),
     biosGuardIDs: (browser) =>
       run(browser, async (c) => {
@@ -971,8 +1028,16 @@ export function protectTest(getLink, describe) {
         await c.send('Page.enable', {}, sessionId);
         const detached = await leave(c, sessionId, away);
         const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
+        const href = await observerHref(targetId);
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
-        return { targetId, detached, after, close };
+        const gone = await waitGone(c, targetId, close);
+        return { targetId, detached, after, href, close, gone };
+      }),
+    closeTarget: (browser, targetId) =>
+      run(browser, async (c) => {
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        const gone = await waitGone(c, targetId, close);
+        return { close, gone };
       }),
     redirectSettles: (browser, start, away, next, direct) =>
       run(browser, async (c) => {

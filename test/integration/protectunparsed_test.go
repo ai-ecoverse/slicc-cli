@@ -313,15 +313,20 @@ func (e *unparsedEnv) testErrorPageForHole(t *testing.T) {
 		TargetID string     `json:"targetId"`
 		Detached bool       `json:"detached"`
 		After    cdpOutcome `json:"after"`
+		Href     string     `json:"href"`
 		Close    cdpOutcome `json:"close"`
+		Gone     bool       `json:"gone"`
 	}
-	e.evalJSON(t, "linkTest.protect.leaveFor("+jsArgs("chrome", e.allowed+"/?n=hole-error", e.hole)+")", &r)
+	e.evalJSONWithObserver(t, "linkTest.protect.leaveFor("+jsArgs("chrome", e.allowed+"/?n=hole-error", e.hole)+")", &r)
+	defer e.b.closeTarget(r.TargetID)
+	if !strings.HasPrefix(r.Href, "chrome-error://") {
+		t.Fatalf("the tab is at %q, not on Chrome's error page for %q", r.Href, e.hole)
+	}
 	if !r.Detached || !r.After.refused() {
 		t.Fatalf("an error page for %q left the tab drivable: %+v", e.hole, r)
 	}
-	if !r.Close.OK {
-		t.Fatalf("closing the locked error page for %q: %+v", e.hole, r.Close)
-		defer e.b.closeTarget(r.TargetID)
+	if !r.Close.OK || !r.Gone {
+		t.Fatalf("closing the locked error page for %q: %+v", e.hole, r)
 	}
 }
 

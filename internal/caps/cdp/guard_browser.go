@@ -137,6 +137,12 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	g.continuedLocked(k, m.Error != nil)
 	attached := g.attachCalls[k]
 	g.attachDoneLocked(k)
+	acceptedAttach := false
+	defer func() {
+		if kind == kindAttach && !acceptedAttach {
+			g.dropPendingTouchLocked(attached)
+		}
+	}()
 	bc, body := g.bodyCalls[k]
 	delete(g.bodyCalls, k)
 	outlived := g.outlivedLocked(k)
@@ -165,6 +171,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if !ok {
 		return browserVerdict{forward: data}
 	}
+	acceptedAttach = true
 	send := g.applyResultKindLocked(kind, attached, m.SessionID, res)
 	m.Result = encode(res)
 	return browserVerdict{forward: encode(m), send: send}
@@ -178,6 +185,10 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		var send [][]byte
 		for _, item := range list {
 			info, _ := toInfo(item)
+			if info.TargetID != "" && !g.opened[info.TargetID] {
+				g.listed[info.TargetID] = true
+				g.forgetOpenedSeenLocked(info.TargetID)
+			}
 			send = append(send, g.infoLocked(item)...)
 			if listed(info) {
 				kept = append(kept, item)
