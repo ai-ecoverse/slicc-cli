@@ -151,7 +151,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	acceptedAttach := false
 	defer func() {
 		if kind == kindAttach && !acceptedAttach {
-			g.dropPendingTouchLocked(attached)
+			g.dropPendingTouchLocked(k)
 		}
 	}()
 	bc, body := g.bodyCalls[k]
@@ -194,23 +194,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 func (g *guard) applyResultKindLocked(kind callKind, attached, session string, res map[string]any) ([][]byte, bool) {
 	switch kind {
 	case kindTargets:
-		list, _ := res["targetInfos"].([]any)
-		kept := make([]any, 0, len(list))
-		var send [][]byte
-		for _, item := range list {
-			info, _ := toInfo(item)
-			if info.TargetID != "" && !g.opened[info.TargetID] {
-				g.listed[info.TargetID] = true
-				g.forgetOpenedSeenLocked(info.TargetID)
-			}
-			send = append(send, g.infoLocked(item)...)
-			if listed(info) && !g.protectedWorkerLocked(info) {
-				kept = append(kept, item)
-				g.noteWorkerShownLocked(info)
-			}
-		}
-		res["targetInfos"] = kept
-		return send, false
+		return g.applyTargetsResultLocked(res), false
 	case kindTargetInfo:
 		info, _ := toInfo(res["targetInfo"])
 		send := g.infoLocked(res["targetInfo"])
@@ -235,20 +219,50 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		id, _ := res["targetId"].(string)
 		return g.touchLocked(id, "page"), false
 	case kindAttach:
-		if g.workerUnshownLocked(attached) || g.workerConcealedLocked(attached) || g.protectedWorkerIDLocked(attached) {
-			return nil, true
-		}
-		g.markTouchedLocked(attached)
-		if t, ok := g.targets[attached]; ok {
-			g.attachAnsweredLocked(session, res, t)
-			return g.touchLocked(attached, t.typ), false
-		}
-		g.logf("cdp: attach counted as touch without a known target target=%s", attached)
+		return g.applyAttachResultLocked(attached, session, res)
 	case kindScript:
 		if id, _ := res["identifier"].(string); id != "" {
 			g.scripts[admittedScriptKey(session, id)] = true
 		}
 	}
+	return nil, false
+}
+
+func (g *guard) applyTargetsResultLocked(res map[string]any) [][]byte {
+	list, _ := res["targetInfos"].([]any)
+	kept := make([]any, 0, len(list))
+	var send [][]byte
+	for _, item := range list {
+		info, _ := toInfo(item)
+		if info.TargetID != "" && !g.opened[info.TargetID] {
+			g.listed[info.TargetID] = true
+			if !g.preserveOpenedSeenLocked(info.TargetID) {
+				g.forgetOpenedSeenLocked(info.TargetID)
+			}
+		}
+		send = append(send, g.infoLocked(item)...)
+		if listed(info) && !g.protectedWorkerLocked(info) {
+			kept = append(kept, item)
+			g.noteWorkerShownLocked(info)
+		}
+	}
+	res["targetInfos"] = kept
+	return send
+}
+
+func (g *guard) applyAttachResultLocked(attached, session string, res map[string]any) ([][]byte, bool) {
+	if g.workerConcealedLocked(attached) || g.protectedWorkerIDLocked(attached) {
+		return nil, true
+	}
+	g.markTouchedLocked(attached)
+	if t, ok := g.targets[attached]; ok {
+		if workerTypes[t.typ] {
+			t.shown = true
+		}
+		g.attachAnsweredLocked(session, res, t)
+		return g.touchLocked(attached, t.typ), false
+	}
+	g.logf("cdp: attach counted as touch without a known target target=%s", attached)
 	return nil, false
 }
 

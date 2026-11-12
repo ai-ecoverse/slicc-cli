@@ -112,7 +112,7 @@ type guard struct {
 	listed                map[string]bool
 	touchSeq              int
 	touchedAt             map[string]int
-	pendingTouch          map[string]int
+	pendingTouch          map[callKey]touchReservation
 	touchedOrder          []string
 	openedSeenAt          map[string]int
 	openedSeenOrder       []string
@@ -217,7 +217,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		opened:                map[string]bool{},
 		listed:                map[string]bool{},
 		touchedAt:             map[string]int{},
-		pendingTouch:          map[string]int{},
+		pendingTouch:          map[callKey]touchReservation{},
 		openedSeenAt:          map[string]int{},
 		openedIneligible:      map[string]bool{},
 		openedWait:            map[string]string{},
@@ -437,6 +437,9 @@ func (g *guard) decide(t *target, previous bool) bool {
 	if t.typ == "browser" {
 		return false
 	}
+	if workerTypes[t.typ] && previous {
+		return true
+	}
 	if g.workerFromProtectedCreatorLocked(t) {
 		return true
 	}
@@ -468,7 +471,7 @@ func parentFrameOf(info targetInfo) string {
 }
 
 func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
-	if id == "" || protect.Inheriting(raw) {
+	if id == "" || protect.Inheriting(raw) || raw == "null" {
 		return nil
 	}
 	if _, ok := g.childFrames[id]; !ok && len(g.childFrames) >= 4096 {
@@ -476,6 +479,13 @@ func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
 	}
 	g.childFrames[id] = raw
 	return g.redecideWorkersLocked(id)
+}
+
+func (g *guard) forgetChildFrameLocked(id string) {
+	if id == "" {
+		return
+	}
+	delete(g.childFrames, id)
 }
 
 func (g *guard) redecideWorkersLocked(creator string) [][]byte {
@@ -555,6 +565,12 @@ func (g *guard) workerUnresolvedLocked(t *target) bool {
 		return false
 	}
 	if t.openerFrame != "" && !g.creatorClassifiedLocked(t.openerFrame) {
+		return true
+	}
+	if t.parentFrame != "" && !g.creatorClassifiedLocked(t.parentFrame) {
+		return true
+	}
+	if t.opener != "" && !g.creatorClassifiedLocked(t.opener) {
 		return true
 	}
 	return protect.Inheriting(t.url) && !g.workerCreatorClassifiedLocked(t)
@@ -745,6 +761,7 @@ func (g *guard) destroyedLocked(id string) {
 	delete(g.frameProbeAttempts, id)
 	delete(g.frameProbed, id)
 	delete(g.frames, id)
+	g.forgetChildFrameLocked(id)
 	g.forgetExtensionFrameURLLocked("", id)
 	g.forgetExtensionProbeWorldsForTargetLocked(id)
 	g.navForgetLocked(id)

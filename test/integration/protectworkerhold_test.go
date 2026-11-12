@@ -9,7 +9,7 @@ import (
 
 func unresolvedWorkerScript(seven, allowed string) fakeScript {
 	page := map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/doc"}
-	early := map[string]any{"targetId": "W-early", "type": "worker", "url": "", "parentId": "FRAME-seven"}
+	early := map[string]any{"targetId": "W-early", "type": "worker", "url": "", "parentFrameId": "FRAME-seven"}
 	plain := map[string]any{"targetId": "W-plain", "type": "worker", "url": "", "parentFrameId": "FRAME-plain"}
 	ordinary := map[string]any{"targetId": "W-ordinary", "type": "worker", "url": allowed + "/worker.js", "openerId": "P-ordinary"}
 	bodies := map[string]map[string]any{"P-ordinary": page, "W-early": early, "W-plain": plain, "W-ordinary": ordinary}
@@ -276,7 +276,7 @@ func TestCDPHoldTimeoutHidesAnUnresolvedWorker(t *testing.T) {
 func unshownWorkerScript(seven, allowed string) fakeScript {
 	page := map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/doc"}
 	late := map[string]any{"targetId": "W-late", "type": "worker", "url": "", "parentFrameId": "FRAME-seven"}
-	plain := map[string]any{"targetId": "W-plain", "type": "worker", "url": "", "parentId": "FRAME-plain"}
+	plain := map[string]any{"targetId": "W-plain", "type": "worker", "url": "", "parentFrameId": "FRAME-plain"}
 	created := func(info map[string]any) string {
 		raw, _ := json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": info}})
 		return string(raw)
@@ -401,10 +401,13 @@ func TestCDPReDecidesAWorkerWhenItsCreatorFrameArrives(t *testing.T) {
 			t.Errorf("the protected worker was shown once its frame was known: %+v", event)
 		}
 	}
-	for _, got := range []cdpOutcome{result.Before.LateAttach, result.Before.PlainAttach, result.Mid.LateAttach, result.Mid.PlainAttach, result.After.LateAttach} {
+	for _, got := range []cdpOutcome{result.Before.LateAttach, result.Before.PlainAttach, result.Mid.LateAttach, result.After.LateAttach} {
 		if got.OK || got.Error.Message != refusedText {
-			t.Errorf("attach of a worker that was never shown or is protected: %+v", got)
+			t.Errorf("attach of a worker that is protected or still unresolved: %+v", got)
 		}
+	}
+	if !result.Mid.PlainAttach.OK {
+		t.Fatalf("attach by id of an ordinary worker once its creator frame is known: %+v", result.Mid.PlainAttach)
 	}
 	seenDestroy := map[string]int{}
 	for _, event := range result.Destroyed {
@@ -412,8 +415,11 @@ func TestCDPReDecidesAWorkerWhenItsCreatorFrameArrives(t *testing.T) {
 			seenDestroy[event.TargetID]++
 		}
 	}
-	if seenDestroy["W-late"] != 0 || seenDestroy["W-plain"] != 0 {
-		t.Fatalf("targetDestroyed reached the client for a worker it was never shown: %+v", result.Destroyed)
+	if seenDestroy["W-late"] != 0 {
+		t.Fatalf("targetDestroyed reached the client for a protected worker it was never shown: %+v", result.Destroyed)
+	}
+	if seenDestroy["W-plain"] == 0 {
+		t.Fatalf("targetDestroyed missing for an ordinary worker attached by id: %+v", result.Destroyed)
 	}
 	listed := map[string]bool{}
 	for _, item := range result.After.List {
@@ -441,7 +447,7 @@ func releaseHeldScript(allowed string) fakeScript {
 		return map[string]any{"targetId": id, "type": "page", "url": allowed + "/doc"}
 	}
 	worker := func(id, frame string) map[string]any {
-		return map[string]any{"targetId": id, "type": "worker", "url": "", "parentId": frame}
+		return map[string]any{"targetId": id, "type": "worker", "url": "", "parentFrameId": frame}
 	}
 	created := func(info map[string]any) string {
 		raw, _ := json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": info}})
@@ -498,6 +504,129 @@ func releaseHeldScript(allowed string) fakeScript {
 			return "{}", nil
 		}
 		return "{}", nil
+	}
+}
+
+func dataWorkerScript(seven, allowed string) fakeScript {
+	page := map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/doc"}
+	ordinaryData := map[string]any{"targetId": "W-data-plain", "type": "worker", "url": "data:text/javascript,1", "parentFrameId": "FRAME-plain"}
+	protectedData := map[string]any{"targetId": "W-data-seven", "type": "worker", "url": "data:text/javascript,1", "parentFrameId": "FRAME-seven"}
+	bodies := map[string]map[string]any{"P-ordinary": page, "W-data-plain": ordinaryData, "W-data-seven": protectedData}
+	created := func(info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": info}})
+		return string(raw)
+	}
+	attach := func(session string, info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{"sessionId": session, "targetInfo": info, "waitingForDebugger": false},
+		})
+		return string(raw)
+	}
+	frame := func(id, raw string) string {
+		rawEvent, _ := json.Marshal(map[string]any{
+			"sessionId": "S-page",
+			"method":    "Page.frameNavigated",
+			"params":    map[string]any{"frame": map[string]any{"id": id, "parentId": "P-ordinary", "url": raw, "securityOrigin": raw}},
+		})
+		return string(rawEvent)
+	}
+	armed := false
+	return func(method string, params json.RawMessage) (string, []string) {
+		switch method {
+		case "Browser.getHistogram":
+			var p struct {
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(params, &p)
+			switch p.Name {
+			case "arm-data-worker":
+				if armed {
+					return "{}", nil
+				}
+				armed = true
+				return "{}", []string{
+					created(page),
+					attach("S-page", page),
+					frame("FRAME-plain", allowed+"/frame"),
+					frame("FRAME-seven", seven+"/doc"),
+					created(ordinaryData),
+					attach("S-data-plain", ordinaryData),
+					created(protectedData),
+					attach("S-data-seven", protectedData),
+				}
+			}
+		case "Target.getTargets":
+			if !armed {
+				return `{"targetInfos":[]}`, nil
+			}
+			raw, _ := json.Marshal(map[string]any{"targetInfos": []any{page, ordinaryData, protectedData}})
+			return string(raw), nil
+		case "Target.getTargetInfo":
+			var p struct {
+				TargetID string `json:"targetId"`
+			}
+			_ = json.Unmarshal(params, &p)
+			if info, ok := bodies[p.TargetID]; ok {
+				raw, _ := json.Marshal(map[string]any{"targetInfo": info})
+				return string(raw), nil
+			}
+		case "Target.attachToTarget":
+			return `{"sessionId":"S-explicit"}`, nil
+		case "Target.detachFromTarget", "Runtime.runIfWaitingForDebugger":
+			return "{}", nil
+		}
+		return "{}", nil
+	}
+}
+
+func TestCDPHidesDataWorkersFromOrdinarySubFrames(t *testing.T) {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return dataWorkerScript(seven, allowed)
+	})
+	var result struct {
+		Events []struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+			TargetID  string `json:"targetId"`
+		} `json:"events"`
+		List []struct {
+			TargetID string `json:"targetId"`
+		} `json:"list"`
+		PlainAttach cdpOutcome `json:"plainAttach"`
+		SevenAttach cdpOutcome `json:"sevenAttach"`
+	}
+	env.evalJSONWithin(t, "linkTest.protect.dataWorkerFrames('chrome-2')", &result, 20*time.Second)
+	listed := map[string]bool{}
+	for _, item := range result.List {
+		listed[item.TargetID] = true
+	}
+	if listed["W-data-plain"] || listed["W-data-seven"] {
+		t.Fatalf("data: worker listing: %+v", result.List)
+	}
+	for _, event := range result.Events {
+		if event.SessionID == "S-data-plain" || event.SessionID == "S-data-seven" || event.TargetID == "W-data-plain" || event.TargetID == "W-data-seven" {
+			t.Fatalf("sub-frame data: worker reached the client: %+v", event)
+		}
+	}
+	if result.PlainAttach.OK || result.PlainAttach.Error.Message != refusedText {
+		t.Fatalf("attach of ordinary sub-frame data: worker: %+v", result.PlainAttach)
+	}
+	if result.SevenAttach.OK || result.SevenAttach.Error.Message != refusedText {
+		t.Fatalf("attach of protected data: worker: %+v", result.SevenAttach)
+	}
+	got := fake.received()
+	detachedPlain, detachedSeven := false, false
+	for _, line := range got {
+		if strings.Contains(line, "Target.detachFromTarget") && strings.Contains(line, "S-data-plain") {
+			detachedPlain = true
+		}
+		if strings.Contains(line, "Target.detachFromTarget") && strings.Contains(line, "S-data-seven") {
+			detachedSeven = true
+		}
+	}
+	if !detachedPlain || !detachedSeven {
+		t.Fatalf("sub-frame data: workers were not detached: plain=%t seven=%t", detachedPlain, detachedSeven)
 	}
 }
 

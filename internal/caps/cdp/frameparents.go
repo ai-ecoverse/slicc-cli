@@ -116,6 +116,7 @@ func (g *guard) frameEventLocked(m *message) {
 		delete(g.frames[id], p.FrameID)
 		g.forgetExtensionFrameURLLocked(id, p.FrameID)
 		if p.Reason == "remove" {
+			g.forgetChildFrameLocked(p.FrameID)
 			g.clearBlockedChildrenLocked(p.FrameID)
 		}
 	case "Page.frameNavigated":
