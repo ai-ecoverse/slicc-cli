@@ -292,6 +292,13 @@ func (g *guard) forgetOpenedSeenLocked(id string) {
 	delete(g.openedSeenAt, id)
 	delete(g.openedIneligible, id)
 	delete(g.openedWait, id)
+	kept := g.openedSeenOrder[:0]
+	for _, old := range g.openedSeenOrder {
+		if old != id {
+			kept = append(kept, old)
+		}
+	}
+	g.openedSeenOrder = kept
 }
 
 func (g *guard) trimOpenedSeenLocked() {
@@ -333,18 +340,41 @@ func (g *guard) trimTouchedLocked() {
 	}
 }
 
-func (g *guard) markTouchedLocked(id string) {
+func (g *guard) noteWireTouchLocked(id string) {
 	if id == "" {
 		return
 	}
 	if _, ok := g.touchedAt[id]; ok {
 		return
 	}
+	if _, ok := g.pendingTouch[id]; ok {
+		return
+	}
 	g.touchSeq++
-	g.touchedAt[id] = g.touchSeq
+	g.pendingTouch[id] = g.touchSeq
+}
+
+func (g *guard) dropPendingTouchLocked(id string) {
+	delete(g.pendingTouch, id)
+}
+
+func (g *guard) markTouchedLocked(id string) {
+	if id == "" {
+		return
+	}
+	seq, pending := g.pendingTouch[id]
+	delete(g.pendingTouch, id)
+	if _, ok := g.touchedAt[id]; ok {
+		return
+	}
+	if !pending {
+		g.touchSeq++
+		seq = g.touchSeq
+	}
+	g.touchedAt[id] = seq
 	g.touchedOrder = append(g.touchedOrder, id)
 	g.trimTouchedLocked()
-	g.logf("cdp: stream touch target=%s touchSeq=%d", id, g.touchSeq)
+	g.logf("cdp: stream touch target=%s touchSeq=%d", id, seq)
 	g.recheckOpenedWaitLocked(id)
 }
 

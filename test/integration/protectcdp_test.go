@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -656,6 +657,59 @@ func TestCDPCloseProtectedOpenedSeenAfterTrim(t *testing.T) {
 	}
 }
 
+func TestCDPCloseProtectedWireTouchOrdersThePopup(t *testing.T) {
+	const opener = "OPENER"
+	const popup = "POPUP"
+	const prior = "PRIOR"
+	env, _ := setupFakeProtect(t, func(seven, allowed string) fakeScript {
+		openerInfo := fmt.Sprintf(`{"targetId":%q,"type":"page","url":%q}`, opener, allowed+"/")
+		priorInfo := fmt.Sprintf(`{"targetId":%q,"type":"page","url":%q,"openerId":%q}`, prior, seven+"/frame.html?n=wire-prior", opener)
+		popupInfo := fmt.Sprintf(`{"targetId":%q,"type":"page","url":%q,"openerId":%q}`, popup, seven+"/frame.html?n=wire-touch", opener)
+		created, err := json.Marshal(fmt.Sprintf(`{"method":"Target.targetCreated","params":{"targetInfo":%s}}`, popupInfo))
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed, err := json.Marshal(fmt.Sprintf(`{"method":"Target.targetInfoChanged","params":{"targetInfo":%s}}`, priorInfo))
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := true
+		return func(method string, params json.RawMessage) (string, []string) {
+			switch method {
+			case "Target.getTargets":
+				return `{"targetInfos":[` + openerInfo + `,` + priorInfo + `]}`, nil
+			case "Target.attachToTarget":
+				var p struct {
+					TargetID string `json:"targetId"`
+				}
+				_ = json.Unmarshal(params, &p)
+				if p.TargetID == opener && first {
+					first = false
+					return `#ahead:[` + string(created) + `,` + string(changed) + `]|{"sessionId":"S-OPENER"}`, nil
+				}
+				return `{"sessionId":"S-OTHER"}`, nil
+			case "Target.closeTarget":
+				return `{"success":true}`, nil
+			default:
+				return "{}", nil
+			}
+		}
+	})
+	var r struct {
+		Close     cdpOutcome `json:"close"`
+		Gone      bool       `json:"gone"`
+		Prior     cdpOutcome `json:"prior"`
+		PriorGone bool       `json:"priorGone"`
+	}
+	env.evalJSON(t, "linkTest.protect.wireTouchClose("+jsArgs("chrome-2", opener, popup, prior)+")", &r)
+	if !r.Prior.refused() || r.PriorGone {
+		t.Fatalf("a pre-existing popup rediscovered with the attach was closable: %+v", r)
+	}
+	if !r.Close.OK || !r.Gone {
+		t.Fatalf("a popup first sighted before the attach reply was closable: %+v", r)
+	}
+}
+
 func TestCDPCloseProtectedUntouchedRefused(t *testing.T) {
 	env := setupProtect(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -726,7 +780,7 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 		Reattach cdpOutcome `json:"reattach"`
 		Href     string     `json:"href"`
 		Close    cdpOutcome `json:"close"`
-		Closed   bool       `json:"closed"`
+		TabGone  bool       `json:"tabGone"`
 	}
 	e.evalJSONWithObserver(t, "linkTest.protect.restoreRace("+jsArgs("chrome", id, e.seven)+")", &r)
 	switch {
@@ -738,7 +792,7 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 		t.Fatalf("seven's restored document didn't lock the tab: %+v", r)
 	case r.Href != doc:
 		t.Fatalf("history.back did not restore seven's document: %q want %q", r.Href, doc)
-	case !r.Close.OK || !r.Closed:
+	case !r.Close.OK || !r.TabGone:
 		t.Fatalf("closing the restored locked tab: %+v", r)
 	}
 	t.Logf("%d probes attempted, %d unanswered after 1s, and %d attaches raced the restore; close ok", r.Probes, r.Stuck, r.Attaches)

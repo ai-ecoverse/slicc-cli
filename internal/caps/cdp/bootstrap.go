@@ -26,6 +26,10 @@ func (rl *relay) bootstrap(ctx context.Context) error {
 		return errors.New("Target.attachToBrowserTarget: no session")
 	}
 	rl.g.setRelaySession(att.SessionID)
+	discover := map[string]any{"discover": true, "filter": allTargets["filter"]}
+	if _, err := rl.syncCall(ctx, att.SessionID, "Target.setDiscoverTargets", discover); err != nil {
+		return err
+	}
 	res, err = rl.syncCall(ctx, att.SessionID, "Target.getTargets", allTargets)
 	if err != nil {
 		return err
@@ -37,10 +41,6 @@ func (rl *relay) bootstrap(ctx context.Context) error {
 		return fmt.Errorf("Target.getTargets: %w", err)
 	}
 	rl.g.observeAll(list.TargetInfos)
-	discover := map[string]any{"discover": true, "filter": allTargets["filter"]}
-	if _, err := rl.syncCall(ctx, att.SessionID, "Target.setDiscoverTargets", discover); err != nil {
-		return err
-	}
 	return nil
 }
 

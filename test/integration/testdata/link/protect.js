@@ -549,6 +549,15 @@ export function protectTest(getLink, describe) {
         await outcome(c.send('Target.closeTarget', { targetId: held.targetId }));
         return { close, gone, postId };
       }),
+    wireTouchClose: (browser, openerId, popupId, priorId) =>
+      run(browser, async (c) => {
+        await c.send('Target.attachToTarget', { targetId: openerId, flatten: true });
+        const close = await outcome(c.send('Target.closeTarget', { targetId: popupId }));
+        const gone = await waitGone(c, popupId, close);
+        const prior = await outcome(c.send('Target.closeTarget', { targetId: priorId }));
+        const priorGone = await waitGone(c, priorId, prior);
+        return { close, gone, prior, priorGone };
+      }),
     closeProtected: (browser, targetId, ordinaryId, priorId, postURL, hostId, browserId, untouchedId) =>
       run(browser, async (c) => {
         const untouched = untouchedId
@@ -784,9 +793,9 @@ export function protectTest(getLink, describe) {
         const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
         const href = await observerHref(targetId);
         const close = await outcome(c.send('Target.closeTarget', { targetId }));
-        const closed = await waitGone(c, targetId, close);
+        const tabGone = await waitGone(c, targetId, close);
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
-        return { before, probes, stuck, attaches, leaked, detached, after, reattach, href, close, closed };
+        return { before, probes, stuck, attaches, leaked, detached, after, reattach, href, close, tabGone };
       }),
     biosGuardIDs: (browser) =>
       run(browser, async (c) => {
