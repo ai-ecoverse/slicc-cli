@@ -141,6 +141,7 @@ type guard struct {
 	goneOrder             []string
 	held                  map[string]*heldSession
 	childFrames           map[string]string
+	frameParents          map[string]string
 	blockedChildren       map[string]string
 	explicit              map[string]int
 	attachCalls           map[callKey]string
@@ -240,6 +241,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
 		childFrames:           map[string]string{},
+		frameParents:          map[string]string{},
 		blockedChildren:       map[string]string{},
 		explicit:              map[string]int{},
 		attachCalls:           map[callKey]string{},
@@ -437,13 +439,148 @@ func (g *guard) decide(t *target, previous bool) bool {
 	if t.typ == "browser" {
 		return false
 	}
-	if workerTypes[t.typ] && previous {
+	if (workerTypes[t.typ] || t.typ == "iframe") && previous {
 		return true
 	}
 	if g.workerFromProtectedCreatorLocked(t) {
 		return true
 	}
+	if g.iframeFromProtectedAncestorLocked(t) {
+		return true
+	}
 	return g.o.TargetWith(t.url, t.typ, previous, g.openerState(t), g.evidenceLocked(t))
+}
+
+const maxFrameAncestors = 64
+
+func (g *guard) frameParentOfLocked(id string) string {
+	if id == "" {
+		return ""
+	}
+	if t := g.targets[id]; t != nil && t.parentFrame != "" {
+		return t.parentFrame
+	}
+	return g.frameParents[id]
+}
+
+func (g *guard) noteFrameParentLocked(id, parent string) {
+	if id == "" || parent == "" || id == parent {
+		return
+	}
+	if _, ok := g.frameParents[id]; !ok && len(g.frameParents) >= 4096 {
+		return
+	}
+	g.frameParents[id] = parent
+	if t := g.targets[id]; t != nil && t.parentFrame == "" {
+		t.parentFrame = parent
+	}
+}
+
+func (g *guard) forgetFrameParentLocked(id string) {
+	if id == "" {
+		return
+	}
+	delete(g.frameParents, id)
+}
+
+func (g *guard) iframeAncestorStartLocked(t *target) string {
+	if t == nil {
+		return ""
+	}
+	if t.parentFrame != "" {
+		return t.parentFrame
+	}
+	return g.frameParents[t.id]
+}
+
+func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
+	if t == nil || t.typ != "iframe" {
+		return false
+	}
+	seen := map[string]bool{t.id: true}
+	id := g.iframeAncestorStartLocked(t)
+	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		if g.creatorProtectedLocked(id) {
+			return true
+		}
+		id = g.frameParentOfLocked(id)
+	}
+	return false
+}
+
+func (g *guard) iframeHasAncestorLocked(t *target, ancestor string) bool {
+	if t == nil || ancestor == "" {
+		return false
+	}
+	if t.parentFrame == ancestor || g.frameParents[t.id] == ancestor {
+		return true
+	}
+	seen := map[string]bool{t.id: true}
+	id := g.iframeAncestorStartLocked(t)
+	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
+		if seen[id] {
+			return false
+		}
+		if id == ancestor {
+			return true
+		}
+		seen[id] = true
+		id = g.frameParentOfLocked(id)
+	}
+	return false
+}
+
+func (g *guard) iframeUnresolvedLocked(t *target) bool {
+	if t == nil || t.gone || t.typ != "iframe" || t.protected || g.explicit[t.id] > 0 {
+		return false
+	}
+	id := g.iframeAncestorStartLocked(t)
+	if id == "" {
+		return true
+	}
+	seen := map[string]bool{t.id: true}
+	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
+		if seen[id] {
+			return true
+		}
+		seen[id] = true
+		if !g.creatorClassifiedLocked(id) {
+			return true
+		}
+		if p := g.targets[id]; p != nil && !p.gone && (p.typ == "page" || p.typ == "tab") {
+			return false
+		}
+		next := g.frameParentOfLocked(id)
+		if next == "" {
+			return false
+		}
+		id = next
+	}
+	return true
+}
+
+func (g *guard) iframeHeldLocked(id string) bool {
+	for _, h := range g.held {
+		if h.target == id && h.typ == "iframe" {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) iframeConcealedLocked(id string) bool {
+	t := g.targets[id]
+	if t != nil && t.typ != "iframe" && !g.iframeHeldLocked(id) {
+		return false
+	}
+	if t == nil && !g.iframeHeldLocked(id) {
+		return false
+	}
+	return g.iframeHeldLocked(id) || g.iframeUnresolvedLocked(t)
 }
 
 func (g *guard) workerFromProtectedCreatorLocked(t *target) bool {
@@ -506,6 +643,27 @@ func (g *guard) redecideWorkersLocked(creator string) [][]byte {
 			send = append(send, g.protectLocked(t)...)
 		}
 	}
+	return append(send, g.redecideIframesLocked(creator)...)
+}
+
+func (g *guard) redecideIframesLocked(creator string) [][]byte {
+	if creator == "" {
+		return nil
+	}
+	var send [][]byte
+	for _, t := range g.targets {
+		if t == nil || t.gone || t.typ != "iframe" {
+			continue
+		}
+		if !g.iframeHasAncestorLocked(t, creator) {
+			continue
+		}
+		prev := t.protected
+		t.protected = g.decide(t, prev)
+		if t.protected && !prev {
+			send = append(send, g.protectLocked(t)...)
+		}
+	}
 	return send
 }
 
@@ -515,12 +673,17 @@ func (g *guard) workerUnshownLocked(id string) bool {
 }
 
 func (g *guard) noteWorkerShownLocked(info targetInfo) {
-	if !workerTypes[info.Type] {
+	if !workerTypes[info.Type] && info.Type != "iframe" {
 		return
 	}
 	if t := g.targets[info.TargetID]; t != nil {
 		t.shown = true
 	}
+}
+
+func (g *guard) iframeUnshownLocked(id string) bool {
+	t := g.targets[id]
+	return t != nil && !t.gone && t.typ == "iframe" && !t.shown
 }
 
 func (g *guard) creatorProtectedLocked(id string) bool {
@@ -635,6 +798,12 @@ func (g *guard) record(info targetInfo) *target {
 	parent := parentFrameOf(info)
 	if parent == "" {
 		parent = t.parentFrame
+	}
+	if parent == "" {
+		parent = g.frameParents[info.TargetID]
+	}
+	if parent != "" {
+		g.noteFrameParentLocked(info.TargetID, parent)
 	}
 	if info.Type == "iframe" && (t.parentFrame != parent || t.url != info.URL) {
 		for id, page := range g.targets {

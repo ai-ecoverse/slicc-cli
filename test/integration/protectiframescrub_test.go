@@ -5,11 +5,9 @@ import (
 	"testing"
 )
 
-func TestCDPListsAProtectedIframeAtItsBareOrigin(t *testing.T) {
-	var origin, full string
+func TestCDPHidesAProtectedIframeFromListings(t *testing.T) {
 	env, _ := setupFakeProtect(t, func(seven, _ string) fakeScript {
-		origin = seven
-		full = seven + "/doc?n=frame-secret&q=1"
+		full := seven + "/doc?n=frame-secret&q=1"
 		info := `{"targetId":"IFRAME","type":"iframe","url":` + jsonQuote(full) + `,"title":"secret frame title","attached":false}`
 		return func(method string, params json.RawMessage) (string, []string) {
 			switch method {
@@ -28,21 +26,16 @@ func TestCDPListsAProtectedIframeAtItsBareOrigin(t *testing.T) {
 				if p.TargetID == "IFRAME" {
 					return `{"targetInfo":` + info + `}`, nil
 				}
+			case "Target.attachToTarget":
+				return `{"sessionId":"S-iframe"}`, nil
 			}
 			return "{}", nil
 		}
 	})
 	var r struct {
-		Listed struct {
-			TargetID string `json:"targetId"`
-			Type     string `json:"type"`
-			URL      string `json:"url"`
-			Title    string `json:"title"`
-		} `json:"listed"`
-		Info struct {
-			URL   string `json:"url"`
-			Title string `json:"title"`
-		} `json:"info"`
+		Listed any        `json:"listed"`
+		Info   cdpOutcome `json:"info"`
+		Attach cdpOutcome `json:"attach"`
 		Events []struct {
 			Method string `json:"method"`
 			URL    string `json:"url"`
@@ -50,19 +43,17 @@ func TestCDPListsAProtectedIframeAtItsBareOrigin(t *testing.T) {
 		} `json:"events"`
 	}
 	env.evalJSON(t, "linkTest.protect.iframeListingScrub('chrome-2')", &r)
-	if r.Listed.TargetID != "IFRAME" || r.Listed.Type != "iframe" || r.Listed.URL != origin || r.Listed.Title != origin {
-		t.Fatalf("getTargets iframe listing: %+v want url/title %s", r.Listed, origin)
+	if r.Listed != nil {
+		t.Fatalf("getTargets listed a protected iframe: %+v", r.Listed)
 	}
-	if r.Info.URL != origin || r.Info.Title != origin {
-		t.Fatalf("getTargetInfo iframe: %+v want url/title %s", r.Info, origin)
+	if r.Info.OK || r.Info.Error.Code != -32602 || r.Info.Error.Message != "No target with given id found" {
+		t.Fatalf("getTargetInfo on a protected iframe: %+v", r.Info)
 	}
-	if len(r.Events) == 0 {
-		t.Fatal("no targetCreated/targetInfoChanged for the protected iframe")
+	if r.Attach.OK || r.Attach.Error.Message != refusedText {
+		t.Fatalf("attach to a protected iframe: %+v", r.Attach)
 	}
-	for _, e := range r.Events {
-		if e.URL != origin || e.Title != origin {
-			t.Fatalf("%s iframe event: %+v want url/title %s", e.Method, e, origin)
-		}
+	if len(r.Events) != 0 {
+		t.Fatalf("discovery events for a protected iframe: %+v", r.Events)
 	}
 }
 

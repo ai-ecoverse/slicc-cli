@@ -198,7 +198,7 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 	case kindTargetInfo:
 		info, _ := toInfo(res["targetInfo"])
 		send := g.infoLocked(res["targetInfo"])
-		hide := g.protectedWorkerLocked(info)
+		hide := g.listingHiddenLocked(info)
 		if !hide {
 			g.noteWorkerShownLocked(info)
 		}
@@ -241,7 +241,7 @@ func (g *guard) applyTargetsResultLocked(res map[string]any) [][]byte {
 			}
 		}
 		send = append(send, g.infoLocked(item)...)
-		if listed(info) && !g.protectedWorkerLocked(info) {
+		if listed(info) && !g.listingHiddenLocked(info) {
 			kept = append(kept, item)
 			g.noteWorkerShownLocked(info)
 		}
@@ -251,12 +251,12 @@ func (g *guard) applyTargetsResultLocked(res map[string]any) [][]byte {
 }
 
 func (g *guard) applyAttachResultLocked(attached, session string, res map[string]any) ([][]byte, bool) {
-	if g.workerConcealedLocked(attached) || g.protectedWorkerIDLocked(attached) {
+	if g.workerConcealedLocked(attached) || g.protectedWorkerIDLocked(attached) || g.iframeConcealedLocked(attached) || g.protectedIframeIDLocked(attached) {
 		return nil, true
 	}
 	g.markTouchedLocked(attached)
 	if t, ok := g.targets[attached]; ok {
-		if workerTypes[t.typ] {
+		if workerTypes[t.typ] || t.typ == "iframe" {
 			t.shown = true
 		}
 		g.attachAnsweredLocked(session, res, t)
@@ -391,7 +391,7 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 		info, obj := toInfo(p["targetInfo"])
 		g.noteStreamOpenedLocked(info)
 		send := g.infoLocked(p["targetInfo"])
-		if g.protectedWorkerLocked(info) {
+		if g.listingHiddenLocked(info) {
 			return false, false, send
 		}
 		keep := listed(info)
@@ -406,9 +406,22 @@ func (g *guard) protectedWorkerLocked(info targetInfo) bool {
 	return workerTypes[info.Type] && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL) || g.workerConcealedLocked(info.TargetID))
 }
 
+func (g *guard) protectedIframeLocked(info targetInfo) bool {
+	return info.Type == "iframe" && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL) || g.iframeConcealedLocked(info.TargetID))
+}
+
+func (g *guard) listingHiddenLocked(info targetInfo) bool {
+	return g.protectedWorkerLocked(info) || g.protectedIframeLocked(info)
+}
+
 func (g *guard) protectedWorkerIDLocked(id string) bool {
 	t := g.targets[id]
 	return t != nil && workerTypes[t.typ] && t.protected
+}
+
+func (g *guard) protectedIframeIDLocked(id string) bool {
+	t := g.targets[id]
+	return t != nil && t.typ == "iframe" && t.protected
 }
 
 func listed(info targetInfo) bool {
@@ -420,7 +433,7 @@ func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
 		TargetID string `json:"targetId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && (g.protectedWorkerIDLocked(p.TargetID) || g.workerConcealedLocked(p.TargetID) || g.workerUnshownLocked(p.TargetID))) {
+	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && (g.protectedWorkerIDLocked(p.TargetID) || g.workerConcealedLocked(p.TargetID) || g.workerUnshownLocked(p.TargetID) || g.protectedIframeIDLocked(p.TargetID) || g.iframeConcealedLocked(p.TargetID) || g.iframeUnshownLocked(p.TargetID))) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}
@@ -465,7 +478,7 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" || workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID, target: info.TargetID, waiting: p.WaitingForDebugger})...)}
 	}
-	if g.workerUnresolvedLocked(g.targets[info.TargetID]) {
+	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
 		params := decodeParams(m.Params)
 		if params == nil {
 			params = map[string]any{"sessionId": p.SessionID, "waitingForDebugger": p.WaitingForDebugger, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID, "parentFrameId": info.ParentFrameID, "parentId": info.ParentID}}

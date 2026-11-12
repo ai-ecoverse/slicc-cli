@@ -31,6 +31,10 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 		g.logf("cdp: holding an auto-attached worker until its URL or creator frame is known target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 		return nil
 	}
+	if info.Type == "iframe" && g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
+		g.logf("cdp: holding an auto-attached iframe until its parent chain is known target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
+		return nil
+	}
 	g.logf("cdp: holding an auto-attached session until its target has a URL target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 	if !waiting {
 		return nil
@@ -50,6 +54,9 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 		if workerTypes[h.typ] && g.workerUnresolvedLocked(g.targets[targetID]) {
 			continue
 		}
+		if h.typ == "iframe" && g.iframeUnresolvedLocked(g.targets[targetID]) {
+			continue
+		}
 		part := g.deliverHeldLocked(h)
 		v.send = append(v.send, part.send...)
 		v.page = append(v.page, part.page...)
@@ -65,13 +72,17 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 		return v
 	}
 	waiting := false
-	if workerTypes[h.typ] {
+	switch {
+	case workerTypes[h.typ]:
 		waiting = h.waiting
 		g.logf("cdp: released an auto-attached worker after its URL or creator frame was known target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, waiting)
-	} else {
+	case h.typ == "iframe":
+		waiting = h.waiting
+		g.logf("cdp: released an auto-attached iframe after its parent chain was known target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, waiting)
+	default:
 		g.logf("cdp: released an auto-attached session after its target got a URL target=%s session=%s parent=%s", h.target, h.id, h.parent)
 	}
-	if t := g.targets[h.target]; t != nil && workerTypes[t.typ] {
+	if t := g.targets[h.target]; t != nil && (workerTypes[t.typ] || t.typ == "iframe") {
 		t.shown = true
 	}
 	g.sessions[h.id] = &session{id: h.id, target: h.target, parent: h.parent, typ: h.typ, waiting: waiting}
@@ -96,7 +107,7 @@ func (g *guard) settleHeldWorkersLocked() browserVerdict {
 	var v browserVerdict
 	ids := make([]string, 0, len(g.held))
 	for sid, h := range g.held {
-		if workerTypes[h.typ] {
+		if workerTypes[h.typ] || h.typ == "iframe" {
 			ids = append(ids, sid)
 		}
 	}
@@ -106,7 +117,13 @@ func (g *guard) settleHeldWorkersLocked() browserVerdict {
 			continue
 		}
 		t := g.targets[h.target]
-		if t == nil || g.workerUnresolvedLocked(t) {
+		if t == nil {
+			continue
+		}
+		if workerTypes[h.typ] && g.workerUnresolvedLocked(t) {
+			continue
+		}
+		if h.typ == "iframe" && g.iframeUnresolvedLocked(t) {
 			continue
 		}
 		prev := t.protected
@@ -114,7 +131,10 @@ func (g *guard) settleHeldWorkersLocked() browserVerdict {
 		if t.protected && !prev {
 			v.send = append(v.send, g.protectLocked(t)...)
 		}
-		if g.workerUnresolvedLocked(t) {
+		if workerTypes[h.typ] && g.workerUnresolvedLocked(t) {
+			continue
+		}
+		if h.typ == "iframe" && g.iframeUnresolvedLocked(t) {
 			continue
 		}
 		part := g.deliverHeldLocked(h)
@@ -186,11 +206,15 @@ func (g *guard) releaseHeldWorkersForSessionLocked(session, why string) [][]byte
 	}
 	var send [][]byte
 	for sid, h := range g.held {
-		if h == nil || !workerTypes[h.typ] || h.parent != session {
+		if h == nil || h.parent != session || (!workerTypes[h.typ] && h.typ != "iframe") {
 			continue
 		}
 		delete(g.held, sid)
-		g.logf("cdp: releasing a held worker because %s target=%s session=%s parent=%s waiting=%t", why, h.target, h.id, h.parent, h.waiting)
+		kind := "worker"
+		if h.typ == "iframe" {
+			kind = "iframe"
+		}
+		g.logf("cdp: releasing a held %s because %s target=%s session=%s parent=%s waiting=%t", kind, why, h.target, h.id, h.parent, h.waiting)
 		send = append(send, g.hideLocked(h)...)
 	}
 	return send
