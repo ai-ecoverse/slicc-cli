@@ -55,6 +55,11 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 			verdict.send = append(verdict.send, g.cutFrameCastsLocked()...)
 		}
 	}()
+	defer func() {
+		settled := g.settleHeldWorkersLocked()
+		verdict.send = append(verdict.send, settled.send...)
+		verdict.page = append(verdict.page, settled.page...)
+	}()
 	g.progressLocked(&m)
 	if m.ID != nil {
 		return g.answerLocked(&m, data)
@@ -372,7 +377,7 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 }
 
 func (g *guard) protectedWorkerLocked(info targetInfo) bool {
-	return workerTypes[info.Type] && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL))
+	return workerTypes[info.Type] && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL) || g.workerConcealedLocked(info.TargetID))
 }
 
 func (g *guard) protectedWorkerIDLocked(id string) bool {
@@ -389,7 +394,7 @@ func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
 		TargetID string `json:"targetId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && g.protectedWorkerIDLocked(p.TargetID)) {
+	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && (g.protectedWorkerIDLocked(p.TargetID) || g.workerConcealedLocked(p.TargetID))) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}
@@ -433,6 +438,13 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" || workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID, target: info.TargetID, waiting: p.WaitingForDebugger})...)}
+	}
+	if g.workerUnresolvedLocked(g.targets[info.TargetID]) {
+		params := decodeParams(m.Params)
+		if params == nil {
+			params = map[string]any{"sessionId": p.SessionID, "waitingForDebugger": p.WaitingForDebugger, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID}}
+		}
+		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
 	}
 	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
@@ -524,6 +536,13 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 		} `json:"frame"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	if p.Frame.ID != "" {
+		raw := p.Frame.URL
+		if protect.Inheriting(raw) {
+			raw = p.Frame.SecurityOrigin
+		}
+		g.noteChildFrameLocked(p.Frame.ID, raw)
+	}
 	var cut [][]byte
 	if page := g.worldTargetLocked(m.SessionID); page != "" && p.Frame.ID != "" && p.Frame.ParentID != "" {
 		raw := p.Frame.URL
@@ -559,6 +578,7 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 		Context execContext `json:"context"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)
 	t := g.sessionTargetLocked(m.SessionID)
 	switch {
 	case t == nil:

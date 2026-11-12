@@ -139,6 +139,7 @@ type guard struct {
 	gone                  map[string]bool
 	goneOrder             []string
 	held                  map[string]*heldSession
+	childFrames           map[string]string
 	blockedChildren       map[string]string
 	explicit              map[string]int
 	attachCalls           map[callKey]string
@@ -237,6 +238,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		unknown:               map[string]*navTarget{},
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
+		childFrames:           map[string]string{},
 		blockedChildren:       map[string]string{},
 		explicit:              map[string]int{},
 		attachCalls:           map[callKey]string{},
@@ -443,7 +445,7 @@ func (g *guard) workerFromProtectedCreatorLocked(t *target) bool {
 	if t == nil || !workerTypes[t.typ] {
 		return false
 	}
-	if g.targetProtectedLocked(t.openerFrame) || g.targetProtectedLocked(t.opener) || g.targetProtectedLocked(t.parentFrame) {
+	if g.creatorProtectedLocked(t.openerFrame) || g.creatorProtectedLocked(t.opener) || g.creatorProtectedLocked(t.parentFrame) {
 		return true
 	}
 	parent := g.attachParent
@@ -454,6 +456,83 @@ func (g *guard) workerFromProtectedCreatorLocked(t *target) bool {
 		return true
 	}
 	return strings.HasPrefix(strings.ToLower(t.url), "data:") && !g.workerCreatorUnprotectedLocked(t)
+}
+
+func (g *guard) noteChildFrameLocked(id, raw string) {
+	if id == "" || protect.Inheriting(raw) {
+		return
+	}
+	if _, ok := g.childFrames[id]; !ok && len(g.childFrames) >= 4096 {
+		return
+	}
+	g.childFrames[id] = raw
+}
+
+func (g *guard) creatorProtectedLocked(id string) bool {
+	if id == "" {
+		return false
+	}
+	if g.targetProtectedLocked(id) {
+		return true
+	}
+	return g.o.Loaded(g.childFrames[id])
+}
+
+func (g *guard) creatorClassifiedLocked(id string) bool {
+	if id == "" {
+		return false
+	}
+	if t := g.targets[id]; t != nil && !t.gone && (t.protected || !protect.Inheriting(t.url)) {
+		return true
+	}
+	raw := g.childFrames[id]
+	return raw != "" && !protect.Inheriting(raw)
+}
+
+func (g *guard) workerCreatorClassifiedLocked(t *target) bool {
+	if t == nil {
+		return false
+	}
+	if t.openerFrame != "" {
+		return g.creatorClassifiedLocked(t.openerFrame)
+	}
+	if t.parentFrame != "" {
+		return g.creatorClassifiedLocked(t.parentFrame)
+	}
+	return t.opener != "" && g.creatorClassifiedLocked(t.opener)
+}
+
+func (g *guard) workerUnresolvedLocked(t *target) bool {
+	if t == nil || t.gone || !workerTypes[t.typ] || t.protected || g.explicit[t.id] > 0 {
+		return false
+	}
+	if g.o.URL(t.url) || protect.Unparseable(t.url) {
+		return false
+	}
+	if t.openerFrame != "" && !g.creatorClassifiedLocked(t.openerFrame) {
+		return true
+	}
+	return protect.Inheriting(t.url) && !g.workerCreatorClassifiedLocked(t)
+}
+
+func (g *guard) workerHeldLocked(id string) bool {
+	for _, h := range g.held {
+		if h.target == id && workerTypes[h.typ] {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) workerConcealedLocked(id string) bool {
+	t := g.targets[id]
+	if t != nil && !workerTypes[t.typ] && !g.workerHeldLocked(id) {
+		return false
+	}
+	if t == nil && !g.workerHeldLocked(id) {
+		return false
+	}
+	return g.workerHeldLocked(id) || g.workerUnresolvedLocked(t)
 }
 
 func (g *guard) workerCreatorUnprotectedLocked(t *target) bool {

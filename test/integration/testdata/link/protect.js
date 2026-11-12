@@ -1319,6 +1319,55 @@ export function protectTest(getLink, describe) {
           .filter((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'HELD').length;
         return { ms: Date.now() - start, attached };
       }),
+    unresolvedWorkerHold: (browser) =>
+      run(browser, async (c) => {
+        const mark = c.events.length;
+        const ordinary = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'S-ordinary', 5000);
+        await c.send('Browser.getHistogram', { name: 'arm-unresolved-worker' });
+        await ordinary;
+        const snapshot = (events) => events.map((e) => ({
+          method: e.method,
+          sessionId: e.sessionId || e.params?.sessionId || '',
+          targetId: e.params?.targetInfo?.targetId || e.params?.targetId || '',
+          type: e.params?.targetInfo?.type || '',
+          url: e.params?.targetInfo?.url || '',
+          waiting: e.params?.waitingForDebugger === true,
+          text: e.params?.args?.[0]?.value || e.params?.context?.origin || '',
+        }));
+        const attach = async (targetId) => outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const info = async (targetId) => outcome(c.send('Target.getTargetInfo', { targetId }));
+        const held = {
+          events: snapshot(c.events.slice(mark)),
+          list: (await c.send('Target.getTargets')).targetInfos,
+          earlyAttach: await attach('W-early'),
+          plainAttach: await attach('W-plain'),
+          ordinaryAttach: await attach('W-ordinary'),
+          earlyInfo: await info('W-early'),
+          ordinaryInfo: await info('W-ordinary'),
+        };
+        const revealed = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'S-plain', 5000);
+        await c.send('Browser.getHistogram', { name: 'reveal-frame' });
+        const plain = await revealed;
+        await c.send('Browser.getHistogram', { name: 'settle-worker' });
+        return {
+          held,
+          plainWaiting: plain.params.waitingForDebugger === true,
+          list: (await c.send('Target.getTargets')).targetInfos,
+          events: snapshot(c.events),
+        };
+      }),
+    unresolvedWorkerTimeout: (browser) =>
+      run(browser, async (c) => {
+        const start = Date.now();
+        const mark = c.events.length;
+        const ordinarySeen = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'S-ordinary', 5000);
+        await c.send('Browser.getHistogram', { name: 'arm-unresolved-worker' });
+        await ordinarySeen;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const events = c.events.slice(mark);
+        const count = (sessionId) => events.filter((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === sessionId).length;
+        return { ms: Date.now() - start, early: count('S-early'), plain: count('S-plain'), ordinary: count('S-ordinary') };
+      }),
     navHang: (browser, opener, hang, wait) =>
       run(browser, async (c) => {
         const { targetId, sessionId } = await c.attachTo(opener);
