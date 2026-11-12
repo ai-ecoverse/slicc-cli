@@ -265,12 +265,81 @@ func TestCloseProtectedErrorPageClosableDespiteLoadingAndOrigin(t *testing.T) {
 		target: "ERR", ready: make(chan struct{}), done: true,
 		documentURL: "chrome-error://chromewebdata/", errorURL: "https://vault.sliccy.ai/missing",
 		securityOrigin: "https://seven.sliccy.ai", unsure: true, loading: map[string]int{"L": 1},
+		errorRecorded: true, errorNavGen: 0,
 	}
 	close(g.navTargets["ERR"].ready)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closeTargetReasonLocked("ERR") != "" {
 		t.Fatal("recorded protected error page was not closable")
+	}
+}
+
+func TestCloseProtectedErrorThenReloadToOSRefuses(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["ERR"] = &target{id: "ERR", typ: "page", url: "https://seven.sliccy.ai/missing", protected: true}
+	g.navTargets["ERR"] = &navTarget{
+		target: "ERR", ready: make(chan struct{}), done: true,
+		documentURL: "chrome-error://chromewebdata/", errorURL: "https://seven.sliccy.ai/missing",
+		errorRecorded: true, errorNavGen: 0, navGen: 0,
+	}
+	close(g.navTargets["ERR"].ready)
+	g.navTargets["ERR"].navGen = 1
+	g.navTargets["ERR"].unsure = true
+	g.navTargets["ERR"].navigationURL = "https://seven.sliccy.ai/os/"
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closeTargetReasonLocked("ERR") == "" {
+		t.Fatal("error page reloading to /os/ was closable")
+	}
+}
+
+func TestCloseProtectedStaleCloseProofFailsClosed(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["T"] = &target{id: "T", typ: "page", url: "https://ordinary.test/", protected: true}
+	g.navTargets["T"] = &navTarget{target: "T", session: "S", ready: make(chan struct{}), done: true, navGen: 1, unsure: true}
+	close(g.navTargets["T"].ready)
+	raw := []byte(`{"frameTree":{"frame":{"id":"T","url":"chrome-error://chromewebdata/","securityOrigin":"://","unreachableUrl":"https://seven.sliccy.ai/missing"}}}`)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.applyCloseProofLocked("T", message{Result: raw}, 0) {
+		t.Fatal("stale close proof generation was accepted")
+	}
+	g.navTargets["T"].navGen = 2
+	if g.applyCloseProofLocked("T", message{Result: raw}, 1) {
+		t.Fatal("close proof from before a navigation start was accepted")
+	}
+	g.navTargets["T"].navGen = 1
+	if !g.applyCloseProofLocked("T", message{Result: raw}, 1) {
+		t.Fatal("matching close proof was refused")
+	}
+	if !g.navTargets["T"].errorRecorded || g.navTargets["T"].errorNavGen != 1 {
+		t.Fatalf("error record: recorded=%t gen=%d", g.navTargets["T"].errorRecorded, g.navTargets["T"].errorNavGen)
+	}
+	g.navTargets["T"].navGen = 2
+	g.navTargets["T"].navigationURL = "https://seven.sliccy.ai/os/"
+	g.navTargets["T"].unsure = true
+	if g.closeTargetFinalLocked("T") == "" {
+		t.Fatal("after error proof, reload to /os/ was closable")
+	}
+}
+
+func TestCloseProtectedBlankPopupFromOSWithoutNavSession(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["OS"] = &target{id: "OS", typ: "page", url: "https://seven.sliccy.ai/os/", protected: true}
+	g.targets["BLANK"] = &target{id: "BLANK", typ: "page", url: "about:blank", opener: "OS", protected: true}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.markStreamOpenedLocked("BLANK")
+	if !g.keptURLLatch["BLANK"] {
+		t.Fatal("blank popup from /os/ was not latched at open")
+	}
+	if g.closeTargetReasonLocked("BLANK") == "" {
+		t.Fatal("blank popup from /os/ without a nav session was closable")
+	}
+	delete(g.keptURLLatch, "BLANK")
+	if g.closeTargetReasonLocked("BLANK") == "" {
+		t.Fatal("blank popup from /os/ was closable without latch when opener is kept")
 	}
 }
 

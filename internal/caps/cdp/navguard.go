@@ -47,41 +47,44 @@ func (g *guard) startsUnheld(c *command) bool {
 }
 
 type navTarget struct {
-	target           string
-	session          string
-	start            time.Time
-	progress         time.Time
-	awayAt           time.Duration
-	reason           string
-	ready            chan struct{}
-	pending          int
-	done             bool
-	failed           bool
-	loading          map[string]int
-	started          int
-	unsure           bool
-	errorURL         string
-	documentURL      string
-	navigationURL    string
-	securityOrigin   string
-	keptOrigin       string
-	failedURLs       []string
-	commits          int
-	failCommit       int
-	navGen           int
-	errorNavGen      int
-	worker           bool
-	iframe           bool
-	shared           bool
-	historyLocked    bool
-	protectedHistory map[string]string
-	confirm          *navTarget
-	confirming       bool
-	revision         int
-	documentsOnly    bool
-	documentsAsked   bool
-	framesGate       chan struct{}
-	framesReads      int
+	target            string
+	session           string
+	start             time.Time
+	progress          time.Time
+	awayAt            time.Duration
+	reason            string
+	ready             chan struct{}
+	pending           int
+	done              bool
+	failed            bool
+	loading           map[string]int
+	started           int
+	unsure            bool
+	errorURL          string
+	documentURL       string
+	navigationURL     string
+	securityOrigin    string
+	keptOrigin        string
+	failedURLs        []string
+	commits           int
+	failCommit        int
+	navGen            int
+	errorNavGen       int
+	errorRecorded     bool
+	closeProofGen     int
+	closeProofPending bool
+	worker            bool
+	iframe            bool
+	shared            bool
+	historyLocked     bool
+	protectedHistory  map[string]string
+	confirm           *navTarget
+	confirming        bool
+	revision          int
+	documentsOnly     bool
+	documentsAsked    bool
+	framesGate        chan struct{}
+	framesReads       int
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -443,6 +446,7 @@ func (nt *navTarget) commitFrameNavigatedLocked(p navCommitParams) {
 	nt.navigationURL = ""
 	nt.commits++
 	if chromeErrorDocument(p.Frame.URL) || p.Frame.UnreachableURL != "" {
+		nt.errorRecorded = true
 		nt.errorNavGen = nt.navGen
 	}
 }
