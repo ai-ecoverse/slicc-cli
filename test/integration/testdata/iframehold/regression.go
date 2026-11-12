@@ -226,6 +226,31 @@ func TestIframeHoldBrowserLevelNilParentStaysUnresolved(t *testing.T) {
 	if g.held["S-child"] == nil || len(settled.page) != 0 {
 		t.Fatalf("settle released browser-level iframe without ancestry: held=%v page=%d", g.held["S-child"] != nil, len(settled.page))
 	}
+	if !g.listingHiddenLocked(targetInfo{TargetID: "CHILD", Type: "iframe", URL: frame.url}) || g.targetReasonLocked("CHILD") == "" {
+		t.Fatal("browser-level ordinary iframe with unknown ancestry was listable or attachable")
+	}
+}
+
+func TestIframeHoldBrowserLevelChromeErrorReleasesForConfirm(t *testing.T) {
+	g := iframeHoldGuard(t)
+	frame := &target{id: "CHILD", typ: "iframe", url: "", shown: false}
+	g.targets["CHILD"] = frame
+	g.held["S-child"] = &heldSession{id: "S-child", parent: "", target: "CHILD", typ: "iframe", params: map[string]any{"sessionId": "S-child"}, waiting: false}
+	if !g.iframePendingLocked(frame) {
+		t.Fatal("URL-less browser-level iframe was not pending")
+	}
+	frame.url = "chrome-error://chromewebdata/"
+	frame.protected = g.decide(frame, false)
+	if g.iframeUnresolvedLocked(frame) {
+		t.Fatal("browser-level chrome-error iframe stayed ancestry-unresolved")
+	}
+	settled := g.settleHeldWorkersLocked()
+	if g.held["S-child"] != nil || len(settled.page) == 0 {
+		t.Fatalf("settle did not deliver browser-level chrome-error iframe for confirmation: held=%v page=%d", g.held["S-child"] != nil, len(settled.page))
+	}
+	if !g.listingHiddenLocked(targetInfo{TargetID: "CHILD", Type: "iframe", URL: frame.url}) {
+		t.Fatal("browser-level chrome-error iframe with unknown ancestry was listable")
+	}
 }
 
 func TestIframeHoldProtectedAncestorHidesURLLess(t *testing.T) {

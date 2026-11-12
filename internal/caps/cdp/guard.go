@@ -601,6 +601,28 @@ func (g *guard) iframeAncestryClassifiedLocked(t *target) bool {
 	return false
 }
 
+func (g *guard) iframeBrowserRootedLocked(t *target) bool {
+	if t == nil || t.typ != "iframe" {
+		return false
+	}
+	if g.iframeAncestorStartLocked(t) != "" || g.iframeParentTargetLocked(t) != nil {
+		return false
+	}
+	if g.attachParent != "" {
+		return g.browserSessions[g.attachParent] || g.sessionOwnerLocked(g.attachParent) == nil
+	}
+	for _, h := range g.held {
+		if h != nil && h.target == t.id && h.typ == "iframe" {
+			return h.parent == "" || g.browserSessions[h.parent]
+		}
+	}
+	return true
+}
+
+func (g *guard) iframeErrorPageURLLocked(t *target) bool {
+	return t != nil && strings.HasPrefix(strings.ToLower(t.url), "chrome-error:")
+}
+
 func (g *guard) iframeAncestryUnknownLocked(t *target) bool {
 	if t == nil || t.gone || t.typ != "iframe" || t.protected || g.explicit[t.id] > 0 {
 		return false
@@ -699,7 +721,13 @@ func (g *guard) iframeUnresolvedLocked(t *target) bool {
 	if g.extensionFrameTargetLocked(t) {
 		return false
 	}
-	if g.iframeAncestryUnknownLocked(t) || g.iframeAncestorPendingLocked(t) {
+	if g.iframeAncestorPendingLocked(t) {
+		return true
+	}
+	if g.iframeAncestryUnknownLocked(t) {
+		if g.iframeBrowserRootedLocked(t) && g.iframeErrorPageURLLocked(t) {
+			return false
+		}
 		return true
 	}
 	if g.attachParent != "" {
@@ -714,7 +742,7 @@ func (g *guard) iframeUnresolvedLocked(t *target) bool {
 	}
 	parent := g.iframeParentTargetLocked(t)
 	if parent == nil {
-		return true
+		return !g.iframeBrowserRootedLocked(t) || !g.iframeErrorPageURLLocked(t)
 	}
 	return g.targetUnconfirmedLocked(parent.id)
 }
@@ -777,7 +805,10 @@ func (g *guard) iframeFollowRefusedLocked(sessionID string) bool {
 	if t == nil || t.gone || t.typ != "iframe" {
 		return false
 	}
-	if t.protected || g.iframeFromProtectedAncestorLocked(t) || g.iframeAncestryUnknownLocked(t) || g.iframeAncestorPendingLocked(t) {
+	if t.protected || g.iframeFromProtectedAncestorLocked(t) || g.iframeAncestorPendingLocked(t) {
+		return true
+	}
+	if g.iframeAncestryUnknownLocked(t) && (!g.iframeBrowserRootedLocked(t) || !g.iframeErrorPageURLLocked(t)) {
 		return true
 	}
 	chain := g.iframePageLocked(t)
