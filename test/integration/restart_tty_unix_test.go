@@ -158,9 +158,7 @@ func TestDashboardDetachKeyLeavesTheLaunchedBrowserRunning(t *testing.T) {
 	env, _ := launchEnv(t)
 	env, chromeID := testChrome(t, env)
 	p, endpoint := dashboardLaunch(t, binary, "1.2.3-test", env, chromeID)
-	if !strings.Contains(p.text(), "d detach") {
-		t.Fatal("the dashboard offers no d")
-	}
+	p.wait(t, 0, "d detach")
 	p.keys(t, "d")
 	ttyExit(t, p)
 	p.wait(t, 0, "slicc: detached; left "+chromeID+" running")
@@ -184,9 +182,7 @@ func TestDashboardUpdateKeyRestartsWithoutClosingTheBrowser(t *testing.T) {
 		"SLICC_NO_UPDATE_CHECK":       "1",
 	})
 	p, endpoint := dashboardLaunch(t, bin, "1.0.0", env, chromeID)
-	if !strings.Contains(p.text(), "u update") {
-		t.Fatal("the dashboard offers no u")
-	}
+	p.wait(t, 0, "u update")
 	mark := len(p.text())
 	p.keys(t, "u")
 	st := linkedAs(t, p, "1.1.0")
