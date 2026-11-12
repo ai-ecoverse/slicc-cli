@@ -39,7 +39,6 @@ type CDPOptions struct {
 	Tab           func(url string) bool
 	Logf          func(format string, args ...any)
 	Status        func(format string, args ...any)
-	OnHostTarget  func(id string)
 	SetupTimeout  time.Duration
 	RetryMin      time.Duration
 	RetryMax      time.Duration
@@ -146,11 +145,7 @@ func (c *CDP) HostTarget() string {
 func (c *CDP) setHostTarget(id string) {
 	c.mu.Lock()
 	c.hostTarget = id
-	fn := c.opts.OnHostTarget
 	c.mu.Unlock()
-	if fn != nil {
-		fn(id)
-	}
 }
 
 const detachTimeout = 2 * time.Second

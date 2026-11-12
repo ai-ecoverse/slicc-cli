@@ -98,6 +98,40 @@ func (f *fakeCDPBrowser) takeParked(tag, session string) []parkedReply {
 	return out
 }
 
+func takeAhead(result string) ([]string, string) {
+	const prefix = "#ahead:"
+	if !strings.HasPrefix(result, prefix) {
+		return nil, result
+	}
+	body := result[len(prefix):]
+	bar := strings.IndexByte(body, '|')
+	if bar < 0 {
+		return nil, result
+	}
+	var ahead []string
+	if json.Unmarshal([]byte(body[:bar]), &ahead) != nil {
+		return nil, result
+	}
+	return ahead, body[bar+1:]
+}
+
+func writeCall(ctx context.Context, c *websocket.Conn, ahead []string, reply string, after []string) bool {
+	for _, e := range ahead {
+		if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
+			return false
+		}
+	}
+	if c.Write(ctx, websocket.MessageText, []byte(reply)) != nil {
+		return false
+	}
+	for _, e := range after {
+		if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func writeParked(ctx context.Context, c *websocket.Conn, parked []parkedReply) bool {
 	for _, p := range parked {
 		if c.Write(ctx, websocket.MessageText, []byte(p.reply)) != nil {
@@ -198,6 +232,7 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 		var result string
 		var after []string
+		var ahead []string
 		switch m.Method {
 		case "Target.attachToBrowserTarget":
 			result = `{"sessionId":"RELAY"}`
@@ -206,11 +241,13 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		case "Target.getTargets":
 			result, after = f.script(m.Method, m.Params)
+			ahead, result = takeAhead(result)
 			if result == "{}" {
 				result = `{"targetInfos":[]}`
 			}
 		default:
 			result, after = f.script(m.Method, m.Params)
+			ahead, result = takeAhead(result)
 			if result == "{}" && m.Method == "Page.getNavigationHistory" {
 				result = `{"currentIndex":0,"entries":[{"id":1,"url":"about:blank"}]}`
 			}
@@ -299,13 +336,8 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 			if !writeParked(ctx, c, f.takeParked("await-dirty", m.SessionID)) {
 				return
 			}
-			if c.Write(ctx, websocket.MessageText, []byte(reply)) != nil {
+			if !writeCall(ctx, c, ahead, reply, after) {
 				return
-			}
-			for _, e := range after {
-				if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
-					return
-				}
 			}
 			continue
 		}
@@ -336,21 +368,12 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		if d > 0 {
 			go func() {
 				time.Sleep(d)
-				for _, e := range append([]string{reply}, after...) {
-					if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
-						return
-					}
-				}
+				_ = writeCall(ctx, c, ahead, reply, after)
 			}()
 			continue
 		}
-		if c.Write(ctx, websocket.MessageText, []byte(reply)) != nil {
+		if !writeCall(ctx, c, ahead, reply, append(after, held[m.Method]...)) {
 			return
-		}
-		for _, e := range append(after, held[m.Method]...) {
-			if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
-				return
-			}
 		}
 		delete(held, m.Method)
 		if flushHolds {
