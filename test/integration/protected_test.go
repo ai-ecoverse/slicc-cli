@@ -61,6 +61,38 @@ func TestProtectedVectors(t *testing.T) {
 	}
 }
 
+func TestProtectKeptDocuments(t *testing.T) {
+	o := protect.MustNew([]string{"http://127.0.0.1:8085"})
+	for _, c := range []struct {
+		url  string
+		kept bool
+	}{
+		{"https://seven.sliccy.ai/os/", true},
+		{"https://seven.sliccy.ai/os/callback.html", false},
+		{"https://seven.sliccy.ai/frame", false},
+		{"https://www.sliccy.ai/os/index.html", true},
+		{"https://user:pass@seven.sliccy.ai/os/", true},
+		{"view-source:https://vault.sliccy.ai/x", true},
+		{"blob:https://vault.sliccy.ai/0b9e", true},
+		{"https://vault.sliccy.ai/", true},
+		{"https://vault-x.sliccy.ai/", true},
+		{"https://get.sliccy.ai/os/", false},
+		{"https://www.sliccy.ai:8443/os/", false},
+		{"http://127.0.0.1:8085/os/", true},
+		{"http://127.0.0.1:8085/os/callback.html", false},
+	} {
+		if got := o.Kept(c.url); got != c.kept {
+			t.Errorf("Kept(%q) = %v, want %v", c.url, got, c.kept)
+		}
+	}
+	if !o.KeptInherited("about:blank", "https://vault.sliccy.ai") {
+		t.Fatal("about:blank with a vault origin was not kept")
+	}
+	if !o.KeptInherited("about:blank", "https://seven.sliccy.ai") {
+		t.Fatal("about:blank with a seven origin was not kept")
+	}
+}
+
 func TestProtectRefusalAndRedaction(t *testing.T) {
 	if !protect.MustNew(nil).URL("https://vault.sliccy.ai/") || !protect.MustNew(nil).CookieDomain("vault.sliccy.ai") {
 		t.Fatal("the vault isn't protected")

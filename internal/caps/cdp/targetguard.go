@@ -211,6 +211,10 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 			g.logf("cdp: closeTarget refused target=%s type=%s why=%s touched=%t opened=%t seenAt=%d touchSeq=%d opener=%s openerFrame=%s", id, t.typ, why, g.navTargets[id] != nil, g.opened[id], g.openedSeenAt[id], g.touchSeq, t.opener, t.openerFrame)
 			return refusedTarget
 		}
+		if g.keptCloseLocked(id) {
+			g.logf("cdp: closeTarget refused target=%s type=%s why=kept url=%s", id, t.typ, t.url)
+			return refusedTarget
+		}
 		return ""
 	case "browser":
 		g.logf("cdp: closeTarget refused target=%s why=browser", id)
@@ -222,6 +226,55 @@ func (g *guard) closeTargetReasonLocked(id string) string {
 
 func (g *guard) streamClosableLocked(id string) bool {
 	return g.navTargets[id] != nil || g.opened[id]
+}
+
+func (g *guard) keptCloseLocked(id string) bool {
+	t := g.targets[id]
+	if t == nil || t.gone {
+		return false
+	}
+	nt := g.navTargets[id]
+	navigating := nt != nil && (nt.unsure || len(nt.loading) > 0)
+	if navigating {
+		return nt.navigationURL == "" || g.o.Kept(nt.navigationURL)
+	}
+	documentURL := t.url
+	if nt != nil && nt.documentURL != "" {
+		documentURL = nt.documentURL
+	}
+	if chromeErrorDocument(documentURL) {
+		return g.o.Kept(documentURL) || g.keptCreatorLocked(t, documentURL)
+	}
+	if ev := g.evidenceLocked(t); ev.UnreachableURL != "" && chromeErrorDocument(ev.DocumentURL) {
+		return g.o.Kept(ev.DocumentURL) || g.keptCreatorLocked(t, ev.DocumentURL)
+	}
+	if g.o.Kept(t.url) || g.o.Kept(documentURL) {
+		return true
+	}
+	return g.keptCreatorLocked(t, documentURL)
+}
+
+func chromeErrorDocument(raw string) bool {
+	return strings.HasPrefix(raw, "chrome-error:") || raw == "chrome-error://chromewebdata/"
+}
+
+func (g *guard) keptCreatorLocked(t *target, documentURL string) bool {
+	if t == nil {
+		return false
+	}
+	for _, id := range []string{t.opener, t.openerFrame} {
+		if id == "" {
+			continue
+		}
+		c := g.targets[id]
+		if c == nil || c.gone {
+			continue
+		}
+		if g.o.KeptInherited(documentURL, c.url) || g.o.KeptInherited(t.url, c.url) {
+			return true
+		}
+	}
+	return false
 }
 
 func openedSeenBound() int {

@@ -165,3 +165,67 @@ func TestCloseProtectedTrimBeforeStoreKeepsTouchSeq(t *testing.T) {
 		t.Fatalf("expected opener touch after popup sight: seenAt=%d touch=%d", seenAt, touch)
 	}
 }
+
+func TestCloseProtectedKeepsLiveSevenUIAndVault(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["OS"] = &target{id: "OS", typ: "page", url: "https://seven.sliccy.ai/os/", protected: true}
+	g.targets["VAULT"] = &target{id: "VAULT", typ: "page", url: "https://vault.sliccy.ai/secret", protected: true}
+	g.targets["ERR"] = &target{id: "ERR", typ: "page", url: "https://vault.sliccy.ai/missing", protected: true}
+	g.navTargets["OS"] = &navTarget{target: "OS", ready: make(chan struct{}), done: true}
+	g.navTargets["VAULT"] = &navTarget{target: "VAULT", ready: make(chan struct{}), done: true}
+	g.navTargets["ERR"] = &navTarget{target: "ERR", ready: make(chan struct{}), done: true, documentURL: "chrome-error://chromewebdata/", errorURL: "https://vault.sliccy.ai/missing"}
+	close(g.navTargets["OS"].ready)
+	close(g.navTargets["VAULT"].ready)
+	close(g.navTargets["ERR"].ready)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closeTargetReasonLocked("OS") == "" {
+		t.Fatal("stream-touched live /os/ tab was closable")
+	}
+	if g.closeTargetReasonLocked("VAULT") == "" {
+		t.Fatal("stream-touched vault tab was closable")
+	}
+	if g.closeTargetReasonLocked("ERR") != "" {
+		t.Fatal("stream-touched committed error page was not closable")
+	}
+}
+
+func TestCloseProtectedKeepsViewSourceBlobUserinfoAndBlank(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["VS"] = &target{id: "VS", typ: "page", url: "view-source:https://vault.sliccy.ai/doc", protected: true}
+	g.targets["BLOB"] = &target{id: "BLOB", typ: "page", url: "blob:https://vault.sliccy.ai/0b9e0f6c-1f0e-4c1a-9a43-5d3f6e2c7a10", protected: true}
+	g.targets["USER"] = &target{id: "USER", typ: "page", url: "https://user:pass@seven.sliccy.ai/os/index.html", protected: true}
+	g.targets["PARENT"] = &target{id: "PARENT", typ: "page", url: "https://vault.sliccy.ai/", protected: true}
+	g.targets["BLANK"] = &target{id: "BLANK", typ: "page", url: "about:blank", opener: "PARENT", protected: true}
+	g.targets["NAV"] = &target{id: "NAV", typ: "page", url: "https://ordinary.test/", protected: true}
+	for _, id := range []string{"VS", "BLOB", "USER", "BLANK", "NAV"} {
+		g.navTargets[id] = &navTarget{target: id, ready: make(chan struct{}), done: true}
+		close(g.navTargets[id].ready)
+	}
+	g.navTargets["NAV"].unsure = true
+	g.navTargets["NAV"].navigationURL = "https://vault.sliccy.ai/slow"
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, id := range []string{"VS", "BLOB", "USER", "BLANK", "NAV"} {
+		if g.closeTargetReasonLocked(id) == "" {
+			t.Fatalf("%s was closable", id)
+		}
+	}
+}
+
+func TestCloseProtectedCallbackAndOtherProtectedStillClosable(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["CB"] = &target{id: "CB", typ: "page", url: "https://seven.sliccy.ai/os/callback.html", protected: true}
+	g.targets["FRAME"] = &target{id: "FRAME", typ: "page", url: "https://seven.sliccy.ai/frame", protected: true}
+	for _, id := range []string{"CB", "FRAME"} {
+		g.navTargets[id] = &navTarget{target: id, ready: make(chan struct{}), done: true}
+		close(g.navTargets[id].ready)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, id := range []string{"CB", "FRAME"} {
+		if g.closeTargetReasonLocked(id) != "" {
+			t.Fatalf("%s was not closable: %q", id, g.closeTargetReasonLocked(id))
+		}
+	}
+}

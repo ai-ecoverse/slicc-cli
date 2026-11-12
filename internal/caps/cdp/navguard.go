@@ -62,6 +62,7 @@ type navTarget struct {
 	unsure           bool
 	errorURL         string
 	documentURL      string
+	navigationURL    string
 	failedURLs       []string
 	commits          int
 	failCommit       int
@@ -357,6 +358,7 @@ func (nt *navTarget) commitLocked(m *message) {
 		RequestID      string `json:"requestId"`
 		NavigationType string `json:"navigationType"`
 		Type           string `json:"type"`
+		URL            string `json:"url"`
 		Frame          struct {
 			ID             string `json:"id"`
 			ParentID       string `json:"parentId"`
@@ -379,6 +381,7 @@ func (nt *navTarget) commitLocked(m *message) {
 		if p.FrameID != nt.target || sameDocument[p.NavigationType] {
 			return
 		}
+		nt.navigationURL = p.URL
 		if nt.loading == nil {
 			nt.loading = map[string]int{}
 		}
@@ -394,6 +397,7 @@ func (nt *navTarget) commitLocked(m *message) {
 		if p.FrameID == nt.target {
 			clear(nt.loading)
 			nt.unsure = false
+			nt.navigationURL = ""
 		}
 	case "Page.frameNavigated":
 		if p.Frame.ID != nt.target || (p.Frame.ParentID != "" && !nt.iframe) {
@@ -411,6 +415,7 @@ func (nt *navTarget) commitLocked(m *message) {
 		}
 		nt.errorURL = p.Frame.UnreachableURL
 		nt.documentURL = p.Frame.URL
+		nt.navigationURL = ""
 		nt.commits++
 	}
 }
