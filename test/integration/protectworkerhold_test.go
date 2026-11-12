@@ -475,6 +475,23 @@ func releaseHeldScript(allowed string) fakeScript {
 				attach("", "S-b", page("P-b")),
 				attach("S-b", "S-wb", worker("W-b", "FRAME-b")),
 			}
+		case "Target.attachToTarget":
+			var attached struct {
+				TargetID string `json:"targetId"`
+			}
+			_ = json.Unmarshal(params, &attached)
+			if attached.TargetID == "" {
+				return "{}", nil
+			}
+			return `{"sessionId":"G-` + attached.TargetID + `"}`, nil
+		case "Page.getNavigationHistory":
+			return `{"currentIndex":0,"entries":[{"id":1,"url":"` + allowed + `/doc"}]}`, nil
+		case "Target.getTargetInfo":
+			var info struct {
+				TargetID string `json:"targetId"`
+			}
+			_ = json.Unmarshal(params, &info)
+			return `{"targetInfo":{"targetId":"` + info.TargetID + `","type":"page","url":"` + allowed + `/doc"}}`, nil
 		case "Target.getTargets":
 			return `{"targetInfos":[]}`, nil
 		case "Target.detachFromTarget", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger":
@@ -515,12 +532,18 @@ func TestCDPReleasesHeldWorkersWhenThePageSessionStopsAutoAttach(t *testing.T) {
 		}
 		return -1
 	}
-	detachPage := index("S-a", "Target.detachFromTarget")
+	detachPage := -1
+	for i, line := range got {
+		if strings.Contains(line, "Target.detachFromTarget") && strings.Contains(line, `"sessionId":"S-a"`) && !strings.Contains(line, `"S-wa"`) {
+			detachPage = i
+			break
+		}
+	}
 	resumeA := index("S-wa", "Runtime.runIfWaitingForDebugger")
 	detachA := index("S-wa", "Target.detachFromTarget")
 	autoOff := -1
 	for i, line := range got {
-		if strings.Contains(line, "Target.setAutoAttach") && strings.Contains(line, "S-b") {
+		if strings.Contains(line, "Target.setAutoAttach") && strings.Contains(line, `"S-b"`) {
 			autoOff = i
 			break
 		}
