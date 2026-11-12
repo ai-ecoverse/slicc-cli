@@ -54,22 +54,17 @@ func TestGuardWaiversAcceptOnlyDocumentedLegs(t *testing.T) {
 		t.Fatal("accepted guarded pass on tab-attach", attachGuardedPass)
 	}
 
-	workerOK := guardRow{
+	workerLeak := guardRow{
 		ID: "C3.tab-worker-leak", Control: "pass", Guarded: "fail", Live: "pass",
 		Why: json.RawMessage(`"workerAttached: got true, want false"`),
 	}
-	if _, ok := waivedGuardRow(workerOK); !ok {
-		t.Fatal(workerOK)
+	if _, ok := waivedGuardRow(workerLeak); ok {
+		t.Fatal("C3.tab-worker-leak must not be waived", workerLeak)
 	}
-	workerGuardedPass := workerOK
-	workerGuardedPass.Guarded = "pass"
-	if _, ok := waivedGuardRow(workerGuardedPass); ok {
-		t.Fatal("accepted guarded pass on worker-leak", workerGuardedPass)
-	}
-	swOK := workerOK
-	swOK.ID = "C3.tab-service-worker-leak"
-	if _, ok := waivedGuardRow(swOK); !ok {
-		t.Fatal(swOK)
+	swLeak := workerLeak
+	swLeak.ID = "C3.tab-service-worker-leak"
+	if _, ok := waivedGuardRow(swLeak); ok {
+		t.Fatal("C3.tab-service-worker-leak must not be waived", swLeak)
 	}
 
 	iframePass := guardRow{
