@@ -589,9 +589,15 @@ export function protectTest(getLink, describe) {
           const reloaded = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.unreachableUrl, 20000);
           const reload = await outcome(c.send('Page.reload', {}, sessionId));
           if (reload.ok) await reloaded;
-          const left = c.waitEvent((e) => e.method === 'Page.frameNavigated' && e.sessionId === sessionId && e.params.frame.url === away, 20000);
           const navigate = await outcome(c.send('Page.navigate', { url: away }, sessionId));
-          if (navigate.ok) await left;
+          if (navigate.ok) {
+            for (let tries = 1; ; tries += 1) {
+              const tree = await outcome(c.send('Page.getFrameTree', {}, sessionId));
+              if (tree.ok && tree.result?.frameTree?.frame?.url === away) break;
+              if (tries >= 200) throw new Error('recovery navigation did not commit');
+              await sleep(100);
+            }
+          }
           const reset = await outcome(c.send('Page.resetNavigationHistory', {}, sessionId));
           const afterReset = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
           const close = await outcome(c.send('Target.closeTarget', { targetId }));
