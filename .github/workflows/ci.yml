@@ -31,7 +31,7 @@ jobs:
         curl -fsSL "https://raw.githubusercontent.com/golangci/golangci-lint/$GOLANGCI_LINT/install.sh" | sh -s -- -b "$RUNNER_TEMP/golangci-lint" "$GOLANGCI_LINT"
         PATH="$RUNNER_TEMP/golangci-lint:$PATH" npm run lint
         npm run lint:sh
-      shards: 5
+      shards: 6
       flaky-retry: 0
       timeout-minutes: 45
       review-timeout-minutes: 90
