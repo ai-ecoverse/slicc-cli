@@ -2,7 +2,6 @@ package integration
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -33,7 +32,6 @@ func TestCDPHidesAProtectedIframeFromListings(t *testing.T) {
 			return "{}", nil
 		}
 	})
-	rawWs := "ws" + strings.TrimPrefix(fake.srv.URL, "http") + "/devtools/browser/fake"
 	var r struct {
 		Listed any        `json:"listed"`
 		Info   cdpOutcome `json:"info"`
@@ -44,7 +42,25 @@ func TestCDPHidesAProtectedIframeFromListings(t *testing.T) {
 			Title  string `json:"title"`
 		} `json:"events"`
 	}
-	env.evalJSON(t, "linkTest.protect.iframeListingScrub("+jsArgs("chrome-2", rawWs)+")", &r)
+	env.evalJSON(t, "linkTest.protect.iframeListingScrub('chrome-2')", &r)
+	sawDiscover, sawList := false, false
+	for _, raw := range fake.received() {
+		var m struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal([]byte(raw), &m) != nil {
+			continue
+		}
+		switch m.Method {
+		case "Target.setDiscoverTargets":
+			sawDiscover = true
+		case "Target.getTargets":
+			sawList = true
+		}
+	}
+	if !sawDiscover || !sawList {
+		t.Fatalf("fake never delivered the iframe to the guard: discover=%v getTargets=%v got=%v", sawDiscover, sawList, fake.received())
+	}
 	if r.Listed != nil {
 		t.Fatalf("getTargets listed a protected iframe: %+v", r.Listed)
 	}
