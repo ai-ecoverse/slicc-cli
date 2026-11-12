@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -210,20 +211,20 @@ func TestIframeHoldURLLessStaysPendingUntilURL(t *testing.T) {
 	}
 }
 
-func TestIframeHoldBrowserLevelNilParentReleasesOnURL(t *testing.T) {
+func TestIframeHoldBrowserLevelNilParentStaysUnresolved(t *testing.T) {
 	g := iframeHoldGuard(t)
 	frame := &target{id: "CHILD", typ: "iframe", url: "https://ordinary.test/embed", shown: false}
 	g.targets["CHILD"] = frame
 	g.held["S-child"] = &heldSession{id: "S-child", parent: "", target: "CHILD", typ: "iframe", params: map[string]any{"sessionId": "S-child"}, waiting: false}
-	if g.iframeUnresolvedLocked(frame) {
-		t.Fatal("browser-level iframe with no parent target stayed ancestry-unresolved after URL")
+	if !g.iframeUnresolvedLocked(frame) {
+		t.Fatal("browser-level iframe with no parent target was not ancestry-unresolved after URL")
 	}
-	if g.iframePendingLocked(frame) {
-		t.Fatal("browser-level iframe with a URL stayed pending")
+	if !g.iframePendingLocked(frame) {
+		t.Fatal("browser-level iframe with a URL was not pending")
 	}
 	settled := g.settleHeldWorkersLocked()
-	if g.held["S-child"] != nil || len(settled.page) == 0 {
-		t.Fatalf("settle did not deliver browser-level iframe: held=%v page=%d", g.held["S-child"] != nil, len(settled.page))
+	if g.held["S-child"] == nil || len(settled.page) != 0 {
+		t.Fatalf("settle released browser-level iframe without ancestry: held=%v page=%d", g.held["S-child"] != nil, len(settled.page))
 	}
 }
 
@@ -344,5 +345,105 @@ func TestIframeHoldExtensionFrameUnderSevenProtected(t *testing.T) {
 	}
 	if !g.listingHiddenLocked(info) || !g.protectedIframeIDLocked("F") {
 		t.Fatal("extension iframe under seven was still listable or answered by getTargetInfo")
+	}
+}
+
+func reviewGuard(t *testing.T) *guard {
+	t.Helper()
+	o, err := protect.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newGuard(o, nil)
+}
+
+func reviewCommand(g *guard, raw string) pageVerdict {
+	c, id, ok := parseCommand([]byte(raw))
+	return g.fromCommand(c, id, ok)
+}
+
+func TestReviewMissingAncestry(t *testing.T) {
+	g := reviewGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "SEVEN", Type: "page", URL: "https://seven.sliccy.ai/doc"}, {TargetID: "F", Type: "iframe", URL: "https://ordinary.test/embed"}})
+	info := targetInfo{TargetID: "F", Type: "iframe", URL: "https://ordinary.test/embed"}
+	if !g.listingHiddenLocked(info) {
+		t.Error("initial discovery lists iframe with unknown ancestry")
+	}
+	v := reviewCommand(g, `{"id":1,"method":"Target.attachToTarget","params":{"targetId":"F","flatten":true}}`)
+	if len(v.forward) > 0 {
+		t.Errorf("attach forwarded: %s", v.forward)
+	}
+	a := g.fromBrowser([]byte(`{"id":1,"result":{"sessionId":"S-F"}}`))
+	if len(a.forward) > 0 {
+		t.Errorf("attach result delivered: %s", a.forward)
+	}
+	g.fromBrowser([]byte(`{"method":"Target.attachedToTarget","params":{"sessionId":"S-F","waitingForDebugger":false,"targetInfo":{"targetId":"F","type":"iframe","url":"https://ordinary.test/embed"}}}`))
+	g.navTargets["F"] = &navTarget{target: "F", iframe: true, done: true}
+	e := reviewCommand(g, `{"id":2,"sessionId":"S-F","method":"Runtime.evaluate","params":{"expression":"window.parent.postMessage({type:'test'}, '*')"}}`)
+	if len(e.forward) > 0 {
+		t.Errorf("evaluate forwarded with unknown ancestry: %s", e.forward)
+	}
+}
+
+func TestReviewNestedHeldAncestor(t *testing.T) {
+	g := reviewGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}, {TargetID: "MID", Type: "iframe", URL: "https://ordinary.test/mid", ParentID: "PAGE"}, {TargetID: "F", Type: "iframe", URL: "https://ordinary.test/embed", ParentID: "MID"}})
+	g.sessions["S-F"] = &session{id: "S-F", target: "F", typ: "iframe"}
+	g.held["S-MID"] = &heldSession{id: "S-MID", target: "MID", typ: "iframe"}
+	if !g.sessionRefusedLocked("S-F") {
+		t.Error("browser-level child session still admitted while intermediate ancestor held")
+	}
+	g.navTargets["F"] = &navTarget{target: "F", iframe: true, done: true}
+	e := reviewCommand(g, `{"id":2,"sessionId":"S-F","method":"Runtime.evaluate","params":{"expression":"window.parent.postMessage({type:'test'}, '*')"}}`)
+	if len(e.forward) > 0 {
+		t.Errorf("evaluate forwarded under held ancestor: %s", e.forward)
+	}
+}
+
+func TestReviewAttachOverwritesAncestry(t *testing.T) {
+	g := reviewGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "SEVEN", Type: "page", URL: "https://seven.sliccy.ai/doc"}, {TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.noteFrameParentLocked("INTERMEDIATE", "SEVEN")
+	g.noteChildFrameLocked("INTERMEDIATE", "https://ordinary.test/intermediate")
+	raw, _ := json.Marshal(map[string]any{"method": "Target.attachedToTarget", "sessionId": "S-page", "params": map[string]any{"sessionId": "S-F", "waitingForDebugger": false, "targetInfo": map[string]any{"targetId": "F", "type": "iframe", "url": "https://ordinary.test/embed", "parentId": "INTERMEDIATE"}}})
+	v := g.fromBrowser(raw)
+	if len(v.forward) > 0 || len(v.page) > 0 {
+		t.Errorf("disagreeing attach delivered after protected chain overwritten: forward=%s page=%s parent=%q", v.forward, v.page, g.frameParents["INTERMEDIATE"])
+	}
+	if !g.targets["F"].protected {
+		t.Error("iframe not sticky protected on ancestry disagreement")
+	}
+}
+
+func TestReviewOwnerUnconfirmed(t *testing.T) {
+	g := reviewGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}, {TargetID: "F", Type: "iframe", URL: "https://ordinary.test/embed", ParentID: "PAGE"}})
+	g.sessions["S-F"] = &session{id: "S-F", target: "F", typ: "iframe"}
+	g.navTargets["F"] = &navTarget{target: "F", iframe: true, done: true}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", done: true}
+	g.observeLocked(targetInfo{TargetID: "PAGE", Type: "page", URL: "https://seven.sliccy.ai/doc"})
+	if !g.sessionRefusedLocked("S-F") {
+		t.Error("iframe remains admitted while owner navigation is unconfirmed")
+	}
+	e := reviewCommand(g, `{"id":2,"sessionId":"S-F","method":"Runtime.evaluate","params":{"expression":"window.parent.postMessage({type:'test'}, '*')"}}`)
+	if len(e.forward) > 0 {
+		t.Errorf("evaluate forwarded during owner confirmation: %s", e.forward)
+	}
+	a := reviewCommand(g, `{"id":3,"method":"Target.attachToTarget","params":{"targetId":"F","flatten":true}}`)
+	if len(a.forward) > 0 {
+		t.Errorf("new browser attach forwarded during owner confirmation: %s", a.forward)
+	}
+}
+
+func TestReviewPlaceholderOverwrite(t *testing.T) {
+	g := reviewGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.noteFrameParentLocked("MID", "PAGE")
+	g.noteChildFrameLocked("MID", "https://seven.sliccy.ai/doc")
+	g.noteChildFrameLocked("MID", "://")
+	g.observeLocked(targetInfo{TargetID: "F", Type: "iframe", URL: "https://ordinary.test/embed", ParentID: "MID"})
+	if !g.targets["F"].protected || !g.listingHiddenLocked(targetInfo{TargetID: "F", Type: "iframe", URL: "https://ordinary.test/embed", ParentID: "MID"}) {
+		t.Error("placeholder overwrite erased recorded protected frame before descendant discovery")
 	}
 }
