@@ -69,6 +69,7 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		return nil
 	}
 	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
+	g.noteErrorPageSnapshotLocked(nt, frame.URL, frame.SecurityOrigin, frame.UnreachableURL)
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
 		check.settle(false)
 		return g.markLocked(t)
@@ -257,6 +258,24 @@ func (g *guard) recordedProtectedErrorPageLocked(nt *navTarget, documentURL stri
 		return true
 	}
 	return nt != nil && nt.errorURL != "" && g.o.Loaded(nt.errorURL)
+}
+
+func (g *guard) noteErrorPageSnapshotLocked(nt *navTarget, url, origin, unreachable string) {
+	if nt == nil {
+		return
+	}
+	if !chromeErrorDocument(url) && (unreachable == "" || !g.o.Loaded(unreachable)) {
+		return
+	}
+	if url != "" {
+		nt.documentURL = url
+	}
+	if origin != "" {
+		nt.securityOrigin = origin
+	}
+	if unreachable != "" {
+		nt.errorURL = unreachable
+	}
 }
 
 func chromeErrorDocument(raw string) bool {
