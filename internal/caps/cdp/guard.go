@@ -493,9 +493,61 @@ func (g *guard) iframeAncestorStartLocked(t *target) string {
 	return g.frameParents[t.id]
 }
 
+func (g *guard) noteIframeAttachParentLocked(info targetInfo) {
+	owner := g.sessionOwnerLocked(g.attachParent)
+	if owner == nil {
+		return
+	}
+	pf := parentFrameOf(info)
+	if pf != "" && pf != owner.id {
+		g.noteFrameParentLocked(pf, owner.id)
+	}
+	parent := pf
+	if parent == "" {
+		parent = owner.id
+	}
+	g.noteFrameParentLocked(info.TargetID, parent)
+}
+
+func (g *guard) iframeParentTargetLocked(t *target) *target {
+	if t == nil {
+		return nil
+	}
+	if g.attachParent != "" {
+		if owner := g.sessionOwnerLocked(g.attachParent); owner != nil {
+			return owner
+		}
+	}
+	if p := g.targets[t.parentFrame]; p != nil && !p.gone && (p.typ == "page" || p.typ == "tab" || p.typ == "iframe") {
+		return p
+	}
+	if page := g.iframePageLocked(t); page != nil {
+		return page
+	}
+	if t.framePage != nil && !t.framePage.gone {
+		return t.framePage
+	}
+	seen := map[string]bool{t.id: true}
+	id := g.iframeAncestorStartLocked(t)
+	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
+		if seen[id] {
+			break
+		}
+		seen[id] = true
+		if p := g.targets[id]; p != nil && !p.gone && (p.typ == "page" || p.typ == "tab" || p.typ == "iframe") {
+			return p
+		}
+		id = g.frameParentOfLocked(id)
+	}
+	return nil
+}
+
 func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 	if t == nil || t.typ != "iframe" {
 		return false
+	}
+	if parent := g.iframeParentTargetLocked(t); parent != nil && parent.protected {
+		return true
 	}
 	seen := map[string]bool{t.id: true}
 	id := g.iframeAncestorStartLocked(t)
@@ -515,6 +567,9 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 func (g *guard) iframeHasAncestorLocked(t *target, ancestor string) bool {
 	if t == nil || ancestor == "" {
 		return false
+	}
+	if parent := g.iframeParentTargetLocked(t); parent != nil && parent.id == ancestor {
+		return true
 	}
 	if t.parentFrame == ancestor || g.frameParents[t.id] == ancestor {
 		return true
@@ -538,29 +593,21 @@ func (g *guard) iframeUnresolvedLocked(t *target) bool {
 	if t == nil || t.gone || t.typ != "iframe" || t.protected || g.explicit[t.id] > 0 {
 		return false
 	}
-	id := g.iframeAncestorStartLocked(t)
-	if id == "" {
+	if g.attachParent != "" {
+		owner := g.sessionOwnerLocked(g.attachParent)
+		if owner == nil {
+			return true
+		}
+		return g.targetUnconfirmedLocked(owner.id)
+	}
+	if !g.iframeHeldLocked(t.id) {
+		return false
+	}
+	parent := g.iframeParentTargetLocked(t)
+	if parent == nil {
 		return true
 	}
-	seen := map[string]bool{t.id: true}
-	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
-		if seen[id] {
-			return true
-		}
-		seen[id] = true
-		if !g.creatorClassifiedLocked(id) {
-			return true
-		}
-		if p := g.targets[id]; p != nil && !p.gone && (p.typ == "page" || p.typ == "tab") {
-			return false
-		}
-		next := g.frameParentOfLocked(id)
-		if next == "" {
-			return false
-		}
-		id = next
-	}
-	return true
+	return g.targetUnconfirmedLocked(parent.id)
 }
 
 func (g *guard) iframeHeldLocked(id string) bool {

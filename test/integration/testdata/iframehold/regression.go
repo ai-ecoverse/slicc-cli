@@ -94,23 +94,52 @@ func TestIframeHoldNestedUnderVaultSrcdoc(t *testing.T) {
 	}
 }
 
-func TestIframeHoldUnknownParentStaysHeld(t *testing.T) {
+func TestIframeHoldUnknownParentTargetStaysHeld(t *testing.T) {
 	g := iframeHoldGuard(t)
 	frame := &target{id: "F", typ: "iframe", url: "https://ordinary.test/embed", parentFrame: "FRAME-unknown", shown: false}
 	g.targets["F"] = frame
+	g.attachParent = "S-unknown"
 	frame.protected = g.decide(frame, false)
 	if frame.protected {
-		t.Fatal("iframe with unknown parent was protected before the chain was known")
+		t.Fatal("iframe with unknown parent target was protected")
 	}
 	if !g.iframeUnresolvedLocked(frame) {
-		t.Fatal("unknown parent did not keep the iframe held")
+		t.Fatal("unknown parent target did not keep the iframe held")
 	}
-	if reason := g.targetReasonLocked("F"); reason == "" {
-		t.Fatal("iframe with unknown parent was attachable by id")
+	g.attachParent = ""
+}
+
+func TestIframeHoldInProcessFrameUnderOrdinaryParent(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/"}
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	frame := &target{id: "F", typ: "iframe", url: "https://ordinary.test/embed", parentFrame: "FRAME-inprocess", shown: false}
+	g.targets["F"] = frame
+	g.attachParent = "S-page"
+	g.noteIframeAttachParentLocked(targetInfo{TargetID: "F", Type: "iframe", URL: frame.url, ParentFrameID: "FRAME-inprocess"})
+	frame.protected = g.decide(frame, false)
+	if frame.protected {
+		t.Fatal("ordinary iframe under ordinary parent was protected because parentFrameId was not a target")
 	}
-	_, hide := g.applyResultKindLocked(kindAttach, "F", "", map[string]any{"sessionId": "S-F"})
-	if !hide {
-		t.Fatal("attach of an unresolved iframe was admitted")
+	if g.iframeUnresolvedLocked(frame) {
+		t.Fatal("known ordinary parent target held an iframe whose parentFrameId was not a target")
+	}
+	g.attachParent = ""
+	if g.listingHiddenLocked(targetInfo{TargetID: "F", Type: "iframe", URL: frame.url, ParentFrameID: "FRAME-inprocess"}) {
+		t.Fatal("ordinary iframe with an in-process parentFrameId was hidden from listings")
+	}
+}
+
+func TestIframeHoldRecordedFrameUnderSeven(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/"}
+	g.noteChildFrameLocked("FRAME", "https://seven.sliccy.ai/embed")
+	g.noteFrameParentLocked("FRAME", "PAGE")
+	frame := &target{id: "F", typ: "iframe", url: "https://ordinary.test/embed", parentFrame: "FRAME", shown: false}
+	g.targets["F"] = frame
+	frame.protected = g.decide(frame, false)
+	if !frame.protected {
+		t.Fatal("iframe was not protected from its recorded ancestor frame")
 	}
 }
 

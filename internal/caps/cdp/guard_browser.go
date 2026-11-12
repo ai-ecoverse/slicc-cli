@@ -452,6 +452,32 @@ func (g *guard) attachedWorkerLocked(m *message) bool {
 	return workerTypes[p.TargetInfo.Type]
 }
 
+func (g *guard) attachedHoldParams(m *message, pSession string, waiting bool, info targetInfo) map[string]any {
+	params := decodeParams(m.Params)
+	if params != nil {
+		return params
+	}
+	return map[string]any{"sessionId": pSession, "waitingForDebugger": waiting, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID, "parentFrameId": info.ParentFrameID, "parentId": info.ParentID}}
+}
+
+func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
+	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
+		if t := g.targets[info.TargetID]; t != nil {
+			t.protected = true
+		}
+	}
+	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" || workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
+		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)}, true
+	}
+	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
+		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
+	}
+	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
+		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, waiting)...), hold: []string{pSession}}, true
+	}
+	return browserVerdict{}, false
+}
+
 func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	var p struct {
 		SessionID          string     `json:"sessionId"`
@@ -468,26 +494,15 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	g.noteStreamOpenedLocked(info)
 	g.attachParent = m.SessionID
+	if info.Type == "iframe" {
+		g.noteIframeAttachParentLocked(info)
+	}
 	send := g.observeLocked(info)
+	if v, handled := g.attachedHideOrHoldLocked(m, p.SessionID, p.WaitingForDebugger, info, send); handled {
+		g.attachParent = ""
+		return v
+	}
 	g.attachParent = ""
-	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
-		if t := g.targets[info.TargetID]; t != nil {
-			t.protected = true
-		}
-	}
-	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" || workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
-		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: p.SessionID, parent: m.SessionID, target: info.TargetID, waiting: p.WaitingForDebugger})...)}
-	}
-	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
-		params := decodeParams(m.Params)
-		if params == nil {
-			params = map[string]any{"sessionId": p.SessionID, "waitingForDebugger": p.WaitingForDebugger, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID, "parentFrameId": info.ParentFrameID, "parentId": info.ParentID}}
-		}
-		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
-	}
-	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
-		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
-	}
 	g.noteWorkerShownLocked(info)
 	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
 	if info.Type == "browser" {
