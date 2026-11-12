@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func protectedIframeShapesScript(seven, vault, allowed string) fakeScript {
+func protectedIframeShapesScript(seven, vault, allowed string, blindSevenFrame bool) fakeScript {
 	page := map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/doc"}
 	sevenPage := map[string]any{"targetId": "P-seven", "type": "page", "url": seven + "/doc"}
 	vaultPage := map[string]any{"targetId": "P-vault", "type": "page", "url": vault + "/doc"}
@@ -65,9 +65,11 @@ func protectedIframeShapesScript(seven, vault, allowed string) fakeScript {
 				created(sevenPage), attach("", "S-seven", sevenPage),
 				created(vaultPage), attach("", "S-vault", vaultPage),
 				frame("S-page", "FRAME-plain", "P-ordinary", allowed+"/frame"),
-				frame("S-seven", "FRAME-seven", "P-seven", seven+"/frame"),
-				frame("S-vault", "FRAME-vault", "P-vault", vault+"/frame"),
 			}
+			if !blindSevenFrame {
+				events = append(events, frame("S-seven", "FRAME-seven", "P-seven", seven+"/frame"))
+			}
+			events = append(events, frame("S-vault", "FRAME-vault", "P-vault", vault+"/frame"))
 			parentOf := map[string]string{
 				"F-seven-ordinary": "S-seven", "F-seven-srcdoc": "S-seven", "F-seven-mid": "S-seven", "F-seven-nest": "S-F-seven-mid",
 				"F-vault-ordinary": "S-vault", "F-vault-srcdoc": "S-vault", "F-vault-mid": "S-vault", "F-vault-nest": "S-F-vault-mid",
@@ -114,10 +116,8 @@ func protectedIframeShapesScript(seven, vault, allowed string) fakeScript {
 	}
 }
 
-func TestCDPHidesIframesInsideProtectedDocuments(t *testing.T) {
-	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
-		return protectedIframeShapesScript(seven, "https://vault.sliccy.ai", allowed)
-	})
+func assertProtectedIframeShapes(t *testing.T, env *protectEnv, fake *fakeCDPBrowser) {
+	t.Helper()
 	var result struct {
 		Events []struct {
 			Method    string `json:"method"`
@@ -196,4 +196,18 @@ func TestCDPHidesIframesInsideProtectedDocuments(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestCDPHidesIframesInsideProtectedDocuments(t *testing.T) {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return protectedIframeShapesScript(seven, "https://vault.sliccy.ai", allowed, false)
+	})
+	assertProtectedIframeShapes(t, env, fake)
+}
+
+func TestCDPHidesIframesInsideProtectedDocumentsBlindSevenFrame(t *testing.T) {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return protectedIframeShapesScript(seven, "https://vault.sliccy.ai", allowed, true)
+	})
+	assertProtectedIframeShapes(t, env, fake)
 }

@@ -629,6 +629,9 @@ func (g *guard) iframeAncestryClassifiedLocked(t *target) bool {
 		return false
 	}
 	if parent := g.iframeParentTargetLocked(t); parent != nil {
+		if parent.typ == "iframe" && g.iframeAncestryUnknownLocked(parent) {
+			return false
+		}
 		return g.creatorClassifiedLocked(parent.id)
 	}
 	seen := map[string]bool{t.id: true}
@@ -638,6 +641,9 @@ func (g *guard) iframeAncestryClassifiedLocked(t *target) bool {
 			return false
 		}
 		seen[id] = true
+		if at := g.targets[id]; at != nil && at.typ == "iframe" && g.iframeAncestryUnknownLocked(at) {
+			return false
+		}
 		if g.creatorClassifiedLocked(id) {
 			return true
 		}
@@ -729,10 +735,16 @@ func (g *guard) iframeAncestorPendingLocked(t *target) bool {
 		if g.targetHeldLocked(id) || g.targetUnconfirmedLocked(id) {
 			return true
 		}
+		if at := g.targets[id]; at != nil && at.typ == "iframe" && g.iframeAncestryUnknownLocked(at) {
+			return true
+		}
 		id = g.frameParentOfLocked(id)
 	}
 	if parent := g.iframeParentTargetLocked(t); parent != nil {
-		return g.targetHeldLocked(parent.id) || g.targetUnconfirmedLocked(parent.id)
+		if g.targetHeldLocked(parent.id) || g.targetUnconfirmedLocked(parent.id) {
+			return true
+		}
+		return parent.typ == "iframe" && g.iframeAncestryUnknownLocked(parent)
 	}
 	return false
 }
@@ -863,7 +875,7 @@ func (g *guard) iframeFollowRefusedLocked(sessionID string) bool {
 	if chain == nil {
 		chain = g.iframeParentTargetLocked(t)
 	}
-	if chain != nil && (chain.protected || g.targetBlockedLocked(chain.id)) {
+	if chain != nil && (chain.protected || g.targetBlockedLocked(chain.id) || chain.typ == "iframe" && g.iframeAncestryUnknownLocked(chain)) {
 		return true
 	}
 	if g.extensionFrameTargetLocked(t) || s.parent == "" || g.browserSessions[s.parent] {

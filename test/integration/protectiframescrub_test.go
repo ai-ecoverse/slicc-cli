@@ -2,11 +2,12 @@ package integration
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
 func TestCDPHidesAProtectedIframeFromListings(t *testing.T) {
-	env, _ := setupFakeProtect(t, func(seven, _ string) fakeScript {
+	env, fake := setupFakeProtect(t, func(seven, _ string) fakeScript {
 		full := seven + "/doc?n=frame-secret&q=1"
 		info := `{"targetId":"IFRAME","type":"iframe","url":` + jsonQuote(full) + `,"title":"secret frame title","attached":false}`
 		return func(method string, params json.RawMessage) (string, []string) {
@@ -32,6 +33,7 @@ func TestCDPHidesAProtectedIframeFromListings(t *testing.T) {
 			return "{}", nil
 		}
 	})
+	rawWs := "ws" + strings.TrimPrefix(fake.srv.URL, "http") + "/devtools/browser/fake"
 	var r struct {
 		Listed any        `json:"listed"`
 		Info   cdpOutcome `json:"info"`
@@ -42,7 +44,7 @@ func TestCDPHidesAProtectedIframeFromListings(t *testing.T) {
 			Title  string `json:"title"`
 		} `json:"events"`
 	}
-	env.evalJSON(t, "linkTest.protect.iframeListingScrub('chrome-2')", &r)
+	env.evalJSON(t, "linkTest.protect.iframeListingScrub("+jsArgs("chrome-2", rawWs)+")", &r)
 	if r.Listed != nil {
 		t.Fatalf("getTargets listed a protected iframe: %+v", r.Listed)
 	}

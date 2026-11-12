@@ -124,13 +124,15 @@ func (g *guard) confirmIframeParentLocked(t *target, parentID string) ([][]byte,
 	if t.parentFrame == "" {
 		t.parentFrame = parentID
 	}
-	blocked := g.iframeFromProtectedAncestorLocked(t) || g.iframeAncestorPendingLocked(t) || g.targetHeldLocked(parentID) || g.targetUnconfirmedLocked(parentID)
+	blocked := g.iframeFromProtectedAncestorLocked(t) || g.iframeAncestorPendingLocked(t) || g.iframeAncestryUnknownLocked(t) || g.targetHeldLocked(parentID) || g.targetUnconfirmedLocked(parentID)
 	if !blocked {
 		parent := g.targets[parentID]
 		switch {
 		case parent == nil:
 			blocked = true
 		case parent.protected || g.decide(parent, parent.protected):
+			blocked = true
+		case parent.typ == "iframe" && g.iframeAncestryUnknownLocked(parent):
 			blocked = true
 		case g.creatorProtectedLocked(parentID):
 			blocked = true

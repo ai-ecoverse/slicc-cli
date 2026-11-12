@@ -2180,10 +2180,21 @@ export function protectTest(getLink, describe) {
           text: c.events.filter((e) => ['Page.frameNavigated', 'Console.messageAdded'].includes(e.method)).map((e) => e.method === 'Page.frameNavigated' ? e.params.frame.name : e.params.message.text),
         };
       }),
-    iframeListingScrub: (browser) =>
+    iframeListingScrub: (browser, rawWs) =>
       run(browser, async (c) => {
+        const { SocketClient } = await import('./observer.js');
+        const unguarded = await SocketClient.open(rawWs);
+        try {
+          await unguarded.send('Target.setDiscoverTargets', { discover: true });
+          await sleep(500);
+          const loaded = (await unguarded.send('Target.getTargets')).targetInfos.find((t) => t.targetId === 'IFRAME');
+          if (!loaded) throw new Error('unguarded observer never saw the iframe load');
+        } finally {
+          unguarded.close();
+        }
+        const mark = c.events.length;
         await c.send('Target.setDiscoverTargets', { discover: true });
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await sleep(500);
         const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === 'IFRAME') || null;
         const info = await outcome(c.send('Target.getTargetInfo', { targetId: 'IFRAME' }));
         const attach = await outcome(c.send('Target.attachToTarget', { targetId: 'IFRAME', flatten: true }));
@@ -2192,6 +2203,7 @@ export function protectTest(getLink, describe) {
           info,
           attach,
           events: c.events
+            .slice(mark)
             .filter((e) => ['Target.targetCreated', 'Target.targetInfoChanged'].includes(e.method) && e.params.targetInfo?.targetId === 'IFRAME')
             .map((e) => ({ method: e.method, url: e.params.targetInfo.url, title: e.params.targetInfo.title })),
         };

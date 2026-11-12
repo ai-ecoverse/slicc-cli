@@ -274,6 +274,9 @@ func chromeErrorConfirmGuard(t *testing.T, parent string) (*guard, *target, *nav
 		g.targets["MID"] = &target{id: "MID", typ: "iframe", url: "https://ordinary.test/mid"}
 		g.held["S-mid"] = &heldSession{id: "S-mid", target: "MID", typ: "iframe"}
 	}
+	if parent == "M" {
+		g.observeLocked(targetInfo{TargetID: "M", Type: "iframe", URL: "https://embed.test/m", ParentFrameID: "INPROC"})
+	}
 	confirm := &navTarget{ready: make(chan struct{}), start: time.Now()}
 	nt := &navTarget{target: "CHILD", session: "GUARD", iframe: true, confirm: confirm}
 	g.navTargets["CHILD"] = nt
@@ -299,7 +302,7 @@ func TestIframeHoldChromeErrorFrameTreeProtectedParent(t *testing.T) {
 }
 
 func TestIframeHoldChromeErrorFrameTreeHeldOrUnknownParent(t *testing.T) {
-	for _, parent := range []string{"HELD", "UNKNOWN"} {
+	for _, parent := range []string{"HELD", "UNKNOWN", "M"} {
 		t.Run(parent, func(t *testing.T) {
 			id := parent
 			if parent == "HELD" {
@@ -314,6 +317,36 @@ func TestIframeHoldChromeErrorFrameTreeHeldOrUnknownParent(t *testing.T) {
 				t.Fatal("client session remained admitted")
 			}
 		})
+	}
+}
+
+func TestIframeHoldUnknownAncestryPropagatesToChild(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "SEVEN", Type: "page", URL: "https://seven.sliccy.ai/doc"},
+		{TargetID: "M", Type: "iframe", URL: "https://embed.test/m", ParentFrameID: "INPROC"},
+		{TargetID: "N", Type: "iframe", URL: "https://inner.test/n", ParentFrameID: "M"},
+	})
+	if !g.listingHiddenLocked(targetInfo{TargetID: "M", Type: "iframe", URL: "https://embed.test/m", ParentFrameID: "INPROC"}) {
+		t.Fatal("M with unknown ancestry was listable")
+	}
+	info := targetInfo{TargetID: "N", Type: "iframe", URL: "https://inner.test/n", ParentFrameID: "M"}
+	if !g.listingHiddenLocked(info) || g.targetReasonLocked("N") == "" {
+		t.Fatalf("N under unknown-ancestry M was shown: reason=%q", g.targetReasonLocked("N"))
+	}
+	g.sessions["S-N"] = &session{id: "S-N", target: "N", typ: "iframe"}
+	g.navTargets["N"] = &navTarget{target: "N", iframe: true, done: true}
+	if !g.sessionRefusedLocked("S-N") {
+		t.Fatal("N session remained admitted under unknown-ancestry M")
+	}
+	e := reviewCommand(g, `{"id":2,"sessionId":"S-N","method":"Runtime.evaluate","params":{"expression":"1"}}`)
+	if len(e.forward) > 0 {
+		t.Errorf("evaluate forwarded for N under unknown-ancestry M: %s", e.forward)
+	}
+	raw, _ := json.Marshal(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "S-root-N", "waitingForDebugger": false, "targetInfo": map[string]any{"targetId": "N", "type": "iframe", "url": "https://inner.test/n", "parentFrameId": "M"}}})
+	v := g.fromBrowser(raw)
+	if len(v.forward) > 0 || len(v.page) > 0 {
+		t.Errorf("root attachedToTarget for N was delivered: forward=%s page=%s", v.forward, v.page)
 	}
 }
 
