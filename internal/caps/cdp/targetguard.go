@@ -235,24 +235,34 @@ func (g *guard) keptCloseLocked(id string) bool {
 		return false
 	}
 	nt := g.navTargets[id]
-	navigating := nt != nil && (nt.unsure || len(nt.loading) > 0)
-	if navigating && (nt.navigationURL == "" || g.o.Kept(nt.navigationURL)) {
-		return true
-	}
 	documentURL := t.url
 	if nt != nil && nt.documentURL != "" {
 		documentURL = nt.documentURL
 	}
-	if chromeErrorDocument(documentURL) {
-		return g.o.Kept(documentURL) || g.keptInheritedLocked(t, documentURL)
+	if g.recordedProtectedErrorPageLocked(nt, documentURL) {
+		return false
 	}
-	if ev := g.evidenceLocked(t); ev.UnreachableURL != "" && chromeErrorDocument(ev.DocumentURL) {
-		return g.o.Kept(ev.DocumentURL) || g.keptInheritedLocked(t, ev.DocumentURL)
+	navigating := nt != nil && (nt.unsure || len(nt.loading) > 0)
+	if navigating {
+		if nt.navigationURL != "" {
+			if g.o.Kept(nt.navigationURL) {
+				return true
+			}
+		} else if g.o.Kept(t.url) || g.o.Kept(documentURL) {
+			return true
+		}
 	}
 	if g.o.Kept(t.url) || g.o.Kept(documentURL) {
 		return true
 	}
 	return g.keptInheritedLocked(t, documentURL)
+}
+
+func (g *guard) recordedProtectedErrorPageLocked(nt *navTarget, documentURL string) bool {
+	if chromeErrorDocument(documentURL) {
+		return true
+	}
+	return nt != nil && nt.errorURL != "" && g.o.Loaded(nt.errorURL)
 }
 
 func chromeErrorDocument(raw string) bool {
@@ -298,6 +308,9 @@ func (g *guard) noteKeptLatchLocked(nt *navTarget) {
 	}
 	doc := nt.documentURL
 	origin := nt.securityOrigin
+	if chromeErrorDocument(doc) {
+		return
+	}
 	if g.o.Kept(doc) || g.o.Kept(origin) || origin != "" && g.o.KeptInherited(doc, origin) {
 		if origin != "" {
 			nt.keptOrigin = origin
@@ -305,7 +318,7 @@ func (g *guard) noteKeptLatchLocked(nt *navTarget) {
 		g.keptURLLatch[nt.target] = true
 		return
 	}
-	if doc == "" || chromeErrorDocument(doc) || protect.Inheriting(doc) || opaqueOrNonHTTPDocument(doc) {
+	if doc == "" || protect.Inheriting(doc) || opaqueOrNonHTTPDocument(doc) {
 		return
 	}
 	nt.keptOrigin = ""

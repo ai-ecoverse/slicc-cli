@@ -248,13 +248,29 @@ func TestCloseProtectedCommittedKeptWhileNavigatingAway(t *testing.T) {
 
 func TestCloseProtectedUnknownInFlightRefuses(t *testing.T) {
 	g := closeProtectedGuard(t)
-	g.targets["P"] = &target{id: "P", typ: "page", url: "https://ordinary.test/protected", protected: true}
-	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true, documentURL: "https://ordinary.test/protected", unsure: true, navigationURL: ""}
+	g.targets["P"] = &target{id: "P", typ: "page", url: "https://seven.sliccy.ai/os/", protected: true}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true, documentURL: "https://seven.sliccy.ai/os/", unsure: true, navigationURL: ""}
 	close(g.navTargets["P"].ready)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closeTargetReasonLocked("P") == "" {
-		t.Fatal("unknown in-flight navigation was closable")
+		t.Fatal("unknown in-flight navigation on a kept document was closable")
+	}
+}
+
+func TestCloseProtectedErrorPageClosableDespiteLoadingAndOrigin(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["ERR"] = &target{id: "ERR", typ: "page", url: "https://vault.sliccy.ai/missing", protected: true}
+	g.navTargets["ERR"] = &navTarget{
+		target: "ERR", ready: make(chan struct{}), done: true,
+		documentURL: "chrome-error://chromewebdata/", errorURL: "https://vault.sliccy.ai/missing",
+		securityOrigin: "https://seven.sliccy.ai", unsure: true, loading: map[string]int{"L": 1},
+	}
+	close(g.navTargets["ERR"].ready)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closeTargetReasonLocked("ERR") != "" {
+		t.Fatal("recorded protected error page was not closable")
 	}
 }
 

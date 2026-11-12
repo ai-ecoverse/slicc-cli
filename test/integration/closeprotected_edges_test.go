@@ -29,7 +29,7 @@ func TestCDPCloseProtectedAvailabilityEdges(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestCloseProtected(OverlappingAttachKeepsReservation|GetTargetsPreservesFirstSight|LiveTouchSurvivesFlood|TrimBeforeStoreKeepsTouchSeq|KeepsLiveSevenUIAndVault|KeepsViewSourceBlobUserinfoAndBlank|CallbackAndOtherProtectedStillClosable|CommittedKeptWhileNavigatingAway|UnknownInFlightRefuses|BlankKeepsLatchedOriginAfterOpenerGone|VaultPathsKept)$", "./internal/caps/cdp")
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestCloseProtected(OverlappingAttachKeepsReservation|GetTargetsPreservesFirstSight|LiveTouchSurvivesFlood|TrimBeforeStoreKeepsTouchSeq|KeepsLiveSevenUIAndVault|KeepsViewSourceBlobUserinfoAndBlank|CallbackAndOtherProtectedStillClosable|CommittedKeptWhileNavigatingAway|UnknownInFlightRefuses|ErrorPageClosableDespiteLoadingAndOrigin|BlankKeepsLatchedOriginAfterOpenerGone|VaultPathsKept)$", "./internal/caps/cdp")
 	command.Dir = root
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("closeProtected availability edges: %v\n%s", err, output)
