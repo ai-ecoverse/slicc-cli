@@ -248,13 +248,13 @@ func TestCloseProtectedCommittedKeptWhileNavigatingAway(t *testing.T) {
 
 func TestCloseProtectedUnknownInFlightRefuses(t *testing.T) {
 	g := closeProtectedGuard(t)
-	g.targets["P"] = &target{id: "P", typ: "page", url: "https://seven.sliccy.ai/os/", protected: true}
-	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true, documentURL: "https://seven.sliccy.ai/os/", unsure: true, navigationURL: ""}
+	g.targets["P"] = &target{id: "P", typ: "page", url: "https://ordinary.test/page", protected: true}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true, documentURL: "https://ordinary.test/page", unsure: true, navigationURL: ""}
 	close(g.navTargets["P"].ready)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closeTargetReasonLocked("P") == "" {
-		t.Fatal("unknown in-flight navigation on a kept document was closable")
+		t.Fatal("ordinary tab with unknown pending navigation was closable")
 	}
 }
 

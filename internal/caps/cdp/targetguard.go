@@ -243,14 +243,8 @@ func (g *guard) keptCloseLocked(id string) bool {
 		return false
 	}
 	navigating := nt != nil && (nt.unsure || len(nt.loading) > 0)
-	if navigating {
-		if nt.navigationURL != "" {
-			if g.o.Kept(nt.navigationURL) {
-				return true
-			}
-		} else if g.o.Kept(t.url) || g.o.Kept(documentURL) {
-			return true
-		}
+	if navigating && (nt.navigationURL == "" || g.o.Kept(nt.navigationURL)) {
+		return true
 	}
 	if g.o.Kept(t.url) || g.o.Kept(documentURL) {
 		return true
