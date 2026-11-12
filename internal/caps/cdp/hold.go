@@ -69,7 +69,12 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	var v browserVerdict
 	delete(g.held, h.id)
-	if g.targetProtectedLocked(h.target) {
+	if t := g.targets[h.target]; g.extensionFrameTargetLocked(t) {
+		if g.iframeHiddenForParentLocked(t) {
+			v.send = append(v.send, g.hideLocked(h)...)
+			return v
+		}
+	} else if g.targetProtectedLocked(h.target) {
 		v.send = append(v.send, g.hideLocked(h)...)
 		return v
 	}

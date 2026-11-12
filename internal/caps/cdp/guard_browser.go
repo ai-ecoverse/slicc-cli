@@ -406,8 +406,19 @@ func (g *guard) protectedWorkerLocked(info targetInfo) bool {
 	return workerTypes[info.Type] && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL) || g.workerConcealedLocked(info.TargetID))
 }
 
+func (g *guard) iframeHiddenForParentLocked(t *target) bool {
+	return t != nil && g.iframeFromProtectedAncestorLocked(t)
+}
+
 func (g *guard) protectedIframeLocked(info targetInfo) bool {
-	return info.Type == "iframe" && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL) || g.iframeConcealedLocked(info.TargetID))
+	if info.Type != "iframe" {
+		return false
+	}
+	t := g.targets[info.TargetID]
+	if g.extensionFrameTargetLocked(t) || g.o.ExtensionFrame(info.URL) {
+		return g.iframeHiddenForParentLocked(t)
+	}
+	return g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL) || g.iframeConcealedLocked(info.TargetID)
 }
 
 func (g *guard) listingHiddenLocked(info targetInfo) bool {
@@ -421,7 +432,13 @@ func (g *guard) protectedWorkerIDLocked(id string) bool {
 
 func (g *guard) protectedIframeIDLocked(id string) bool {
 	t := g.targets[id]
-	return t != nil && t.typ == "iframe" && t.protected
+	if t == nil || t.typ != "iframe" {
+		return false
+	}
+	if g.extensionFrameTargetLocked(t) {
+		return g.iframeHiddenForParentLocked(t)
+	}
+	return t.protected
 }
 
 func listed(info targetInfo) bool {
@@ -460,6 +477,22 @@ func (g *guard) attachedIframeLocked(m *message) bool {
 	return p.TargetInfo.Type == "iframe"
 }
 
+func (g *guard) attachedShouldHideLocked(info targetInfo, parentSession string) bool {
+	if info.URL == "" && g.blockedChildren[info.TargetID] != "" {
+		return true
+	}
+	if workerTypes[info.Type] && g.sessionRefusedLocked(parentSession) {
+		return true
+	}
+	if info.Type == "iframe" {
+		t := g.targets[info.TargetID]
+		if g.extensionFrameTargetLocked(t) || g.o.ExtensionFrame(info.URL) {
+			return g.iframeHiddenForParentLocked(t)
+		}
+	}
+	return g.targetProtectedLocked(info.TargetID)
+}
+
 func (g *guard) attachedHoldParams(m *message, pSession string, waiting bool, info targetInfo) map[string]any {
 	params := decodeParams(m.Params)
 	if params != nil {
@@ -474,7 +507,7 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 			t.protected = true
 		}
 	}
-	if g.targetProtectedLocked(info.TargetID) || info.URL == "" && g.blockedChildren[info.TargetID] != "" || workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
+	if g.attachedShouldHideLocked(info, m.SessionID) {
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)}, true
 	}
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {

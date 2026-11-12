@@ -176,7 +176,7 @@ func (g *guard) targetReasonLocked(id string) string {
 	if g.targetProtectedLocked(id) || g.workerConcealedLocked(id) || g.iframeConcealedLocked(id) {
 		return refusedTarget
 	}
-	if t := g.targets[id]; t != nil && t.typ == "iframe" && g.iframeAncestryUnknownLocked(t) {
+	if t := g.targets[id]; t != nil && t.typ == "iframe" && !g.extensionFrameTargetLocked(t) && g.iframeAncestryUnknownLocked(t) {
 		return refusedTarget
 	}
 	if g.targetUnconfirmedLocked(id) {
