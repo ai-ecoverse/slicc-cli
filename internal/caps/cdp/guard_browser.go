@@ -182,8 +182,8 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if !ok {
 		return browserVerdict{forward: data}
 	}
-	acceptedAttach = true
 	send, hide := g.applyResultKindLocked(kind, attached, m.SessionID, res)
+	acceptedAttach = kind != kindAttach || !hide
 	if hide {
 		return browserVerdict{forward: missingTarget(*m.ID, m.SessionID), send: send}
 	}
@@ -206,6 +206,7 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 			send = append(send, g.infoLocked(item)...)
 			if listed(info) && !g.protectedWorkerLocked(info) {
 				kept = append(kept, item)
+				g.noteWorkerShownLocked(info)
 			}
 		}
 		res["targetInfos"] = kept
@@ -213,7 +214,11 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 	case kindTargetInfo:
 		info, _ := toInfo(res["targetInfo"])
 		send := g.infoLocked(res["targetInfo"])
-		return send, g.protectedWorkerLocked(info)
+		hide := g.protectedWorkerLocked(info)
+		if !hide {
+			g.noteWorkerShownLocked(info)
+		}
+		return send, hide
 	case kindCookies:
 		res["cookies"] = g.filterCookies(res["cookies"])
 	case kindStreams:
@@ -230,6 +235,9 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		id, _ := res["targetId"].(string)
 		return g.touchLocked(id, "page"), false
 	case kindAttach:
+		if g.workerUnshownLocked(attached) || g.workerConcealedLocked(attached) || g.protectedWorkerIDLocked(attached) {
+			return nil, true
+		}
 		g.markTouchedLocked(attached)
 		if t, ok := g.targets[attached]; ok {
 			g.attachAnsweredLocked(session, res, t)
@@ -372,7 +380,11 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 		if g.protectedWorkerLocked(info) {
 			return false, false, send
 		}
-		return listed(info), obj != nil && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL)), send
+		keep := listed(info)
+		if keep {
+			g.noteWorkerShownLocked(info)
+		}
+		return keep, obj != nil && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL)), send
 	})
 }
 
@@ -394,7 +406,7 @@ func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
 		TargetID string `json:"targetId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && (g.protectedWorkerIDLocked(p.TargetID) || g.workerConcealedLocked(p.TargetID))) {
+	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && (g.protectedWorkerIDLocked(p.TargetID) || g.workerConcealedLocked(p.TargetID) || g.workerUnshownLocked(p.TargetID))) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}
@@ -442,13 +454,14 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) {
 		params := decodeParams(m.Params)
 		if params == nil {
-			params = map[string]any{"sessionId": p.SessionID, "waitingForDebugger": p.WaitingForDebugger, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID}}
+			params = map[string]any{"sessionId": p.SessionID, "waitingForDebugger": p.WaitingForDebugger, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID, "parentFrameId": info.ParentFrameID, "parentId": info.ParentID}}
 		}
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
 	}
 	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, p.WaitingForDebugger)...), hold: []string{p.SessionID}}
 	}
+	g.noteWorkerShownLocked(info)
 	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
 	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
@@ -536,12 +549,13 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 		} `json:"frame"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	var decided [][]byte
 	if p.Frame.ID != "" {
 		raw := p.Frame.URL
 		if protect.Inheriting(raw) {
 			raw = p.Frame.SecurityOrigin
 		}
-		g.noteChildFrameLocked(p.Frame.ID, raw)
+		decided = g.noteChildFrameLocked(p.Frame.ID, raw)
 	}
 	var cut [][]byte
 	if page := g.worldTargetLocked(m.SessionID); page != "" && p.Frame.ID != "" && p.Frame.ParentID != "" {
@@ -558,12 +572,12 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	}
 	t := g.sessionTargetLocked(m.SessionID)
 	if t == nil || (p.Frame.ParentID != "" && t.typ != "iframe") || p.Frame.ID != t.id {
-		return browserVerdict{forward: data, send: cut}
+		return browserVerdict{forward: data, send: append(decided, cut...)}
 	}
 	if g.o.Loaded(p.Frame.SecurityOrigin) {
-		return browserVerdict{send: g.markLocked(t)}
+		return browserVerdict{send: append(decided, g.markLocked(t)...)}
 	}
-	send := cut
+	send := append(decided, cut...)
 	if nt := g.navTargets[t.id]; nt != nil {
 		if (nt.confirm != nil && nt.confirm.done && nt.confirm.failed) || p.Type == "BackForwardCacheRestore" || p.Frame.UnreachableURL != "" || strings.HasPrefix(p.Frame.URL, "chrome-error:") || protect.Inheriting(p.Frame.URL) || protect.Unparseable(p.Frame.URL) {
 			g.beginConfirmLocked(nt)
@@ -578,17 +592,17 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 		Context execContext `json:"context"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)
+	decided := g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)
 	t := g.sessionTargetLocked(m.SessionID)
 	switch {
 	case t == nil:
-		return browserVerdict{forward: data}
+		return browserVerdict{forward: data, send: decided}
 	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.Loaded(p.Context.Origin):
-		return browserVerdict{send: g.markLocked(t)}
+		return browserVerdict{send: append(decided, g.markLocked(t)...)}
 	case g.worldContextLocked(t.id, m.SessionID, p.Context):
-		return browserVerdict{send: g.cutCastsLocked(t.id)}
+		return browserVerdict{send: append(decided, g.cutCastsLocked(t.id)...)}
 	}
-	return browserVerdict{forward: data}
+	return browserVerdict{forward: data, send: decided}
 }
 
 func (g *guard) eventProtected(v any, depth int) bool {

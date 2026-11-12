@@ -78,7 +78,7 @@
     "TestCDPPreAttachedInheritedFramesRemainProtected": 19.7,
     "TestCDPPreAttachedProtectedOOPIFParent": 20.3,
     "TestCDPProtectVectorsIgnoreChromeUITargets": 23.6,
-    "TestCDPProtectVectorsLagging": 300,
+    "TestCDPProtectVectorsLagging": 364,
     "TestCDPProtectVectorsPrompt": 263,
     "TestCDPProtectedErrorPageVaultVectorsLagging": 13.9,
     "TestCDPProtectedErrorTargetUsesFreshBrowserState": 24,

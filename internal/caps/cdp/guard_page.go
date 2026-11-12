@@ -153,6 +153,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 		g.noteWireTouchLocked(t)
 	}
 	v := pageVerdict{forward: c.bytes(), cmd: c}
+	v.send = append(v.send, g.releaseOnAutoAttachStopLocked(c)...)
 	if c.method == "DOM.getFrameOwner" {
 		if frame := c.str("frameId"); frame != "" {
 			if t := g.sessionTargetLocked(c.session); t != nil && g.extensionFrameOnPageLocked(frame, t.id) {

@@ -9,8 +9,8 @@ import (
 
 func unresolvedWorkerScript(seven, allowed string) fakeScript {
 	page := map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/doc"}
-	early := map[string]any{"targetId": "W-early", "type": "worker", "url": "", "openerId": "P-ordinary", "openerFrameId": "FRAME-seven"}
-	plain := map[string]any{"targetId": "W-plain", "type": "worker", "url": "", "openerId": "P-ordinary", "openerFrameId": "FRAME-plain"}
+	early := map[string]any{"targetId": "W-early", "type": "worker", "url": "", "parentId": "FRAME-seven"}
+	plain := map[string]any{"targetId": "W-plain", "type": "worker", "url": "", "parentFrameId": "FRAME-plain"}
 	ordinary := map[string]any{"targetId": "W-ordinary", "type": "worker", "url": allowed + "/worker.js", "openerId": "P-ordinary"}
 	bodies := map[string]map[string]any{"P-ordinary": page, "W-early": early, "W-plain": plain, "W-ordinary": ordinary}
 	attach := func(session string, info map[string]any) string {
@@ -231,7 +231,7 @@ func TestCDPHoldsAWorkerUntilItsCreatorFrameIsKnown(t *testing.T) {
 }
 
 func TestCDPHoldTimeoutHidesAnUnresolvedWorker(t *testing.T) {
-	env, _ := setupFakeProtectEnv(t, []string{"SLICC_CDP_HOLD_TIMEOUT=500ms"}, func(seven, allowed string) fakeScript {
+	env, fake := setupFakeProtectEnv(t, []string{"SLICC_CDP_HOLD_TIMEOUT=500ms"}, func(seven, allowed string) fakeScript {
 		return unresolvedWorkerScript(seven, allowed)
 	})
 	var r struct {
@@ -251,4 +251,286 @@ func TestCDPHoldTimeoutHidesAnUnresolvedWorker(t *testing.T) {
 		t.Fatalf("hold timeout took %d ms, want about the shortened 500ms hold", r.MS)
 	}
 	env.a.waitStderr(t, "cdp: an auto-attached target never got a URL", 2*time.Second)
+	resumed, detached := map[string]bool{}, map[string]bool{}
+	for _, line := range fake.received() {
+		for _, session := range []string{"S-early", "S-plain", "S-ordinary"} {
+			if !strings.Contains(line, session) {
+				continue
+			}
+			if strings.Contains(line, "Runtime.runIfWaitingForDebugger") {
+				resumed[session] = true
+			}
+			if strings.Contains(line, "Target.detachFromTarget") {
+				detached[session] = true
+			}
+		}
+	}
+	if !resumed["S-early"] || !detached["S-early"] || !resumed["S-plain"] || !detached["S-plain"] {
+		t.Fatalf("an unresolved worker was not resumed and detached at the hold timeout: resumed=%v detached=%v", resumed, detached)
+	}
+	if resumed["S-ordinary"] || detached["S-ordinary"] {
+		t.Fatalf("the ordinary worker was resumed or detached: resumed=%v detached=%v", resumed, detached)
+	}
+}
+
+func unshownWorkerScript(seven, allowed string) fakeScript {
+	page := map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/doc"}
+	late := map[string]any{"targetId": "W-late", "type": "worker", "url": "", "parentFrameId": "FRAME-seven"}
+	plain := map[string]any{"targetId": "W-plain", "type": "worker", "url": "", "parentId": "FRAME-plain"}
+	created := func(info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": info}})
+		return string(raw)
+	}
+	attach := func(session string, info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{"sessionId": session, "targetInfo": info, "waitingForDebugger": false},
+		})
+		return string(raw)
+	}
+	on := func(method string, params any) string {
+		raw, _ := json.Marshal(map[string]any{"method": method, "params": params})
+		return string(raw)
+	}
+	frame := func(id, raw string) string {
+		rawEvent, _ := json.Marshal(map[string]any{
+			"sessionId": "S-page",
+			"method":    "Page.frameNavigated",
+			"params":    map[string]any{"frame": map[string]any{"id": id, "parentId": "P-ordinary", "url": raw, "securityOrigin": raw}},
+		})
+		return string(rawEvent)
+	}
+	tick := func(name string) string {
+		return on("Target.targetInfoChanged", map[string]any{"targetInfo": map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/doc", "title": name}})
+	}
+	destroyed := func(id string) string {
+		return on("Target.targetDestroyed", map[string]any{"targetId": id})
+	}
+	armed := false
+	return func(method string, params json.RawMessage) (string, []string) {
+		switch method {
+		case "Browser.getHistogram":
+			var p struct {
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(params, &p)
+			switch p.Name {
+			case "arm-unshown-worker":
+				if armed {
+					return "{}", nil
+				}
+				armed = true
+				return "{}", []string{created(late), created(plain), created(page), attach("S-page", page)}
+			case "reveal-unshown-frame":
+				return "{}", []string{
+					frame("FRAME-seven", seven+"/doc"),
+					frame("FRAME-plain", allowed+"/frame"),
+					on("Target.targetInfoChanged", map[string]any{"targetInfo": map[string]any{"targetId": "W-late", "type": "worker", "url": allowed + "/worker.js"}}),
+					tick("revealed"),
+				}
+			case "destroy-unshown":
+				return "{}", []string{destroyed("W-late"), destroyed("W-plain"), tick("destroyed")}
+			case "destroy-shown":
+				return "{}", []string{destroyed("W-late"), destroyed("W-plain"), tick("after-list")}
+			}
+		case "Target.getTargets":
+			if !armed {
+				return `{"targetInfos":[]}`, nil
+			}
+			raw, _ := json.Marshal(map[string]any{"targetInfos": []any{page, late, plain}})
+			return string(raw), nil
+		case "Target.attachToTarget":
+			return `{"sessionId":"S-explicit"}`, nil
+		}
+		return "{}", nil
+	}
+}
+
+func TestCDPReDecidesAWorkerWhenItsCreatorFrameArrives(t *testing.T) {
+	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return unshownWorkerScript(seven, allowed)
+	})
+	var result struct {
+		Before struct {
+			Events []struct {
+				TargetID string `json:"targetId"`
+			} `json:"events"`
+			List []struct {
+				TargetID string `json:"targetId"`
+			} `json:"list"`
+			LateAttach  cdpOutcome `json:"lateAttach"`
+			PlainAttach cdpOutcome `json:"plainAttach"`
+		} `json:"before"`
+		Reveal []struct {
+			TargetID string `json:"targetId"`
+			Method   string `json:"method"`
+		} `json:"reveal"`
+		Mid struct {
+			LateAttach  cdpOutcome `json:"lateAttach"`
+			PlainAttach cdpOutcome `json:"plainAttach"`
+		} `json:"mid"`
+		Destroyed []struct {
+			TargetID string `json:"targetId"`
+			Method   string `json:"method"`
+		} `json:"destroyed"`
+		After struct {
+			List []struct {
+				TargetID string `json:"targetId"`
+			} `json:"list"`
+			LateAttach  cdpOutcome `json:"lateAttach"`
+			PlainAttach cdpOutcome `json:"plainAttach"`
+		} `json:"after"`
+		ShownDestroyed []struct {
+			TargetID string `json:"targetId"`
+			Method   string `json:"method"`
+		} `json:"shownDestroyed"`
+	}
+	env.evalJSONWithin(t, "linkTest.protect.unshownWorkerArrival('chrome-2')", &result, 20*time.Second)
+	for _, event := range result.Before.Events {
+		if event.TargetID == "W-late" || event.TargetID == "W-plain" {
+			t.Errorf("a worker reached the client before its frame: %+v", event)
+		}
+	}
+	for _, item := range result.Before.List {
+		if item.TargetID == "W-late" || item.TargetID == "W-plain" {
+			t.Errorf("getTargets listed %s before its frame", item.TargetID)
+		}
+	}
+	for _, event := range result.Reveal {
+		if event.TargetID == "W-late" {
+			t.Errorf("the protected worker was shown once its frame was known: %+v", event)
+		}
+	}
+	for _, got := range []cdpOutcome{result.Before.LateAttach, result.Before.PlainAttach, result.Mid.LateAttach, result.Mid.PlainAttach, result.After.LateAttach} {
+		if got.OK || got.Error.Message != refusedText {
+			t.Errorf("attach of a worker that was never shown or is protected: %+v", got)
+		}
+	}
+	seenDestroy := map[string]int{}
+	for _, event := range result.Destroyed {
+		if event.Method == "Target.targetDestroyed" {
+			seenDestroy[event.TargetID]++
+		}
+	}
+	if seenDestroy["W-late"] != 0 || seenDestroy["W-plain"] != 0 {
+		t.Fatalf("targetDestroyed reached the client for a worker it was never shown: %+v", result.Destroyed)
+	}
+	listed := map[string]bool{}
+	for _, item := range result.After.List {
+		listed[item.TargetID] = true
+	}
+	if listed["W-late"] || !listed["W-plain"] {
+		t.Fatalf("listing after the frames were known: %+v", result.After.List)
+	}
+	if !result.After.PlainAttach.OK {
+		t.Fatalf("attach after the ordinary worker was listed: %+v", result.After.PlainAttach)
+	}
+	shownDestroy := map[string]int{}
+	for _, event := range result.ShownDestroyed {
+		if event.Method == "Target.targetDestroyed" {
+			shownDestroy[event.TargetID]++
+		}
+	}
+	if shownDestroy["W-late"] != 0 || shownDestroy["W-plain"] == 0 {
+		t.Fatalf("targetDestroyed after listing: %+v", result.ShownDestroyed)
+	}
+}
+
+func releaseHeldScript(allowed string) fakeScript {
+	page := func(id string) map[string]any {
+		return map[string]any{"targetId": id, "type": "page", "url": allowed + "/doc"}
+	}
+	worker := func(id, frame string) map[string]any {
+		return map[string]any{"targetId": id, "type": "worker", "url": "", "parentId": frame}
+	}
+	created := func(info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": info}})
+		return string(raw)
+	}
+	attach := func(parent, session string, info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{
+			"method":    "Target.attachedToTarget",
+			"sessionId": parent,
+			"params":    map[string]any{"sessionId": session, "targetInfo": info, "waitingForDebugger": true},
+		})
+		return string(raw)
+	}
+	armed := false
+	return func(method string, params json.RawMessage) (string, []string) {
+		switch method {
+		case "Browser.getHistogram":
+			var p struct {
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(params, &p)
+			if p.Name != "arm-held-release" || armed {
+				return "{}", nil
+			}
+			armed = true
+			return "{}", []string{
+				created(page("P-a")),
+				attach("", "S-a", page("P-a")),
+				attach("S-a", "S-wa", worker("W-a", "FRAME-a")),
+				created(page("P-b")),
+				attach("", "S-b", page("P-b")),
+				attach("S-b", "S-wb", worker("W-b", "FRAME-b")),
+			}
+		case "Target.getTargets":
+			return `{"targetInfos":[]}`, nil
+		case "Target.detachFromTarget", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger":
+			return "{}", nil
+		}
+		return "{}", nil
+	}
+}
+
+func TestCDPReleasesHeldWorkersWhenThePageSessionStopsAutoAttach(t *testing.T) {
+	env, fake := setupFakeProtectPage(t, func(_, allowed string) fakeScript {
+		return releaseHeldScript(allowed)
+	})
+	var result struct {
+		Events []struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+			TargetID  string `json:"targetId"`
+		} `json:"events"`
+		MS int `json:"ms"`
+	}
+	env.evalJSONWithin(t, "linkTest.protect.releaseHeldWorkers('chrome-2')", &result, 20*time.Second)
+	if result.MS > 2000 {
+		t.Fatalf("releasing held workers took %d ms; the hold timeout must not be what unpauses them", result.MS)
+	}
+	for _, event := range result.Events {
+		if event.TargetID == "W-a" || event.TargetID == "W-b" || event.SessionID == "S-wa" || event.SessionID == "S-wb" {
+			t.Errorf("a held worker reached the client: %+v", event)
+		}
+	}
+	got := fake.received()
+	index := func(session, method string) int {
+		needle := `"` + session + `"`
+		for i, line := range got {
+			if strings.Contains(line, needle) && strings.Contains(line, method) {
+				return i
+			}
+		}
+		return -1
+	}
+	detachPage := index("S-a", "Target.detachFromTarget")
+	resumeA := index("S-wa", "Runtime.runIfWaitingForDebugger")
+	detachA := index("S-wa", "Target.detachFromTarget")
+	autoOff := -1
+	for i, line := range got {
+		if strings.Contains(line, "Target.setAutoAttach") && strings.Contains(line, "S-b") {
+			autoOff = i
+			break
+		}
+	}
+	resumeB := index("S-wb", "Runtime.runIfWaitingForDebugger")
+	detachB := index("S-wb", "Target.detachFromTarget")
+	if resumeA < 0 || detachA < 0 || detachPage < 0 || resumeA > detachPage || detachA > detachPage {
+		t.Fatalf("detaching the page session did not resume and detach its held worker first: resume=%d detach=%d page=%d", resumeA, detachA, detachPage)
+	}
+	if resumeB < 0 || detachB < 0 || autoOff < 0 || resumeB > autoOff || detachB > autoOff || resumeB < detachPage {
+		t.Fatalf("turning auto-attach off did not resume and detach the other held worker: resume=%d detach=%d auto=%d pageDetach=%d", resumeB, detachB, autoOff, detachPage)
+	}
 }

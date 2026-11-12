@@ -73,6 +73,7 @@ type target struct {
 	openerFrame      string
 	ctx              string
 	protected        bool
+	shown            bool
 	gone             bool
 	document         string
 	documentRevision uint64
@@ -301,6 +302,7 @@ type targetInfo struct {
 	URL              string `json:"url"`
 	OpenerID         string `json:"openerId"`
 	ParentFrameID    string `json:"parentFrameId"`
+	ParentID         string `json:"parentId"`
 	OpenerFrameID    string `json:"openerFrameId"`
 	BrowserContextID string `json:"browserContextId"`
 }
@@ -458,14 +460,57 @@ func (g *guard) workerFromProtectedCreatorLocked(t *target) bool {
 	return strings.HasPrefix(strings.ToLower(t.url), "data:") && !g.workerCreatorUnprotectedLocked(t)
 }
 
-func (g *guard) noteChildFrameLocked(id, raw string) {
+func parentFrameOf(info targetInfo) string {
+	if info.ParentFrameID != "" {
+		return info.ParentFrameID
+	}
+	return info.ParentID
+}
+
+func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
 	if id == "" || protect.Inheriting(raw) {
-		return
+		return nil
 	}
 	if _, ok := g.childFrames[id]; !ok && len(g.childFrames) >= 4096 {
-		return
+		return nil
 	}
 	g.childFrames[id] = raw
+	return g.redecideWorkersLocked(id)
+}
+
+func (g *guard) redecideWorkersLocked(creator string) [][]byte {
+	if creator == "" {
+		return nil
+	}
+	var send [][]byte
+	for _, t := range g.targets {
+		if t == nil || t.gone || !workerTypes[t.typ] {
+			continue
+		}
+		if t.opener != creator && t.openerFrame != creator && t.parentFrame != creator {
+			continue
+		}
+		prev := t.protected
+		t.protected = g.decide(t, prev)
+		if t.protected && !prev {
+			send = append(send, g.protectLocked(t)...)
+		}
+	}
+	return send
+}
+
+func (g *guard) workerUnshownLocked(id string) bool {
+	t := g.targets[id]
+	return t != nil && !t.gone && workerTypes[t.typ] && !t.shown
+}
+
+func (g *guard) noteWorkerShownLocked(info targetInfo) {
+	if !workerTypes[info.Type] {
+		return
+	}
+	if t := g.targets[info.TargetID]; t != nil {
+		t.shown = true
+	}
 }
 
 func (g *guard) creatorProtectedLocked(id string) bool {
@@ -571,7 +616,11 @@ func (g *guard) record(info targetInfo) *target {
 		delete(g.frameProbed, t.id)
 		delete(g.frames, t.id)
 	}
-	if info.Type == "iframe" && (t.parentFrame != info.ParentFrameID || t.url != info.URL) {
+	parent := parentFrameOf(info)
+	if parent == "" {
+		parent = t.parentFrame
+	}
+	if info.Type == "iframe" && (t.parentFrame != parent || t.url != info.URL) {
 		for id, page := range g.targets {
 			if page.typ == "page" && page.ctx == info.BrowserContextID {
 				delete(g.frameProbeAttempts, id)
@@ -579,10 +628,10 @@ func (g *guard) record(info targetInfo) *target {
 			}
 		}
 	}
-	if t.parentFrame != info.ParentFrameID || t.ctx != info.BrowserContextID {
+	if t.parentFrame != parent || t.ctx != info.BrowserContextID {
 		t.framePage, t.frameDocument, t.frameOwner = nil, "", nil
 	}
-	t.parentFrame = info.ParentFrameID
+	t.parentFrame = parent
 	t.typ, t.url, t.opener, t.openerFrame, t.ctx = info.Type, info.URL, info.OpenerID, info.OpenerFrameID, info.BrowserContextID
 	g.bindIframeDocumentLocked(t)
 	return t
@@ -605,6 +654,7 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	if t.protected && !prev {
 		send = append(send, g.protectLocked(t)...)
 	}
+	send = append(send, g.redecideWorkersLocked(t.id)...)
 	if g.extensionFrameTargetLocked(t) {
 		if page := g.iframePageLocked(t); page != nil {
 			send = append(send, g.cutCastsLocked(page.id)...)
@@ -638,8 +688,10 @@ func (g *guard) observeAll(infos []targetInfo) {
 			return
 		}
 		done[t.id] = true
-		if op, ok := g.targets[t.opener]; ok && fresh[op.id] {
-			resolve(op)
+		for _, id := range []string{t.opener, t.openerFrame, t.parentFrame} {
+			if op, ok := g.targets[id]; ok && fresh[op.id] {
+				resolve(op)
+			}
 		}
 		t.protected = g.decide(t, t.protected)
 	}
@@ -649,11 +701,12 @@ func (g *guard) observeAll(infos []targetInfo) {
 }
 
 func (g *guard) markLocked(t *target) [][]byte {
-	if t.protected {
-		return nil
+	var send [][]byte
+	if !t.protected {
+		t.protected = true
+		send = append(send, g.protectLocked(t)...)
 	}
-	t.protected = true
-	return g.protectLocked(t)
+	return append(send, g.redecideWorkersLocked(t.id)...)
 }
 
 func (g *guard) protectLocked(t *target) [][]byte {

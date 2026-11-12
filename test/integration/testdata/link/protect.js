@@ -1356,6 +1356,64 @@ export function protectTest(getLink, describe) {
           events: snapshot(c.events),
         };
       }),
+    unshownWorkerArrival: (browser) =>
+      run(browser, async (c) => {
+        const snapshot = (events) => events.map((e) => ({
+          method: e.method,
+          sessionId: e.sessionId || e.params?.sessionId || '',
+          targetId: e.params?.targetInfo?.targetId || e.params?.targetId || '',
+        }));
+        const attach = async (targetId) => outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const page = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'S-page', 5000);
+        const mark = c.events.length;
+        await c.send('Browser.getHistogram', { name: 'arm-unshown-worker' });
+        await page;
+        const before = {
+          events: snapshot(c.events.slice(mark)),
+          list: (await c.send('Target.getTargets')).targetInfos,
+          lateAttach: await attach('W-late'),
+          plainAttach: await attach('W-plain'),
+        };
+        const revealed = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.title === 'revealed', 5000);
+        const revealMark = c.events.length;
+        await c.send('Browser.getHistogram', { name: 'reveal-unshown-frame' });
+        await revealed;
+        const reveal = snapshot(c.events.slice(revealMark));
+        const mid = { lateAttach: await attach('W-late'), plainAttach: await attach('W-plain') };
+        const dropped = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.title === 'destroyed', 5000);
+        const destroyMark = c.events.length;
+        await c.send('Browser.getHistogram', { name: 'destroy-unshown' });
+        await dropped;
+        const destroyed = snapshot(c.events.slice(destroyMark));
+        const after = {
+          list: (await c.send('Target.getTargets')).targetInfos,
+          lateAttach: await attach('W-late'),
+          plainAttach: await attach('W-plain'),
+        };
+        const shown = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.title === 'after-list', 5000);
+        const shownMark = c.events.length;
+        await c.send('Browser.getHistogram', { name: 'destroy-shown' });
+        await shown;
+        return { before, reveal, mid, destroyed, after, shownDestroyed: snapshot(c.events.slice(shownMark)) };
+      }),
+    releaseHeldWorkers: (browser) =>
+      run(browser, async (c) => {
+        const ready = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'S-b', 5000);
+        const mark = c.events.length;
+        await c.send('Browser.getHistogram', { name: 'arm-held-release' });
+        await ready;
+        const start = Date.now();
+        await c.send('Target.detachFromTarget', { sessionId: 'S-a' });
+        await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true }, 'S-b');
+        return {
+          ms: Date.now() - start,
+          events: c.events.slice(mark).map((e) => ({
+            method: e.method,
+            sessionId: e.sessionId || e.params?.sessionId || '',
+            targetId: e.params?.targetInfo?.targetId || e.params?.targetId || '',
+          })),
+        };
+      }),
     unresolvedWorkerTimeout: (browser) =>
       run(browser, async (c) => {
         const start = Date.now();

@@ -177,20 +177,7 @@ func guardPageServer(t *testing.T, pkg string, fixturePort int) *httptest.Server
 		r.SetURL(upstream)
 		r.Out.Host = r.In.Host
 	}}
-	runner, err := os.ReadFile(filepath.Join(pkg, "guard-runner.mjs"))
-	if err != nil {
-		t.Fatalf("guard runner: %v", err)
-	}
-	patched, patchedN := patchGuardRunnerAbsence(runner)
-	if patchedN != 4 {
-		t.Fatalf("guard runner absence patch matched %d sites, want 4", patchedN)
-	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/vendor/slicc-browsers/guard-runner.mjs" {
-			w.Header().Set("Content-Type", "text/javascript")
-			_, _ = w.Write(patched)
-			return
-		}
 		if strings.HasPrefix(r.URL.Path, "/vendor/slicc-browsers/") {
 			if strings.HasSuffix(r.URL.Path, ".mjs") {
 				w.Header().Set("Content-Type", "text/javascript")
@@ -210,32 +197,6 @@ func guardPageServer(t *testing.T, pkg string, fixturePort int) *httptest.Server
 	}))
 	t.Cleanup(srv.Close)
 	return srv
-}
-
-func patchGuardRunnerAbsence(src []byte) ([]byte, int) {
-	n := 0
-	repl := func(old, new string) {
-		found := strings.Count(string(src), old)
-		src = []byte(strings.ReplaceAll(string(src), old, new))
-		n += found
-	}
-	repl(
-		"async absenceCheck(check) {",
-		"async absenceCheck(check, ms = observeMs) {",
-	)
-	repl(
-		"const late = await this.poll(async () => (await this.check(check)) === true, observeMs, false);",
-		"const late = await this.poll(async () => (await this.check(check)) === true, ms, false);",
-	)
-	repl(
-		"return this.absenceCheck(check);",
-		"return this.absenceCheck(check, /worker/i.test(name) ? 250 : observeMs);",
-	)
-	repl(
-		"return seen === true;\n      },\n      observeMs,\n      false,\n      snapshots.length > 0",
-		"return seen === true;\n      },\n      want === false && /worker/i.test(name) ? 250 : observeMs,\n      false,\n      snapshots.length > 0",
-	)
-	return src, n
 }
 
 type guardRow struct {

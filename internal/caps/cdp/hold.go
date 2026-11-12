@@ -71,6 +71,9 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	} else {
 		g.logf("cdp: released an auto-attached session after its target got a URL target=%s session=%s parent=%s", h.target, h.id, h.parent)
 	}
+	if t := g.targets[h.target]; t != nil && workerTypes[t.typ] {
+		t.shown = true
+	}
 	g.sessions[h.id] = &session{id: h.id, target: h.target, parent: h.parent, typ: h.typ, waiting: waiting}
 	v.send = append(v.send, g.touchLocked(h.target, h.typ)...)
 	if h.params == nil {
@@ -151,6 +154,46 @@ func (g *guard) hideLocked(h *heldSession) [][]byte {
 	}
 	msg, _ := g.newCallLocked(h.parent, "Target.detachFromTarget", map[string]any{"sessionId": h.id}, false)
 	return append(send, msg)
+}
+
+func autoAttachStopped(c *command) bool {
+	if c == nil || c.method != "Target.setAutoAttach" || c.session == "" || c.params == nil {
+		return false
+	}
+	if _, ok := c.params["filter"]; ok {
+		return false
+	}
+	on, ok1 := c.params["autoAttach"].(bool)
+	wait, ok2 := c.params["waitForDebuggerOnStart"].(bool)
+	flat, ok3 := c.params["flatten"].(bool)
+	return ok1 && ok2 && ok3 && !on && !wait && flat
+}
+
+func (g *guard) releaseOnAutoAttachStopLocked(c *command) [][]byte {
+	switch {
+	case c.method == "Target.detachFromTarget":
+		return g.releaseHeldWorkersForSessionLocked(c.str("sessionId"), "its page session detached")
+	case autoAttachStopped(c):
+		return g.releaseHeldWorkersForSessionLocked(c.session, "auto-attach was turned off")
+	default:
+		return nil
+	}
+}
+
+func (g *guard) releaseHeldWorkersForSessionLocked(session, why string) [][]byte {
+	if session == "" {
+		return nil
+	}
+	var send [][]byte
+	for sid, h := range g.held {
+		if h == nil || !workerTypes[h.typ] || h.parent != session {
+			continue
+		}
+		delete(g.held, sid)
+		g.logf("cdp: releasing a held worker because %s target=%s session=%s parent=%s waiting=%t", why, h.target, h.id, h.parent, h.waiting)
+		send = append(send, g.hideLocked(h)...)
+	}
+	return send
 }
 
 func (g *guard) expireHold(sessionID string) [][]byte {
