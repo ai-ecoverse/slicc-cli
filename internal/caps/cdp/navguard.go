@@ -63,6 +63,8 @@ type navTarget struct {
 	errorURL         string
 	documentURL      string
 	navigationURL    string
+	securityOrigin   string
+	keptOrigin       string
 	failedURLs       []string
 	commits          int
 	failCommit       int
@@ -215,6 +217,9 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	send := g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
+	if m.Method == "Page.frameNavigated" {
+		g.noteKeptLatchLocked(nt)
+	}
 	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {
 		nt.revision++
 	}
@@ -297,6 +302,7 @@ func (g *guard) navForgetLocked(targetID string) {
 	}
 	g.forgetClientTargetLocked(targetID)
 	delete(g.navTargets, targetID)
+	delete(g.keptURLLatch, targetID)
 	delete(g.tainted, targetID)
 	delete(g.clean, targetID)
 	if nt.session != "" {
@@ -364,6 +370,7 @@ func (nt *navTarget) commitLocked(m *message) {
 			ParentID       string `json:"parentId"`
 			LoaderID       string `json:"loaderId"`
 			URL            string `json:"url"`
+			SecurityOrigin string `json:"securityOrigin"`
 			UnreachableURL string `json:"unreachableUrl"`
 		} `json:"frame"`
 	}
@@ -416,6 +423,9 @@ func (nt *navTarget) commitLocked(m *message) {
 		}
 		nt.errorURL = p.Frame.UnreachableURL
 		nt.documentURL = p.Frame.URL
+		if p.Frame.SecurityOrigin != "" {
+			nt.securityOrigin = p.Frame.SecurityOrigin
+		}
 		nt.navigationURL = ""
 		nt.commits++
 	}

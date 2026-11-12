@@ -68,6 +68,7 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		check.settle(true)
 		return nil
 	}
+	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
 		check.settle(false)
 		return g.markLocked(t)
@@ -235,46 +236,80 @@ func (g *guard) keptCloseLocked(id string) bool {
 	}
 	nt := g.navTargets[id]
 	navigating := nt != nil && (nt.unsure || len(nt.loading) > 0)
-	if navigating && nt.navigationURL != "" {
-		return g.o.Kept(nt.navigationURL) || g.o.SevenOrVaultHost(nt.navigationURL)
+	if navigating && (nt.navigationURL == "" || g.o.Kept(nt.navigationURL)) {
+		return true
 	}
 	documentURL := t.url
 	if nt != nil && nt.documentURL != "" {
 		documentURL = nt.documentURL
 	}
 	if chromeErrorDocument(documentURL) {
-		return g.o.Kept(documentURL) || g.keptCreatorLocked(t, documentURL)
+		return g.o.Kept(documentURL) || g.keptInheritedLocked(t, documentURL)
 	}
 	if ev := g.evidenceLocked(t); ev.UnreachableURL != "" && chromeErrorDocument(ev.DocumentURL) {
-		return g.o.Kept(ev.DocumentURL) || g.keptCreatorLocked(t, ev.DocumentURL)
+		return g.o.Kept(ev.DocumentURL) || g.keptInheritedLocked(t, ev.DocumentURL)
 	}
 	if g.o.Kept(t.url) || g.o.Kept(documentURL) {
 		return true
 	}
-	return g.keptCreatorLocked(t, documentURL)
+	return g.keptInheritedLocked(t, documentURL)
 }
 
 func chromeErrorDocument(raw string) bool {
 	return strings.HasPrefix(raw, "chrome-error:") || raw == "chrome-error://chromewebdata/"
 }
 
-func (g *guard) keptCreatorLocked(t *target, documentURL string) bool {
+func (g *guard) keptInheritedLocked(t *target, documentURL string) bool {
 	if t == nil {
 		return false
 	}
-	for _, id := range []string{t.opener, t.openerFrame} {
-		if id == "" {
-			continue
-		}
-		c := g.targets[id]
-		if c == nil || c.gone {
-			continue
-		}
-		if g.o.KeptInherited(documentURL, c.url) || g.o.KeptInherited(t.url, c.url) {
+	nt := g.navTargets[t.id]
+	if nt == nil {
+		return g.keptURLLatch[t.id] && (protect.Inheriting(documentURL) || opaqueOrNonHTTPDocument(documentURL))
+	}
+	for _, origin := range []string{nt.securityOrigin, nt.keptOrigin} {
+		if origin != "" && (g.o.KeptInherited(documentURL, origin) || g.o.KeptInherited(t.url, origin)) {
 			return true
 		}
 	}
-	return false
+	return g.keptURLLatch[t.id] && (protect.Inheriting(documentURL) || opaqueOrNonHTTPDocument(documentURL))
+}
+
+func opaqueOrNonHTTPDocument(raw string) bool {
+	return protect.Inheriting(raw) || raw == "" || strings.HasPrefix(raw, "about:") || (!strings.HasPrefix(raw, "http:") && !strings.HasPrefix(raw, "https:") && raw != "")
+}
+
+func (g *guard) noteFrameKeptLocked(nt *navTarget, url, origin string) {
+	if nt == nil {
+		return
+	}
+	if origin != "" {
+		nt.securityOrigin = origin
+	}
+	if url != "" {
+		nt.documentURL = url
+	}
+	g.noteKeptLatchLocked(nt)
+}
+
+func (g *guard) noteKeptLatchLocked(nt *navTarget) {
+	if nt == nil {
+		return
+	}
+	doc := nt.documentURL
+	origin := nt.securityOrigin
+	if g.o.Kept(doc) || g.o.Kept(origin) || origin != "" && g.o.KeptInherited(doc, origin) {
+		if origin != "" {
+			nt.keptOrigin = origin
+		}
+		g.keptURLLatch[nt.target] = true
+		return
+	}
+	if doc == "" || chromeErrorDocument(doc) || protect.Inheriting(doc) || opaqueOrNonHTTPDocument(doc) {
+		return
+	}
+	nt.keptOrigin = ""
+	delete(g.keptURLLatch, nt.target)
 }
 
 func openedSeenBound() int {

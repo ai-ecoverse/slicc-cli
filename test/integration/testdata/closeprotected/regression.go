@@ -169,7 +169,7 @@ func TestCloseProtectedTrimBeforeStoreKeepsTouchSeq(t *testing.T) {
 func TestCloseProtectedKeepsLiveSevenUIAndVault(t *testing.T) {
 	g := closeProtectedGuard(t)
 	g.targets["OS"] = &target{id: "OS", typ: "page", url: "https://seven.sliccy.ai/os/", protected: true}
-	g.targets["VAULT"] = &target{id: "VAULT", typ: "page", url: "https://vault.sliccy.ai/", protected: true}
+	g.targets["VAULT"] = &target{id: "VAULT", typ: "page", url: "https://vault.sliccy.ai/unlock", protected: true}
 	g.targets["ERR"] = &target{id: "ERR", typ: "page", url: "https://vault.sliccy.ai/missing", protected: true}
 	g.navTargets["OS"] = &navTarget{target: "OS", ready: make(chan struct{}), done: true}
 	g.navTargets["VAULT"] = &navTarget{target: "VAULT", ready: make(chan struct{}), done: true}
@@ -202,6 +202,10 @@ func TestCloseProtectedKeepsViewSourceBlobUserinfoAndBlank(t *testing.T) {
 		g.navTargets[id] = &navTarget{target: id, ready: make(chan struct{}), done: true}
 		close(g.navTargets[id].ready)
 	}
+	g.navTargets["BLANK"].documentURL = "about:blank"
+	g.navTargets["BLANK"].securityOrigin = "https://vault.sliccy.ai"
+	g.navTargets["BLANK"].keptOrigin = "https://vault.sliccy.ai"
+	g.keptURLLatch["BLANK"] = true
 	g.navTargets["NAV"].unsure = true
 	g.navTargets["NAV"].navigationURL = "https://vault.sliccy.ai/slow"
 	g.mu.Lock()
@@ -217,21 +221,74 @@ func TestCloseProtectedCallbackAndOtherProtectedStillClosable(t *testing.T) {
 	g := closeProtectedGuard(t)
 	g.targets["CB"] = &target{id: "CB", typ: "page", url: "https://seven.sliccy.ai/os/callback.html", protected: true}
 	g.targets["FRAME"] = &target{id: "FRAME", typ: "page", url: "https://seven.sliccy.ai/frame", protected: true}
-	g.targets["DOC"] = &target{id: "DOC", typ: "page", url: "https://vault.sliccy.ai/doc?n=history", protected: true}
-	g.targets["EMPTY"] = &target{id: "EMPTY", typ: "page", url: "https://ordinary.test/", protected: true}
-	for _, id := range []string{"CB", "FRAME", "DOC", "EMPTY"} {
+	for _, id := range []string{"CB", "FRAME"} {
 		g.navTargets[id] = &navTarget{target: id, ready: make(chan struct{}), done: true}
 		close(g.navTargets[id].ready)
 	}
-	g.navTargets["EMPTY"].unsure = true
-	g.navTargets["EMPTY"].navigationURL = ""
-	g.navTargets["EMPTY"].documentURL = "https://ordinary.test/protected"
-	g.targets["EMPTY"].url = "https://ordinary.test/protected"
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	for _, id := range []string{"CB", "FRAME", "DOC", "EMPTY"} {
+	for _, id := range []string{"CB", "FRAME"} {
 		if g.closeTargetReasonLocked(id) != "" {
 			t.Fatalf("%s was not closable: %q", id, g.closeTargetReasonLocked(id))
+		}
+	}
+}
+
+func TestCloseProtectedCommittedKeptWhileNavigatingAway(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["OS"] = &target{id: "OS", typ: "page", url: "https://seven.sliccy.ai/os/", protected: true}
+	g.navTargets["OS"] = &navTarget{target: "OS", ready: make(chan struct{}), done: true, documentURL: "https://seven.sliccy.ai/os/", unsure: true, navigationURL: "https://ordinary.test/slow"}
+	close(g.navTargets["OS"].ready)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closeTargetReasonLocked("OS") == "" {
+		t.Fatal("live /os/ tab navigating to an ordinary URL was closable")
+	}
+}
+
+func TestCloseProtectedUnknownInFlightRefuses(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["P"] = &target{id: "P", typ: "page", url: "https://ordinary.test/protected", protected: true}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true, documentURL: "https://ordinary.test/protected", unsure: true, navigationURL: ""}
+	close(g.navTargets["P"].ready)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closeTargetReasonLocked("P") == "" {
+		t.Fatal("unknown in-flight navigation was closable")
+	}
+}
+
+func TestCloseProtectedBlankKeepsLatchedOriginAfterOpenerGone(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.targets["BLANK"] = &target{id: "BLANK", typ: "page", url: "about:blank", opener: "GONE", protected: true}
+	g.navTargets["BLANK"] = &navTarget{target: "BLANK", ready: make(chan struct{}), done: true, documentURL: "about:blank", securityOrigin: "https://seven.sliccy.ai", keptOrigin: "https://seven.sliccy.ai"}
+	close(g.navTargets["BLANK"].ready)
+	g.keptURLLatch["BLANK"] = true
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closeTargetReasonLocked("BLANK") == "" {
+		t.Fatal("inherited blank was closable after opener was gone")
+	}
+}
+
+func TestCloseProtectedVaultPathsKept(t *testing.T) {
+	g := closeProtectedGuard(t)
+	for i, url := range []string{
+		"https://vault.sliccy.ai/unlock",
+		"https://vault.sliccy.ai/Landing",
+		"https://vault.sliccy.ai//",
+		"http://vault.sliccy.ai:8080/doc",
+		"https://vault-x.sliccy.ai/preview",
+	} {
+		id := fmt.Sprintf("V%d", i)
+		g.targets[id] = &target{id: id, typ: "page", url: url, protected: true}
+		g.navTargets[id] = &navTarget{target: id, ready: make(chan struct{}), done: true}
+		close(g.navTargets[id].ready)
+		g.mu.Lock()
+		refused := g.closeTargetReasonLocked(id) != ""
+		g.mu.Unlock()
+		if !refused {
+			t.Fatalf("%s was closable", url)
 		}
 	}
 }

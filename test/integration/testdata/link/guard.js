@@ -472,7 +472,16 @@ export function guardStart(getLink, opts) {
     if (opts.only) set.vectors = set.vectors.filter((v) => v.id === opts.only);
     if (opts.errorPageVault) {
       set.vectors = set.vectors.filter((v) => v.trigger?.some((s) => s.errorPage));
-      for (const v of set.vectors) v.targets = ['vault'];
+      for (const v of set.vectors) {
+        v.targets = ['vault'];
+        if (v.id === 'C8.protected-document-restore') {
+          v.expected = { ...v.expected, closed: false, closeRefused: true };
+          if (v.observe?.closeRefused) {
+            const { unless: _unless, ...closeRefused } = v.observe.closeRefused;
+            v.observe = { ...v.observe, closeRefused };
+          }
+        }
+      }
     }
     for (const v of set.vectors) {
       if (opts.skips?.[v.id]) v.skip = opts.skips[v.id];

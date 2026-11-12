@@ -33,10 +33,20 @@ func checkVaultErrorPages(t *testing.T, variant string) {
 		var observed struct {
 			Guarded struct {
 				EventsRedacted bool `json:"eventsRedacted"`
+				Closed         any  `json:"closed"`
+				CloseRefused   any  `json:"closeRefused"`
 			} `json:"guarded"`
 		}
 		if err := json.Unmarshal(row.Observed, &observed); err != nil || !observed.Guarded.EventsRedacted {
 			t.Errorf("%s vault %s discovery redaction: %s", row.ID, variant, row.Observed)
+		}
+		if row.ID == "C8.protected-document-restore" {
+			if observed.Guarded.Closed != false {
+				t.Errorf("%s vault %s: vault documents are never closable; closed=%v want false (observed %s)", row.ID, variant, observed.Guarded.Closed, row.Observed)
+			}
+			if observed.Guarded.CloseRefused != true {
+				t.Errorf("%s vault %s: vault-remapped restore expects closeRefused; closeRefused=%v want true (observed %s)", row.ID, variant, observed.Guarded.CloseRefused, row.Observed)
+			}
 		}
 		t.Logf("%s vault %s: control %s guarded %s live %s", row.ID, variant, row.Control, row.Guarded, row.Live)
 	}
