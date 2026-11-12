@@ -307,7 +307,9 @@ type guardSkip struct {
 const guardC9MacReason = "not-applicable: on macOS the C9 controls hang inside Chrome (#344)"
 
 var guardWaivers = map[string]string{
-	"C3.tab-attach": "guarded settle of window.open under main empty-URL hold; runner folds that into control=fail (#260); stock Playwright/Puppeteer popup through the link guard passes",
+	"C3.tab-worker-leak":         "guarded workerAttached true until slicc-browsers 1.21.2; control and live pass",
+	"C3.tab-service-worker-leak": "guarded workerAttached true until slicc-browsers 1.21.2; control and live pass",
+	"C3.tab-attach":              "guarded settle of window.open under main empty-URL hold; runner folds that into control=fail (#260); stock Playwright/Puppeteer popup through the link guard passes",
 }
 
 func waivedGuardRow(r guardRow) (string, bool) {
@@ -321,6 +323,14 @@ func waivedGuardRow(r guardRow) (string, bool) {
 			return "", false
 		}
 		if !guardedSettleFailure(r) {
+			return "", false
+		}
+		return reason, true
+	case "C3.tab-worker-leak", "C3.tab-service-worker-leak":
+		if r.Control != "pass" || r.Guarded != "fail" || r.Live != "pass" {
+			return "", false
+		}
+		if !strings.Contains(string(r.Why), "workerAttached") {
 			return "", false
 		}
 		return reason, true
