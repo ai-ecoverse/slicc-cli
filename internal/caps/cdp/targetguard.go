@@ -319,9 +319,9 @@ func (g *guard) noteErrorPageSnapshotLocked(nt *navTarget, url, origin, unreacha
 	nt.errorNavGen = nt.navGen
 }
 
-func (g *guard) applyCloseProofLocked(id string, m message, gen int) bool {
+func (g *guard) applyCloseProofLocked(id string, m message, gen, rev int) bool {
 	nt := g.navTargets[id]
-	if nt == nil || m.Error != nil || nt.navGen != gen {
+	if nt == nil || m.Error != nil || nt.navGen != gen || nt.revision != rev {
 		return false
 	}
 	var result struct {
@@ -342,7 +342,7 @@ func (g *guard) applyCloseProofLocked(id string, m message, gen int) bool {
 	if frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
 		return false
 	}
-	if nt.navGen != gen {
+	if nt.navGen != gen || nt.revision != rev {
 		return false
 	}
 	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)

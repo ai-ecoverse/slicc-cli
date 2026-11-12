@@ -177,11 +177,10 @@ func (rl *relay) resolveCloseProof(c *command) pageVerdict {
 	targetID := c.str("targetId")
 	nt := rl.g.navTargets[targetID]
 	session := ""
-	gen := 0
 	if nt != nil {
 		session = nt.session
-		gen = nt.navGen
-		nt.closeProofGen = gen
+		nt.closeProofGen = nt.navGen
+		nt.closeProofRev = nt.revision
 		nt.closeProofPending = true
 	}
 	rl.g.mu.Unlock()

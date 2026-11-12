@@ -241,12 +241,12 @@ func (g *guard) afterCloseProof(c *command, res message, ok bool) pageVerdict {
 	defer g.mu.Unlock()
 	id := c.str("targetId")
 	nt := g.navTargets[id]
-	gen := 0
+	gen, rev := 0, 0
 	if nt != nil {
-		gen = nt.closeProofGen
+		gen, rev = nt.closeProofGen, nt.closeProofRev
 		nt.closeProofPending = false
 	}
-	if !ok || !g.applyCloseProofLocked(id, res, gen) {
+	if !ok || !g.applyCloseProofLocked(id, res, gen, rev) {
 		g.logf("cdp: closeTarget refused target=%s why=close-proof", id)
 		return pageVerdict{reply: refusal(c.id, c.session, refusedTarget)}
 	}

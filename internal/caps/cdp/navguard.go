@@ -72,6 +72,7 @@ type navTarget struct {
 	errorNavGen       int
 	errorRecorded     bool
 	closeProofGen     int
+	closeProofRev     int
 	closeProofPending bool
 	worker            bool
 	iframe            bool
