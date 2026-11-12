@@ -1858,6 +1858,31 @@ export function protectTest(getLink, describe) {
           received: JSON.stringify(c.events),
         };
       }),
+    workerListing: (browser) =>
+      run(browser, async (c) => {
+        const done = c.waitEvent((e) => e.method === 'Console.messageAdded' && e.params.message.text === 'worker-listing-done', 15000);
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await done;
+        const info = async (targetId) => outcome(c.send('Target.getTargetInfo', { targetId }));
+        const attach = await outcome(c.send('Target.attachToTarget', { targetId: 'W-protected', flatten: true }));
+        return {
+          list: (await c.send('Target.getTargets')).targetInfos,
+          protectedInfo: await info('W-protected'),
+          ordinaryInfo: await info('W-ordinary'),
+          pageInfo: await info('P-seven'),
+          tabInfo: await info('T-seven'),
+          attach,
+          events: c.events
+            .filter((e) => ['Target.targetCreated', 'Target.targetInfoChanged', 'Target.targetDestroyed'].includes(e.method))
+            .map((e) => ({
+              method: e.method,
+              targetId: e.params.targetId || e.params.targetInfo?.targetId,
+              type: e.params.targetInfo?.type,
+              url: e.params.targetInfo?.url,
+              title: e.params.targetInfo?.title,
+            })),
+        };
+      }),
     discoveryScrub: (browser) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === 'T9', 15000);

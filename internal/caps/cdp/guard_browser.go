@@ -165,12 +165,15 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if !ok {
 		return browserVerdict{forward: data}
 	}
-	send := g.applyResultKindLocked(kind, attached, m.SessionID, res)
+	send, hide := g.applyResultKindLocked(kind, attached, m.SessionID, res)
+	if hide {
+		return browserVerdict{forward: missingTarget(*m.ID, m.SessionID), send: send}
+	}
 	m.Result = encode(res)
 	return browserVerdict{forward: encode(m), send: send}
 }
 
-func (g *guard) applyResultKindLocked(kind callKind, attached, session string, res map[string]any) [][]byte {
+func (g *guard) applyResultKindLocked(kind callKind, attached, session string, res map[string]any) ([][]byte, bool) {
 	switch kind {
 	case kindTargets:
 		list, _ := res["targetInfos"].([]any)
@@ -179,14 +182,16 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		for _, item := range list {
 			info, _ := toInfo(item)
 			send = append(send, g.infoLocked(item)...)
-			if listed(info) {
+			if listed(info) && !g.protectedWorkerLocked(info) {
 				kept = append(kept, item)
 			}
 		}
 		res["targetInfos"] = kept
-		return send
+		return send, false
 	case kindTargetInfo:
-		return g.infoLocked(res["targetInfo"])
+		info, _ := toInfo(res["targetInfo"])
+		send := g.infoLocked(res["targetInfo"])
+		return send, g.protectedWorkerLocked(info)
 	case kindCookies:
 		res["cookies"] = g.filterCookies(res["cookies"])
 	case kindStreams:
@@ -201,12 +206,12 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		}
 	case kindCreate:
 		id, _ := res["targetId"].(string)
-		return g.touchLocked(id, "page")
+		return g.touchLocked(id, "page"), false
 	case kindAttach:
 		g.markTouchedLocked(attached)
 		if t, ok := g.targets[attached]; ok {
 			g.attachAnsweredLocked(session, res, t)
-			return g.touchLocked(attached, t.typ)
+			return g.touchLocked(attached, t.typ), false
 		}
 		g.logf("cdp: attach counted as touch without a known target target=%s", attached)
 	case kindScript:
@@ -214,7 +219,7 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 			g.scripts[admittedScriptKey(session, id)] = true
 		}
 	}
-	return nil
+	return nil, false
 }
 
 func toInfo(v any) (targetInfo, map[string]any) {
@@ -342,8 +347,20 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 		info, obj := toInfo(p["targetInfo"])
 		g.noteStreamOpenedLocked(info)
 		send := g.infoLocked(p["targetInfo"])
+		if g.protectedWorkerLocked(info) {
+			return false, false, send
+		}
 		return listed(info), obj != nil && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL)), send
 	})
+}
+
+func (g *guard) protectedWorkerLocked(info targetInfo) bool {
+	return workerTypes[info.Type] && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL))
+}
+
+func (g *guard) protectedWorkerIDLocked(id string) bool {
+	t := g.targets[id]
+	return t != nil && workerTypes[t.typ] && t.protected
 }
 
 func listed(info targetInfo) bool {
@@ -355,7 +372,7 @@ func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
 		TargetID string `json:"targetId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	if g.hiddenTargetLocked(p.TargetID) {
+	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && g.protectedWorkerIDLocked(p.TargetID)) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}

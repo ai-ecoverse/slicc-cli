@@ -118,6 +118,9 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	if reply := g.answerLocally(c); reply != nil {
 		return pageVerdict{reply: reply}
 	}
+	if c.method == "Target.getTargetInfo" && g.protectedWorkerIDLocked(c.str("targetId")) {
+		return pageVerdict{reply: missingTarget(c.id, c.session)}
+	}
 	return g.admitLocked(c)
 }
 
