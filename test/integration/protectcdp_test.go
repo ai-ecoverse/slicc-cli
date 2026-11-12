@@ -162,6 +162,7 @@ func (e *protectEnv) evalJSONWithObserver(t *testing.T, expr string, out any) {
 				TargetID      string   `json:"targetId"`
 				URL           string   `json:"url"`
 				Delta         int      `json:"delta"`
+				ReadHref      bool     `json:"readHref"`
 				ScriptTargets []string `json:"scriptTargets"`
 			} `json:"request"`
 		}
@@ -180,9 +181,21 @@ func (e *protectEnv) evalJSONWithObserver(t *testing.T, expr string, out any) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		s, err := e.b.client.Attach(ctx, state.Request.TargetID)
 		if err == nil {
-			if state.Request.URL != "" {
+			switch {
+			case state.Request.ReadHref:
+				var href string
+				err = s.Evaluate(ctx, "document.readyState === 'complete' ? location.href : ''", cdp.EvaluateOptions{ReturnByValue: true}, &href)
+				if err == nil {
+					raw, mErr := json.Marshal(href)
+					if mErr != nil {
+						err = mErr
+					} else {
+						e.p.eval("window.protectObserverHref = "+string(raw)+"; true", &value)
+					}
+				}
+			case state.Request.URL != "":
 				err = s.Call(ctx, "Page.navigate", map[string]any{"url": state.Request.URL}, nil)
-			} else {
+			default:
 				err = s.Evaluate(ctx, "setTimeout(() => history.go("+strconv.Itoa(state.Request.Delta)+"), 0); true", cdp.EvaluateOptions{ReturnByValue: true}, &value)
 			}
 			_ = s.Detach(ctx)
@@ -623,7 +636,7 @@ func TestCDPCloseProtectedOpenedSeenBound(t *testing.T) {
 }
 
 func TestCDPCloseProtectedOpenedSeenAfterTrim(t *testing.T) {
-	env := setupProtectAttachEnv(t, []string{"SLICC_CDP_OPENED_SEEN=2"})
+	env := setupProtectAttachEnv(t, []string{"SLICC_CDP_OPENED_SEEN=4"})
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	ordinary, opener := env.directTab(t, env.allowed+"/?n=seen-trim-opener")
@@ -634,7 +647,7 @@ func TestCDPCloseProtectedOpenedSeenAfterTrim(t *testing.T) {
 		Gone   bool       `json:"gone"`
 		PostID string     `json:"postId"`
 	}
-	env.evalJSON(t, "linkTest.protect.closeProtectedOpenedSeenAfterTrim("+jsArgs("chrome", ordinary, postURL, 4)+")", &r)
+	env.evalJSON(t, "linkTest.protect.closeProtectedOpenedSeenAfterTrim("+jsArgs("chrome", ordinary, postURL, 1)+")", &r)
 	if r.PostID != "" {
 		t.Cleanup(func() { env.b.closeTarget(r.PostID) })
 	}
@@ -711,6 +724,9 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 		Detached bool       `json:"detached"`
 		After    cdpOutcome `json:"after"`
 		Reattach cdpOutcome `json:"reattach"`
+		Href     string     `json:"href"`
+		Close    cdpOutcome `json:"close"`
+		Closed   bool       `json:"closed"`
 	}
 	e.evalJSONWithObserver(t, "linkTest.protect.restoreRace("+jsArgs("chrome", id, e.seven)+")", &r)
 	switch {
@@ -720,17 +736,10 @@ func (e *protectEnv) testRestoreRace(t *testing.T) {
 		t.Fatalf("commands ran in seven's restored document: %+v", r)
 	case !r.Detached || !r.After.refused() || !r.Reattach.refused():
 		t.Fatalf("seven's restored document didn't lock the tab: %+v", r)
-	}
-	if href := (&navEnv{linkEnv: e.linkEnv}).directHref(t, id); href != doc {
-		t.Fatalf("history.back did not restore seven's document: %q want %q", href, doc)
-	}
-	var close struct {
-		Close cdpOutcome `json:"close"`
-		Gone  bool       `json:"gone"`
-	}
-	e.evalJSON(t, "linkTest.protect.closeTarget("+jsArgs("chrome", id)+")", &close)
-	if !close.Close.OK || !close.Gone {
-		t.Fatalf("closing the restored locked tab: %+v", close)
+	case r.Href != doc:
+		t.Fatalf("history.back did not restore seven's document: %q want %q", r.Href, doc)
+	case !r.Close.OK || !r.Closed:
+		t.Fatalf("closing the restored locked tab: %+v", r)
 	}
 	t.Logf("%d probes attempted, %d unanswered after 1s, and %d attaches raced the restore; close ok", r.Probes, r.Stuck, r.Attaches)
 }

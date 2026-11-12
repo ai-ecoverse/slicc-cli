@@ -61,6 +61,12 @@ const observerNavigation = async (targetId, params) => {
   await new Promise((resolve) => { window.protectObserverNext = resolve; });
 };
 
+const observerHref = async (targetId) => {
+  window.protectObserverRequest = { targetId, readHref: true };
+  await new Promise((resolve) => { window.protectObserverNext = resolve; });
+  return window.protectObserverHref;
+};
+
 const waitGone = async (c, targetId, close) => {
   if (!close?.ok) return false;
   for (let tries = 0; tries < 50; tries += 1) {
@@ -526,6 +532,7 @@ export function protectTest(getLink, describe) {
           }
         }
         const known = new Set((await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId));
+        known.add(held.targetId);
         const opened = c.waitEvent(
           (e) =>
             e.method === 'Target.targetCreated' &&
@@ -775,8 +782,11 @@ export function protectTest(getLink, describe) {
         for (let i = 0; i < 5; i += 1) await Promise.all([probe(sessionId), probe(sessionId)]);
         const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
         const reattach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const href = await observerHref(targetId);
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        const closed = await waitGone(c, targetId, close);
         const leaked = seen.filter((h) => h.startsWith(sevenOrigin));
-        return { before, probes, stuck, attaches, leaked, detached, after, reattach };
+        return { before, probes, stuck, attaches, leaked, detached, after, reattach, href, close, closed };
       }),
     biosGuardIDs: (browser) =>
       run(browser, async (c) => {
@@ -1001,7 +1011,10 @@ export function protectTest(getLink, describe) {
         await c.send('Page.enable', {}, sessionId);
         const detached = await leave(c, sessionId, away);
         const after = await outcome(c.send('Runtime.evaluate', { expression: 'location.href' }, sessionId));
-        return { targetId, detached, after };
+        const href = await observerHref(targetId);
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        const gone = await waitGone(c, targetId, close);
+        return { targetId, detached, after, href, close, gone };
       }),
     closeTarget: (browser, targetId) =>
       run(browser, async (c) => {
