@@ -17,8 +17,6 @@ func documentedGuardSkip(r guardRow) bool {
 		return r.ID == "C4.iframe-preattach.blank.shared" || r.ID == "C4.iframe-preattach.srcdoc.shared"
 	case "not-supported:syntheticAutoAttach":
 		return strings.HasSuffix(r.ID, ".synthetic")
-	case "not-supported:secureOrigin":
-		return r.ID == "C3.tab-service-worker-leak"
 	default:
 		return false
 	}
