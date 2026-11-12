@@ -314,21 +314,21 @@ func TestIframeHoldAttachSessionDisagreesProtected(t *testing.T) {
 	}
 }
 
-func TestIframeHoldExtensionFrameUnderOrdinaryNotConcealed(t *testing.T) {
+func TestIframeHoldExtensionFrameUnderOrdinaryKeepsMainRule(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
 	frame := &target{id: "F", typ: "iframe", url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/frame.html", parentFrame: "FRAME-dangling", shown: false}
 	g.targets["F"] = frame
 	frame.protected = g.decide(frame, false)
+	info := targetInfo{TargetID: "F", Type: "iframe", URL: frame.url, ParentFrameID: "FRAME-dangling"}
+	if !frame.protected || !g.attachedShouldHideLocked(info, "S-page") {
+		t.Fatal("extension iframe under an ordinary page was auto-attachable")
+	}
 	if g.iframeAncestryUnknownLocked(frame) || g.iframeUnresolvedLocked(frame) || g.iframeConcealedLocked("F") {
 		t.Fatal("extension iframe was ancestry-held or concealed under an ordinary page")
 	}
-	if g.iframeHiddenForParentLocked(frame) {
-		t.Fatal("extension iframe was parent-hidden under an ordinary page")
-	}
-	info := targetInfo{TargetID: "F", Type: "iframe", URL: frame.url, ParentFrameID: "FRAME-dangling"}
-	if g.listingHiddenLocked(info) || g.protectedIframeIDLocked("F") {
-		t.Fatal("extension iframe was hidden from listings/getTargetInfo under an ordinary page")
+	if g.iframeHiddenForParentLocked(frame) || g.listingHiddenLocked(info) || g.protectedIframeIDLocked("F") {
+		t.Fatal("extension iframe lost main getTargetInfo/listing under an ordinary page")
 	}
 }
 
@@ -338,10 +338,11 @@ func TestIframeHoldExtensionFrameUnderSevenProtected(t *testing.T) {
 	frame := &target{id: "F", typ: "iframe", url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/frame.html", parentFrame: "SEVEN", shown: false}
 	g.targets["F"] = frame
 	frame.protected = g.decide(frame, false)
-	if !g.iframeHiddenForParentLocked(frame) {
-		t.Fatal("extension iframe under seven was not parent-hidden")
+	info := targetInfo{TargetID: "F", Type: "iframe", URL: frame.url, ParentFrameID: "SEVEN"}
+	if !g.iframeHiddenForParentLocked(frame) || !g.attachedShouldHideLocked(info, "S-seven") {
+		t.Fatal("extension iframe under seven was not parent-hidden from auto-attach")
 	}
-	if !g.listingHiddenLocked(targetInfo{TargetID: "F", Type: "iframe", URL: frame.url, ParentFrameID: "SEVEN"}) || !g.protectedIframeIDLocked("F") {
+	if !g.listingHiddenLocked(info) || !g.protectedIframeIDLocked("F") {
 		t.Fatal("extension iframe under seven was still listable or answered by getTargetInfo")
 	}
 }

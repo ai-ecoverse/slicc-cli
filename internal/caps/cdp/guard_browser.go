@@ -484,12 +484,6 @@ func (g *guard) attachedShouldHideLocked(info targetInfo, parentSession string) 
 	if workerTypes[info.Type] && g.sessionRefusedLocked(parentSession) {
 		return true
 	}
-	if info.Type == "iframe" {
-		t := g.targets[info.TargetID]
-		if g.extensionFrameTargetLocked(t) || g.o.ExtensionFrame(info.URL) {
-			return g.iframeHiddenForParentLocked(t)
-		}
-	}
 	return g.targetProtectedLocked(info.TargetID)
 }
 
