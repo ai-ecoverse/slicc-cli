@@ -452,7 +452,7 @@ func (g *guard) openerState(t *target) protect.Opener {
 func (g *guard) decide(t *target, previous bool) bool {
 	protected, reason := g.decideReasonLocked(t, previous)
 	if protected && !previous {
-		g.logf("cdp: protecting target=%s type=%s reason=%s url=%s", t.id, t.typ, reason, t.url)
+		g.logf("cdp: protecting target=%s type=%s reason=%s", t.id, t.typ, reason)
 	}
 	return protected
 }
@@ -803,19 +803,15 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 
 func (g *guard) ancestorProtectStateLocked(id string) string {
 	t := g.targets[id]
-	url := ""
 	typ := ""
 	if t != nil {
-		url = t.url
 		typ = t.typ
 	}
-	child := g.childFrames[id]
 	rule := g.creatorProtectRuleLocked(id)
 	return "ancestor=" + id + " type=" + typ + " rule=" + rule +
 		" protected=" + strconv.FormatBool(t != nil && t.protected) +
 		" unconfirmed=" + strconv.FormatBool(g.targetUnconfirmedLocked(id)) +
-		" held=" + strconv.FormatBool(g.targetHeldLocked(id)) +
-		" url=" + url + " childFrame=" + child
+		" held=" + strconv.FormatBool(g.targetHeldLocked(id))
 }
 
 func (g *guard) creatorProtectRuleLocked(id string) string {

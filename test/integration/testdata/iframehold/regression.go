@@ -2,6 +2,8 @@ package cdp
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,18 @@ func iframeHoldGuard(t *testing.T) *guard {
 		t.Fatal(err)
 	}
 	return newGuard(o, nil)
+}
+
+func capturingGuard(t *testing.T) (*guard, *strings.Builder) {
+	t.Helper()
+	var buf strings.Builder
+	o, err := protect.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newGuard(o, func(format string, args ...any) {
+		fmt.Fprintf(&buf, format+"\n", args...)
+	}), &buf
 }
 
 func TestIframeHoldOrdinaryURLUnderSeven(t *testing.T) {
@@ -1440,6 +1454,42 @@ func assertHeldHiddenAfterOwnerProtect(t *testing.T, g *guard, label string) {
 	}
 }
 
+func chromeDetachSessions(send [][]byte) map[string]bool {
+	out := map[string]bool{}
+	for _, raw := range send {
+		var m struct {
+			Method string `json:"method"`
+			Params struct {
+				Session string `json:"sessionId"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		if m.Method == "Target.detachFromTarget" && m.Params.Session != "" {
+			out[m.Params.Session] = true
+		}
+	}
+	return out
+}
+
+func clientSawDetach(page [][]byte, session string) bool {
+	for _, raw := range page {
+		var m struct {
+			Method string `json:"method"`
+			Params struct {
+				Session string `json:"sessionId"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		if m.Method == "Target.detachedFromTarget" && m.Params.Session == session {
+			return true
+		}
+		if m.Method == "Target.attachedToTarget" && m.Params.Session == session {
+			return true
+		}
+	}
+	return false
+}
+
 func TestIframeHoldOwnerFrameNavigatedSevenHidesHeld(t *testing.T) {
 	for _, host := range []string{"https://seven.sliccy.ai", "https://vault.sliccy.ai"} {
 		g := heldOwnerSettleGuard(t)
@@ -1449,8 +1499,17 @@ func TestIframeHoldOwnerFrameNavigatedSevenHidesHeld(t *testing.T) {
 				"id": "P", "url": host + "/doc", "securityOrigin": host,
 			}},
 		})
-		_ = g.fromBrowser(raw)
+		v := g.fromBrowser(raw)
 		assertHeldHiddenAfterOwnerProtect(t, g, "frameNavigated "+host)
+		if !chromeDetachSessions(v.send)["S-F"] {
+			t.Fatalf("frameNavigated %s: Chrome was not sent Target.detachFromTarget for the held session", host)
+		}
+		if clientSawDetach(v.page, "S-F") {
+			t.Fatalf("frameNavigated %s: client saw attach/detach for a session that stayed held until hide", host)
+		}
+		if g.hidden["S-F"] != true {
+			t.Fatalf("frameNavigated %s: held session was not marked hidden", host)
+		}
 	}
 }
 
@@ -1466,8 +1525,14 @@ func TestIframeHoldOwnerConfirmReplySevenHidesHeld(t *testing.T) {
 			"id": "P", "url": host + "/doc", "securityOrigin": host,
 		}}})
 		_ = g.confirmedTargetLocked(g.navTargets["P"], g.navTargets["P"].confirm, 0, message{Result: result})
-		_ = g.settleHeldWorkersLocked()
+		settled := g.settleHeldWorkersLocked()
 		assertHeldHiddenAfterOwnerProtect(t, g, "confirm reply "+host)
+		if !chromeDetachSessions(settled.send)["S-F"] {
+			t.Fatalf("confirm reply %s: Chrome was not sent Target.detachFromTarget for the held session", host)
+		}
+		if clientSawDetach(settled.page, "S-F") {
+			t.Fatalf("confirm reply %s: client saw attach/detach for a session that stayed held until hide", host)
+		}
 	}
 }
 
@@ -1479,8 +1544,60 @@ func TestIframeHoldOwnerURLChangedSevenHidesHeld(t *testing.T) {
 			"method": "Target.targetInfoChanged", "sessionId": "RELAY",
 			"params": map[string]any{"targetInfo": map[string]any{"targetId": "P", "type": "page", "url": host + "/doc"}},
 		})
-		_ = g.fromBrowser(raw)
+		v := g.fromBrowser(raw)
 		assertHeldHiddenAfterOwnerProtect(t, g, "targetInfoChanged "+host)
+		if !chromeDetachSessions(v.send)["S-F"] {
+			t.Fatalf("targetInfoChanged %s: Chrome was not sent Target.detachFromTarget for the held session", host)
+		}
+		if clientSawDetach(v.page, "S-F") {
+			t.Fatalf("targetInfoChanged %s: client saw attach/detach for a session that stayed held until hide", host)
+		}
+	}
+}
+
+func TestIframeHoldProtectReasonLogsOmitProtectedSecrets(t *testing.T) {
+	sevenURL := "https://seven.sliccy.ai/auth/callback?code=REVIEW_SECRET#token=REVIEW_TOKEN"
+	vaultURL := "https://vault.sliccy.ai/auth/callback?code=VAULT_SECRET#token=VAULT_TOKEN"
+	secrets := []string{"REVIEW_SECRET", "REVIEW_TOKEN", "VAULT_SECRET", "VAULT_TOKEN"}
+	g, buf := capturingGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "SEVEN", Type: "page", URL: sevenURL},
+		{TargetID: "VAULT", Type: "page", URL: vaultURL},
+		{TargetID: "ORD", Type: "page", URL: "https://ordinary.test/framed"},
+	})
+	_ = g.decide(g.targets["SEVEN"], false)
+	_ = g.decide(g.targets["VAULT"], false)
+	g.targets["SEVEN"].protected = true
+	g.targets["VAULT"].protected = true
+	_ = g.noteChildFrameLocked("SEVEN", sevenURL)
+	_ = g.noteChildFrameLocked("VAULT", vaultURL)
+	_ = g.creatorProtectRuleLocked("SEVEN")
+	_ = g.creatorProtectRuleLocked("VAULT")
+	_ = g.ancestorProtectStateLocked("SEVEN")
+	_ = g.ancestorProtectStateLocked("VAULT")
+	frame := &target{id: "F", typ: "iframe", url: "https://frame.test/embed", parentFrame: "SEVEN"}
+	g.targets["F"] = frame
+	_ = g.decide(frame, false)
+	_ = g.iframeProtectedAncestorReasonLocked(frame)
+	g.logf("cdp: iframe confirm blocked on pending ancestor target=%s parent=%s %s", "F", "SEVEN", g.ancestorProtectStateLocked("SEVEN"))
+	g.logf("cdp: iframe confirm blocked on pending ancestor target=%s parent=%s %s", "F", "VAULT", g.ancestorProtectStateLocked("VAULT"))
+	g.sessions["S-ORD"] = &session{id: "S-ORD", target: "ORD", typ: "page"}
+	g.attachParent = "S-ORD"
+	g.targets["DISPUTE"] = &target{id: "DISPUTE", typ: "iframe", url: sevenURL}
+	_ = g.noteIframeAttachParentLocked(targetInfo{TargetID: "DISPUTE", Type: "iframe", URL: sevenURL, ParentFrameID: "MISSING"})
+	_ = g.protectLocked(g.targets["SEVEN"])
+	_ = g.protectLocked(g.targets["VAULT"])
+	got := buf.String()
+	if !strings.Contains(got, "protecting target=SEVEN") || !strings.Contains(got, "reason=") {
+		t.Fatalf("expected protecting reason logs, got:\n%s", got)
+	}
+	if strings.Contains(got, "url=") {
+		t.Fatalf("protect reason logs still include url=:\n%s", got)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(got, secret) {
+			t.Fatalf("secret %q leaked into protect reason logs:\n%s", secret, got)
+		}
 	}
 }
 

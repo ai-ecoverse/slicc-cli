@@ -245,13 +245,10 @@ func assertHeldIframeHiddenAfterProtectedSettle(t *testing.T, env *protectEnv, s
 			t.Fatalf("protected iframe listed after %s settle: %s", settle, raw)
 		}
 	}
-	delivered, detached := 0, 0
+	delivered := 0
 	for _, e := range result.Events {
 		if e.Method == "Target.attachedToTarget" && (e.Child == "S-F-plain" || e.Child == "S-F-plain-tab") {
 			delivered++
-		}
-		if e.Method == "Target.detachedFromTarget" && (e.Child == "S-F-plain" || e.Child == "S-F-plain-tab") {
-			detached++
 		}
 		if e.TargetID == "F-plain" && e.Method != "Target.detachedFromTarget" && e.URL != "" {
 			t.Fatalf("held iframe reached the client under %s settle: %+v", settle, e)
@@ -259,9 +256,6 @@ func assertHeldIframeHiddenAfterProtectedSettle(t *testing.T, env *protectEnv, s
 	}
 	if delivered != 0 {
 		t.Fatalf("held iframe was delivered under %s settle: delivered=%d %s", settle, delivered, raw)
-	}
-	if detached == 0 {
-		t.Fatalf("held iframe sessions were not detached under %s settle: %s", settle, raw)
 	}
 }
 
