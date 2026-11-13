@@ -387,8 +387,11 @@ func lateIframeWorkerCascadeScript(seven, vault, allowed string) fakeScript {
 	}
 	workers := []map[string]any{
 		{"targetId": "W-seven", "type": "worker", "url": allowed + "/seven-worker.js", "openerFrameId": "F-seven"},
+		{"targetId": "W-seven-2", "type": "worker", "url": allowed + "/seven-worker-2.js", "openerId": "W-seven"},
 		{"targetId": "W-vault", "type": "worker", "url": allowed + "/vault-worker.js", "openerFrameId": "F-vault"},
+		{"targetId": "W-vault-2", "type": "worker", "url": allowed + "/vault-worker-2.js", "openerId": "W-vault"},
 		{"targetId": "W-plain", "type": "worker", "url": allowed + "/plain-worker.js", "openerFrameId": "F-plain"},
+		{"targetId": "W-plain-2", "type": "worker", "url": allowed + "/plain-worker-2.js", "openerId": "W-plain"},
 	}
 	bodies := map[string]map[string]any{
 		"P-ordinary": page, "P-seven": sevenPage, "P-vault": vaultPage,
@@ -515,7 +518,7 @@ func TestCDPCascadesLateIframeProtectionIntoWorkers(t *testing.T) {
 	}
 	before := listed(result.Before.List)
 	after := listed(result.After.List)
-	for _, id := range []string{"W-seven", "W-vault"} {
+	for _, id := range []string{"W-seven", "W-seven-2", "W-vault", "W-vault-2"} {
 		if !before[id] {
 			t.Errorf("before late parent, worker %s was not listed", id)
 		}
@@ -534,13 +537,15 @@ func TestCDPCascadesLateIframeProtectionIntoWorkers(t *testing.T) {
 			t.Errorf("after late protected parent, getTargetInfo(%s): %+v", id, info)
 		}
 	}
-	if !before["W-plain"] || !after["W-plain"] {
-		t.Fatalf("ordinary late-parent worker listing before=%v after=%v", before["W-plain"], after["W-plain"])
-	}
-	if !result.After.Attach["W-plain"].OK {
-		t.Fatalf("ordinary late-parent worker attach: %+v", result.After.Attach["W-plain"])
-	}
-	if !result.After.Infos["W-plain"].OK {
-		t.Fatalf("ordinary late-parent worker getTargetInfo: %+v", result.After.Infos["W-plain"])
+	for _, id := range []string{"W-plain", "W-plain-2"} {
+		if !before[id] || !after[id] {
+			t.Errorf("ordinary late-parent worker %s listing before=%v after=%v", id, before[id], after[id])
+		}
+		if !result.After.Attach[id].OK {
+			t.Errorf("ordinary late-parent worker attach(%s): %+v", id, result.After.Attach[id])
+		}
+		if !result.After.Infos[id].OK {
+			t.Errorf("ordinary late-parent worker getTargetInfo(%s): %+v", id, result.After.Infos[id])
+		}
 	}
 }

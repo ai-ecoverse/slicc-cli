@@ -1516,10 +1516,10 @@ export function protectTest(getLink, describe) {
         await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
         await c.send('Browser.getHistogram', { name: 'arm-late-iframe-worker' });
         await new Promise((resolve) => setTimeout(resolve, 200));
-        const before = await probe(['W-seven', 'W-vault', 'W-plain']);
+        const before = await probe(['W-seven', 'W-seven-2', 'W-vault', 'W-vault-2', 'W-plain', 'W-plain-2']);
         await c.send('Browser.getHistogram', { name: 'reveal-late-iframe-worker' });
         await new Promise((resolve) => setTimeout(resolve, 200));
-        const after = await probe(['W-seven', 'W-vault', 'W-plain']);
+        const after = await probe(['W-seven', 'W-seven-2', 'W-vault', 'W-vault-2', 'W-plain', 'W-plain-2']);
         return { before, after };
       }),
     unresolvedWorkerTimeout: (browser) =>
