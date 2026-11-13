@@ -70,6 +70,10 @@ func urlLessIframeScript(seven, vault, allowed string) fakeScript {
 				for _, s := range shapes {
 					events = append(events, created("RELAY", info(s, "")), created("", info(s, "")), attach(s.session, "S-"+s.id, info(s, ""), true))
 				}
+				events = append(events,
+					event("S-page", "Page.frameAttached", map[string]any{"frameId": "F-plain", "parentFrameId": "P-ordinary"}),
+					event("S-page", "Page.frameDetached", map[string]any{"frameId": "F-plain", "reason": "swap"}),
+				)
 				return "{}", events
 			case p.Name == "commit-urlless-iframes" && framed && !committed:
 				committed = true
@@ -128,6 +132,8 @@ func TestCDPAnswersLookupsOfAURLLessIframeOnceItsHoldSettles(t *testing.T) {
 			Child     string `json:"child"`
 			TargetID  string `json:"targetId"`
 			URL       string `json:"url"`
+			Waiting   *bool  `json:"waiting"`
+			Reason    string `json:"reason"`
 		} `json:"events"`
 	}
 	env.evalJSONWithin(t, "linkTest.urlLessIframes("+jsArgs(map[string]any{"browser": "chrome-2", "frames": frames})+")", &result, 60*time.Second)
@@ -139,14 +145,24 @@ func TestCDPAnswersLookupsOfAURLLessIframeOnceItsHoldSettles(t *testing.T) {
 	if !plain.Attach.OK {
 		t.Errorf("Target.attachToTarget on an ordinary iframe asked during its URL hold: %+v\n%s", plain.Attach, raw)
 	}
-	delivered := false
-	for _, e := range result.Events {
-		if e.Method == "Target.attachedToTarget" && e.SessionID == "S-page" && e.Child == "S-F-plain" && e.URL == env.allowed+"/inner" {
-			delivered = true
+	delivered, swapped, swapAt, attachAt := 0, false, -1, -1
+	for i, e := range result.Events {
+		if e.Method == "Page.frameDetached" && e.SessionID == "S-page" && e.Reason == "swap" {
+			swapped, swapAt = true, i
+		}
+		if e.Method == "Target.attachedToTarget" && e.Child == "S-F-plain" {
+			delivered++
+			attachAt = i
+			if e.SessionID != "S-page" || e.URL != env.allowed+"/inner" || e.Waiting == nil || *e.Waiting {
+				t.Errorf("the ordinary iframe's auto-attach reached the client wrong: %+v", e)
+			}
 		}
 	}
-	if !delivered {
-		t.Errorf("the ordinary iframe's auto-attach never reached the client with its URL: %s", raw)
+	if !swapped {
+		t.Errorf("the page session's frame swap never reached the client: %s", raw)
+	}
+	if delivered != 1 || attachAt < swapAt {
+		t.Errorf("the ordinary iframe's auto-attach reached the client %d times (at %d, swap at %d), want once after the swap: %s", delivered, attachAt, swapAt, raw)
 	}
 	listed := map[string]bool{}
 	for _, id := range result.List {

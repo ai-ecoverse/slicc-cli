@@ -166,6 +166,8 @@ export async function measureURLLessIframes(getLink, opts) {
       child: e.params?.sessionId ?? '',
       targetId: e.params?.targetInfo?.targetId ?? e.params?.targetId ?? '',
       url: e.params?.targetInfo?.url ?? '',
+      waiting: e.params?.waitingForDebugger ?? null,
+      reason: e.params?.reason ?? '',
     }));
     return { rows, list, events };
   } finally {

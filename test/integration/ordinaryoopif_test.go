@@ -94,7 +94,7 @@ func TestCDPOrdinaryCrossSiteIframeReachesAStockClient(t *testing.T) {
 	frameHost := "http://frame.other.test:" + port
 	b := launchBrowserOn(t, 0, "--site-per-process", "--unsafely-treat-insecure-origin-as-secure="+seven, "--host-resolver-rules=MAP *.test 127.0.0.1")
 	host := b.openPage(t, seven+"/seven-framed")
-	b.openPage(t, vault+"/vault-framed")
+	b.openTarget(t, vault+"/vault-framed")
 	protectedFrames := rawIframeTargets(t, b, frameHost)
 	env := &linkEnv{t: t, b: b, origin: seven, p: host}
 	env.a = startAttach(t, "--cdp", b.endpoint, "--origin", seven, "--origin", vault, "--name", "ordinary-oopif-node")
