@@ -1004,6 +1004,7 @@ func (g *guard) redecideIframesLocked(creator string) [][]byte {
 		t.protected = g.decide(t, prev)
 		if t.protected && !prev {
 			send = append(send, g.protectLocked(t)...)
+			send = append(send, g.redecideWorkersLocked(t.id)...)
 		}
 	}
 	return send
