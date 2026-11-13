@@ -233,10 +233,15 @@ func TestCDPDeliversOrdinaryIframeUnderTabAndPageAttachParents(t *testing.T) {
 	if !plain.Attach.OK {
 		t.Fatalf("Target.attachToTarget on an ordinary dual-parent iframe: %+v\n%s", plain.Attach, raw)
 	}
-	pageDelivered, tabDelivered, swapped, swapAt, pageAt := 0, 0, false, -1, -1
+	pageDelivered, tabDelivered, swapped, swapAt, pageAt, pageChangedAt := 0, 0, false, -1, -1, -1
 	for i, e := range result.Events {
 		if e.Method == "Page.frameDetached" && e.SessionID == "S-page" && e.Reason == "swap" {
 			swapped, swapAt = true, i
+		}
+		if e.Method == "Target.targetInfoChanged" && e.TargetID == "F-plain" && e.URL == env.allowed+"/inner" && e.SessionID == "S-page" {
+			if pageChangedAt < 0 {
+				pageChangedAt = i
+			}
 		}
 		if e.Method == "Target.attachedToTarget" && e.Child == "S-F-plain" {
 			pageDelivered++
@@ -260,6 +265,9 @@ func TestCDPDeliversOrdinaryIframeUnderTabAndPageAttachParents(t *testing.T) {
 	}
 	if pageDelivered != 1 || pageAt < swapAt {
 		t.Fatalf("page-parent auto-attach reached the client %d times (at %d, swap at %d), want once after the swap: %s", pageDelivered, pageAt, swapAt, raw)
+	}
+	if pageChangedAt < 0 || pageAt < pageChangedAt {
+		t.Fatalf("want page-session targetInfoChanged before attachedToTarget: changed=%d attach=%d %s", pageChangedAt, pageAt, raw)
 	}
 	if tabDelivered != 1 {
 		t.Fatalf("tab-parent auto-attach reached the client %d times, want once: %s", tabDelivered, raw)

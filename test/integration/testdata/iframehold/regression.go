@@ -1380,6 +1380,39 @@ func TestIframeHoldConfirmPendingParentDoesNotStickyProtect(t *testing.T) {
 	}
 }
 
+func TestIframeHoldURLReleaseEmitsInfoChangedBeforeAttach(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-F", true, dualAttachInfo("F", "P", ""))
+	if g.held["S-F"] == nil {
+		t.Fatal("URL-less iframe was not held")
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"method": "Target.targetInfoChanged",
+		"params": map[string]any{"targetInfo": map[string]any{"targetId": "F", "type": "iframe", "url": "https://frame.test/embed", "parentId": "P", "parentFrameId": "P"}},
+	})
+	v := g.fromBrowser(raw)
+	var methods []string
+	for _, page := range v.page {
+		var m struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(page, &m)
+		if m.SessionID == "S-P" {
+			methods = append(methods, m.Method)
+		}
+	}
+	if len(methods) < 2 || methods[0] != "Target.targetInfoChanged" || methods[1] != "Target.attachedToTarget" {
+		t.Fatalf("held iframe release order=%v, want targetInfoChanged then attachedToTarget", methods)
+	}
+	if g.held["S-F"] != nil {
+		t.Fatal("held iframe was not delivered")
+	}
+}
+
 func TestIframeHoldContentScriptWorldDoesNotProtectSibling(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})

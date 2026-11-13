@@ -110,6 +110,13 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 		g.redactInfoLocked(obj, ti)
 	}
 	h.params["waitingForDebugger"] = waiting
+	if h.typ == "iframe" || h.typ == "page" {
+		changed := map[string]any{"method": "Target.targetInfoChanged", "params": map[string]any{"targetInfo": h.params["targetInfo"]}}
+		if h.parent != "" {
+			changed["sessionId"] = h.parent
+		}
+		v.page = append(v.page, encode(changed))
+	}
 	ev := map[string]any{"method": "Target.attachedToTarget", "params": h.params}
 	if h.parent != "" {
 		ev["sessionId"] = h.parent
