@@ -67,6 +67,37 @@ func (g *guard) forgetExtensionOwnerCallsLocked(session string) {
 			delete(g.extensionOwnerReplies, k)
 		}
 	}
+	for k := range g.extensionMarkCalls {
+		if k.session == session {
+			delete(g.extensionMarkCalls, k)
+		}
+	}
+	for k := range g.extensionMarkReplies {
+		if k.session == session {
+			delete(g.extensionMarkReplies, k)
+		}
+	}
+}
+
+func stripExtensionFrameInnerMessage(t map[string]any) bool {
+	method, _ := t["method"].(string)
+	if method != "Target.receivedMessageFromTarget" {
+		return false
+	}
+	params, ok := t["params"].(map[string]any)
+	if !ok {
+		return false
+	}
+	msg, ok := params["message"].(string)
+	if !ok || msg == "" {
+		return false
+	}
+	inner, ok := decodeObject(json.RawMessage(msg))
+	if !ok || !stripExtensionFrameMarkers(inner) {
+		return false
+	}
+	params["message"] = string(encode(inner))
+	return true
 }
 
 func stripExtensionFrameMarkers(v any) bool {
@@ -75,6 +106,9 @@ func stripExtensionFrameMarkers(v any) bool {
 	case map[string]any:
 		if _, ok := t[extensionFrameMarkerKey]; ok {
 			delete(t, extensionFrameMarkerKey)
+			changed = true
+		}
+		if stripExtensionFrameInnerMessage(t) {
 			changed = true
 		}
 		for _, val := range t {
@@ -122,23 +156,80 @@ func markExtensionFrameOwnerNodes(v any, ids map[string]bool) bool {
 	return changed
 }
 
+func (g *guard) noteExtensionMarkCallLocked(k callKey, method string) {
+	switch method {
+	case "DOM.getDocument", "DOM.describeNode":
+	default:
+		return
+	}
+	if g.extensionMarkCalls == nil {
+		g.extensionMarkCalls = map[callKey]string{}
+	}
+	g.extensionMarkCalls[k] = method
+}
+
+func (g *guard) noteExtensionMarkReplyLocked(k callKey, method string, failed bool) {
+	if failed || method == "" {
+		return
+	}
+	if g.extensionMarkReplies == nil {
+		g.extensionMarkReplies = map[callKey]string{}
+	}
+	g.extensionMarkReplies[k] = method
+}
+
+func extensionFrameMarkTarget(m map[string]any, markMethod, eventMethod string) any {
+	switch {
+	case markMethod == "DOM.getDocument":
+		if res, ok := m["result"].(map[string]any); ok {
+			return res["root"]
+		}
+	case markMethod == "DOM.describeNode":
+		if res, ok := m["result"].(map[string]any); ok {
+			return res["node"]
+		}
+	case eventMethod == "DOM.setChildNodes":
+		if params, ok := m["params"].(map[string]any); ok {
+			return params["nodes"]
+		}
+	case eventMethod == "DOM.childNodeInserted":
+		if params, ok := m["params"].(map[string]any); ok {
+			return params["node"]
+		}
+	}
+	return nil
+}
+
+func (g *guard) takeExtensionFrameMarkReplyLocked(m map[string]any) (ownerReply bool, markMethod string) {
+	raw, ok := m["id"].(json.Number)
+	if !ok {
+		return false, ""
+	}
+	id, err := raw.Int64()
+	if err != nil {
+		return false, ""
+	}
+	session, _ := m["sessionId"].(string)
+	k := callKey{session, id}
+	if g.extensionOwnerReplies[k] > 0 {
+		ownerReply = true
+		g.extensionOwnerReplies[k]--
+		if g.extensionOwnerReplies[k] == 0 {
+			delete(g.extensionOwnerReplies, k)
+		}
+	}
+	if method := g.extensionMarkReplies[k]; method != "" {
+		markMethod = method
+		delete(g.extensionMarkReplies, k)
+	}
+	return ownerReply, markMethod
+}
+
 func (g *guard) markExtensionFramePlacement(m map[string]any) bool {
 	g.mu.Lock()
 	ids := g.trackedExtensionFrameIDsLocked()
-	ownerReply := false
-	if raw, ok := m["id"].(json.Number); ok {
-		if id, err := raw.Int64(); err == nil {
-			session, _ := m["sessionId"].(string)
-			k := callKey{session, id}
-			if g.extensionOwnerReplies[k] > 0 {
-				ownerReply = true
-				g.extensionOwnerReplies[k]--
-				if g.extensionOwnerReplies[k] == 0 {
-					delete(g.extensionOwnerReplies, k)
-				}
-			}
-		}
-	}
+	ownerReply, markMethod := g.takeExtensionFrameMarkReplyLocked(m)
+	eventMethod, _ := m["method"].(string)
 	g.mu.Unlock()
 	changed := false
 	if ownerReply {
@@ -150,7 +241,10 @@ func (g *guard) markExtensionFramePlacement(m map[string]any) bool {
 	if len(ids) == 0 {
 		return changed
 	}
-	return markExtensionFrameOwnerNodes(m, ids) || changed
+	if target := extensionFrameMarkTarget(m, markMethod, eventMethod); target != nil && markExtensionFrameOwnerNodes(target, ids) {
+		changed = true
+	}
+	return changed
 }
 
 func extensionOwnerResult(res map[string]any) map[string]any {
@@ -213,6 +307,15 @@ type extensionProbeWorld struct {
 	frame    string
 	document string
 	revision uint64
+}
+
+type extensionWorldPending struct {
+	name     string
+	session  string
+	frame    string
+	document string
+	revision uint64
+	waiters  []func(context int64, name string, ok bool) [][]byte
 }
 
 type extensionWorldKey struct {
@@ -281,6 +384,17 @@ func (g *guard) forgetExtensionProbeWorldSessionLocked(session string) {
 		if key.session == session || w.session == session {
 			delete(g.extensionProbeWorlds, w.name)
 			delete(g.extensionProbeCache, key)
+		}
+	}
+	for key, p := range g.extensionProbePending {
+		if key.session != session && p.session != session {
+			continue
+		}
+		delete(g.extensionProbeWorlds, p.name)
+		waiters := p.waiters
+		delete(g.extensionProbePending, key)
+		for _, w := range waiters {
+			_ = w(0, "", false)
 		}
 	}
 }
@@ -663,6 +777,20 @@ func (g *guard) extensionProbeDocumentLocked(target string) (string, uint64) {
 	return "", 0
 }
 
+func (g *guard) joinExtensionWorldPendingLocked(state *extensionProbe, frame string, pending *extensionWorldPending) [][]byte {
+	state.world = pending.name
+	pending.waiters = append(pending.waiters, func(ctx int64, name string, ok bool) [][]byte {
+		if !ok || ctx == 0 || name == "" {
+			return state.done(true, false)
+		}
+		state.world = name
+		return [][]byte{g.callbackLocked(state.session, "DOM.getFrameOwner", map[string]any{"frameId": frame}, func(owner message) [][]byte {
+			return g.extensionOwnerAnsweredLocked(state, ctx, owner)
+		})}
+	})
+	return nil
+}
+
 func (g *guard) stepExtensionProbeLocked(state *extensionProbe) [][]byte {
 	if state.at >= len(state.frames) {
 		return state.done(false, true)
@@ -687,6 +815,10 @@ func (g *guard) stepExtensionProbeLocked(state *extensionProbe) [][]byte {
 		return [][]byte{g.callbackLocked(state.session, "DOM.getFrameOwner", map[string]any{"frameId": frame}, func(owner message) [][]byte {
 			return g.extensionOwnerAnsweredLocked(state, cached.context, owner)
 		})}
+	}
+	key := extensionWorldKey{state.session, parent}
+	if pending := g.extensionProbePending[key]; pending != nil && pending.document == state.document && pending.revision == state.revision {
+		return g.joinExtensionWorldPendingLocked(state, frame, pending)
 	}
 	return [][]byte{g.callbackLocked(state.session, "DOM.getDocument", map[string]any{"depth": 0}, func(m message) [][]byte {
 		return g.extensionDocumentAnsweredLocked(state, frame, parent, m)
@@ -737,28 +869,63 @@ func (g *guard) extensionDocumentAnsweredLocked(state *extensionProbe, frame, pa
 			return g.extensionOwnerAnsweredLocked(state, cached.context, owner)
 		})}
 	}
+	key := extensionWorldKey{state.session, parent}
+	if pending := g.extensionProbePending[key]; pending != nil && pending.document == document && pending.revision == revision {
+		return g.joinExtensionWorldPendingLocked(state, frame, pending)
+	}
 	state.world = g.newExtensionWorldNameLocked()
 	state.document, state.revision = document, revision
+	if g.extensionProbePending == nil {
+		g.extensionProbePending = map[extensionWorldKey]*extensionWorldPending{}
+	}
+	g.extensionProbePending[key] = &extensionWorldPending{
+		name:     state.world,
+		session:  state.session,
+		frame:    parent,
+		document: document,
+		revision: revision,
+	}
 	return [][]byte{g.callbackLocked(state.session, "Page.createIsolatedWorld", map[string]any{"frameId": parent, "worldName": state.world}, func(world message) [][]byte {
 		return g.extensionWorldAnsweredLocked(state, frame, parent, world)
 	})}
 }
 
 func (g *guard) extensionWorldAnsweredLocked(state *extensionProbe, frame, parent string, m message) [][]byte {
+	key := extensionWorldKey{state.session, parent}
+	pending := g.extensionProbePending[key]
+	if pending != nil && pending.name == state.world {
+		delete(g.extensionProbePending, key)
+	} else {
+		pending = nil
+	}
 	var world struct {
 		ExecutionContextID int64 `json:"executionContextId"`
 	}
-	if m.Error != nil || json.Unmarshal(m.Result, &world) != nil || world.ExecutionContextID == 0 {
-		return state.done(true, false)
-	}
+	fail := m.Error != nil || json.Unmarshal(m.Result, &world) != nil || world.ExecutionContextID == 0
 	document, revision := g.extensionProbeDocumentLocked(state.target)
-	if document != state.document || revision != state.revision {
-		return state.done(true, false)
+	if !fail && (document != state.document || revision != state.revision) {
+		fail = true
+	}
+	if fail {
+		delete(g.extensionProbeWorlds, state.world)
+		var out [][]byte
+		if pending != nil {
+			for _, w := range pending.waiters {
+				out = append(out, w(0, "", false)...)
+			}
+		}
+		return append(out, state.done(true, false)...)
 	}
 	g.storeExtensionProbeWorldLocked(state.session, parent, document, revision, state.world, world.ExecutionContextID)
-	return [][]byte{g.callbackLocked(state.session, "DOM.getFrameOwner", map[string]any{"frameId": frame}, func(owner message) [][]byte {
+	var out [][]byte
+	if pending != nil {
+		for _, w := range pending.waiters {
+			out = append(out, w(world.ExecutionContextID, state.world, true)...)
+		}
+	}
+	return append(out, [][]byte{g.callbackLocked(state.session, "DOM.getFrameOwner", map[string]any{"frameId": frame}, func(owner message) [][]byte {
 		return g.extensionOwnerAnsweredLocked(state, world.ExecutionContextID, owner)
-	})}
+	})}...)
 }
 
 func (g *guard) extensionOwnerAnsweredLocked(state *extensionProbe, context int64, m message) [][]byte {
