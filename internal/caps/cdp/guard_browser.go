@@ -142,6 +142,8 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	delete(g.extensionOwnerCalls, k)
 	versionCall := g.versionCalls[k]
 	delete(g.versionCalls, k)
+	markMethod := g.extensionMarkCalls[k]
+	delete(g.extensionMarkCalls, k)
 	kind := g.pending[k]
 	delete(g.pending, k)
 	g.clientRequestAnsweredLocked(k, m.Error != nil)
@@ -175,6 +177,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		return g.extensionOwnerAnswerLocked(ownerFrame, m, data)
 	}
 	g.noteVersionReplyLocked(k, !versionCall || m.Error != nil)
+	g.noteExtensionMarkReplyLocked(k, markMethod, m.Error != nil)
 	if m.Error != nil || kind == kindPlain {
 		return browserVerdict{forward: data}
 	}

@@ -143,6 +143,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 		g.paintMethods[k] = c.method
 	}
 	g.noteVersionCallLocked(k, c.method)
+	g.noteExtensionMarkCallLocked(k, c.method)
 	g.noteBodyCallLocked(k, c)
 	g.noteClientRequestLocked(k, c)
 	g.noteContinueLocked(k, c)

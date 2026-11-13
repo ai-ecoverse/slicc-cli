@@ -199,10 +199,13 @@ type guard struct {
 	extensionShownCleared bool
 	extensionProbeWorlds  map[string]bool
 	extensionProbeCache   map[extensionWorldKey]*extensionProbeWorld
+	extensionProbePending map[extensionWorldKey]*extensionWorldPending
 	extensionFrameURLs    map[string]map[string]string
 	extensionCaptureDirty map[callKey]bool
 	extensionOwnerCalls   map[callKey]string
 	extensionOwnerReplies map[callKey]int
+	extensionMarkCalls    map[callKey]string
+	extensionMarkReplies  map[callKey]string
 	extensionPaintGen     uint64
 	versionCalls          map[callKey]bool
 	versionReplies        map[callKey]int
@@ -285,6 +288,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		paintMethods:          map[callKey]string{},
 		heldExtensionPaints:   map[callKey]*heldExtensionPaint{},
 		extensionProbeCache:   map[extensionWorldKey]*extensionProbeWorld{},
+		extensionProbePending: map[extensionWorldKey]*extensionWorldPending{},
 		extensionCaptureDirty: map[callKey]bool{},
 		scripts:               map[string]bool{},
 		maxWorlds:             maxWorlds,
