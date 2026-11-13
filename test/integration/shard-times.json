@@ -532,6 +532,7 @@
     "TestCDPExtensionFrameFixRows": 2.5,
     "TestCDPExtensionFrameEvaluateResultUnmarked": 8,
     "TestCDPExtensionFrameInnerMessageMarkerStripped": 8,
-    "TestCDPExtensionFrameDetachReleasesHeldPaint": 10
+    "TestCDPExtensionFrameDetachReleasesHeldPaint": 10,
+    "TestCDPDeliversOrdinaryIframeUnderTabAndPageAttachParents": 25.0
   }
 }

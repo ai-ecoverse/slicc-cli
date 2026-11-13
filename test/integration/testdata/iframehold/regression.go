@@ -1056,3 +1056,185 @@ func TestReviewPlaceholderOverwrite(t *testing.T) {
 		t.Error("placeholder overwrite erased recorded protected frame before descendant discovery")
 	}
 }
+
+func dualAttachInfo(id, parent string, url string) map[string]any {
+	info := map[string]any{"targetId": id, "type": "iframe", "url": url}
+	if parent != "" {
+		info["parentFrameId"] = parent
+		info["parentId"] = parent
+	}
+	return info
+}
+
+func dualAttach(g *guard, parentSession, session string, waiting bool, info map[string]any) browserVerdict {
+	raw, _ := json.Marshal(map[string]any{
+		"method":    "Target.attachedToTarget",
+		"sessionId": parentSession,
+		"params":    map[string]any{"sessionId": session, "waitingForDebugger": waiting, "targetInfo": info},
+	})
+	return g.fromBrowser(raw)
+}
+
+func TestIframeHoldTabOwnerEmptyParentThenPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-tab", "S-X-tab", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	v := dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("tab then page disputed: disputed=%v protected=%v parents=%v", g.ancestryDisputed["X"], g.targets["X"].protected, g.frameParents)
+	}
+	if len(v.forward) == 0 && len(v.page) == 0 {
+		t.Fatalf("page attach not delivered: forward=%s page=%s", v.forward, v.page)
+	}
+}
+
+func TestIframeHoldPageThenTabOwnerEmptyParent(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	_ = dualAttach(g, "S-tab", "S-X-tab", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("page then tab disputed: disputed=%v protected=%v parents=%v", g.ancestryDisputed["X"], g.targets["X"].protected, g.frameParents)
+	}
+}
+
+func TestIframeHoldTabOwnerNestedChainReachesPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.noteFrameParentLocked("INNER", "P")
+	v := dualAttach(g, "S-tab", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("tab nested disputed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"].protected)
+	}
+	if len(v.forward) == 0 && len(v.page) == 0 {
+		t.Fatal("tab nested attach not delivered")
+	}
+}
+
+func TestIframeHoldBrowserOwnerEmptyParentThenPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "BROWSER", Type: "browser", URL: ""},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+	})
+	g.sessions["S-browser"] = &session{id: "S-browser", target: "BROWSER", typ: "browser"}
+	g.browserSessions["S-browser"] = true
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-browser", "S-X-b", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	_ = dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("browser then page disputed: disputed=%v protected=%v parents=%v", g.ancestryDisputed["X"], g.targets["X"].protected, g.frameParents)
+	}
+}
+
+func TestIframeHoldBrowserOwnerNestedChainNoDispute(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "BROWSER", Type: "browser", URL: ""},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+	})
+	g.sessions["S-browser"] = &session{id: "S-browser", target: "BROWSER", typ: "browser"}
+	g.browserSessions["S-browser"] = true
+	g.noteFrameParentLocked("INNER", "P")
+	v := dualAttach(g, "S-browser", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("browser nested disputed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"].protected)
+	}
+	if len(v.forward) == 0 && len(v.page) == 0 {
+		t.Fatal("browser nested attach not delivered")
+	}
+}
+
+func TestIframeHoldUnknownOwnerTypeStillDisputes(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "OTHER", Type: "other", URL: "https://ordinary.test/"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+	})
+	g.sessions["S-other"] = &session{id: "S-other", target: "OTHER", typ: "other"}
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	_ = dualAttach(g, "S-other", "S-X-other", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	if !g.ancestryDisputed["X"] || !g.targets["X"].protected {
+		t.Fatalf("unknown owner type did not dispute: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"] != nil && g.targets["X"].protected)
+	}
+}
+
+func TestIframeHoldUnresolvedTabOwnerFailsClosed(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C-tab"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C-page"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	_ = dualAttach(g, "S-tab", "S-X-tab", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	if !g.ancestryDisputed["X"] || !g.targets["X"].protected {
+		t.Fatalf("unresolved tab owner did not fail closed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"] != nil && g.targets["X"].protected)
+	}
+}
+
+func TestIframeHoldAmbiguousTabPagesFailClosed(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P1", Type: "page", URL: "https://ordinary.test/a", BrowserContextID: "C1"},
+		{TargetID: "P2", Type: "page", URL: "https://ordinary.test/b", BrowserContextID: "C1"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.noteFrameParentLocked("INNER", "P1")
+	_ = dualAttach(g, "S-tab", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
+	if !g.ancestryDisputed["X"] || !g.targets["X"].protected {
+		t.Fatalf("ambiguous tab pages did not fail closed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"] != nil && g.targets["X"].protected)
+	}
+}
+
+func TestIframeHoldDifferentPageOwnerStillDisputes(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "OTHER", Type: "page", URL: "https://ordinary.test/other"},
+	})
+	g.sessions["S-other"] = &session{id: "S-other", target: "OTHER", typ: "page"}
+	g.noteFrameParentLocked("INNER", "P")
+	_ = dualAttach(g, "S-other", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
+	if !g.ancestryDisputed["X"] || !g.targets["X"].protected {
+		t.Fatalf("different page owner did not dispute: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"] != nil && g.targets["X"].protected)
+	}
+}
+
+func TestIframeHoldTabSessionFollowMatchesResolvedPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+	})
+	g.frames["P"] = map[string]bool{"X": true}
+	frame := &target{id: "X", typ: "iframe", url: "https://frame.test/embed", parentFrame: "P", shown: true, ctx: "C1"}
+	g.targets["X"] = frame
+	g.sessions["S-X"] = &session{id: "S-X", target: "X", parent: "S-tab", typ: "iframe"}
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	if g.iframeFollowRefusedLocked("S-X") {
+		t.Fatal("tab-attached iframe was refused against its resolved page chain")
+	}
+}

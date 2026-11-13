@@ -450,19 +450,38 @@ func (g *guard) openerState(t *target) protect.Opener {
 }
 
 func (g *guard) decide(t *target, previous bool) bool {
+	protected, reason := g.decideReasonLocked(t, previous)
+	if protected && !previous {
+		g.logf("cdp: protecting target=%s type=%s reason=%s url=%s", t.id, t.typ, reason, t.url)
+	}
+	return protected
+}
+
+func (g *guard) decideReasonLocked(t *target, previous bool) (bool, string) {
 	if t.typ == "browser" {
-		return false
+		return false, ""
 	}
 	if (workerTypes[t.typ] || t.typ == "iframe") && previous {
-		return true
+		return true, "sticky"
 	}
 	if g.workerFromProtectedCreatorLocked(t) {
-		return true
+		return true, "worker-creator-protected"
 	}
-	if g.iframeFromProtectedAncestorLocked(t) {
-		return true
+	if reason := g.iframeProtectedAncestorReasonLocked(t); reason != "" {
+		return true, reason
 	}
-	return g.o.TargetWith(t.url, t.typ, previous, g.openerState(t), g.evidenceLocked(t))
+	opener := g.openerState(t)
+	if g.o.TargetWith(t.url, t.typ, previous, opener, g.evidenceLocked(t)) {
+		switch {
+		case protect.HiddenType(t.typ):
+			return true, "hidden-type"
+		case protect.Inheriting(t.url) && (previous || opener == protect.OpenerProtected || opener == protect.OpenerUnknown):
+			return true, "inheriting-opener"
+		default:
+			return true, "url"
+		}
+	}
+	return false, ""
 }
 
 const maxFrameAncestors = 64
@@ -565,30 +584,82 @@ func (g *guard) iframeAncestorStartLocked(t *target) string {
 	return g.frameParents[t.id]
 }
 
+func (g *guard) pageUnderTabLocked(tab *target) *target {
+	if tab == nil || tab.gone || tab.typ != "tab" {
+		return nil
+	}
+	var match *target
+	for _, t := range g.targets {
+		if t == nil || t.gone || t.typ != "page" {
+			continue
+		}
+		sameCtx := tab.ctx != "" && t.ctx == tab.ctx
+		sameURL := tab.ctx == "" && tab.url != "" && t.url == tab.url
+		if !sameCtx && !sameURL {
+			continue
+		}
+		if match != nil && match != t {
+			return nil
+		}
+		match = t
+	}
+	return match
+}
+
+func (g *guard) attachDisputeOwnerLocked(owner *target) (id string, skipDispute bool) {
+	if owner == nil {
+		return "", true
+	}
+	switch owner.typ {
+	case "page", "iframe":
+		return owner.id, false
+	case "tab":
+		if page := g.pageUnderTabLocked(owner); page != nil {
+			return page.id, false
+		}
+		return owner.id, false
+	case "browser":
+		return "", true
+	default:
+		return owner.id, false
+	}
+}
+
 func (g *guard) noteIframeAttachParentLocked(info targetInfo) [][]byte {
 	owner := g.sessionOwnerLocked(g.attachParent)
 	if owner == nil {
 		return nil
 	}
+	disputeOwner, skipDispute := g.attachDisputeOwnerLocked(owner)
 	var send [][]byte
 	pf := parentFrameOf(info)
-	if pf != "" && pf != owner.id {
+	if pf != "" && disputeOwner != "" && pf != disputeOwner {
 		if _, ok := g.frameParents[pf]; ok {
-			if !g.frameParentChainReachesLocked(pf, owner.id) {
+			if !skipDispute && !g.frameParentChainReachesLocked(pf, disputeOwner) {
 				g.ancestryDisputed[info.TargetID] = true
+				g.logf("cdp: iframe ancestry disputed target=%s owner=%s ownerType=%s disputeOwner=%s parentFrame=%s chainMissesOwner=true", info.TargetID, owner.id, owner.typ, disputeOwner, pf)
 			}
-		} else if part, ok := g.noteFrameParentLocked(pf, owner.id); !ok {
-			g.ancestryDisputed[info.TargetID] = true
+		} else if part, ok := g.noteFrameParentLocked(pf, disputeOwner); !ok {
+			if !skipDispute {
+				g.ancestryDisputed[info.TargetID] = true
+				g.logf("cdp: iframe ancestry disputed target=%s owner=%s ownerType=%s disputeOwner=%s parentFrame=%s noteParentFailed=true", info.TargetID, owner.id, owner.typ, disputeOwner, pf)
+			}
 		} else {
 			send = append(send, part...)
 		}
 	}
 	parent := pf
 	if parent == "" {
-		parent = owner.id
+		parent = disputeOwner
+	}
+	if parent == "" {
+		return send
 	}
 	if part, ok := g.noteFrameParentLocked(info.TargetID, parent); !ok && g.frameParents[info.TargetID] != parent {
-		g.ancestryDisputed[info.TargetID] = true
+		if !skipDispute {
+			g.ancestryDisputed[info.TargetID] = true
+			g.logf("cdp: iframe ancestry disputed target=%s owner=%s ownerType=%s disputeOwner=%s recordedParent=%s attachParent=%s", info.TargetID, owner.id, owner.typ, disputeOwner, g.frameParents[info.TargetID], parent)
+		}
 	} else {
 		send = append(send, part...)
 	}
@@ -727,29 +798,39 @@ func (g *guard) iframeAncestryUnknownLocked(t *target) bool {
 }
 
 func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
+	return g.iframeProtectedAncestorReasonLocked(t) != ""
+}
+
+func (g *guard) iframeProtectedAncestorReasonLocked(t *target) string {
 	if t == nil || t.typ != "iframe" {
-		return false
+		return ""
 	}
 	if g.ancestryDisputed[t.id] {
-		return true
+		return "ancestry-disputed"
 	}
 	if parent := g.iframeParentTargetLocked(t); parent != nil && parent.protected {
-		return true
+		return "parent-target-protected:" + parent.id
 	}
 	seen := map[string]bool{t.id: true}
 	id := g.iframeAncestorStartLocked(t)
 	ext := g.extensionFrameTargetLocked(t)
 	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
 		if seen[id] {
-			return ext
+			if ext {
+				return "extension-frame-cycle"
+			}
+			return ""
 		}
 		seen[id] = true
 		if g.creatorProtectedLocked(id) {
-			return true
+			return "ancestor-protected:" + id
 		}
 		id = g.frameParentOfLocked(id)
 	}
-	return ext && id != ""
+	if ext && id != "" {
+		return "extension-frame-depth"
+	}
+	return ""
 }
 
 func (g *guard) iframeAncestorPendingLocked(t *target) bool {
@@ -890,6 +971,26 @@ func (g *guard) targetBlockedLocked(id string) bool {
 	return id != "" && (g.targetProtectedLocked(id) || g.targetHeldLocked(id) || g.targetUnconfirmedLocked(id))
 }
 
+func (g *guard) iframeAttachOwnerDisagreesLocked(parent string, chain *target) bool {
+	if parent == "" || g.browserSessions[parent] {
+		return false
+	}
+	if g.held[parent] != nil || g.hidden[parent] {
+		return true
+	}
+	owner := g.sessionOwnerLocked(parent)
+	if owner == nil || owner.typ == "browser" {
+		return owner != nil && g.targetBlockedLocked(owner.id)
+	}
+	compare := owner
+	if owner.typ == "tab" {
+		if page := g.pageUnderTabLocked(owner); page != nil {
+			compare = page
+		}
+	}
+	return g.targetBlockedLocked(owner.id) || (chain != nil && compare.id != chain.id)
+}
+
 func (g *guard) iframeFollowRefusedLocked(sessionID string) bool {
 	s := g.sessions[sessionID]
 	if s == nil {
@@ -912,17 +1013,10 @@ func (g *guard) iframeFollowRefusedLocked(sessionID string) bool {
 	if chain != nil && (chain.protected || g.targetBlockedLocked(chain.id) || chain.typ == "iframe" && g.iframeAncestryUnknownLocked(chain)) {
 		return true
 	}
-	if g.extensionFrameTargetLocked(t) || s.parent == "" || g.browserSessions[s.parent] {
+	if g.extensionFrameTargetLocked(t) {
 		return false
 	}
-	if g.held[s.parent] != nil || g.hidden[s.parent] {
-		return true
-	}
-	owner := g.sessionOwnerLocked(s.parent)
-	if owner == nil {
-		return false
-	}
-	return g.targetBlockedLocked(owner.id) || (chain != nil && owner.id != chain.id)
+	return g.iframeAttachOwnerDisagreesLocked(s.parent, chain)
 }
 
 func (g *guard) workerFromProtectedCreatorLocked(t *target) bool {
@@ -1244,7 +1338,11 @@ func (g *guard) markLocked(t *target) [][]byte {
 }
 
 func (g *guard) protectLocked(t *target) [][]byte {
-	g.logf("cdp: a target moved onto a protected origin; detaching its sessions target=%s", t.id)
+	_, reason := g.decideReasonLocked(t, false)
+	if reason == "" && t.protected {
+		reason = "sticky"
+	}
+	g.logf("cdp: a target moved onto a protected origin; detaching its sessions target=%s reason=%s", t.id, reason)
 	var out [][]byte
 	for _, s := range g.sessions {
 		if s.target != t.id || s.refused {
@@ -1252,7 +1350,7 @@ func (g *guard) protectLocked(t *target) [][]byte {
 		}
 		s.refused = true
 		g.addRefusedLocked(s.id)
-		g.logf("cdp: detaching a session on a protected origin target=%s session=%s parent=%s waiting=%t", t.id, s.id, s.parent, s.waiting)
+		g.logf("cdp: detaching a session on a protected origin target=%s session=%s parent=%s waiting=%t reason=%s", t.id, s.id, s.parent, s.waiting, reason)
 		if s.waiting {
 			out = append(out, g.resumeLocked(s.id, t.id))
 		}
