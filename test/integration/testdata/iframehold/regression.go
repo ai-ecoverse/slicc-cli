@@ -728,6 +728,42 @@ func TestIframeHoldOrdinaryLateParentStaysShown(t *testing.T) {
 	}
 }
 
+func TestIframeHoldFrameAttachedOnTrackedPageRedecides(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/doc"},
+		{TargetID: "SEVEN", Type: "page", URL: "https://seven.sliccy.ai/doc"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	child := &target{id: "CHILD", typ: "iframe", url: "https://ordinary.test/child", parentFrame: "X", shown: true}
+	g.targets["CHILD"] = child
+	x.protected = g.decide(x, false)
+	child.protected = g.decide(child, false)
+	if x.protected || child.protected || g.targetReasonLocked("CHILD") != refusedAncestry {
+		t.Fatalf("precondition: want unresolved ancestry, got x=%t child=%t reason=%q", x.protected, child.protected, g.targetReasonLocked("CHILD"))
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"sessionId": "S-page",
+		"method":    "Page.frameAttached",
+		"params":    map[string]any{"frameId": "FRAME", "parentFrameId": "SEVEN"},
+	})
+	_ = g.fromBrowser(raw)
+	if g.frameParents["FRAME"] != "SEVEN" {
+		t.Fatalf("tracked page frameAttached did not record parent: %q", g.frameParents["FRAME"])
+	}
+	if !x.protected || !child.protected {
+		t.Fatalf("tracked page frameAttached did not redecide: x=%t child=%t", x.protected, child.protected)
+	}
+	if g.targetReasonLocked("CHILD") != refusedTarget {
+		t.Fatalf("after tracked frameAttached reason=%q want %q", g.targetReasonLocked("CHILD"), refusedTarget)
+	}
+	if g.listingHiddenLocked(targetInfo{TargetID: "CHILD", Type: "iframe", URL: child.url, ParentFrameID: "X"}) == false {
+		t.Fatal("after tracked frameAttached CHILD was listable")
+	}
+}
+
 func TestIframeHoldExtensionFrameUnderOrdinaryKeepsMainRule(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}

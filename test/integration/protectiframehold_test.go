@@ -242,11 +242,11 @@ func lateIframeParentScript(seven, vault, allowed string) fakeScript {
 		})
 		return string(raw)
 	}
-	frame := func(session, id, parent, raw string) string {
+	frameAttached := func(session, id, parent string) string {
 		event, _ := json.Marshal(map[string]any{
 			"sessionId": session,
-			"method":    "Page.frameNavigated",
-			"params":    map[string]any{"frame": map[string]any{"id": id, "parentId": parent, "url": raw, "securityOrigin": raw}},
+			"method":    "Page.frameAttached",
+			"params":    map[string]any{"frameId": id, "parentFrameId": parent},
 		})
 		return string(event)
 	}
@@ -267,8 +267,8 @@ func lateIframeParentScript(seven, vault, allowed string) fakeScript {
 				armed = true
 				events := []string{
 					created(page), attach("", "S-page", page),
-					created(sevenPage), attach("", "S-seven", sevenPage),
-					created(vaultPage), attach("", "S-vault", vaultPage),
+					created(sevenPage),
+					created(vaultPage),
 				}
 				for _, info := range shapes {
 					events = append(events, created(info))
@@ -280,9 +280,9 @@ func lateIframeParentScript(seven, vault, allowed string) fakeScript {
 				}
 				revealed = true
 				return "{}", []string{
-					frame("S-seven", "FRAME-seven-late", "P-seven", seven+"/frame"),
-					frame("S-vault", "FRAME-vault-late", "P-vault", vault+"/frame"),
-					frame("S-page", "FRAME-plain-late", "P-ordinary", allowed+"/frame"),
+					frameAttached("S-page", "FRAME-seven-late", "P-seven"),
+					frameAttached("S-page", "FRAME-vault-late", "P-vault"),
+					frameAttached("S-page", "FRAME-plain-late", "P-ordinary"),
 				}
 			}
 		case "Target.getTargets":
@@ -340,6 +340,7 @@ func TestCDPRedecidesIframesWhenParentAncestryArrivesLate(t *testing.T) {
 	before := listed(result.Before.List)
 	after := listed(result.After.List)
 	hidden := []string{"F-seven-x", "F-seven-child", "F-vault-x", "F-vault-child"}
+	ancestryText := "slicc: refused: unresolved ancestry"
 	for _, id := range hidden {
 		if before[id] {
 			t.Errorf("before late parent, %s was listed", id)
@@ -353,7 +354,10 @@ func TestCDPRedecidesIframesWhenParentAncestryArrivesLate(t *testing.T) {
 		}
 		attach := result.After.Attach[id]
 		if attach.OK || attach.Error.Message != refusedText {
-			t.Errorf("after late protected parent, attach(%s): %+v", id, attach)
+			t.Errorf("after late protected parent, attach(%s): %+v want %q", id, attach, refusedText)
+		}
+		if attach.Error.Message == ancestryText {
+			t.Errorf("after late protected parent, attach(%s) stayed on unresolved ancestry", id)
 		}
 	}
 	for _, id := range []string{"F-plain-x", "F-plain-child"} {
