@@ -530,7 +530,6 @@
     "TestCDPExtensionFrameFixRows": 2.5,
     "TestCDPExtensionFrameEvaluateResultUnmarked": 8,
     "TestCDPExtensionFrameInnerMessageMarkerStripped": 8,
-    "TestCDPExtensionFrameConcurrentProbesShareWorld": 10,
     "TestCDPExtensionFrameDetachReleasesHeldPaint": 10
   }
 }

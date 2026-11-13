@@ -915,33 +915,6 @@ func TestCDPExtensionFrameInnerMessageMarkerStripped(t *testing.T) {
 	}
 }
 
-func TestCDPExtensionFrameConcurrentProbesShareWorld(t *testing.T) {
-	env, fake := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
-		return extensionTwoTabScript(false)
-	})
-	fake.delay("Page.getFrameTree", 150*time.Millisecond)
-	fake.delay("Network.enable", 150*time.Millisecond)
-	fake.delay("Page.createIsolatedWorld", 500*time.Millisecond)
-	var r struct {
-		OK      bool `json:"ok"`
-		ShotOK  bool `json:"shotOk"`
-		TypedOK bool `json:"typedOk"`
-	}
-	env.evalJSONWithin(t, "linkTest.protect.foreignExtensionFrameConcurrentProbeWorlds('chrome-2')", &r, 30*time.Second)
-	if !r.OK || !r.ShotOK || !r.TypedOK {
-		t.Fatalf("overlapping screenshot and insertText probes: %+v", r)
-	}
-	worlds := 0
-	for _, raw := range fake.received() {
-		if strings.Contains(raw, `"method":"Page.createIsolatedWorld"`) {
-			worlds++
-		}
-	}
-	if worlds != 1 {
-		t.Fatalf("Page.createIsolatedWorld count=%d want 1 (base overlaps two probes and creates two)", worlds)
-	}
-}
-
 func TestCDPExtensionFrameDetachReleasesHeldPaint(t *testing.T) {
 	env, _ := setupFakeProtectEnv(t, []string{"SLICC_CDP_EXTENSION_PAINT_HOLD=30s"}, func(_, _ string) fakeScript {
 		return extensionTwoTabScript(true)

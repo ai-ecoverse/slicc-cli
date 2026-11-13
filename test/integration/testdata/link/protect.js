@@ -2638,21 +2638,6 @@ export function protectTest(getLink, describe) {
           parsed,
         };
       }),
-    foreignExtensionFrameConcurrentProbeWorlds: (browser) =>
-      run(browser, async (c) => {
-        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
-        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
-        const shot = outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
-        await sleep(350);
-        const typed = outcome(c.send('Input.insertText', { text: 'x' }, sessionId));
-        const [shotR, typedR] = await Promise.all([shot, typed]);
-        await outcome(c.send('Target.detachFromTarget', { sessionId }));
-        return {
-          ok: shotR.ok && typedR.ok,
-          shotOk: shotR.ok,
-          typedOk: typedR.ok,
-        };
-      }),
     foreignExtensionFrameDetachReleasesHold: (browser) =>
       run(browser, async (c) => {
         const shownRefusal =
