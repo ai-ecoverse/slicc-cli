@@ -1380,7 +1380,7 @@ func TestIframeHoldConfirmPendingParentDoesNotStickyProtect(t *testing.T) {
 	}
 }
 
-func TestIframeHoldURLReleaseEmitsInfoChangedBeforeAttach(t *testing.T) {
+func TestIframeHoldURLReleaseAttachesWithoutSynthesizedInfoChanged(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
 	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
@@ -1405,11 +1405,82 @@ func TestIframeHoldURLReleaseEmitsInfoChangedBeforeAttach(t *testing.T) {
 			methods = append(methods, m.Method)
 		}
 	}
-	if len(methods) < 2 || methods[0] != "Target.targetInfoChanged" || methods[1] != "Target.attachedToTarget" {
-		t.Fatalf("held iframe release order=%v, want targetInfoChanged then attachedToTarget", methods)
+	if len(methods) != 1 || methods[0] != "Target.attachedToTarget" {
+		t.Fatalf("held iframe release order=%v, want attachedToTarget only (Chrome's later targetInfoChanged is separate)", methods)
 	}
 	if g.held["S-F"] != nil {
 		t.Fatal("held iframe was not delivered")
+	}
+}
+
+func heldOwnerSettleGuard(t *testing.T) *guard {
+	t.Helper()
+	g := iframeHoldGuard(t)
+	g.relaySession = "RELAY"
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", session: "GUARD", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-F", true, dualAttachInfo("F", "P", ""))
+	if g.targets["F"].protected || g.held["S-F"] == nil {
+		t.Fatal("expected held unprotected iframe before owner settle")
+	}
+	return g
+}
+
+func assertHeldHiddenAfterOwnerProtect(t *testing.T, g *guard, label string) {
+	t.Helper()
+	if !g.targets["P"].protected {
+		t.Fatalf("%s: page was not protected", label)
+	}
+	if !g.targets["F"].protected {
+		t.Fatalf("%s: iframe was not protected reason=%q", label, g.targetReasonLocked("F"))
+	}
+	if g.held["S-F"] != nil {
+		t.Fatalf("%s: held iframe session remained", label)
+	}
+}
+
+func TestIframeHoldOwnerFrameNavigatedSevenHidesHeld(t *testing.T) {
+	for _, host := range []string{"https://seven.sliccy.ai", "https://vault.sliccy.ai"} {
+		g := heldOwnerSettleGuard(t)
+		raw, _ := json.Marshal(map[string]any{
+			"method": "Page.frameNavigated", "sessionId": "S-P",
+			"params": map[string]any{"type": "Navigation", "frame": map[string]any{
+				"id": "P", "url": host + "/doc", "securityOrigin": host,
+			}},
+		})
+		_ = g.fromBrowser(raw)
+		assertHeldHiddenAfterOwnerProtect(t, g, "frameNavigated "+host)
+	}
+}
+
+func TestIframeHoldOwnerConfirmReplySevenHidesHeld(t *testing.T) {
+	for _, host := range []string{"https://seven.sliccy.ai", "https://vault.sliccy.ai"} {
+		g := heldOwnerSettleGuard(t)
+		g.beginConfirmLocked(g.navTargets["P"])
+		g.browserCommitIframeURL(t, "F", "P", "https://frame.test/embed")
+		if g.held["S-F"] == nil {
+			t.Fatal("iframe released before confirm settled")
+		}
+		result, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": map[string]any{
+			"id": "P", "url": host + "/doc", "securityOrigin": host,
+		}}})
+		_ = g.confirmedTargetLocked(g.navTargets["P"], g.navTargets["P"].confirm, 0, message{Result: result})
+		_ = g.settleHeldWorkersLocked()
+		assertHeldHiddenAfterOwnerProtect(t, g, "confirm reply "+host)
+	}
+}
+
+func TestIframeHoldOwnerURLChangedSevenHidesHeld(t *testing.T) {
+	for _, host := range []string{"https://seven.sliccy.ai", "https://vault.sliccy.ai"} {
+		g := heldOwnerSettleGuard(t)
+		delete(g.navTargets, "P")
+		raw, _ := json.Marshal(map[string]any{
+			"method": "Target.targetInfoChanged", "sessionId": "RELAY",
+			"params": map[string]any{"targetInfo": map[string]any{"targetId": "P", "type": "page", "url": host + "/doc"}},
+		})
+		_ = g.fromBrowser(raw)
+		assertHeldHiddenAfterOwnerProtect(t, g, "targetInfoChanged "+host)
 	}
 }
 

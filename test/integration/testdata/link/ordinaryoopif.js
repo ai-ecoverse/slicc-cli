@@ -178,6 +178,7 @@ export async function measureURLLessIframes(getLink, opts) {
 export async function measurePendingAncestorIframes(getLink, opts) {
   const c = await CdpClient.open(getLink(), opts.browser);
   c.callTimeout = 20000;
+  const settle = opts.settle || 'ordinary';
   try {
     await c.send('Target.setDiscoverTargets', { discover: true });
     await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
@@ -194,9 +195,23 @@ export async function measurePendingAncestorIframes(getLink, opts) {
       };
     }
     await sleep(300);
-    await c.send('Browser.getHistogram', { name: 'commit-pending-iframes' });
-    await sleep(300);
-    await c.send('Browser.getHistogram', { name: 'flush:page-confirm' });
+    if (settle === 'ordinary') {
+      await c.send('Browser.getHistogram', { name: 'commit-pending-iframes' });
+    } else if (settle === 'ordinary-confirm' || settle.endsWith('-confirm')) {
+      await c.send('Browser.getHistogram', { name: 'arm-page-confirm' });
+      await sleep(300);
+      await c.send('Browser.getHistogram', { name: 'commit-pending-iframes' });
+      await sleep(300);
+      await c.send('Browser.getHistogram', { name: 'flush:page-confirm' });
+    } else if (settle.endsWith('-url')) {
+      await c.send('Browser.getHistogram', { name: 'settle-owner-url' });
+      await sleep(300);
+      await c.send('Browser.getHistogram', { name: 'flush:page-confirm' });
+    } else if (settle.endsWith('-nav')) {
+      await c.send('Browser.getHistogram', { name: 'settle-owner-nav' });
+    } else {
+      throw new Error(`unknown pending-ancestor settle ${settle}`);
+    }
     await sleep(300);
     const rows = {};
     for (const [id, p] of Object.entries(asked)) {
@@ -218,7 +233,7 @@ export async function measurePendingAncestorIframes(getLink, opts) {
       waiting: e.params?.waitingForDebugger ?? null,
       reason: e.params?.reason ?? '',
     }));
-    return { rows, list, events, settle: opts.settle || 'ordinary' };
+    return { rows, list, events, settle };
   } finally {
     await c.close();
   }

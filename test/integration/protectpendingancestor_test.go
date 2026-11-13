@@ -3,22 +3,32 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
 
 func pendingAncestorIframeScript(seven, allowed, settle string) fakeScript {
+	vault := "https://vault.sliccy.ai"
 	tab := map[string]any{"targetId": "T-ordinary", "type": "tab", "url": allowed + "/framed", "browserContextId": "C-ordinary"}
-	pageURL := allowed + "/framed"
-	if settle == "seven" {
-		pageURL = seven + "/doc"
-	}
 	page := map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/framed", "browserContextId": "C-ordinary"}
 	frameURL := allowed + "/inner"
 	info := func(url string) map[string]any {
 		return map[string]any{"targetId": "F-plain", "type": "iframe", "url": url, "parentId": "P-ordinary", "parentFrameId": "P-ordinary", "attached": true, "browserContextId": "C-ordinary"}
 	}
 	bodies := map[string]map[string]any{"T-ordinary": tab, "P-ordinary": page, "F-plain": info("")}
+	protectedURL := seven + "/doc"
+	protectedOrigin := seven
+	if strings.HasPrefix(settle, "vault-") {
+		protectedURL = vault + "/doc"
+		protectedOrigin = vault
+	}
+	confirmTree, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": map[string]any{
+		"id": "P-ordinary", "url": protectedURL, "securityOrigin": protectedOrigin,
+	}}})
+	ordinaryTree, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": map[string]any{
+		"id": "P-ordinary", "url": allowed + "/framed", "securityOrigin": allowed,
+	}}})
 	event := func(session, method string, params map[string]any) string {
 		m := map[string]any{"method": method, "params": params}
 		if session != "" {
@@ -33,9 +43,9 @@ func pendingAncestorIframeScript(seven, allowed, settle string) fakeScript {
 	attach := func(parent, session string, body map[string]any, waiting bool) string {
 		return event(parent, "Target.attachedToTarget", map[string]any{"sessionId": session, "targetInfo": body, "waitingForDebugger": waiting})
 	}
-	confirmTree, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "P-ordinary", "url": pageURL, "securityOrigin": pageURL}}})
-	armed, framed, committed := false, false, false
-	attaches, frameTrees := 0, 0
+	armed, framed, committed, confirming := false, false, false, false
+	attaches := 0
+	pendingConfirm := false
 	return func(method string, params json.RawMessage) (string, []string) {
 		var p struct {
 			Name     string `json:"name"`
@@ -61,6 +71,15 @@ func pendingAncestorIframeScript(seven, allowed, settle string) fakeScript {
 					event("S-page", "Page.frameAttached", map[string]any{"frameId": "F-plain", "parentFrameId": "P-ordinary"}),
 					event("S-page", "Page.frameDetached", map[string]any{"frameId": "F-plain", "reason": "swap"}),
 				}
+			case p.Name == "arm-page-confirm" && framed && !confirming:
+				confirming = true
+				pendingConfirm = true
+				return "{}", []string{
+					event("S-page", "Page.frameNavigated", map[string]any{
+						"type":  "Navigation",
+						"frame": map[string]any{"id": "P-ordinary", "url": "about:blank", "securityOrigin": "://"},
+					}),
+				}
 			case p.Name == "commit-pending-iframes" && framed && !committed:
 				committed = true
 				bodies["F-plain"] = info(frameURL)
@@ -69,17 +88,34 @@ func pendingAncestorIframeScript(seven, allowed, settle string) fakeScript {
 					event("RELAY", "Target.targetInfoChanged", map[string]any{"targetInfo": changed}),
 					event("", "Target.targetInfoChanged", map[string]any{"targetInfo": changed}),
 				}
+			case p.Name == "settle-owner-url" && framed:
+				bodies["P-ordinary"] = map[string]any{"targetId": "P-ordinary", "type": "page", "url": protectedURL, "browserContextId": "C-ordinary"}
+				changed := bodies["P-ordinary"]
+				pendingConfirm = true
+				return "{}", []string{
+					event("RELAY", "Target.targetInfoChanged", map[string]any{"targetInfo": changed}),
+					event("", "Target.targetInfoChanged", map[string]any{"targetInfo": changed}),
+				}
+			case p.Name == "settle-owner-nav" && framed:
+				bodies["P-ordinary"] = map[string]any{"targetId": "P-ordinary", "type": "page", "url": protectedURL, "browserContextId": "C-ordinary"}
+				return "{}", []string{
+					event("S-page", "Page.frameNavigated", map[string]any{
+						"type":  "Navigation",
+						"frame": map[string]any{"id": "P-ordinary", "url": protectedURL, "securityOrigin": protectedOrigin},
+					}),
+				}
 			}
 			return "{}", nil
 		case "Page.getFrameTree":
-			if settle == "seven" {
-				bodies["P-ordinary"] = map[string]any{"targetId": "P-ordinary", "type": "page", "url": pageURL, "browserContextId": "C-ordinary"}
+			tree := confirmTree
+			if settle == "ordinary" || settle == "ordinary-confirm" {
+				tree = ordinaryTree
 			}
-			frameTrees++
-			if frameTrees == 1 {
-				return "#pending:page-confirm|" + string(confirmTree), nil
+			if pendingConfirm {
+				pendingConfirm = false
+				return "#pending:page-confirm|" + string(tree), nil
 			}
-			return string(confirmTree), nil
+			return string(tree), nil
 		case "Target.getTargets":
 			if !armed {
 				return `{"targetInfos":[]}`, nil
@@ -107,7 +143,7 @@ func pendingAncestorIframeScript(seven, allowed, settle string) fakeScript {
 
 func TestCDPDeliversOrdinaryIframeAfterDelayedPageConfirm(t *testing.T) {
 	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
-		return pendingAncestorIframeScript(seven, allowed, "ordinary")
+		return pendingAncestorIframeScript(seven, allowed, "ordinary-confirm")
 	})
 	var result struct {
 		Rows map[string]struct {
@@ -128,43 +164,40 @@ func TestCDPDeliversOrdinaryIframeAfterDelayedPageConfirm(t *testing.T) {
 			Reason    string `json:"reason"`
 		} `json:"events"`
 	}
-	env.evalJSONWithin(t, "linkTest.pendingAncestorIframes("+jsArgs(map[string]any{"browser": "chrome-2", "frames": []string{"F-plain"}, "settle": "ordinary"})+")", &result, 60*time.Second)
+	env.evalJSONWithin(t, "linkTest.pendingAncestorIframes("+jsArgs(map[string]any{"browser": "chrome-2", "frames": []string{"F-plain"}, "settle": "ordinary-confirm"})+")", &result, 60*time.Second)
 	raw, _ := json.Marshal(result)
 	plain := result.Rows["F-plain"]
 	if !plain.Info.OK || plain.Info.URL != env.allowed+"/inner" {
-		t.Fatalf("Target.getTargetInfo after delayed ordinary confirm: %+v\n%s", plain.Info, raw)
+		t.Fatalf("Target.getTargetInfo after ordinary settle: %+v\n%s", plain.Info, raw)
 	}
 	if !plain.Attach.OK {
-		t.Fatalf("Target.attachToTarget after delayed ordinary confirm: %+v\n%s", plain.Attach, raw)
+		t.Fatalf("Target.attachToTarget after ordinary settle: %+v\n%s", plain.Attach, raw)
 	}
-	changedAt, pageAt, tabAt, pageN, tabN := -1, -1, -1, 0, 0
+	pageAt, tabAt, pageN, tabN := -1, -1, 0, 0
 	for i, e := range result.Events {
-		if e.Method == "Target.targetInfoChanged" && e.TargetID == "F-plain" && e.URL == env.allowed+"/inner" {
-			changedAt = i
-		}
 		if e.Method == "Target.attachedToTarget" && e.Child == "S-F-plain" {
 			pageN++
 			pageAt = i
 			if e.SessionID != "S-page" || e.URL != env.allowed+"/inner" || e.Waiting == nil || *e.Waiting {
-				t.Fatalf("page-parent auto-attach after delayed confirm wrong: %+v", e)
+				t.Fatalf("page-parent auto-attach after ordinary settle wrong: %+v", e)
 			}
 		}
 		if e.Method == "Target.attachedToTarget" && e.Child == "S-F-plain-tab" {
 			tabN++
 			tabAt = i
 			if e.SessionID != "S-tab" || e.URL != env.allowed+"/inner" || e.Waiting == nil || *e.Waiting {
-				t.Fatalf("tab-parent auto-attach after delayed confirm wrong: %+v", e)
+				t.Fatalf("tab-parent auto-attach after ordinary settle wrong: %+v", e)
 			}
 		}
 		if e.Method == "Target.detachedFromTarget" && (e.Child == "S-F-plain" || e.Child == "S-F-plain-tab") {
-			t.Fatalf("ordinary delayed-confirm iframe was detached: %+v\n%s", e, raw)
+			t.Fatalf("ordinary iframe was detached: %+v\n%s", e, raw)
 		}
 	}
 	if pageN != 1 || tabN != 1 {
 		t.Fatalf("auto-attach delivery counts page=%d tab=%d want 1 each: %s", pageN, tabN, raw)
 	}
-	if changedAt < 0 || pageAt < changedAt || tabAt < changedAt {
-		t.Fatalf("want targetInfoChanged before both attaches: changed=%d page=%d tab=%d %s", changedAt, pageAt, tabAt, raw)
+	if pageAt < 0 || tabAt < 0 {
+		t.Fatalf("missing dual-parent attaches page=%d tab=%d %s", pageAt, tabAt, raw)
 	}
 	listed := false
 	for _, id := range result.List {
@@ -173,14 +206,12 @@ func TestCDPDeliversOrdinaryIframeAfterDelayedPageConfirm(t *testing.T) {
 		}
 	}
 	if !listed {
-		t.Fatalf("ordinary iframe missing from listing after delayed confirm: %s", raw)
+		t.Fatalf("ordinary iframe missing from listing after settle: %s", raw)
 	}
 }
 
-func TestCDPProtectsHeldIframeWhenPendingPageSettlesOnSeven(t *testing.T) {
-	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
-		return pendingAncestorIframeScript(seven, allowed, "seven")
-	})
+func assertHeldIframeHiddenAfterProtectedSettle(t *testing.T, env *protectEnv, settle string) {
+	t.Helper()
 	var result struct {
 		Rows map[string]struct {
 			Info struct {
@@ -200,18 +231,18 @@ func TestCDPProtectsHeldIframeWhenPendingPageSettlesOnSeven(t *testing.T) {
 			Reason    string `json:"reason"`
 		} `json:"events"`
 	}
-	env.evalJSONWithin(t, "linkTest.pendingAncestorIframes("+jsArgs(map[string]any{"browser": "chrome-2", "frames": []string{"F-plain"}, "settle": "seven"})+")", &result, 60*time.Second)
+	env.evalJSONWithin(t, "linkTest.pendingAncestorIframes("+jsArgs(map[string]any{"browser": "chrome-2", "frames": []string{"F-plain"}, "settle": settle})+")", &result, 60*time.Second)
 	raw, _ := json.Marshal(result)
 	plain := result.Rows["F-plain"]
 	if plain.Info.OK || plain.Info.Error.Code != -32602 || plain.Info.Error.Message != "No target with given id found" {
-		t.Fatalf("Target.getTargetInfo after seven settle: %+v\n%s", plain.Info, raw)
+		t.Fatalf("Target.getTargetInfo after %s settle: %+v\n%s", settle, plain.Info, raw)
 	}
 	if plain.Attach.OK || plain.Attach.Error.Message != refusedText {
-		t.Fatalf("Target.attachToTarget after seven settle: %+v\n%s", plain.Attach, raw)
+		t.Fatalf("Target.attachToTarget after %s settle: %+v\n%s", settle, plain.Attach, raw)
 	}
 	for _, id := range result.List {
 		if id == "F-plain" {
-			t.Fatalf("protected iframe listed after seven settle: %s", raw)
+			t.Fatalf("protected iframe listed after %s settle: %s", settle, raw)
 		}
 	}
 	delivered, detached := 0, 0
@@ -223,13 +254,55 @@ func TestCDPProtectsHeldIframeWhenPendingPageSettlesOnSeven(t *testing.T) {
 			detached++
 		}
 		if e.TargetID == "F-plain" && e.Method != "Target.detachedFromTarget" && e.URL != "" {
-			t.Fatalf("held iframe reached the client under seven settle: %+v", e)
+			t.Fatalf("held iframe reached the client under %s settle: %+v", settle, e)
 		}
 	}
 	if delivered != 0 {
-		t.Fatalf("held iframe was delivered under seven settle: delivered=%d %s", delivered, raw)
+		t.Fatalf("held iframe was delivered under %s settle: delivered=%d %s", settle, delivered, raw)
 	}
 	if detached == 0 {
-		t.Fatalf("held iframe sessions were not detached under seven settle: %s", raw)
+		t.Fatalf("held iframe sessions were not detached under %s settle: %s", settle, raw)
 	}
+}
+
+func TestCDPProtectsHeldIframeWhenOwnerURLChangesToSeven(t *testing.T) {
+	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return pendingAncestorIframeScript(seven, allowed, "seven-url")
+	})
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, "seven-url")
+}
+
+func TestCDPProtectsHeldIframeWhenOwnerURLChangesToVault(t *testing.T) {
+	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return pendingAncestorIframeScript(seven, allowed, "vault-url")
+	})
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, "vault-url")
+}
+
+func TestCDPProtectsHeldIframeWhenOwnerFrameNavigatesToSeven(t *testing.T) {
+	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return pendingAncestorIframeScript(seven, allowed, "seven-nav")
+	})
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, "seven-nav")
+}
+
+func TestCDPProtectsHeldIframeWhenOwnerFrameNavigatesToVault(t *testing.T) {
+	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return pendingAncestorIframeScript(seven, allowed, "vault-nav")
+	})
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, "vault-nav")
+}
+
+func TestCDPProtectsHeldIframeWhenPendingPageConfirmsOnSeven(t *testing.T) {
+	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return pendingAncestorIframeScript(seven, allowed, "seven-confirm")
+	})
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, "seven-confirm")
+}
+
+func TestCDPProtectsHeldIframeWhenPendingPageConfirmsOnVault(t *testing.T) {
+	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return pendingAncestorIframeScript(seven, allowed, "vault-confirm")
+	})
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, "vault-confirm")
 }

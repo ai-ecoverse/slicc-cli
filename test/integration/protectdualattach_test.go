@@ -266,8 +266,8 @@ func TestCDPDeliversOrdinaryIframeUnderTabAndPageAttachParents(t *testing.T) {
 	if pageDelivered != 1 || pageAt < swapAt {
 		t.Fatalf("page-parent auto-attach reached the client %d times (at %d, swap at %d), want once after the swap: %s", pageDelivered, pageAt, swapAt, raw)
 	}
-	if pageChangedAt < 0 || pageAt < pageChangedAt {
-		t.Fatalf("want page-session targetInfoChanged before attachedToTarget: changed=%d attach=%d %s", pageChangedAt, pageAt, raw)
+	if pageChangedAt >= 0 && pageChangedAt < pageAt {
+		t.Fatalf("page-session targetInfoChanged arrived before attach (attach carries the URL; mid-hold URL updates are dropped): changed=%d attach=%d %s", pageChangedAt, pageAt, raw)
 	}
 	if tabDelivered != 1 {
 		t.Fatalf("tab-parent auto-attach reached the client %d times, want once: %s", tabDelivered, raw)
