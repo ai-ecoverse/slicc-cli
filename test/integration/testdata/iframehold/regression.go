@@ -1380,6 +1380,70 @@ func TestIframeHoldConfirmPendingParentDoesNotStickyProtect(t *testing.T) {
 	}
 }
 
+func TestIframeHoldContentScriptWorldDoesNotProtectSibling(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	ext := "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob"
+	raw, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S-P",
+		"params": map[string]any{"context": map[string]any{
+			"id": 2, "origin": ext, "name": "", "uniqueId": "ext-world",
+			"auxData": map[string]any{"isDefault": false, "type": "default", "frameId": "P"},
+		}},
+	})
+	_ = g.fromBrowser(raw)
+	if g.childFrames["P"] == ext {
+		t.Fatalf("content-script world origin was recorded as the page child frame: %q", g.childFrames["P"])
+	}
+	if g.creatorProtectedLocked("P") {
+		t.Fatal("ordinary page was creator-protected after a content-script world")
+	}
+	v := dualAttach(g, "S-P", "S-F", true, dualAttachInfo("F", "P", "https://frame.test/embed"))
+	if g.targets["F"].protected {
+		t.Fatalf("sibling iframe was protected by content-script world: reason=%q", g.targetReasonLocked("F"))
+	}
+	if len(v.forward)+len(v.page) == 0 && g.held["S-F"] != nil {
+		t.Fatal("ordinary iframe was held after content-script world on its page")
+	}
+}
+
+func TestIframeHoldPollutedExtensionChildFrameDoesNotProtectOrdinaryPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.childFrames["P"] = "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob"
+	if g.creatorProtectedLocked("P") || g.creatorProtectRuleLocked("P") != "none" {
+		t.Fatalf("polluted extension childFrame still protected the page: rule=%q", g.creatorProtectRuleLocked("P"))
+	}
+	frame := &target{id: "F", typ: "iframe", url: "https://frame.test/embed", parentFrame: "P"}
+	g.targets["F"] = frame
+	frame.protected = g.decide(frame, false)
+	if frame.protected {
+		t.Fatalf("ordinary iframe under polluted page was protected: reason=%q", g.targetReasonLocked("F"))
+	}
+}
+
+func TestIframeHoldDefaultProtectedContextStillLocksPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	raw, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S-P",
+		"params": map[string]any{"context": map[string]any{
+			"id": 1, "origin": "https://seven.sliccy.ai", "name": "", "uniqueId": "main",
+			"auxData": map[string]any{"isDefault": true, "type": "default", "frameId": "P"},
+		}},
+	})
+	v := g.fromBrowser(raw)
+	if g.childFrames["P"] != "https://seven.sliccy.ai" {
+		t.Fatalf("default protected context was not recorded: %q", g.childFrames["P"])
+	}
+	if !g.targets["P"].protected {
+		t.Fatalf("default protected context did not lock the page; send=%d", len(v.send))
+	}
+}
+
 func TestIframeHoldConfirmSettledSevenParentProtects(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.observeAll([]targetInfo{

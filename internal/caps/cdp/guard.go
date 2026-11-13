@@ -831,7 +831,7 @@ func (g *guard) creatorProtectRuleLocked(id string) string {
 	if g.targetProtectedLocked(id) {
 		return "sticky-flag"
 	}
-	if g.o.Loaded(g.childFrames[id]) {
+	if g.creatorChildFrameProtectedLocked(id) {
 		return "child-frame-url"
 	}
 	return "none"
@@ -1201,7 +1201,20 @@ func (g *guard) creatorProtectedLocked(id string) bool {
 	if g.targetProtectedLocked(id) {
 		return true
 	}
-	return g.o.Loaded(g.childFrames[id])
+	return g.creatorChildFrameProtectedLocked(id)
+}
+
+func (g *guard) creatorChildFrameProtectedLocked(id string) bool {
+	raw := g.childFrames[id]
+	if !g.o.Loaded(raw) {
+		return false
+	}
+	if protect.Scheme(raw) == "chrome-extension" {
+		if t := g.targets[id]; t != nil && !t.gone && !g.o.Loaded(t.url) {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *guard) creatorClassifiedLocked(id string) bool {

@@ -133,6 +133,14 @@ func dualParentIframeScript(seven, vault, allowed string) fakeScript {
 				return "{}", []string{
 					created("RELAY", tab), created("", tab), attach("", "S-tab", tab, false),
 					created("RELAY", page), created("", page), attach("", "S-page", page, false),
+					event("S-page", "Runtime.executionContextCreated", map[string]any{"context": map[string]any{
+						"id": 2, "origin": "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", "name": "", "uniqueId": "harness-world",
+						"auxData": map[string]any{"isDefault": false, "type": "default", "frameId": "P-ordinary"},
+					}}),
+					event("S-page", "Runtime.executionContextCreated", map[string]any{"context": map[string]any{
+						"id": 1, "origin": allowed + "/framed", "name": "", "uniqueId": "page-main",
+						"auxData": map[string]any{"isDefault": true, "type": "default", "frameId": "P-ordinary"},
+					}}),
 					created("RELAY", sevenPage), created("", sevenPage), attach("", "S-seven", sevenPage, false),
 					created("RELAY", vaultPage), created("", vaultPage), attach("", "S-vault", vaultPage, false),
 				}
