@@ -258,7 +258,7 @@ func keysOf(m map[string]bool) []string {
 
 func TestCDPExtensionFrameConcurrentCaptures(t *testing.T) {
 	env, fake := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
-		return extensionTwoTabScript("chrome-extension://"+harnessExtensionID+"/frame.html", false)
+		return extensionTwoTabScript(false)
 	})
 	fake.overlapCaptureHolds()
 	var r struct {
@@ -296,7 +296,7 @@ func TestCDPExtensionFrameSiblingProbeDirtiesInFlight(t *testing.T) {
 
 func TestCDPExtensionFrameDetachMidProbeReleasesHold(t *testing.T) {
 	env, fake := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
-		return extensionTwoTabScript("chrome-extension://"+harnessExtensionID+"/frame.html", false)
+		return extensionTwoTabScript(false)
 	})
 	fake.overlapCaptureHolds()
 	var r struct {
@@ -314,7 +314,8 @@ func TestCDPExtensionFrameDetachMidProbeReleasesHold(t *testing.T) {
 	}
 }
 
-func extensionTwoTabScript(frameURL string, hangHoldProbe bool) fakeScript {
+func extensionTwoTabScript(hangHoldProbe bool) fakeScript {
+	frameURL := extensionFrameURL()
 	var sessions atomic.Int32
 	var contexts atomic.Int64
 	var pages atomic.Int32
@@ -695,7 +696,24 @@ func extensionFrameMarkerScript(foreignURL, ownURL string) fakeScript {
 			return `{"backendNodeId":0}`, nil
 		case "Page.createIsolatedWorld":
 			return `{"executionContextId":7}`, nil
+		case "Runtime.enable":
+			sid, _ := lastPageSession.Load().(string)
+			if sid == "" {
+				sid = "S1"
+			}
+			inner := `{"id":1,"result":{"nodeName":"IFRAME","frameId":"FRAME","sliccExtensionFrame":` + poison + `}}`
+			return `{}`, []string{
+				`{"method":"Target.receivedMessageFromTarget","params":{"sessionId":` + strconv.Quote(sid) + `,"message":` + strconv.Quote(inner) + `}}`,
+			}
 		case "Runtime.evaluate":
+			var p struct {
+				Expression    string `json:"expression"`
+				ReturnByValue bool   `json:"returnByValue"`
+			}
+			_ = json.Unmarshal(params, &p)
+			if p.ReturnByValue && strings.Contains(p.Expression, "IFRAME") {
+				return `{"result":{"type":"object","value":{"nodeName":"IFRAME","frameId":"FRAME","nodeId":2,"backendNodeId":2}}}`, nil
+			}
 			return `{"result":{"type":"number","value":1}}`, nil
 		}
 		return "{}", nil
@@ -863,5 +881,59 @@ func TestCDPExtensionFrameBiosLiveCheck(t *testing.T) {
 	}
 	if !hasBackend || !hasMarker {
 		t.Fatalf("live-check owner keys %v want backendNodeId and sliccExtensionFrame", r.OwnerKeys)
+	}
+}
+
+func TestCDPExtensionFrameEvaluateResultUnmarked(t *testing.T) {
+	env := setupExtensionFrameMarkerProtect(t)
+	var r struct {
+		OK     bool `json:"ok"`
+		Marked bool `json:"marked"`
+	}
+	env.evalJSON(t, "linkTest.protect.extensionFrameEvaluateUnmarked('chrome-2')", &r)
+	if !r.OK {
+		t.Fatal("Runtime.evaluate failed")
+	}
+	if r.Marked {
+		t.Fatal("evaluate result shaped like an owner node was marked")
+	}
+}
+
+func TestCDPExtensionFrameInnerMessageMarkerStripped(t *testing.T) {
+	env := setupExtensionFrameMarkerProtect(t)
+	var r struct {
+		OK      bool   `json:"ok"`
+		Marked  bool   `json:"marked"`
+		Message string `json:"message"`
+	}
+	env.evalJSON(t, "linkTest.protect.extensionFrameInnerMessageStrip('chrome-2')", &r)
+	if !r.OK {
+		t.Fatal("Target.receivedMessageFromTarget was not delivered")
+	}
+	if r.Marked {
+		t.Fatalf("inner-message marker survived strip: %s", r.Message)
+	}
+}
+
+func TestCDPExtensionFrameDetachReleasesHeldPaint(t *testing.T) {
+	env, _ := setupFakeProtectEnv(t, []string{"SLICC_CDP_EXTENSION_PAINT_HOLD=30s"}, func(_, _ string) fakeScript {
+		return extensionTwoTabScript(true)
+	})
+	var r struct {
+		OK           bool    `json:"ok"`
+		Refusal      *string `json:"refusal"`
+		ShownRefusal string  `json:"shownRefusal"`
+		MS           int     `json:"ms"`
+	}
+	env.evalJSONWithin(t, "linkTest.protect.foreignExtensionFrameDetachReleasesHold('chrome-2')", &r, 30*time.Second)
+	if !r.OK {
+		got := "<nil>"
+		if r.Refusal != nil {
+			got = *r.Refusal
+		}
+		t.Fatalf("detach did not refuse the held capture: refusal=%q", got)
+	}
+	if r.MS > 5000 {
+		t.Fatalf("refusal arrived after %dms; want well under the 30s hold", r.MS)
 	}
 }

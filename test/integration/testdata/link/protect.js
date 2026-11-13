@@ -2600,6 +2600,65 @@ export function protectTest(getLink, describe) {
           payload,
         };
       }),
+    extensionFrameEvaluateUnmarked: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Runtime.enable', {}, sessionId);
+        const evaluated = await outcome(
+          c.send('Runtime.evaluate', { expression: '({nodeName:"IFRAME",frameId:"FRAME"})', returnByValue: true }, sessionId)
+        );
+        await c.send('Target.detachFromTarget', { sessionId });
+        const value = evaluated.result?.result?.value ?? null;
+        return {
+          ok: evaluated.ok,
+          marked: value != null && Object.prototype.hasOwnProperty.call(value, 'sliccExtensionFrame'),
+          value,
+        };
+      }),
+    extensionFrameInnerMessageStrip: (browser) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const inner = c.waitEvent((e) => e.method === 'Target.receivedMessageFromTarget', 10000);
+        await c.send('Runtime.enable', {}, sessionId);
+        const event = await inner;
+        await c.send('Target.detachFromTarget', { sessionId });
+        let parsed = null;
+        try {
+          parsed = JSON.parse(event?.params?.message ?? 'null');
+        } catch {
+          parsed = null;
+        }
+        const raw = event?.params?.message ?? '';
+        return {
+          ok: !!event,
+          marked: raw.includes('sliccExtensionFrame') || raw.includes('"attacker"'),
+          message: raw,
+          parsed,
+        };
+      }),
+    foreignExtensionFrameDetachReleasesHold: (browser) =>
+      run(browser, async (c) => {
+        const shownRefusal =
+          "slicc: refused: a browser extension's frame (chrome-extension://) is showing or focused in this tab, such as a password manager's autofill list; close it or reload the tab";
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        await c.send('Runtime.enable', {}, sessionId);
+        await c.send('Page.enable', {}, sessionId);
+        const start = Date.now();
+        const pending = outcome(c.send('Page.captureScreenshot', { format: 'png' }, sessionId));
+        await c.send('Page.getLayoutMetrics', {}, sessionId);
+        await c.send('Target.detachFromTarget', { sessionId });
+        const shot = await pending;
+        const ms = Date.now() - start;
+        return {
+          ok: !shot.ok && shot.error?.message === shownRefusal,
+          refusal: shot.ok ? null : shot.error?.message,
+          shownRefusal,
+          ms,
+        };
+      }),
     extensionFrameOwnerAdmission: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
