@@ -728,6 +728,166 @@ func TestIframeHoldOrdinaryLateParentStaysShown(t *testing.T) {
 	}
 }
 
+func TestIframeHoldLateParentCascadesWorkerUnderSeven(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["SEVEN"] = &target{id: "SEVEN", typ: "page", url: "https://seven.sliccy.ai/doc", protected: true}
+	g.browserSessions["S-browser"] = true
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js", openerFrame: "X", shown: true}
+	g.targets["W"] = w
+	g.sessions["S-W"] = &session{id: "S-W", target: "W", parent: "S-browser", typ: "worker"}
+	x.protected = g.decide(x, false)
+	w.protected = g.decide(w, false)
+	if x.protected || w.protected {
+		t.Fatalf("precondition protected early: x=%t w=%t", x.protected, w.protected)
+	}
+	if g.listingHiddenLocked(targetInfo{TargetID: "W", Type: "worker", URL: w.url}) || g.targetReasonLocked("W") != "" {
+		t.Fatal("ordinary worker under unknown-frame iframe was hidden or refused before the late parent")
+	}
+	_, ok := g.noteFrameParentLocked("FRAME", "SEVEN")
+	if !ok {
+		t.Fatal("late frameParents entry was not recorded")
+	}
+	if !x.protected {
+		t.Fatal("late parent under seven did not protect the iframe")
+	}
+	if !w.protected {
+		t.Fatal("late parent under seven did not cascade protection into the worker")
+	}
+	if !g.listingHiddenLocked(targetInfo{TargetID: "W", Type: "worker", URL: w.url}) || g.targetReasonLocked("W") == "" || !g.protectedWorkerIDLocked("W") {
+		t.Fatal("cascaded worker stayed listable or attachable")
+	}
+	if !g.sessionRefusedLocked("S-W") {
+		t.Fatal("existing worker session was not refused after cascade")
+	}
+}
+
+func TestIframeHoldLateParentCascadesWorkerUnderVault(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["VAULT"] = &target{id: "VAULT", typ: "page", url: "https://vault.sliccy.ai/doc", protected: true}
+	g.browserSessions["S-browser"] = true
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js", openerFrame: "X", shown: true}
+	g.targets["W"] = w
+	g.sessions["S-W"] = &session{id: "S-W", target: "W", parent: "S-browser", typ: "worker"}
+	x.protected = g.decide(x, false)
+	w.protected = g.decide(w, false)
+	_, ok := g.noteFrameParentLocked("FRAME", "VAULT")
+	if !ok {
+		t.Fatal("late vault frameParents entry was not recorded")
+	}
+	if !x.protected || !w.protected {
+		t.Fatalf("late parent under vault did not cascade: x=%t w=%t", x.protected, w.protected)
+	}
+	if !g.listingHiddenLocked(targetInfo{TargetID: "W", Type: "worker", URL: w.url}) || g.targetReasonLocked("W") == "" || !g.sessionRefusedLocked("S-W") {
+		t.Fatal("vault-cascaded worker stayed visible or its session stayed open")
+	}
+}
+
+func TestIframeHoldOrdinaryLateParentWorkerStaysDelivered(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
+	g.browserSessions["S-browser"] = true
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js", openerFrame: "X", shown: true}
+	g.targets["W"] = w
+	g.sessions["S-W"] = &session{id: "S-W", target: "W", parent: "S-browser", typ: "worker"}
+	x.protected = g.decide(x, false)
+	w.protected = g.decide(w, false)
+	_, ok := g.noteFrameParentLocked("FRAME", "PAGE")
+	if !ok {
+		t.Fatal("late ordinary frameParents entry was not recorded")
+	}
+	if x.protected || w.protected {
+		t.Fatalf("ordinary late parent protected targets: x=%t w=%t", x.protected, w.protected)
+	}
+	if g.listingHiddenLocked(targetInfo{TargetID: "W", Type: "worker", URL: w.url}) || g.targetReasonLocked("W") != "" || g.sessionRefusedLocked("S-W") {
+		t.Fatal("worker under ordinary late parent was refused")
+	}
+}
+
+func TestIframeHoldLateParentCascadesWorkerOfWorkerUnderSeven(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["SEVEN"] = &target{id: "SEVEN", typ: "page", url: "https://seven.sliccy.ai/doc", protected: true}
+	g.browserSessions["S-browser"] = true
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	w1 := &target{id: "W1", typ: "worker", url: "https://ordinary.test/w1.js", openerFrame: "X", shown: true}
+	g.targets["W1"] = w1
+	w2 := &target{id: "W2", typ: "worker", url: "https://ordinary.test/w2.js", opener: "W1", shown: true}
+	g.targets["W2"] = w2
+	g.sessions["S-W1"] = &session{id: "S-W1", target: "W1", parent: "S-browser", typ: "worker"}
+	g.sessions["S-W2"] = &session{id: "S-W2", target: "W2", parent: "S-browser", typ: "worker"}
+	x.protected = g.decide(x, false)
+	w1.protected = g.decide(w1, false)
+	w2.protected = g.decide(w2, false)
+	if x.protected || w1.protected || w2.protected {
+		t.Fatalf("precondition protected early: x=%t w1=%t w2=%t", x.protected, w1.protected, w2.protected)
+	}
+	_, ok := g.noteFrameParentLocked("FRAME", "SEVEN")
+	if !ok {
+		t.Fatal("late frameParents entry was not recorded")
+	}
+	if !x.protected || !w1.protected || !w2.protected {
+		t.Fatalf("late parent did not cascade to worker-of-worker: x=%t w1=%t w2=%t", x.protected, w1.protected, w2.protected)
+	}
+	if !g.listingHiddenLocked(targetInfo{TargetID: "W2", Type: "worker", URL: w2.url}) || g.targetReasonLocked("W2") == "" || !g.protectedWorkerIDLocked("W2") {
+		t.Fatal("cascaded worker-of-worker stayed listable or attachable")
+	}
+	if !g.sessionRefusedLocked("S-W1") || !g.sessionRefusedLocked("S-W2") {
+		t.Fatal("worker sessions were not refused after cascade")
+	}
+}
+
+func TestIframeHoldLateParentCascadesWorkerOfWorkerUnderVault(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["VAULT"] = &target{id: "VAULT", typ: "page", url: "https://vault.sliccy.ai/doc", protected: true}
+	g.browserSessions["S-browser"] = true
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	w1 := &target{id: "W1", typ: "worker", url: "https://ordinary.test/w1.js", openerFrame: "X", shown: true}
+	g.targets["W1"] = w1
+	w2 := &target{id: "W2", typ: "worker", url: "https://ordinary.test/w2.js", opener: "W1", shown: true}
+	g.targets["W2"] = w2
+	g.sessions["S-W2"] = &session{id: "S-W2", target: "W2", parent: "S-browser", typ: "worker"}
+	x.protected = g.decide(x, false)
+	w1.protected = g.decide(w1, false)
+	w2.protected = g.decide(w2, false)
+	_, ok := g.noteFrameParentLocked("FRAME", "VAULT")
+	if !ok {
+		t.Fatal("late vault frameParents entry was not recorded")
+	}
+	if !w2.protected || !g.listingHiddenLocked(targetInfo{TargetID: "W2", Type: "worker", URL: w2.url}) || g.targetReasonLocked("W2") == "" || !g.sessionRefusedLocked("S-W2") {
+		t.Fatal("vault worker-of-worker stayed visible or its session stayed open")
+	}
+}
+
+func TestIframeHoldOrdinaryLateParentWorkerOfWorkerStaysDelivered(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
+	g.browserSessions["S-browser"] = true
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	w1 := &target{id: "W1", typ: "worker", url: "https://ordinary.test/w1.js", openerFrame: "X", shown: true}
+	g.targets["W1"] = w1
+	w2 := &target{id: "W2", typ: "worker", url: "https://ordinary.test/w2.js", opener: "W1", shown: true}
+	g.targets["W2"] = w2
+	g.sessions["S-W2"] = &session{id: "S-W2", target: "W2", parent: "S-browser", typ: "worker"}
+	x.protected = g.decide(x, false)
+	w1.protected = g.decide(w1, false)
+	w2.protected = g.decide(w2, false)
+	_, ok := g.noteFrameParentLocked("FRAME", "PAGE")
+	if !ok {
+		t.Fatal("late ordinary frameParents entry was not recorded")
+	}
+	if w2.protected || g.listingHiddenLocked(targetInfo{TargetID: "W2", Type: "worker", URL: w2.url}) || g.targetReasonLocked("W2") != "" || g.sessionRefusedLocked("S-W2") {
+		t.Fatal("worker-of-worker under ordinary late parent was refused")
+	}
+}
+
 func TestIframeHoldFrameAttachedOnTrackedPageRedecides(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.observeAll([]targetInfo{

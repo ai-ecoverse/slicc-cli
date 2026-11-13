@@ -375,3 +375,177 @@ func TestCDPRedecidesIframesWhenParentAncestryArrivesLate(t *testing.T) {
 		}
 	}
 }
+
+func lateIframeWorkerCascadeScript(seven, vault, allowed string) fakeScript {
+	page := map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/doc"}
+	sevenPage := map[string]any{"targetId": "P-seven", "type": "page", "url": seven + "/doc"}
+	vaultPage := map[string]any{"targetId": "P-vault", "type": "page", "url": vault + "/doc"}
+	frames := []map[string]any{
+		{"targetId": "F-seven", "type": "iframe", "url": allowed + "/seven-x", "parentFrameId": "FRAME-seven-late"},
+		{"targetId": "F-vault", "type": "iframe", "url": allowed + "/vault-x", "parentFrameId": "FRAME-vault-late"},
+		{"targetId": "F-plain", "type": "iframe", "url": allowed + "/plain-x", "parentFrameId": "FRAME-plain-late"},
+	}
+	workers := []map[string]any{
+		{"targetId": "W-seven", "type": "worker", "url": allowed + "/seven-worker.js", "openerFrameId": "F-seven"},
+		{"targetId": "W-seven-2", "type": "worker", "url": allowed + "/seven-worker-2.js", "openerId": "W-seven"},
+		{"targetId": "W-vault", "type": "worker", "url": allowed + "/vault-worker.js", "openerFrameId": "F-vault"},
+		{"targetId": "W-vault-2", "type": "worker", "url": allowed + "/vault-worker-2.js", "openerId": "W-vault"},
+		{"targetId": "W-plain", "type": "worker", "url": allowed + "/plain-worker.js", "openerFrameId": "F-plain"},
+		{"targetId": "W-plain-2", "type": "worker", "url": allowed + "/plain-worker-2.js", "openerId": "W-plain"},
+	}
+	bodies := map[string]map[string]any{
+		"P-ordinary": page, "P-seven": sevenPage, "P-vault": vaultPage,
+	}
+	for _, info := range frames {
+		bodies[info["targetId"].(string)] = info
+	}
+	for _, info := range workers {
+		bodies[info["targetId"].(string)] = info
+	}
+	created := func(info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": info}})
+		return string(raw)
+	}
+	attach := func(parent, session string, info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{
+			"method":    "Target.attachedToTarget",
+			"sessionId": parent,
+			"params":    map[string]any{"sessionId": session, "targetInfo": info, "waitingForDebugger": false},
+		})
+		return string(raw)
+	}
+	frameAttached := func(session, id, parent string) string {
+		event, _ := json.Marshal(map[string]any{
+			"sessionId": session,
+			"method":    "Page.frameAttached",
+			"params":    map[string]any{"frameId": id, "parentFrameId": parent},
+		})
+		return string(event)
+	}
+	armed := false
+	revealed := false
+	return func(method string, params json.RawMessage) (string, []string) {
+		switch method {
+		case "Browser.getHistogram":
+			var p struct {
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(params, &p)
+			switch p.Name {
+			case "arm-late-iframe-worker":
+				if armed {
+					return "{}", nil
+				}
+				armed = true
+				events := []string{
+					created(page), attach("", "S-page", page),
+					created(sevenPage),
+					created(vaultPage),
+				}
+				for _, info := range frames {
+					events = append(events, created(info))
+				}
+				for _, info := range workers {
+					id := info["targetId"].(string)
+					events = append(events, created(info), attach("", "S-"+id, info))
+				}
+				return "{}", events
+			case "reveal-late-iframe-worker":
+				if !armed || revealed {
+					return "{}", nil
+				}
+				revealed = true
+				return "{}", []string{
+					frameAttached("S-page", "FRAME-seven-late", "P-seven"),
+					frameAttached("S-page", "FRAME-vault-late", "P-vault"),
+					frameAttached("S-page", "FRAME-plain-late", "P-ordinary"),
+				}
+			}
+		case "Target.getTargets":
+			if !armed {
+				return `{"targetInfos":[]}`, nil
+			}
+			list := []any{page, sevenPage, vaultPage}
+			for _, info := range frames {
+				list = append(list, info)
+			}
+			for _, info := range workers {
+				list = append(list, info)
+			}
+			raw, _ := json.Marshal(map[string]any{"targetInfos": list})
+			return string(raw), nil
+		case "Target.getTargetInfo":
+			var p struct {
+				TargetID string `json:"targetId"`
+			}
+			_ = json.Unmarshal(params, &p)
+			if info, ok := bodies[p.TargetID]; ok {
+				raw, _ := json.Marshal(map[string]any{"targetInfo": info})
+				return string(raw), nil
+			}
+		case "Target.attachToTarget":
+			return `{"sessionId":"S-explicit"}`, nil
+		case "Target.detachFromTarget", "Runtime.runIfWaitingForDebugger":
+			return "{}", nil
+		}
+		return "{}", nil
+	}
+}
+
+func TestCDPCascadesLateIframeProtectionIntoWorkers(t *testing.T) {
+	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return lateIframeWorkerCascadeScript(seven, "https://vault.sliccy.ai", allowed)
+	})
+	var result struct {
+		Before struct {
+			List   []string              `json:"list"`
+			Infos  map[string]cdpOutcome `json:"infos"`
+			Attach map[string]cdpOutcome `json:"attach"`
+		} `json:"before"`
+		After struct {
+			List   []string              `json:"list"`
+			Infos  map[string]cdpOutcome `json:"infos"`
+			Attach map[string]cdpOutcome `json:"attach"`
+		} `json:"after"`
+	}
+	env.evalJSONWithin(t, "linkTest.protect.lateIframeWorkerCascade('chrome-2')", &result, 20*time.Second)
+	listed := func(ids []string) map[string]bool {
+		out := map[string]bool{}
+		for _, id := range ids {
+			out[id] = true
+		}
+		return out
+	}
+	before := listed(result.Before.List)
+	after := listed(result.After.List)
+	for _, id := range []string{"W-seven", "W-seven-2", "W-vault", "W-vault-2"} {
+		if !before[id] {
+			t.Errorf("before late parent, worker %s was not listed", id)
+		}
+		if !result.Before.Attach[id].OK {
+			t.Errorf("before late parent, attach(%s): %+v", id, result.Before.Attach[id])
+		}
+		if after[id] {
+			t.Errorf("after late protected parent, worker %s was listed", id)
+		}
+		attach := result.After.Attach[id]
+		if attach.OK || attach.Error.Message != refusedText {
+			t.Errorf("after late protected parent, attach(%s): %+v want %q", id, attach, refusedText)
+		}
+		info := result.After.Infos[id]
+		if info.OK || info.Error.Code != -32602 || info.Error.Message != "No target with given id found" {
+			t.Errorf("after late protected parent, getTargetInfo(%s): %+v", id, info)
+		}
+	}
+	for _, id := range []string{"W-plain", "W-plain-2"} {
+		if !before[id] || !after[id] {
+			t.Errorf("ordinary late-parent worker %s listing before=%v after=%v", id, before[id], after[id])
+		}
+		if !result.After.Attach[id].OK {
+			t.Errorf("ordinary late-parent worker attach(%s): %+v", id, result.After.Attach[id])
+		}
+		if !result.After.Infos[id].OK {
+			t.Errorf("ordinary late-parent worker getTargetInfo(%s): %+v", id, result.After.Infos[id])
+		}
+	}
+}

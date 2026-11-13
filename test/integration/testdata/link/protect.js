@@ -1499,6 +1499,29 @@ export function protectTest(getLink, describe) {
         const after = await probe(['F-seven-x', 'F-seven-child', 'F-vault-x', 'F-vault-child', 'F-plain-x', 'F-plain-child']);
         return { before, after };
       }),
+    lateIframeWorkerCascade: (browser) =>
+      run(browser, async (c) => {
+        const probe = async (ids) => {
+          const attach = {};
+          for (const id of ids) {
+            attach[id] = await outcome(c.send('Target.attachToTarget', { targetId: id, flatten: true }));
+          }
+          const infos = {};
+          for (const id of ids) {
+            infos[id] = await outcome(c.send('Target.getTargetInfo', { targetId: id }));
+          }
+          const list = (await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId);
+          return { list, infos, attach };
+        };
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        await c.send('Browser.getHistogram', { name: 'arm-late-iframe-worker' });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const before = await probe(['W-seven', 'W-seven-2', 'W-vault', 'W-vault-2', 'W-plain', 'W-plain-2']);
+        await c.send('Browser.getHistogram', { name: 'reveal-late-iframe-worker' });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const after = await probe(['W-seven', 'W-seven-2', 'W-vault', 'W-vault-2', 'W-plain', 'W-plain-2']);
+        return { before, after };
+      }),
     unresolvedWorkerTimeout: (browser) =>
       run(browser, async (c) => {
         const start = Date.now();
