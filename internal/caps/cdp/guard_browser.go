@@ -529,18 +529,15 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	g.noteStreamOpenedLocked(info)
 	g.attachParent = m.SessionID
-	g.attachTarget = info.TargetID
 	if info.Type == "iframe" {
 		g.noteIframeAttachParentLocked(info)
 	}
 	send := g.observeLocked(info)
 	if v, handled := g.attachedHideOrHoldLocked(m, p.SessionID, p.WaitingForDebugger, info, send); handled {
 		g.attachParent = ""
-		g.attachTarget = ""
 		return v
 	}
 	g.attachParent = ""
-	g.attachTarget = ""
 	g.noteWorkerShownLocked(info)
 	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
 	if info.Type == "browser" {

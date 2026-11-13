@@ -1435,7 +1435,7 @@ export function protectTest(getLink, describe) {
       run(browser, async (c) => {
         const snapshot = (events) => events.map((e) => ({
           method: e.method,
-          sessionId: e.sessionId || e.params?.sessionId || '',
+          sessionId: e.method === 'Target.attachedToTarget' ? (e.params?.sessionId || '') : (e.sessionId || e.params?.sessionId || ''),
           targetId: e.params?.targetInfo?.targetId || e.params?.targetId || '',
           type: e.params?.targetInfo?.type || '',
           url: e.params?.targetInfo?.url || '',

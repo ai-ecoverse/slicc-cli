@@ -123,7 +123,6 @@ type guard struct {
 	hidden                map[string]bool
 	hiddenOwner           map[string]string
 	attachParent          string
-	attachTarget          string
 	refused               map[string]bool
 	refusedOrder          []string
 	browserSessions       map[string]bool
@@ -582,19 +581,14 @@ func (g *guard) iframeParentFromFramesLocked(t *target) *target {
 	return nil
 }
 
-func (g *guard) attachParentOwnerLocked(t *target) *target {
-	if t == nil || g.attachParent == "" || t.id != g.attachTarget {
-		return nil
-	}
-	return g.sessionOwnerLocked(g.attachParent)
-}
-
 func (g *guard) iframeParentTargetLocked(t *target) *target {
 	if t == nil {
 		return nil
 	}
-	if owner := g.attachParentOwnerLocked(t); owner != nil {
-		return owner
+	if g.attachParent != "" {
+		if owner := g.sessionOwnerLocked(g.attachParent); owner != nil {
+			return owner
+		}
 	}
 	for _, h := range g.held {
 		if h == nil || h.target != t.id {
@@ -666,7 +660,7 @@ func (g *guard) iframeBrowserRootedLocked(t *target) bool {
 	if g.iframeAncestorStartLocked(t) != "" || g.iframeParentTargetLocked(t) != nil {
 		return false
 	}
-	if g.attachParent != "" && t.id == g.attachTarget {
+	if g.attachParent != "" {
 		return g.browserSessions[g.attachParent] || g.sessionOwnerLocked(g.attachParent) == nil
 	}
 	for _, h := range g.held {
@@ -691,7 +685,7 @@ func (g *guard) iframeAncestryUnknownLocked(t *target) bool {
 	if g.frameParentsFull {
 		return true
 	}
-	if g.attachParent != "" && t.id == g.attachTarget {
+	if g.attachParent != "" {
 		return g.sessionOwnerLocked(g.attachParent) == nil
 	}
 	if g.iframeParentTargetLocked(t) != nil {
@@ -800,7 +794,7 @@ func (g *guard) iframeUnresolvedLocked(t *target) bool {
 		}
 		return true
 	}
-	if g.attachParent != "" && t.id == g.attachTarget {
+	if g.attachParent != "" {
 		owner := g.sessionOwnerLocked(g.attachParent)
 		if owner == nil {
 			return true
@@ -1069,7 +1063,7 @@ func (g *guard) nullOriginFrameClassifiedLocked(t *target) bool {
 			return false
 		}
 		seen[id] = true
-		if g.targetHeldLocked(id) || g.targetUnconfirmedLocked(id) {
+		if g.targetHeldLocked(id) {
 			return false
 		}
 		at := g.targets[id]
@@ -1077,10 +1071,10 @@ func (g *guard) nullOriginFrameClassifiedLocked(t *target) bool {
 			if at.protected || !protect.Inheriting(at.url) {
 				return true
 			}
-			if at.typ != "iframe" {
+			if at.typ != "iframe" || g.targetUnconfirmedLocked(id) {
 				return false
 			}
-		} else if g.frameParentOfLocked(id) == "" {
+		} else if g.frameParentOfLocked(id) == "" || g.targetUnconfirmedLocked(id) {
 			return false
 		}
 		id = g.frameParentOfLocked(id)

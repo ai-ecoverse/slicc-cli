@@ -121,7 +121,7 @@ func TestCDPDeliversAWorkerFromANullOriginFrame(t *testing.T) {
 	}
 	var ordinarySeen bool
 	for _, event := range result.Events {
-		if event.SessionID == "S-null-ordinary" && event.Method == "Target.attachedToTarget" {
+		if event.Method == "Target.attachedToTarget" && (event.SessionID == "S-null-ordinary" || event.TargetID == "W-null-ordinary") {
 			ordinarySeen = true
 		}
 		if event.TargetID == "W-null-seven" || event.SessionID == "S-null-seven-worker" {

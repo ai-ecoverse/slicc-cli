@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -241,8 +242,7 @@ func TestWorkerHoldNullOriginAttachUnderCreatorSession(t *testing.T) {
 	g.sessions["S-f"] = &session{id: "S-f", target: "F", parent: "S-page", typ: "iframe"}
 	g.noteFrameParentLocked("F", "PAGE")
 	g.attachParent = "S-f"
-	g.attachTarget = "W"
-	defer func() { g.attachParent, g.attachTarget = "", "" }()
+	defer func() { g.attachParent = "" }()
 	if !g.creatorClassifiedLocked("F") {
 		t.Fatal("null-origin creator stayed unclassified while its own session attached a worker")
 	}
@@ -251,5 +251,79 @@ func TestWorkerHoldNullOriginAttachUnderCreatorSession(t *testing.T) {
 	w.protected = g.decide(w, false)
 	if w.protected || g.workerUnresolvedLocked(w) {
 		t.Fatalf("worker attached under null-origin creator session stayed held: protected=%t unresolved=%t", w.protected, g.workerUnresolvedLocked(w))
+	}
+}
+
+func TestWorkerHoldNullOriginFakeSequence(t *testing.T) {
+	g := workerHoldGuard(t)
+	allowed := "https://ordinary.test"
+	page := targetInfo{TargetID: "P-ordinary", Type: "page", URL: allowed + "/doc"}
+	frame := targetInfo{TargetID: "F-null", Type: "iframe", URL: "about:srcdoc", ParentFrameID: "P-ordinary"}
+	worker := targetInfo{TargetID: "W-null-ordinary", Type: "worker", URL: allowed + "/worker.js?null-origin-worker=1", ParentFrameID: "F-null"}
+	attach := func(parent string, session string, info targetInfo) {
+		raw, _ := json.Marshal(map[string]any{"method": "Target.attachedToTarget", "sessionId": parent, "params": map[string]any{"sessionId": session, "waitingForDebugger": true, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "parentFrameId": info.ParentFrameID}}})
+		if parent == "" {
+			raw, _ = json.Marshal(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": session, "waitingForDebugger": true, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "parentFrameId": info.ParentFrameID}}})
+		}
+		_ = g.fromBrowser(raw)
+	}
+	created := func(info targetInfo) {
+		raw, _ := json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "parentFrameId": info.ParentFrameID}}})
+		_ = g.fromBrowser(raw)
+	}
+	created(page)
+	attach("", "S-page", page)
+	created(frame)
+	attach("S-page", "S-null", frame)
+	raw, _ := json.Marshal(map[string]any{"sessionId": "S-null", "method": "Runtime.executionContextCreated", "params": map[string]any{"context": map[string]any{"id": 1, "origin": "null", "auxData": map[string]any{"isDefault": true, "frameId": "F-null"}}}})
+	_ = g.fromBrowser(raw)
+	created(worker)
+	attach("S-null", "S-null-ordinary", worker)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	w := g.targets["W-null-ordinary"]
+	if w == nil || w.protected || g.workerUnresolvedLocked(w) || g.held["S-null-ordinary"] != nil || !w.shown {
+		t.Fatalf("fake sequence worker not delivered: protected=%v unresolved=%v held=%v shown=%v classified=%v", w != nil && w.protected, w != nil && g.workerUnresolvedLocked(w), g.held["S-null-ordinary"] != nil, w != nil && w.shown, g.creatorClassifiedLocked("F-null"))
+	}
+}
+
+func TestWorkerHoldNullOriginChromeInProcessSequence(t *testing.T) {
+	g := workerHoldGuard(t)
+	allowed := "https://ordinary.test"
+	page := targetInfo{TargetID: "PAGE", Type: "page", URL: allowed + "/doc"}
+	worker := targetInfo{TargetID: "W", Type: "worker", URL: allowed + "/worker.js?null-origin-worker=1", ParentFrameID: "FRAME", OpenerFrameID: "FRAME"}
+	raw, _ := json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": map[string]any{"targetId": page.TargetID, "type": page.Type, "url": page.URL}}})
+	_ = g.fromBrowser(raw)
+	raw, _ = json.Marshal(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "S-page", "waitingForDebugger": false, "targetInfo": map[string]any{"targetId": page.TargetID, "type": page.Type, "url": page.URL}}})
+	_ = g.fromBrowser(raw)
+	g.mu.Lock()
+	g.navSessions["NAV"] = &navTarget{target: "PAGE", session: "NAV", done: true}
+	g.mu.Unlock()
+	raw, _ = json.Marshal(map[string]any{"sessionId": "NAV", "method": "Page.frameAttached", "params": map[string]any{"frameId": "FRAME", "parentFrameId": "PAGE"}})
+	_ = g.fromBrowser(raw)
+	raw, _ = json.Marshal(map[string]any{"sessionId": "NAV", "method": "Page.frameNavigated", "params": map[string]any{"frame": map[string]any{"id": "FRAME", "parentId": "PAGE", "url": "about:srcdoc", "securityOrigin": "null"}}})
+	_ = g.fromBrowser(raw)
+	raw, _ = json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": map[string]any{"targetId": worker.TargetID, "type": worker.Type, "url": worker.URL, "parentFrameId": worker.ParentFrameID, "openerFrameId": worker.OpenerFrameID}}})
+	_ = g.fromBrowser(raw)
+	raw, _ = json.Marshal(map[string]any{"method": "Target.attachedToTarget", "sessionId": "S-page", "params": map[string]any{"sessionId": "S-w", "waitingForDebugger": false, "targetInfo": map[string]any{"targetId": worker.TargetID, "type": worker.Type, "url": worker.URL, "parentFrameId": worker.ParentFrameID, "openerFrameId": worker.OpenerFrameID}}})
+	_ = g.fromBrowser(raw)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	w := g.targets["W"]
+	if w == nil || w.protected || g.workerUnresolvedLocked(w) || g.held["S-w"] != nil {
+		t.Fatalf("chrome in-process sequence worker not delivered: protected=%v unresolved=%v held=%v classified=%v parents=%q", w != nil && w.protected, w != nil && g.workerUnresolvedLocked(w), g.held["S-w"] != nil, g.creatorClassifiedLocked("FRAME"), g.frameParents["FRAME"])
+	}
+}
+
+func TestWorkerHoldNullOriginChromeInProcessUnderSeven(t *testing.T) {
+	g := workerHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://seven.sliccy.ai/doc", protected: true}
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.noteFrameParentLocked("FRAME", "PAGE")
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js?null-origin-worker=1", parentFrame: "FRAME", openerFrame: "FRAME", shown: false}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if !w.protected || g.targetReasonLocked("W") == "" {
+		t.Fatalf("in-process null-origin worker under seven was shown: protected=%t reason=%q", w.protected, g.targetReasonLocked("W"))
 	}
 }
