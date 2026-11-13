@@ -164,3 +164,69 @@ func TestWorkerHoldDataWorkerOrdinaryOpenerOpaqueFrame(t *testing.T) {
 		t.Fatal("opaque-frame data: worker was attachable")
 	}
 }
+
+func TestWorkerHoldNullOriginOrdinaryWorkerDelivered(t *testing.T) {
+	g := workerHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
+	frame := &target{id: "F", typ: "iframe", url: "about:srcdoc", parentFrame: "PAGE"}
+	g.targets["F"] = frame
+	frame.protected = g.decide(frame, false)
+	g.noteChildFrameLocked("F", "null")
+	if !g.creatorClassifiedLocked("F") {
+		t.Fatal("null-origin iframe under ordinary page stayed unclassified")
+	}
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js", parentFrame: "F", shown: false}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if w.protected || g.workerUnresolvedLocked(w) || g.targetReasonLocked("W") != "" {
+		t.Fatalf("ordinary worker from null-origin frame under ordinary: protected=%t unresolved=%t reason=%q", w.protected, g.workerUnresolvedLocked(w), g.targetReasonLocked("W"))
+	}
+}
+
+func TestWorkerHoldNullOriginUnderSevenStaysHidden(t *testing.T) {
+	g := workerHoldGuard(t)
+	g.targets["SEVEN"] = &target{id: "SEVEN", typ: "page", url: "https://seven.sliccy.ai/doc", protected: true}
+	frame := &target{id: "F", typ: "iframe", url: "about:srcdoc", parentFrame: "SEVEN"}
+	g.targets["F"] = frame
+	frame.protected = g.decide(frame, false)
+	g.noteChildFrameLocked("F", "null")
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js", parentFrame: "F", shown: false}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if !w.protected || g.targetReasonLocked("W") == "" {
+		t.Fatalf("worker from null-origin under seven was shown: protected=%t reason=%q", w.protected, g.targetReasonLocked("W"))
+	}
+}
+
+func TestWorkerHoldNullOriginUnknownAncestryStaysHidden(t *testing.T) {
+	g := workerHoldGuard(t)
+	frame := &target{id: "F", typ: "iframe", url: "about:srcdoc", parentFrame: "UNKNOWN"}
+	g.targets["F"] = frame
+	frame.protected = g.decide(frame, false)
+	g.noteChildFrameLocked("F", "null")
+	if g.creatorClassifiedLocked("F") {
+		t.Fatal("null-origin iframe with unknown ancestry was classified")
+	}
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js", parentFrame: "F", shown: false}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if !g.workerUnresolvedLocked(w) || g.targetReasonLocked("W") == "" {
+		t.Fatalf("worker from null-origin with unknown ancestry was shown: unresolved=%t reason=%q", g.workerUnresolvedLocked(w), g.targetReasonLocked("W"))
+	}
+}
+
+func TestWorkerHoldNullOriginInProcessFrameUnderOrdinary(t *testing.T) {
+	g := workerHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
+	g.noteFrameParentLocked("FRAME", "PAGE")
+	g.noteChildFrameLocked("FRAME", "null")
+	if !g.creatorClassifiedLocked("FRAME") {
+		t.Fatal("in-process null-origin frame under ordinary stayed unclassified")
+	}
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js", parentFrame: "FRAME", shown: false}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if w.protected || g.workerUnresolvedLocked(w) {
+		t.Fatalf("worker from in-process null-origin under ordinary stayed held: protected=%t unresolved=%t", w.protected, g.workerUnresolvedLocked(w))
+	}
+}

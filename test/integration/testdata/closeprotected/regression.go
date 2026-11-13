@@ -166,6 +166,41 @@ func TestCloseProtectedTrimBeforeStoreKeepsTouchSeq(t *testing.T) {
 	}
 }
 
+func TestCloseProtectedPendingTouchClearedOnSessionDetach(t *testing.T) {
+	g := closeProtectedGuard(t)
+	g.sessions["S-page"] = &session{id: "S-page", target: "OPENER", typ: "page"}
+	g.navTargets["OPENER"] = &navTarget{target: "OPENER", done: true}
+	raw, _ := json.Marshal(map[string]any{"id": 1, "sessionId": "S-page", "method": "Target.attachToTarget", "params": map[string]any{"targetId": "OPENER", "flatten": true}})
+	c, id, ok := parseCommand(raw)
+	if !ok {
+		t.Fatal("parse attach")
+	}
+	v := g.fromCommand(c, id, ok)
+	if v.forward == nil {
+		t.Fatalf("attach not forwarded: %s", v.reply)
+	}
+	g.mu.Lock()
+	if len(g.pendingTouch) == 0 {
+		t.Fatal("expected a pending touch reservation")
+	}
+	reserved := g.touchSeq
+	g.forgetSessionLocked("S-page")
+	if len(g.pendingTouch) != 0 {
+		t.Fatalf("pendingTouch survived session detach: %+v", g.pendingTouch)
+	}
+	g.sessions["S-new"] = &session{id: "S-new", target: "OPENER", typ: "page"}
+	g.mu.Unlock()
+	_ = g.fromBrowser(popupCreated())
+	g.mu.Lock()
+	closable := g.streamClosableLocked("POPUP")
+	reason := g.closeTargetReasonLocked("POPUP")
+	pending, _ := g.pendingTouchSeqLocked("OPENER")
+	g.mu.Unlock()
+	if closable || reason == "" {
+		t.Fatalf("popup inherited a detached session's touch reservation: closable=%t reason=%q reserved=%d pending=%d", closable, reason, reserved, pending)
+	}
+}
+
 func TestCloseProtectedKeepsLiveSevenUIAndVault(t *testing.T) {
 	g := closeProtectedGuard(t)
 	g.targets["OS"] = &target{id: "OS", typ: "page", url: "https://seven.sliccy.ai/os/", protected: true}

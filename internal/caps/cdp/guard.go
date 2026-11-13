@@ -15,6 +15,7 @@ import (
 
 const (
 	refusedTarget       = "target is on seven's origin"
+	refusedAncestry     = "unresolved ancestry"
 	refusedCookies      = "cookies on seven's origin"
 	refusedLost         = "slicc lost track of the browser's targets"
 	refusedPaused       = "slicc didn't pass this paused request to the page, so it could be seven's"
@@ -710,7 +711,7 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 	id := g.iframeAncestorStartLocked(t)
 	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
 		if seen[id] {
-			return true
+			return false
 		}
 		seen[id] = true
 		if g.creatorProtectedLocked(id) {
@@ -718,7 +719,7 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 		}
 		id = g.frameParentOfLocked(id)
 	}
-	return id != ""
+	return false
 }
 
 func (g *guard) iframeAncestorPendingLocked(t *target) bool {
@@ -919,7 +920,16 @@ func parentFrameOf(info targetInfo) string {
 }
 
 func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
-	if id == "" || protect.Inheriting(raw) || raw == "null" || raw == "://" {
+	if id == "" || protect.Inheriting(raw) || raw == "://" {
+		return nil
+	}
+	if raw == "null" {
+		if _, ok := g.childFrames[id]; ok {
+			return nil
+		}
+		if g.creatorClassifiedLocked(id) {
+			return g.redecideWorkersLocked(id)
+		}
 		return nil
 	}
 	if prev, ok := g.childFrames[id]; ok {
@@ -1008,18 +1018,55 @@ func (g *guard) creatorProtectedLocked(id string) bool {
 	if g.targetProtectedLocked(id) {
 		return true
 	}
-	return g.o.Loaded(g.childFrames[id])
+	if g.o.Loaded(g.childFrames[id]) {
+		return true
+	}
+	return g.nullOriginFrameProtectedLocked(id)
 }
 
 func (g *guard) creatorClassifiedLocked(id string) bool {
 	if id == "" {
 		return false
 	}
-	if t := g.targets[id]; t != nil && !t.gone && (t.protected || !protect.Inheriting(t.url)) {
-		return true
+	if t := g.targets[id]; t != nil && !t.gone {
+		if t.protected || !protect.Inheriting(t.url) {
+			return true
+		}
+		if t.typ == "iframe" {
+			return g.nullOriginFrameClassifiedLocked(t)
+		}
 	}
 	raw := g.childFrames[id]
-	return raw != "" && !protect.Inheriting(raw)
+	if raw != "" && raw != "null" && !protect.Inheriting(raw) {
+		return true
+	}
+	if parent := g.frameParentOfLocked(id); parent != "" {
+		return g.nullOriginFrameClassifiedLocked(&target{id: id, typ: "iframe", parentFrame: parent})
+	}
+	return false
+}
+
+func (g *guard) nullOriginFrameClassifiedLocked(t *target) bool {
+	if t == nil || t.typ != "iframe" {
+		return false
+	}
+	if g.iframeAncestryUnknownLocked(t) || g.iframeAncestorPendingLocked(t) {
+		return false
+	}
+	return g.iframeAncestryClassifiedLocked(t)
+}
+
+func (g *guard) nullOriginFrameProtectedLocked(id string) bool {
+	if t := g.targets[id]; t != nil && !t.gone && t.typ == "iframe" {
+		if t.protected || !protect.Inheriting(t.url) {
+			return false
+		}
+		return g.iframeFromProtectedAncestorLocked(t)
+	}
+	if parent := g.frameParentOfLocked(id); parent != "" {
+		return g.iframeFromProtectedAncestorLocked(&target{id: id, typ: "iframe", parentFrame: parent})
+	}
+	return false
 }
 
 func (g *guard) workerCreatorClassifiedLocked(t *target) bool {
@@ -1291,6 +1338,12 @@ func (g *guard) forgetSessionLocked(id string) {
 			delete(g.commitMarks, k)
 			delete(g.bodyCalls, k)
 			g.attachDoneLocked(k)
+			g.dropPendingTouchLocked(k)
+		}
+	}
+	for k := range g.pendingTouch {
+		if k.session == id {
+			delete(g.pendingTouch, k)
 		}
 	}
 }

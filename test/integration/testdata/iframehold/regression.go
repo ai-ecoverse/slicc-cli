@@ -436,6 +436,27 @@ func TestIframeHoldOrdinaryDeepWithinLimitShown(t *testing.T) {
 	}
 }
 
+func TestIframeHoldOrdinaryDeepBeyondLimitRefusesAncestry(t *testing.T) {
+	g := iframeHoldGuard(t)
+	infos := []targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}}
+	prev := "PAGE"
+	for i := 0; i <= maxFrameAncestors; i++ {
+		id := "F" + itoa(int64(i))
+		infos = append(infos, targetInfo{TargetID: id, Type: "iframe", URL: iframeChainURL(i), ParentFrameID: prev})
+		prev = id
+	}
+	g.observeAll(infos)
+	bottom := "F" + itoa(int64(maxFrameAncestors))
+	reason := g.targetReasonLocked(bottom)
+	if reason != refusedAncestry {
+		t.Fatalf("deep ordinary chain reason=%q want %q protected=%v", reason, refusedAncestry, g.targets[bottom] != nil && g.targets[bottom].protected)
+	}
+	info := targetInfo{TargetID: bottom, Type: "iframe", URL: iframeChainURL(maxFrameAncestors), ParentFrameID: "F" + itoa(int64(maxFrameAncestors-1))}
+	if !g.listingHiddenLocked(info) {
+		t.Fatal("deep ordinary chain beyond the limit was listable")
+	}
+}
+
 func TestIframeHoldChromeErrorFrameTreeOrdinaryOrMissingParent(t *testing.T) {
 	for _, parent := range []string{"", "PAGE"} {
 		name := parent
