@@ -120,3 +120,55 @@ export async function measureProtectedOOPIF(getLink, opts) {
     await c.close();
   }
 }
+
+async function answered(promise) {
+  try {
+    return { ok: true, result: await promise };
+  } catch (error) {
+    return { ok: false, error: error.cdp ?? { message: String(error?.message ?? error) } };
+  }
+}
+
+export async function measureURLLessIframes(getLink, opts) {
+  const c = await CdpClient.open(getLink(), opts.browser);
+  c.callTimeout = 20000;
+  try {
+    await c.send('Target.setDiscoverTargets', { discover: true });
+    await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    await c.send('Browser.getHistogram', { name: 'arm-urlless-pages' });
+    await sleep(300);
+    const mark = c.events.length;
+    await c.send('Browser.getHistogram', { name: 'arm-urlless-iframes' });
+    await sleep(300);
+    const asked = {};
+    for (const id of opts.frames) {
+      asked[id] = {
+        info: answered(c.send('Target.getTargetInfo', { targetId: id })),
+        attach: answered(c.send('Target.attachToTarget', { targetId: id, flatten: true })),
+      };
+    }
+    await sleep(300);
+    await c.send('Browser.getHistogram', { name: 'commit-urlless-iframes' });
+    const rows = {};
+    for (const [id, p] of Object.entries(asked)) {
+      const info = await p.info;
+      const attach = await p.attach;
+      rows[id] = {
+        info: info.ok ? { ok: true, url: info.result.targetInfo?.url ?? '' } : { ok: false, error: info.error },
+        attach: attach.ok ? { ok: true } : { ok: false, error: attach.error },
+      };
+    }
+    await sleep(300);
+    const list = (await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId);
+    const events = c.events.slice(mark).map((e) => ({
+      method: e.method,
+      sessionId: e.sessionId ?? '',
+      child: e.params?.sessionId ?? '',
+      targetId: e.params?.targetInfo?.targetId ?? e.params?.targetId ?? '',
+      url: e.params?.targetInfo?.url ?? '',
+    }));
+    return { rows, list, events };
+  } finally {
+    await c.close();
+  }
+}
