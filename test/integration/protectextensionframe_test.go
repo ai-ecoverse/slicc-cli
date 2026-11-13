@@ -919,15 +919,17 @@ func TestCDPExtensionFrameConcurrentProbesShareWorld(t *testing.T) {
 	env, fake := setupFakeProtectEnv(t, nil, func(_, _ string) fakeScript {
 		return extensionTwoTabScript(false)
 	})
-	fake.delay("Page.createIsolatedWorld", 300*time.Millisecond)
+	fake.delay("Page.getFrameTree", 150*time.Millisecond)
+	fake.delay("Network.enable", 150*time.Millisecond)
+	fake.delay("Page.createIsolatedWorld", 500*time.Millisecond)
 	var r struct {
-		OK       bool `json:"ok"`
-		Admitted int  `json:"admitted"`
-		Burst    int  `json:"burst"`
+		OK      bool `json:"ok"`
+		ShotOK  bool `json:"shotOk"`
+		TypedOK bool `json:"typedOk"`
 	}
 	env.evalJSONWithin(t, "linkTest.protect.foreignExtensionFrameConcurrentProbeWorlds('chrome-2')", &r, 30*time.Second)
-	if !r.OK || r.Admitted != r.Burst {
-		t.Fatalf("concurrent probes: %+v", r)
+	if !r.OK || !r.ShotOK || !r.TypedOK {
+		t.Fatalf("overlapping screenshot and insertText probes: %+v", r)
 	}
 	worlds := 0
 	for _, raw := range fake.received() {
@@ -936,7 +938,7 @@ func TestCDPExtensionFrameConcurrentProbesShareWorld(t *testing.T) {
 		}
 	}
 	if worlds != 1 {
-		t.Fatalf("Page.createIsolatedWorld count=%d want 1", worlds)
+		t.Fatalf("Page.createIsolatedWorld count=%d want 1 (base overlaps two probes and creates two)", worlds)
 	}
 }
 
