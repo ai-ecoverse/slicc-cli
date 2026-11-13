@@ -233,7 +233,7 @@ func TestCDPDeliversOrdinaryIframeUnderTabAndPageAttachParents(t *testing.T) {
 		if e.Method == "Target.attachedToTarget" && e.Child == "S-F-plain" {
 			pageDelivered++
 			pageAt = i
-			if e.SessionID != "S-page" || e.URL != env.allowed+"/inner" || e.Waiting == nil || !*e.Waiting {
+			if e.SessionID != "S-page" || e.URL != env.allowed+"/inner" || e.Waiting == nil || *e.Waiting {
 				t.Fatalf("page-parent auto-attach reached the client wrong: %+v", e)
 			}
 		}

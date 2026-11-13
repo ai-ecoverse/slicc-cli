@@ -174,3 +174,52 @@ export async function measureURLLessIframes(getLink, opts) {
     await c.close();
   }
 }
+
+export async function measurePendingAncestorIframes(getLink, opts) {
+  const c = await CdpClient.open(getLink(), opts.browser);
+  c.callTimeout = 20000;
+  try {
+    await c.send('Target.setDiscoverTargets', { discover: true });
+    await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    await c.send('Browser.getHistogram', { name: 'arm-pending-pages' });
+    await sleep(300);
+    const mark = c.events.length;
+    await c.send('Browser.getHistogram', { name: 'arm-pending-iframes' });
+    await sleep(300);
+    const asked = {};
+    for (const id of opts.frames) {
+      asked[id] = {
+        info: answered(c.send('Target.getTargetInfo', { targetId: id })),
+        attach: answered(c.send('Target.attachToTarget', { targetId: id, flatten: true })),
+      };
+    }
+    await sleep(300);
+    await c.send('Browser.getHistogram', { name: 'commit-pending-iframes' });
+    await sleep(300);
+    await c.send('Browser.getHistogram', { name: 'flush:page-confirm' });
+    await sleep(300);
+    const rows = {};
+    for (const [id, p] of Object.entries(asked)) {
+      const info = await p.info;
+      const attach = await p.attach;
+      rows[id] = {
+        info: info.ok ? { ok: true, url: info.result.targetInfo?.url ?? '' } : { ok: false, error: info.error },
+        attach: attach.ok ? { ok: true } : { ok: false, error: attach.error },
+      };
+    }
+    await sleep(300);
+    const list = (await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId);
+    const events = c.events.slice(mark).map((e) => ({
+      method: e.method,
+      sessionId: e.sessionId ?? '',
+      child: e.params?.sessionId ?? '',
+      targetId: e.params?.targetInfo?.targetId ?? e.params?.targetId ?? '',
+      url: e.params?.targetInfo?.url ?? '',
+      waiting: e.params?.waitingForDebugger ?? null,
+      reason: e.params?.reason ?? '',
+    }));
+    return { rows, list, events, settle: opts.settle || 'ordinary' };
+  } finally {
+    await c.close();
+  }
+}

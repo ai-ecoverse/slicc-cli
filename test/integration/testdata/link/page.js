@@ -565,6 +565,7 @@ globalThis.linkTest = {
   oopif: (opts) => measureOOPIF(() => state.link, opts),
   ordinaryOOPIF: (opts) => import('./ordinaryoopif.js').then((m) => m.measureOrdinaryOOPIF(() => state.link, opts)),
   urlLessIframes: (opts) => import('./ordinaryoopif.js').then((m) => m.measureURLLessIframes(() => state.link, opts)),
+  pendingAncestorIframes: (opts) => import('./ordinaryoopif.js').then((m) => m.measurePendingAncestorIframes(() => state.link, opts)),
   protectedOOPIF: (opts) => import('./ordinaryoopif.js').then((m) => m.measureProtectedOOPIF(() => state.link, opts)),
   cdp: cdpTest(() => state.link, describe),
   playwrightRelay: (url, browser) => import('./playwright.js').then((m) => m.playwrightRelay(() => state.link, url, browser)),

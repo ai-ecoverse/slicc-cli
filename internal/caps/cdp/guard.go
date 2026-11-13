@@ -801,6 +801,42 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 	return g.iframeProtectedAncestorReasonLocked(t) != ""
 }
 
+func (g *guard) ancestorProtectStateLocked(id string) string {
+	t := g.targets[id]
+	url := ""
+	typ := ""
+	if t != nil {
+		url = t.url
+		typ = t.typ
+	}
+	child := g.childFrames[id]
+	rule := g.creatorProtectRuleLocked(id)
+	return "ancestor=" + id + " type=" + typ + " rule=" + rule +
+		" protected=" + strconv.FormatBool(t != nil && t.protected) +
+		" unconfirmed=" + strconv.FormatBool(g.targetUnconfirmedLocked(id)) +
+		" held=" + strconv.FormatBool(g.targetHeldLocked(id)) +
+		" url=" + url + " childFrame=" + child
+}
+
+func (g *guard) creatorProtectRuleLocked(id string) string {
+	if id == "" {
+		return "none"
+	}
+	if g.targetUnconfirmedLocked(id) {
+		return "pending-unconfirmed"
+	}
+	if g.targetHeldLocked(id) {
+		return "pending-held"
+	}
+	if g.targetProtectedLocked(id) {
+		return "sticky-flag"
+	}
+	if g.o.Loaded(g.childFrames[id]) {
+		return "child-frame-url"
+	}
+	return "none"
+}
+
 func (g *guard) iframeProtectedAncestorReasonLocked(t *target) string {
 	if t == nil || t.typ != "iframe" {
 		return ""
@@ -809,7 +845,7 @@ func (g *guard) iframeProtectedAncestorReasonLocked(t *target) string {
 		return "ancestry-disputed"
 	}
 	if parent := g.iframeParentTargetLocked(t); parent != nil && parent.protected {
-		return "parent-target-protected:" + parent.id
+		return "parent-target-protected:" + parent.id + " " + g.ancestorProtectStateLocked(parent.id)
 	}
 	seen := map[string]bool{t.id: true}
 	id := g.iframeAncestorStartLocked(t)
@@ -823,7 +859,7 @@ func (g *guard) iframeProtectedAncestorReasonLocked(t *target) string {
 		}
 		seen[id] = true
 		if g.creatorProtectedLocked(id) {
-			return "ancestor-protected:" + id
+			return "ancestor-protected:" + id + " " + g.ancestorProtectStateLocked(id)
 		}
 		id = g.frameParentOfLocked(id)
 	}
@@ -834,6 +870,32 @@ func (g *guard) iframeProtectedAncestorReasonLocked(t *target) string {
 }
 
 func (g *guard) iframeAncestorPendingLocked(t *target) bool {
+	return g.iframeAncestorNavPendingLocked(t) || g.iframeAncestorUnknownLocked(t)
+}
+
+func (g *guard) iframeAncestorNavPendingLocked(t *target) bool {
+	if t == nil || t.typ != "iframe" {
+		return false
+	}
+	seen := map[string]bool{t.id: true}
+	id := g.iframeAncestorStartLocked(t)
+	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		if g.targetHeldLocked(id) || g.targetUnconfirmedLocked(id) {
+			return true
+		}
+		id = g.frameParentOfLocked(id)
+	}
+	if parent := g.iframeParentTargetLocked(t); parent != nil {
+		return g.targetHeldLocked(parent.id) || g.targetUnconfirmedLocked(parent.id)
+	}
+	return false
+}
+
+func (g *guard) iframeAncestorUnknownLocked(t *target) bool {
 	if t == nil || t.typ != "iframe" {
 		return false
 	}
@@ -845,7 +907,8 @@ func (g *guard) iframeAncestorPendingLocked(t *target) bool {
 		}
 		seen[id] = true
 		if g.targetHeldLocked(id) || g.targetUnconfirmedLocked(id) {
-			return true
+			id = g.frameParentOfLocked(id)
+			continue
 		}
 		if at := g.targets[id]; at != nil && at.typ == "iframe" && g.iframeAncestryUnknownLocked(at) {
 			return true
@@ -857,7 +920,7 @@ func (g *guard) iframeAncestorPendingLocked(t *target) bool {
 	}
 	if parent := g.iframeParentTargetLocked(t); parent != nil {
 		if g.targetHeldLocked(parent.id) || g.targetUnconfirmedLocked(parent.id) {
-			return true
+			return false
 		}
 		return parent.typ == "iframe" && g.iframeAncestryUnknownLocked(parent)
 	}
@@ -1130,6 +1193,9 @@ func (g *guard) iframeUnshownLocked(id string) bool {
 
 func (g *guard) creatorProtectedLocked(id string) bool {
 	if id == "" {
+		return false
+	}
+	if g.targetUnconfirmedLocked(id) || g.targetHeldLocked(id) {
 		return false
 	}
 	if g.targetProtectedLocked(id) {

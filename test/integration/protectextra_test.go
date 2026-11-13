@@ -233,6 +233,7 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 		var result string
 		var after []string
 		var ahead []string
+		flushTag := ""
 		switch m.Method {
 		case "Target.attachToBrowserTarget":
 			result = `{"sessionId":"RELAY"}`
@@ -245,6 +246,16 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 			if result == "{}" {
 				result = `{"targetInfos":[]}`
 			}
+		case "Browser.getHistogram":
+			var hist struct {
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(m.Params, &hist)
+			if tag, ok := strings.CutPrefix(hist.Name, "flush:"); ok && tag != "" {
+				flushTag = tag
+			}
+			result, after = f.script(m.Method, m.Params)
+			ahead, result = takeAhead(result)
 		default:
 			result, after = f.script(m.Method, m.Params)
 			ahead, result = takeAhead(result)
@@ -257,6 +268,11 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 				}
 				_ = json.Unmarshal(m.Params, &params)
 				result = fmt.Sprintf(`{"targetInfo":{"targetId":%q,"type":"page","url":"about:blank"}}`, params.TargetID)
+			}
+		}
+		if flushTag != "" {
+			if !writeParked(ctx, c, f.takeParked(flushTag, "")) {
+				return
 			}
 		}
 		pendingTag := ""
