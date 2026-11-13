@@ -210,7 +210,7 @@ func TestCDPDeliversOrdinaryIframeAfterDelayedPageConfirm(t *testing.T) {
 	}
 }
 
-func assertHeldIframeHiddenAfterProtectedSettle(t *testing.T, env *protectEnv, settle string) {
+func assertHeldIframeHiddenAfterProtectedSettle(t *testing.T, env *protectEnv, fake *fakeCDPBrowser, settle string) {
 	t.Helper()
 	var result struct {
 		Rows map[string]struct {
@@ -257,46 +257,99 @@ func assertHeldIframeHiddenAfterProtectedSettle(t *testing.T, env *protectEnv, s
 	if delivered != 0 {
 		t.Fatalf("held iframe was delivered under %s settle: delivered=%d %s", settle, delivered, raw)
 	}
+	assertChromeCutHeldIframeSessions(t, fake, settle)
+}
+
+func assertChromeCutHeldIframeSessions(t *testing.T, fake *fakeCDPBrowser, settle string) {
+	t.Helper()
+	sessions := []string{"S-F-plain", "S-F-plain-tab"}
+	got := fake.received()
+	lastCut := map[string]int{}
+	for i, line := range got {
+		var call struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+			Params    struct {
+				SessionID string `json:"sessionId"`
+				TargetID  string `json:"targetId"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal([]byte(line), &call)
+		if call.Method == "Target.closeTarget" && call.Params.TargetID == "F-plain" {
+			for _, sid := range sessions {
+				lastCut[sid] = i
+			}
+			continue
+		}
+		if call.Method != "Target.detachFromTarget" {
+			continue
+		}
+		for _, sid := range sessions {
+			if call.Params.SessionID == sid {
+				lastCut[sid] = i
+			}
+		}
+	}
+	for _, sid := range sessions {
+		if _, ok := lastCut[sid]; !ok {
+			t.Fatalf("Chrome never received Target.detachFromTarget (or closeTarget) for held session %s under %s settle; got=%v", sid, settle, got)
+		}
+	}
+	for i, line := range got {
+		var call struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal([]byte(line), &call)
+		if call.Method == "" || call.SessionID == "" {
+			continue
+		}
+		cut, ok := lastCut[call.SessionID]
+		if !ok || i <= cut {
+			continue
+		}
+		t.Fatalf("Chrome received %s on held session %s after cut under %s settle: %s", call.Method, call.SessionID, settle, line)
+	}
 }
 
 func TestCDPProtectsHeldIframeWhenOwnerURLChangesToSeven(t *testing.T) {
-	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
 		return pendingAncestorIframeScript(seven, allowed, "seven-url")
 	})
-	assertHeldIframeHiddenAfterProtectedSettle(t, env, "seven-url")
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, fake, "seven-url")
 }
 
 func TestCDPProtectsHeldIframeWhenOwnerURLChangesToVault(t *testing.T) {
-	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
 		return pendingAncestorIframeScript(seven, allowed, "vault-url")
 	})
-	assertHeldIframeHiddenAfterProtectedSettle(t, env, "vault-url")
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, fake, "vault-url")
 }
 
 func TestCDPProtectsHeldIframeWhenOwnerFrameNavigatesToSeven(t *testing.T) {
-	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
 		return pendingAncestorIframeScript(seven, allowed, "seven-nav")
 	})
-	assertHeldIframeHiddenAfterProtectedSettle(t, env, "seven-nav")
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, fake, "seven-nav")
 }
 
 func TestCDPProtectsHeldIframeWhenOwnerFrameNavigatesToVault(t *testing.T) {
-	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
 		return pendingAncestorIframeScript(seven, allowed, "vault-nav")
 	})
-	assertHeldIframeHiddenAfterProtectedSettle(t, env, "vault-nav")
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, fake, "vault-nav")
 }
 
 func TestCDPProtectsHeldIframeWhenPendingPageConfirmsOnSeven(t *testing.T) {
-	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
 		return pendingAncestorIframeScript(seven, allowed, "seven-confirm")
 	})
-	assertHeldIframeHiddenAfterProtectedSettle(t, env, "seven-confirm")
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, fake, "seven-confirm")
 }
 
 func TestCDPProtectsHeldIframeWhenPendingPageConfirmsOnVault(t *testing.T) {
-	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+	env, fake := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
 		return pendingAncestorIframeScript(seven, allowed, "vault-confirm")
 	})
-	assertHeldIframeHiddenAfterProtectedSettle(t, env, "vault-confirm")
+	assertHeldIframeHiddenAfterProtectedSettle(t, env, fake, "vault-confirm")
 }
