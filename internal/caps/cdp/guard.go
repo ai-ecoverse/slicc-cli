@@ -15,6 +15,7 @@ import (
 
 const (
 	refusedTarget       = "target is on seven's origin"
+	refusedAncestry     = "unresolved ancestry"
 	refusedCookies      = "cookies on seven's origin"
 	refusedLost         = "slicc lost track of the browser's targets"
 	refusedPaused       = "slicc didn't pass this paused request to the page, so it could be seven's"
@@ -712,9 +713,10 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 	}
 	seen := map[string]bool{t.id: true}
 	id := g.iframeAncestorStartLocked(t)
+	ext := g.extensionFrameTargetLocked(t)
 	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
 		if seen[id] {
-			return true
+			return ext
 		}
 		seen[id] = true
 		if g.creatorProtectedLocked(id) {
@@ -722,7 +724,7 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 		}
 		id = g.frameParentOfLocked(id)
 	}
-	return id != ""
+	return ext && id != ""
 }
 
 func (g *guard) iframeAncestorPendingLocked(t *target) bool {
@@ -1295,6 +1297,12 @@ func (g *guard) forgetSessionLocked(id string) {
 			delete(g.commitMarks, k)
 			delete(g.bodyCalls, k)
 			g.attachDoneLocked(k)
+			g.dropPendingTouchLocked(k)
+		}
+	}
+	for k := range g.pendingTouch {
+		if k.session == id {
+			delete(g.pendingTouch, k)
 		}
 	}
 }

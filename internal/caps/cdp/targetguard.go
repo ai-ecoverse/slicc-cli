@@ -224,10 +224,10 @@ func (g *guard) confirmReasonLocked(nt *navTarget) string {
 }
 
 func (g *guard) targetReasonLocked(id string) string {
-	if g.targetProtectedLocked(id) || g.workerConcealedLocked(id) || g.iframeConcealedLocked(id) {
-		return refusedTarget
+	if t := g.targets[id]; t != nil && t.typ == "iframe" && !g.extensionFrameTargetLocked(t) && !t.protected && (g.iframeAncestryUnknownLocked(t) || g.iframeAncestorPendingLocked(t) || g.iframeConcealedLocked(id)) {
+		return refusedAncestry
 	}
-	if t := g.targets[id]; t != nil && t.typ == "iframe" && !g.extensionFrameTargetLocked(t) && g.iframeAncestryUnknownLocked(t) {
+	if g.targetProtectedLocked(id) || g.workerConcealedLocked(id) || g.iframeConcealedLocked(id) {
 		return refusedTarget
 	}
 	if g.targetUnconfirmedLocked(id) {
