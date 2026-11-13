@@ -230,3 +230,26 @@ func TestWorkerHoldNullOriginInProcessFrameUnderOrdinary(t *testing.T) {
 		t.Fatalf("worker from in-process null-origin under ordinary stayed held: protected=%t unresolved=%t", w.protected, g.workerUnresolvedLocked(w))
 	}
 }
+
+func TestWorkerHoldNullOriginAttachUnderCreatorSession(t *testing.T) {
+	g := workerHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	frame := &target{id: "F", typ: "iframe", url: "about:srcdoc", parentFrame: "PAGE"}
+	g.targets["F"] = frame
+	frame.protected = g.decide(frame, false)
+	g.sessions["S-f"] = &session{id: "S-f", target: "F", parent: "S-page", typ: "iframe"}
+	g.noteFrameParentLocked("F", "PAGE")
+	g.attachParent = "S-f"
+	g.attachTarget = "W"
+	defer func() { g.attachParent, g.attachTarget = "", "" }()
+	if !g.creatorClassifiedLocked("F") {
+		t.Fatal("null-origin creator stayed unclassified while its own session attached a worker")
+	}
+	w := &target{id: "W", typ: "worker", url: "https://ordinary.test/worker.js", parentFrame: "F", shown: false}
+	g.targets["W"] = w
+	w.protected = g.decide(w, false)
+	if w.protected || g.workerUnresolvedLocked(w) {
+		t.Fatalf("worker attached under null-origin creator session stayed held: protected=%t unresolved=%t", w.protected, g.workerUnresolvedLocked(w))
+	}
+}

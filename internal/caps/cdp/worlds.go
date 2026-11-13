@@ -463,10 +463,12 @@ func (g *guard) navWorldLocked(nt *navTarget, m *message) [][]byte {
 		var p struct {
 			Context execContext `json:"context"`
 		}
+		var send [][]byte
 		if json.Unmarshal(m.Params, &p) == nil {
+			send = append(send, g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)...)
 			g.worldContextLocked(nt.target, m.SessionID, p.Context)
 		}
-		return g.cutCastsLocked(nt.target)
+		return append(send, g.cutCastsLocked(nt.target)...)
 	case "Runtime.executionContextDestroyed":
 		var p struct {
 			ID       int64  `json:"executionContextId"`

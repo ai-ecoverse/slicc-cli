@@ -216,6 +216,24 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 	return nil
 }
 
+func (g *guard) navFrameNavigatedChildLocked(m *message) [][]byte {
+	var p struct {
+		Frame struct {
+			ID             string `json:"id"`
+			URL            string `json:"url"`
+			SecurityOrigin string `json:"securityOrigin"`
+		} `json:"frame"`
+	}
+	if json.Unmarshal(m.Params, &p) != nil || p.Frame.ID == "" {
+		return nil
+	}
+	raw := p.Frame.URL
+	if protect.Inheriting(raw) {
+		raw = p.Frame.SecurityOrigin
+	}
+	return g.noteChildFrameLocked(p.Frame.ID, raw)
+}
+
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if nt.shared && m.Method == "Inspector.targetCrashed" {
 		return g.navReleaseLocked(nt)
@@ -225,6 +243,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	nt.commitLocked(m)
 	if m.Method == "Page.frameNavigated" {
 		g.noteKeptLatchLocked(nt)
+		send = append(send, g.navFrameNavigatedChildLocked(m)...)
 	}
 	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {
 		nt.revision++
