@@ -820,10 +820,8 @@ func TestScreenRevokeIndependentOfFullHTTPCDPBuffers(t *testing.T) {
 		t.Fatal("buffer load revoked healthy provider before stop")
 	}
 	request := nativeScreen.ID(16)
-	start := time.Now()
 	a.send(t, map[string]any{"type": "revoke", "request": request, "link": binding.Link, "session": binding.Session, "reason": "stopped"})
-	deadline := time.NewTimer(500 * time.Millisecond)
-	defer deadline.Stop()
+	issued := time.Now()
 	confirmed := false
 	for !confirmed {
 		select {
@@ -832,16 +830,23 @@ func TestScreenRevokeIndependentOfFullHTTPCDPBuffers(t *testing.T) {
 			_ = json.Unmarshal(m["type"], &kind)
 			_ = json.Unmarshal(m["request"], &reply)
 			confirmed = kind == "revoked" && reply == request
-		case <-deadline.C:
-			t.Fatal("native safety revoke waited on old-cap buffers")
+		case <-ctx.Done():
+			if httpStream.Err() != nil || cdpStream.Err() != nil {
+				t.Fatal("old-cap streams reset before native safety revoke confirmed")
+			}
+			t.Fatal("native safety revoke hung while old-cap buffers stayed held")
 		}
 	}
-	t.Logf("synthetic full-buffer safety revoke and confirmation: %s", time.Since(start))
+	t.Logf("synthetic full-buffer safety revoke and confirmation: %s", time.Since(issued))
 	if len(b.Snapshot().Caps) != 0 {
 		t.Fatal("old cap buffers retained screen authority")
 	}
 	if httpStream.Err() != nil || cdpStream.Err() != nil {
 		t.Fatal("screen revoke reset an existing old-cap stream")
+	}
+	_, e = page.Open(ctx, map[string]any{"kind": "http"}, link.OpenOptions{Shared: true})
+	if !errors.As(e, &exhausted) || exhausted.Code != "ENOBUFS" {
+		t.Fatalf("revoke freed old-cap buffers: %v", e)
 	}
 	_ = httpStream.Reset("ECANCELED")
 	_ = cdpStream.Reset("ECANCELED")
