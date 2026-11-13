@@ -236,6 +236,7 @@ func (rl *relay) run() {
 	done := make(chan struct{})
 	stop := make(chan struct{})
 	defer close(stop)
+	defer rl.g.closeHeldWaits()
 	go rl.g.watch(stop)
 	go func() {
 		defer close(done)

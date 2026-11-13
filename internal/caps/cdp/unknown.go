@@ -40,12 +40,15 @@ func (g *guard) commandWait(c *command) <-chan struct{} {
 	if !g.browserScope(c.session) {
 		return g.sessionWait(c.session)
 	}
-	if exemptKeys[c.method]["targetId"] {
-		return nil
-	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	id := c.str("targetId")
+	if ch := g.heldIframeWaitLocked(c); ch != nil {
+		return ch
+	}
+	if exemptKeys[c.method]["targetId"] {
+		return nil
+	}
 	nt := g.navTargets[id]
 	if nt == nil || g.targetProtectedLocked(id) || nt.confirm == nil || nt.confirm.done {
 		return nil
@@ -65,6 +68,7 @@ func (g *guard) awaitCommand(c *command, ready, done <-chan struct{}) {
 }
 
 func (g *guard) resolveUnknownLocked() {
+	g.resolveHeldWaitsLocked()
 	for id, u := range g.unknown {
 		if g.sessionKnownLocked(id) {
 			delete(g.unknown, id)

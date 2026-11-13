@@ -595,6 +595,7 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 	if h, ok := g.held[p.SessionID]; ok {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		delete(g.held, p.SessionID)
+		g.refuseHeldWaitLocked(h.target)
 		g.forgetSessionLocked(p.SessionID)
 		return browserVerdict{page: g.takePendingPageLocked()}
 	}

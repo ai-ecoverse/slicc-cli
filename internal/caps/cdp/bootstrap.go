@@ -228,6 +228,8 @@ func (rl *relay) park(data []byte) bool {
 			return false
 		}
 		go rl.release(key)
+	} else {
+		rl.g.commandWait(c)
 	}
 	if rl.parkedCount >= maxParked || rl.parkedBytes+len(data) > maxParkedBytes {
 		rl.kill("ENOBUFS: too many commands wait for a target's guard")
@@ -261,6 +263,12 @@ func (rl *relay) release(key parkKey) {
 		rl.parkMu.Unlock()
 		if c, _, ok := parseCommand(data); ok {
 			rl.g.awaitCommand(c, rl.g.commandWait(c), rl.s.Done())
+		}
+		select {
+		case <-rl.s.Done():
+			rl.clearParked(key)
+			return
+		default:
 		}
 		rl.parkMu.Lock()
 		rl.parked[key][0] = parkedMessage{}
