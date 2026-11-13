@@ -125,6 +125,10 @@ func TestCDPOrdinaryCrossSiteIframeReachesAStockClient(t *testing.T) {
 					OK    bool   `json:"ok"`
 					Value string `json:"value"`
 				} `json:"read"`
+				Lookups map[string]struct {
+					OK    bool   `json:"ok"`
+					Error string `json:"error"`
+				} `json:"lookups"`
 				Explicit map[string]struct {
 					OK    bool   `json:"ok"`
 					Error string `json:"error"`
@@ -135,6 +139,11 @@ func TestCDPOrdinaryCrossSiteIframeReachesAStockClient(t *testing.T) {
 			}
 			if row.Child == nil || row.Read == nil || !row.Read.OK || row.Read.Value != "inner" {
 				t.Fatalf("an ordinary page's cross-site iframe never reached the client: %s\nguard:\n%s", raw, guardLines(env.a))
+			}
+			for id, answer := range row.Lookups {
+				if !answer.OK {
+					t.Errorf("Target.getTargetInfo on the announced ordinary iframe %s failed: %s\nguard:\n%s", id, raw, guardLines(env.a))
+				}
 			}
 			for id, answer := range row.Explicit {
 				if !answer.OK {

@@ -26,6 +26,7 @@ export async function measureOrdinaryOOPIF(getLink, opts) {
   const started = Date.now();
   const log = [];
   const explicit = {};
+  const lookups = {};
   const note = (entry) => log.push({ at: Date.now() - started, ...entry });
   let page = '';
   let pageSession = '';
@@ -35,6 +36,11 @@ export async function measureOrdinaryOOPIF(getLink, opts) {
     if (!e.method.startsWith('Target.')) return;
     const info = e.params?.targetInfo ?? {};
     note({ event: e.method, session: e.sessionId ?? '', child: e.params?.sessionId ?? '', target: info.targetId ?? e.params?.targetId ?? '', type: info.type ?? '', url: info.url ?? '', parentId: info.parentId ?? '', parentFrameId: info.parentFrameId ?? '', waiting: e.params?.waitingForDebugger ?? null });
+    if (e.method === 'Target.targetCreated' && info.type === 'iframe' && opts.shape === 'bios' && !explicit[info.targetId]) {
+      const asked = Date.now() - started;
+      lookups[info.targetId] = outcome(c.send('Target.getTargetInfo', { targetId: info.targetId })).then((o) => ({ asked, at: Date.now() - started, ok: o.ok, url: o.ok ? o.result.targetInfo?.url ?? '' : '', error: o.ok ? '' : o.error }));
+      explicit[info.targetId] = outcome(c.send('Target.attachToTarget', { targetId: info.targetId, flatten: true }));
+    }
     if (e.method !== 'Target.attachedToTarget') return;
     sessions.set(e.params.sessionId, { target: info.targetId, type: info.type, url: info.url, parent: e.sessionId ?? '' });
     if (info.type !== 'iframe') return;
@@ -73,7 +79,10 @@ export async function measureOrdinaryOOPIF(getLink, opts) {
       const o = await p;
       explicitAnswers[id] = o.ok ? { ok: true } : { ok: false, error: o.error };
     }
+    const lookupAnswers = {};
+    for (const [id, p] of Object.entries(lookups)) lookupAnswers[id] = await p;
     return {
+      lookups: lookupAnswers,
       shape: opts.shape,
       pageEnable: Boolean(opts.pageEnable),
       page,
