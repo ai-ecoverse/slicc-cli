@@ -41,7 +41,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	defer g.mu.Unlock()
 	defer func() { verdict.releases = g.takeReleasesLocked() }()
 	defer g.resolveUnknownLocked()
-	g.frameEventLocked(&m)
+	frameSend := g.frameEventLocked(&m)
 	defer func() {
 		verdict.send = append(verdict.send, g.recheckDebuggersLocked()...)
 		recheck := m.ID != nil
@@ -59,6 +59,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		settled := g.settleHeldWorkersLocked()
 		verdict.send = append(verdict.send, settled.send...)
 		verdict.page = append(verdict.page, settled.page...)
+		verdict.send = append(verdict.send, frameSend...)
 	}()
 	g.progressLocked(&m)
 	if m.ID != nil {
@@ -532,10 +533,11 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	g.noteStreamOpenedLocked(info)
 	g.attachParent = m.SessionID
+	var send [][]byte
 	if info.Type == "iframe" {
-		g.noteIframeAttachParentLocked(info)
+		send = append(send, g.noteIframeAttachParentLocked(info)...)
 	}
-	send := g.observeLocked(info)
+	send = append(send, g.observeLocked(info)...)
 	if v, handled := g.attachedHideOrHoldLocked(m, p.SessionID, p.WaitingForDebugger, info, send); handled {
 		g.attachParent = ""
 		return v

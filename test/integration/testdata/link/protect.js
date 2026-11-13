@@ -1476,6 +1476,27 @@ export function protectTest(getLink, describe) {
           },
         };
       }),
+    lateIframeParent: (browser) =>
+      run(browser, async (c) => {
+        const probe = async (ids) => {
+          const list = (await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId);
+          const infos = {};
+          const attach = {};
+          for (const id of ids) {
+            infos[id] = await outcome(c.send('Target.getTargetInfo', { targetId: id }));
+            attach[id] = await outcome(c.send('Target.attachToTarget', { targetId: id, flatten: true }));
+          }
+          return { list, infos, attach };
+        };
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        await c.send('Browser.getHistogram', { name: 'arm-late-iframe-parent' });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const before = await probe(['F-seven-x', 'F-seven-child', 'F-vault-x', 'F-vault-child', 'F-plain-x', 'F-plain-child']);
+        await c.send('Browser.getHistogram', { name: 'reveal-late-iframe-parent' });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const after = await probe(['F-seven-x', 'F-seven-child', 'F-vault-x', 'F-vault-child', 'F-plain-x', 'F-plain-child']);
+        return { before, after };
+      }),
     unresolvedWorkerTimeout: (browser) =>
       run(browser, async (c) => {
         const start = Date.now();

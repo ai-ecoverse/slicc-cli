@@ -623,17 +623,108 @@ func TestIframeHoldFrameParentsCapFailsClosed(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.targets["P"] = &target{id: "P", typ: "page", url: "https://ordinary.test/"}
 	for i := 0; i < 4096; i++ {
-		if !g.noteFrameParentLocked("F"+itoa(int64(i)), "P") {
+		if _, ok := g.noteFrameParentLocked("F"+itoa(int64(i)), "P"); !ok {
 			t.Fatalf("failed to fill frameParents before cap at %d", i)
 		}
 	}
-	if g.noteFrameParentLocked("OVERFLOW", "P") || !g.frameParentsFull {
+	if _, ok := g.noteFrameParentLocked("OVERFLOW", "P"); ok || !g.frameParentsFull {
 		t.Fatal("frameParents cap did not fail closed")
 	}
 	frame := &target{id: "X", typ: "iframe", url: "https://ordinary.test/embed", parentFrame: "OVERFLOW"}
 	g.targets["X"] = frame
 	if !g.iframeAncestryUnknownLocked(frame) || !g.listingHiddenLocked(targetInfo{TargetID: "X", Type: "iframe", URL: frame.url, ParentFrameID: "OVERFLOW"}) {
 		t.Fatal("iframe was not concealed after frameParents cap")
+	}
+}
+
+func TestIframeHoldLateParentUnderSevenRedecidesDescendants(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["SEVEN"] = &target{id: "SEVEN", typ: "page", url: "https://seven.sliccy.ai/doc", protected: true}
+	g.browserSessions["S-browser"] = true
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	child := &target{id: "CHILD", typ: "iframe", url: "https://ordinary.test/child", parentFrame: "X", shown: true}
+	g.targets["CHILD"] = child
+	g.sessions["S-CHILD"] = &session{id: "S-CHILD", target: "CHILD", parent: "S-browser", typ: "iframe"}
+	x.protected = g.decide(x, false)
+	child.protected = g.decide(child, false)
+	if x.protected || child.protected {
+		t.Fatalf("unknown parent protected early: x=%t child=%t", x.protected, child.protected)
+	}
+	if !g.iframeAncestryUnknownLocked(x) {
+		t.Fatal("X was not ancestry-unknown before the late parent")
+	}
+	_, ok := g.noteFrameParentLocked("FRAME", "SEVEN")
+	if !ok {
+		t.Fatal("late frameParents entry was not recorded")
+	}
+	if !x.protected || !child.protected {
+		t.Fatalf("late parent under seven did not redecide: x=%t child=%t", x.protected, child.protected)
+	}
+	infoX := targetInfo{TargetID: "X", Type: "iframe", URL: x.url, ParentFrameID: "FRAME"}
+	infoChild := targetInfo{TargetID: "CHILD", Type: "iframe", URL: child.url, ParentFrameID: "X"}
+	if !g.listingHiddenLocked(infoX) || !g.listingHiddenLocked(infoChild) {
+		t.Fatal("late-parent seven descendants remained listable")
+	}
+	if g.targetReasonLocked("X") == "" || g.targetReasonLocked("CHILD") == "" {
+		t.Fatal("late-parent seven descendants remained attachable by id")
+	}
+	if !g.protectedIframeIDLocked("X") || !g.protectedIframeIDLocked("CHILD") {
+		t.Fatal("late-parent seven descendants remained getTargetInfo-able")
+	}
+	if !g.sessionRefusedLocked("S-CHILD") {
+		t.Fatal("browser-level session on a late-protected descendant was not refused")
+	}
+}
+
+func TestIframeHoldLateParentUnderVaultRedecidesDescendants(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["VAULT"] = &target{id: "VAULT", typ: "page", url: "https://vault.sliccy.ai/doc", protected: true}
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	child := &target{id: "CHILD", typ: "iframe", url: "https://ordinary.test/child", parentFrame: "X", shown: true}
+	g.targets["CHILD"] = child
+	x.protected = g.decide(x, false)
+	child.protected = g.decide(child, false)
+	_, ok := g.noteFrameParentLocked("FRAME", "VAULT")
+	if !ok {
+		t.Fatal("late vault frameParents entry was not recorded")
+	}
+	if !x.protected || !child.protected {
+		t.Fatalf("late parent under vault did not redecide: x=%t child=%t", x.protected, child.protected)
+	}
+	infoChild := targetInfo{TargetID: "CHILD", Type: "iframe", URL: child.url, ParentFrameID: "X"}
+	if !g.listingHiddenLocked(infoChild) || g.targetReasonLocked("CHILD") == "" || !g.protectedIframeIDLocked("CHILD") {
+		t.Fatal("late-parent vault descendants stayed visible or attachable")
+	}
+}
+
+func TestIframeHoldOrdinaryLateParentStaysShown(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/doc"}
+	x := &target{id: "X", typ: "iframe", url: "https://ordinary.test/x", parentFrame: "FRAME", shown: true}
+	g.targets["X"] = x
+	child := &target{id: "CHILD", typ: "iframe", url: "https://ordinary.test/child", parentFrame: "X", shown: true}
+	g.targets["CHILD"] = child
+	x.protected = g.decide(x, false)
+	child.protected = g.decide(child, false)
+	if !g.listingHiddenLocked(targetInfo{TargetID: "X", Type: "iframe", URL: x.url, ParentFrameID: "FRAME"}) {
+		t.Fatal("unknown-parent iframe was listable before the late ordinary parent")
+	}
+	_, ok := g.noteFrameParentLocked("FRAME", "PAGE")
+	if !ok {
+		t.Fatal("late ordinary frameParents entry was not recorded")
+	}
+	if x.protected || child.protected {
+		t.Fatalf("ordinary late parent protected iframes: x=%t child=%t", x.protected, child.protected)
+	}
+	infoX := targetInfo{TargetID: "X", Type: "iframe", URL: x.url, ParentFrameID: "FRAME"}
+	infoChild := targetInfo{TargetID: "CHILD", Type: "iframe", URL: child.url, ParentFrameID: "X"}
+	if g.listingHiddenLocked(infoX) || g.listingHiddenLocked(infoChild) {
+		t.Fatal("ordinary late-parent descendants stayed hidden")
+	}
+	if g.targetReasonLocked("X") != "" || g.targetReasonLocked("CHILD") != "" {
+		t.Fatal("ordinary late-parent descendants were refused by id")
 	}
 }
 

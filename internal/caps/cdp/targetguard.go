@@ -120,7 +120,7 @@ func (g *guard) confirmIframeParentLocked(t *target, parentID string) ([][]byte,
 	if parentID == "" {
 		return nil, false
 	}
-	g.noteFrameParentLocked(t.id, parentID)
+	send, _ := g.noteFrameParentLocked(t.id, parentID)
 	if t.parentFrame == "" {
 		t.parentFrame = parentID
 	}
@@ -139,14 +139,14 @@ func (g *guard) confirmIframeParentLocked(t *target, parentID string) ([][]byte,
 		}
 	}
 	if !blocked {
-		return nil, false
+		return send, false
 	}
 	prev := t.protected
 	t.protected = true
-	if prev {
-		return nil, true
+	if !prev {
+		send = append(send, g.protectLocked(t)...)
 	}
-	return g.protectLocked(t), true
+	return send, true
 }
 
 func inheritedDocument(url, unreachable string) bool {

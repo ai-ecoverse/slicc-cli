@@ -74,16 +74,16 @@ func (g *guard) iframeProtectedLocked(id string) bool {
 	return false
 }
 
-func (g *guard) frameEventLocked(m *message) {
+func (g *guard) frameEventLocked(m *message) [][]byte {
 	if m.Method != "Page.frameAttached" && m.Method != "Page.frameDetached" && m.Method != "Page.frameNavigated" {
-		return
+		return nil
 	}
 	id := g.worldTargetLocked(m.SessionID)
 	if nt := g.navSessions[m.SessionID]; nt != nil {
 		id = nt.target
 	}
 	if id == "" {
-		return
+		return nil
 	}
 	var p struct {
 		FrameID       string `json:"frameId"`
@@ -96,12 +96,13 @@ func (g *guard) frameEventLocked(m *message) {
 		} `json:"frame"`
 	}
 	if json.Unmarshal(m.Params, &p) != nil {
-		return
+		return nil
 	}
+	var send [][]byte
 	switch m.Method {
 	case "Page.frameAttached":
 		if p.FrameID == "" {
-			return
+			return nil
 		}
 		if g.frames[id] == nil {
 			g.frames[id] = map[string]bool{}
@@ -113,7 +114,8 @@ func (g *guard) frameEventLocked(m *message) {
 		if parent == "" {
 			parent = id
 		}
-		g.noteFrameParentLocked(p.FrameID, parent)
+		part, _ := g.noteFrameParentLocked(p.FrameID, parent)
+		send = append(send, part...)
 		if t := g.targets[p.FrameID]; t != nil {
 			t.frameOwner = nil
 			t.frameDocument = ""
@@ -129,7 +131,8 @@ func (g *guard) frameEventLocked(m *message) {
 	case "Page.frameNavigated":
 		g.clearBlockedChildrenLocked(p.Frame.ID)
 		if p.Frame.ParentID != "" {
-			g.noteFrameParentLocked(p.Frame.ID, p.Frame.ParentID)
+			part, _ := g.noteFrameParentLocked(p.Frame.ID, p.Frame.ParentID)
+			send = append(send, part...)
 		}
 		if p.Frame.ID == id && p.Frame.ParentID == "" {
 			if page := g.targets[id]; page != nil && page.typ == "page" {
@@ -138,6 +141,7 @@ func (g *guard) frameEventLocked(m *message) {
 			delete(g.frames, id)
 		}
 	}
+	return send
 }
 
 func (g *guard) cutFrameCastsLocked() [][]byte {

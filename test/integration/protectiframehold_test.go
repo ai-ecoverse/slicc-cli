@@ -211,3 +211,163 @@ func TestCDPHidesIframesInsideProtectedDocumentsBlindSevenFrame(t *testing.T) {
 	})
 	assertProtectedIframeShapes(t, env, fake)
 }
+
+func lateIframeParentScript(seven, vault, allowed string) fakeScript {
+	page := map[string]any{"targetId": "P-ordinary", "type": "page", "url": allowed + "/doc"}
+	sevenPage := map[string]any{"targetId": "P-seven", "type": "page", "url": seven + "/doc"}
+	vaultPage := map[string]any{"targetId": "P-vault", "type": "page", "url": vault + "/doc"}
+	shapes := []map[string]any{
+		{"targetId": "F-seven-x", "type": "iframe", "url": allowed + "/seven-x", "parentFrameId": "FRAME-seven-late"},
+		{"targetId": "F-seven-child", "type": "iframe", "url": allowed + "/seven-child", "parentFrameId": "F-seven-x"},
+		{"targetId": "F-vault-x", "type": "iframe", "url": allowed + "/vault-x", "parentFrameId": "FRAME-vault-late"},
+		{"targetId": "F-vault-child", "type": "iframe", "url": allowed + "/vault-child", "parentFrameId": "F-vault-x"},
+		{"targetId": "F-plain-x", "type": "iframe", "url": allowed + "/plain-x", "parentFrameId": "FRAME-plain-late"},
+		{"targetId": "F-plain-child", "type": "iframe", "url": allowed + "/plain-child", "parentFrameId": "F-plain-x"},
+	}
+	bodies := map[string]map[string]any{
+		"P-ordinary": page, "P-seven": sevenPage, "P-vault": vaultPage,
+	}
+	for _, info := range shapes {
+		bodies[info["targetId"].(string)] = info
+	}
+	created := func(info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": info}})
+		return string(raw)
+	}
+	attach := func(parent, session string, info map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{
+			"method":    "Target.attachedToTarget",
+			"sessionId": parent,
+			"params":    map[string]any{"sessionId": session, "targetInfo": info, "waitingForDebugger": false},
+		})
+		return string(raw)
+	}
+	frame := func(session, id, parent, raw string) string {
+		event, _ := json.Marshal(map[string]any{
+			"sessionId": session,
+			"method":    "Page.frameNavigated",
+			"params":    map[string]any{"frame": map[string]any{"id": id, "parentId": parent, "url": raw, "securityOrigin": raw}},
+		})
+		return string(event)
+	}
+	armed := false
+	revealed := false
+	return func(method string, params json.RawMessage) (string, []string) {
+		switch method {
+		case "Browser.getHistogram":
+			var p struct {
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(params, &p)
+			switch p.Name {
+			case "arm-late-iframe-parent":
+				if armed {
+					return "{}", nil
+				}
+				armed = true
+				events := []string{
+					created(page), attach("", "S-page", page),
+					created(sevenPage), attach("", "S-seven", sevenPage),
+					created(vaultPage), attach("", "S-vault", vaultPage),
+				}
+				for _, info := range shapes {
+					events = append(events, created(info))
+				}
+				return "{}", events
+			case "reveal-late-iframe-parent":
+				if !armed || revealed {
+					return "{}", nil
+				}
+				revealed = true
+				return "{}", []string{
+					frame("S-seven", "FRAME-seven-late", "P-seven", seven+"/frame"),
+					frame("S-vault", "FRAME-vault-late", "P-vault", vault+"/frame"),
+					frame("S-page", "FRAME-plain-late", "P-ordinary", allowed+"/frame"),
+				}
+			}
+		case "Target.getTargets":
+			if !armed {
+				return `{"targetInfos":[]}`, nil
+			}
+			list := []any{page, sevenPage, vaultPage}
+			for _, info := range shapes {
+				list = append(list, info)
+			}
+			raw, _ := json.Marshal(map[string]any{"targetInfos": list})
+			return string(raw), nil
+		case "Target.getTargetInfo":
+			var p struct {
+				TargetID string `json:"targetId"`
+			}
+			_ = json.Unmarshal(params, &p)
+			if info, ok := bodies[p.TargetID]; ok {
+				raw, _ := json.Marshal(map[string]any{"targetInfo": info})
+				return string(raw), nil
+			}
+		case "Target.attachToTarget":
+			return `{"sessionId":"S-explicit"}`, nil
+		case "Target.detachFromTarget", "Runtime.runIfWaitingForDebugger":
+			return "{}", nil
+		}
+		return "{}", nil
+	}
+}
+
+func TestCDPRedecidesIframesWhenParentAncestryArrivesLate(t *testing.T) {
+	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
+		return lateIframeParentScript(seven, "https://vault.sliccy.ai", allowed)
+	})
+	var result struct {
+		Before struct {
+			List   []string              `json:"list"`
+			Infos  map[string]cdpOutcome `json:"infos"`
+			Attach map[string]cdpOutcome `json:"attach"`
+		} `json:"before"`
+		After struct {
+			List   []string              `json:"list"`
+			Infos  map[string]cdpOutcome `json:"infos"`
+			Attach map[string]cdpOutcome `json:"attach"`
+		} `json:"after"`
+	}
+	env.evalJSONWithin(t, "linkTest.protect.lateIframeParent('chrome-2')", &result, 20*time.Second)
+	listed := func(ids []string) map[string]bool {
+		out := map[string]bool{}
+		for _, id := range ids {
+			out[id] = true
+		}
+		return out
+	}
+	before := listed(result.Before.List)
+	after := listed(result.After.List)
+	hidden := []string{"F-seven-x", "F-seven-child", "F-vault-x", "F-vault-child"}
+	for _, id := range hidden {
+		if before[id] {
+			t.Errorf("before late parent, %s was listed", id)
+		}
+		if after[id] {
+			t.Errorf("after late protected parent, %s was listed", id)
+		}
+		info := result.After.Infos[id]
+		if info.OK || info.Error.Code != -32602 || info.Error.Message != "No target with given id found" {
+			t.Errorf("after late protected parent, getTargetInfo(%s): %+v", id, info)
+		}
+		attach := result.After.Attach[id]
+		if attach.OK || attach.Error.Message != refusedText {
+			t.Errorf("after late protected parent, attach(%s): %+v", id, attach)
+		}
+	}
+	for _, id := range []string{"F-plain-x", "F-plain-child"} {
+		if before[id] {
+			t.Errorf("before late parent, ordinary %s was listed", id)
+		}
+		if !after[id] {
+			t.Errorf("after ordinary late parent, %s stayed hidden", id)
+		}
+		if !result.After.Infos[id].OK {
+			t.Errorf("after ordinary late parent, getTargetInfo(%s): %+v", id, result.After.Infos[id])
+		}
+		if !result.After.Attach[id].OK {
+			t.Errorf("after ordinary late parent, attach(%s): %+v", id, result.After.Attach[id])
+		}
+	}
+}
