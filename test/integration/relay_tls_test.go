@@ -89,17 +89,21 @@ func relayTLSDataRoundTrip(t *testing.T, root, url string) {
 		ICEServers: []webrtc.ICEServer{{URLs: []string{url},
 			Username: "synthetic-user", Credential: "synthetic-password"}},
 	}
-	api := link.NewAPI(link.APIOptions{Discovery: failedInterfaceDiscovery(), Logf: t.Logf})
+	logf, stopLog := testBoundLogf(t)
+	api := link.NewAPI(link.APIOptions{Discovery: failedInterfaceDiscovery(), Logf: logf})
 	a, err := api.NewPeerConnection(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = a.Close() }()
 	b, err := api.NewPeerConnection(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = b.Close() }()
+	t.Cleanup(func() {
+		stopLog()
+		_ = a.Close()
+		_ = b.Close()
+	})
 	got := make(chan string, 1)
 	fail := make(chan error, 2)
 	b.OnDataChannel(func(dc *webrtc.DataChannel) {
@@ -154,6 +158,9 @@ func relayTLSDataRoundTrip(t *testing.T, root, url string) {
 			t.Fatalf("non-relay selected pair: %v", pair)
 		}
 	}
+	stopLog()
+	_ = a.Close()
+	_ = b.Close()
 }
 
 func relayGatherDescription(t *testing.T, pc *webrtc.PeerConnection, description webrtc.SessionDescription) {
