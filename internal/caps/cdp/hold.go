@@ -35,9 +35,9 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 	}
 	if info.Type == "iframe" && g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
 		g.logf("cdp: holding an auto-attached iframe until its parent target is known target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
-		return nil
+	} else {
+		g.logf("cdp: holding an auto-attached session until its target has a URL target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 	}
-	g.logf("cdp: holding an auto-attached session until its target has a URL target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 	if !waiting {
 		return nil
 	}

@@ -2,6 +2,8 @@ package cdp
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,18 @@ func iframeHoldGuard(t *testing.T) *guard {
 		t.Fatal(err)
 	}
 	return newGuard(o, nil)
+}
+
+func capturingGuard(t *testing.T) (*guard, *strings.Builder) {
+	t.Helper()
+	var buf strings.Builder
+	o, err := protect.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newGuard(o, func(format string, args ...any) {
+		fmt.Fprintf(&buf, format+"\n", args...)
+	}), &buf
 }
 
 func TestIframeHoldOrdinaryURLUnderSeven(t *testing.T) {
@@ -310,8 +324,15 @@ func TestIframeHoldChromeErrorFrameTreeHeldOrUnknownParent(t *testing.T) {
 			}
 			g, frame, nt := chromeErrorConfirmGuard(t, parent)
 			_ = g.confirmedTargetLocked(nt, nt.confirm, 0, chromeErrorConfirmMessage("CHILD", id, "https://ordinary.test/fail"))
-			if !frame.protected || !nt.confirm.failed {
-				t.Fatalf("chrome-error with %s parent was released: protected=%v failed=%v parent=%q", parent, frame.protected, nt.confirm.failed, g.frameParents["CHILD"])
+			if !nt.confirm.failed {
+				t.Fatalf("chrome-error with %s parent was confirmed: failed=%v parent=%q", parent, nt.confirm.failed, g.frameParents["CHILD"])
+			}
+			if parent == "HELD" {
+				if frame.protected {
+					t.Fatal("held parent sticky-protected chrome-error iframe")
+				}
+			} else if !frame.protected {
+				t.Fatalf("chrome-error with %s parent was not protected: parent=%q", parent, g.frameParents["CHILD"])
 			}
 			if !g.sessionRefusedLocked("S-child") {
 				t.Fatal("client session remained admitted")
@@ -1054,5 +1075,605 @@ func TestReviewPlaceholderOverwrite(t *testing.T) {
 	g.observeLocked(targetInfo{TargetID: "F", Type: "iframe", URL: "https://ordinary.test/embed", ParentID: "MID"})
 	if !g.targets["F"].protected || !g.listingHiddenLocked(targetInfo{TargetID: "F", Type: "iframe", URL: "https://ordinary.test/embed", ParentID: "MID"}) {
 		t.Error("placeholder overwrite erased recorded protected frame before descendant discovery")
+	}
+}
+
+func dualAttachInfo(id, parent string, url string) map[string]any {
+	info := map[string]any{"targetId": id, "type": "iframe", "url": url}
+	if parent != "" {
+		info["parentFrameId"] = parent
+		info["parentId"] = parent
+	}
+	return info
+}
+
+func dualAttach(g *guard, parentSession, session string, waiting bool, info map[string]any) browserVerdict {
+	raw, _ := json.Marshal(map[string]any{
+		"method":    "Target.attachedToTarget",
+		"sessionId": parentSession,
+		"params":    map[string]any{"sessionId": session, "waitingForDebugger": waiting, "targetInfo": info},
+	})
+	return g.fromBrowser(raw)
+}
+
+func TestIframeHoldTabOwnerEmptyParentThenPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-tab", "S-X-tab", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	v := dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("tab then page disputed: disputed=%v protected=%v parents=%v", g.ancestryDisputed["X"], g.targets["X"].protected, g.frameParents)
+	}
+	if len(v.forward) == 0 && len(v.page) == 0 {
+		t.Fatalf("page attach not delivered: forward=%s page=%s", v.forward, v.page)
+	}
+}
+
+func TestIframeHoldPageThenTabOwnerEmptyParent(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	_ = dualAttach(g, "S-tab", "S-X-tab", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("page then tab disputed: disputed=%v protected=%v parents=%v", g.ancestryDisputed["X"], g.targets["X"].protected, g.frameParents)
+	}
+}
+
+func TestIframeHoldTabOwnerNestedChainReachesPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.noteFrameParentLocked("INNER", "P")
+	v := dualAttach(g, "S-tab", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("tab nested disputed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"].protected)
+	}
+	if len(v.forward) == 0 && len(v.page) == 0 {
+		t.Fatal("tab nested attach not delivered")
+	}
+}
+
+func TestIframeHoldBrowserOwnerEmptyParentThenPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "BROWSER", Type: "browser", URL: ""},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+	})
+	g.sessions["S-browser"] = &session{id: "S-browser", target: "BROWSER", typ: "browser"}
+	g.browserSessions["S-browser"] = true
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-browser", "S-X-b", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	_ = dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("browser then page disputed: disputed=%v protected=%v parents=%v", g.ancestryDisputed["X"], g.targets["X"].protected, g.frameParents)
+	}
+}
+
+func TestIframeHoldBrowserOwnerNestedChainNoDispute(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "BROWSER", Type: "browser", URL: ""},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+	})
+	g.sessions["S-browser"] = &session{id: "S-browser", target: "BROWSER", typ: "browser"}
+	g.browserSessions["S-browser"] = true
+	g.noteFrameParentLocked("INNER", "P")
+	v := dualAttach(g, "S-browser", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
+	if g.ancestryDisputed["X"] || g.targets["X"].protected {
+		t.Fatalf("browser nested disputed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"].protected)
+	}
+	if len(v.forward) == 0 && len(v.page) == 0 {
+		t.Fatal("browser nested attach not delivered")
+	}
+}
+
+func TestIframeHoldUnknownOwnerTypeStillDisputes(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "OTHER", Type: "other", URL: "https://ordinary.test/"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+	})
+	g.sessions["S-other"] = &session{id: "S-other", target: "OTHER", typ: "other"}
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	_ = dualAttach(g, "S-other", "S-X-other", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	if !g.ancestryDisputed["X"] || !g.targets["X"].protected {
+		t.Fatalf("unknown owner type did not dispute: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"] != nil && g.targets["X"].protected)
+	}
+}
+
+func TestIframeHoldUnresolvedTabOwnerFailsClosed(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C-tab"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C-page"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-X-page", true, dualAttachInfo("X", "P", "https://frame.test/embed"))
+	_ = dualAttach(g, "S-tab", "S-X-tab", false, dualAttachInfo("X", "", "https://frame.test/embed"))
+	if !g.ancestryDisputed["X"] || !g.targets["X"].protected {
+		t.Fatalf("unresolved tab owner did not fail closed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"] != nil && g.targets["X"].protected)
+	}
+}
+
+func TestIframeHoldAmbiguousTabPagesFailClosed(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P1", Type: "page", URL: "https://ordinary.test/a", BrowserContextID: "C1"},
+		{TargetID: "P2", Type: "page", URL: "https://ordinary.test/b", BrowserContextID: "C1"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.noteFrameParentLocked("INNER", "P1")
+	_ = dualAttach(g, "S-tab", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
+	if !g.ancestryDisputed["X"] || !g.targets["X"].protected {
+		t.Fatalf("ambiguous tab pages did not fail closed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"] != nil && g.targets["X"].protected)
+	}
+}
+
+func TestIframeHoldDifferentPageOwnerStillDisputes(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "OTHER", Type: "page", URL: "https://ordinary.test/other"},
+	})
+	g.sessions["S-other"] = &session{id: "S-other", target: "OTHER", typ: "page"}
+	g.noteFrameParentLocked("INNER", "P")
+	_ = dualAttach(g, "S-other", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
+	if !g.ancestryDisputed["X"] || !g.targets["X"].protected {
+		t.Fatalf("different page owner did not dispute: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"] != nil && g.targets["X"].protected)
+	}
+}
+
+func TestIframeHoldTabSessionFollowMatchesResolvedPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/", BrowserContextID: "C1"},
+	})
+	g.frames["P"] = map[string]bool{"X": true}
+	frame := &target{id: "X", typ: "iframe", url: "https://frame.test/embed", parentFrame: "P", shown: true, ctx: "C1"}
+	g.targets["X"] = frame
+	g.sessions["S-X"] = &session{id: "S-X", target: "X", parent: "S-tab", typ: "iframe"}
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	if g.iframeFollowRefusedLocked("S-X") {
+		t.Fatal("tab-attached iframe was refused against its resolved page chain")
+	}
+}
+
+func TestIframeHoldUnconfirmedPageHoldsNotProtects(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "TAB", Type: "tab", URL: "https://ordinary.test/framed", BrowserContextID: "C1"},
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed", BrowserContextID: "C1"},
+	})
+	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.sessions["S-P2"] = &session{id: "S-P2", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	g.beginConfirmLocked(g.navTargets["P"])
+	if !g.targetUnconfirmedLocked("P") {
+		t.Fatal("page was not unconfirmed")
+	}
+	_ = dualAttach(g, "S-tab", "S-F-tab", false, dualAttachInfo("F", "", ""))
+	v := dualAttach(g, "S-P", "S-F", true, dualAttachInfo("F", "P", ""))
+	frame := g.targets["F"]
+	if frame == nil || frame.protected || g.ancestryDisputed["F"] {
+		t.Fatalf("unconfirmed page sticky-protected iframe: protected=%v disputed=%v", frame != nil && frame.protected, g.ancestryDisputed["F"])
+	}
+	if !g.iframeUnresolvedLocked(frame) || g.held["S-F"] == nil {
+		t.Fatalf("unconfirmed page did not hold iframe: unresolved=%v held=%v", frame != nil && g.iframeUnresolvedLocked(frame), g.held["S-F"] != nil)
+	}
+	if len(v.page)+len(v.forward) != 0 {
+		t.Fatalf("held iframe was delivered early: forward=%s page=%s", v.forward, v.page)
+	}
+}
+
+func TestIframeHoldUnconfirmedPageThenOrdinaryDelivers(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.sessions["S-P2"] = &session{id: "S-P2", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	g.beginConfirmLocked(g.navTargets["P"])
+	_ = dualAttach(g, "S-P2", "S-F-priv", false, dualAttachInfo("F", "P", ""))
+	_ = dualAttach(g, "S-P", "S-F", true, dualAttachInfo("F", "P", ""))
+	if g.targets["F"].protected || g.held["S-F"] == nil || g.held["S-F-priv"] == nil {
+		t.Fatal("expected held unprotected iframe under both parents while page unconfirmed")
+	}
+	g.browserCommitIframeURL(t, "F", "P", "https://frame.test/embed")
+	if g.targets["F"].protected {
+		t.Fatal("URL commit under unconfirmed page sticky-protected iframe")
+	}
+	if g.held["S-F"] == nil || g.held["S-F-priv"] == nil {
+		t.Fatal("URL commit released iframe while page still unconfirmed")
+	}
+	g.navTargets["P"].confirm.settle(false)
+	settled := g.settleHeldWorkersLocked()
+	if g.targets["F"].protected {
+		t.Fatal("ordinary confirm sticky-protected iframe")
+	}
+	if g.held["S-F"] != nil || g.held["S-F-priv"] != nil || len(settled.page) == 0 {
+		t.Fatalf("ordinary confirm did not deliver held iframe: held=%v/%v page=%d", g.held["S-F"] != nil, g.held["S-F-priv"] != nil, len(settled.page))
+	}
+	got := map[string]bool{}
+	for _, raw := range settled.page {
+		var m struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+			Params    struct {
+				Waiting bool   `json:"waitingForDebugger"`
+				Session string `json:"sessionId"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		if m.Method != "Target.attachedToTarget" {
+			continue
+		}
+		if m.Params.Waiting {
+			t.Fatalf("delivered attach kept waitingForDebugger true session=%s child=%s", m.SessionID, m.Params.Session)
+		}
+		got[m.Params.Session] = true
+	}
+	if !got["S-F"] || !got["S-F-priv"] {
+		t.Fatalf("both parents were not delivered once: %v", got)
+	}
+}
+
+func TestIframeHoldUnconfirmedPageThenSevenProtects(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	g.beginConfirmLocked(g.navTargets["P"])
+	_ = dualAttach(g, "S-P", "S-F", true, dualAttachInfo("F", "P", ""))
+	g.browserCommitIframeURL(t, "F", "P", "https://frame.test/embed")
+	if g.targets["F"].protected || g.held["S-F"] == nil {
+		t.Fatal("expected held iframe before owner turned protected")
+	}
+	delete(g.navTargets, "P")
+	_ = g.observeLocked(targetInfo{TargetID: "P", Type: "page", URL: "https://seven.sliccy.ai/doc"})
+	settled := g.settleHeldWorkersLocked()
+	if !g.targets["P"].protected {
+		t.Fatal("page was not protected after navigating to seven")
+	}
+	if !g.targets["F"].protected {
+		t.Fatal("iframe was not protected when owner confirmed onto seven")
+	}
+	if g.held["S-F"] != nil {
+		t.Fatal("held iframe session was not detached when owner turned protected")
+	}
+	if len(settled.page) != 0 {
+		t.Fatalf("protected iframe was delivered: %s", settled.page)
+	}
+}
+
+func (g *guard) browserCommitIframeURL(t *testing.T, id, parent, url string) {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{
+		"method": "Target.targetInfoChanged", "sessionId": "RELAY",
+		"params": map[string]any{"targetInfo": map[string]any{"targetId": id, "type": "iframe", "url": url, "parentId": parent, "parentFrameId": parent}},
+	})
+	_ = g.fromBrowser(raw)
+}
+
+func TestIframeHoldConfirmPendingParentDoesNotStickyProtect(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"},
+		{TargetID: "F", Type: "iframe", URL: "https://frame.test/embed", ParentFrameID: "P"},
+	})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	g.beginConfirmLocked(g.navTargets["P"])
+	send, blocked := g.confirmIframeParentLocked(g.targets["F"], "P")
+	if !blocked {
+		t.Fatal("confirm with pending parent was not blocked")
+	}
+	if g.targets["F"].protected {
+		t.Fatalf("pending parent sticky-protected iframe during confirm; send=%d", len(send))
+	}
+}
+
+func TestIframeHoldURLReleaseAttachesWithoutSynthesizedInfoChanged(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-F", true, dualAttachInfo("F", "P", ""))
+	if g.held["S-F"] == nil {
+		t.Fatal("URL-less iframe was not held")
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"method": "Target.targetInfoChanged",
+		"params": map[string]any{"targetInfo": map[string]any{"targetId": "F", "type": "iframe", "url": "https://frame.test/embed", "parentId": "P", "parentFrameId": "P"}},
+	})
+	v := g.fromBrowser(raw)
+	var methods []string
+	for _, page := range v.page {
+		var m struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(page, &m)
+		if m.SessionID == "S-P" {
+			methods = append(methods, m.Method)
+		}
+	}
+	if len(methods) != 1 || methods[0] != "Target.attachedToTarget" {
+		t.Fatalf("held iframe release order=%v, want attachedToTarget only (Chrome's later targetInfoChanged is separate)", methods)
+	}
+	if g.held["S-F"] != nil {
+		t.Fatal("held iframe was not delivered")
+	}
+}
+
+func heldOwnerSettleGuard(t *testing.T) *guard {
+	t.Helper()
+	g := iframeHoldGuard(t)
+	g.relaySession = "RELAY"
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", session: "GUARD", ready: make(chan struct{}), done: true}
+	_ = dualAttach(g, "S-P", "S-F", true, dualAttachInfo("F", "P", ""))
+	if g.targets["F"].protected || g.held["S-F"] == nil {
+		t.Fatal("expected held unprotected iframe before owner settle")
+	}
+	return g
+}
+
+func assertHeldHiddenAfterOwnerProtect(t *testing.T, g *guard, label string) {
+	t.Helper()
+	if !g.targets["P"].protected {
+		t.Fatalf("%s: page was not protected", label)
+	}
+	if !g.targets["F"].protected {
+		t.Fatalf("%s: iframe was not protected reason=%q", label, g.targetReasonLocked("F"))
+	}
+	if g.held["S-F"] != nil {
+		t.Fatalf("%s: held iframe session remained", label)
+	}
+}
+
+func chromeDetachSessions(send [][]byte) map[string]bool {
+	out := map[string]bool{}
+	for _, raw := range send {
+		var m struct {
+			Method string `json:"method"`
+			Params struct {
+				Session string `json:"sessionId"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		if m.Method == "Target.detachFromTarget" && m.Params.Session != "" {
+			out[m.Params.Session] = true
+		}
+	}
+	return out
+}
+
+func clientSawDetach(page [][]byte, session string) bool {
+	for _, raw := range page {
+		var m struct {
+			Method string `json:"method"`
+			Params struct {
+				Session string `json:"sessionId"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		if m.Method == "Target.detachedFromTarget" && m.Params.Session == session {
+			return true
+		}
+		if m.Method == "Target.attachedToTarget" && m.Params.Session == session {
+			return true
+		}
+	}
+	return false
+}
+
+func TestIframeHoldOwnerFrameNavigatedSevenHidesHeld(t *testing.T) {
+	for _, host := range []string{"https://seven.sliccy.ai", "https://vault.sliccy.ai"} {
+		g := heldOwnerSettleGuard(t)
+		raw, _ := json.Marshal(map[string]any{
+			"method": "Page.frameNavigated", "sessionId": "S-P",
+			"params": map[string]any{"type": "Navigation", "frame": map[string]any{
+				"id": "P", "url": host + "/doc", "securityOrigin": host,
+			}},
+		})
+		v := g.fromBrowser(raw)
+		assertHeldHiddenAfterOwnerProtect(t, g, "frameNavigated "+host)
+		if !chromeDetachSessions(v.send)["S-F"] {
+			t.Fatalf("frameNavigated %s: Chrome was not sent Target.detachFromTarget for the held session", host)
+		}
+		if clientSawDetach(v.page, "S-F") {
+			t.Fatalf("frameNavigated %s: client saw attach/detach for a session that stayed held until hide", host)
+		}
+		if g.hidden["S-F"] != true {
+			t.Fatalf("frameNavigated %s: held session was not marked hidden", host)
+		}
+	}
+}
+
+func TestIframeHoldOwnerConfirmReplySevenHidesHeld(t *testing.T) {
+	for _, host := range []string{"https://seven.sliccy.ai", "https://vault.sliccy.ai"} {
+		g := heldOwnerSettleGuard(t)
+		g.beginConfirmLocked(g.navTargets["P"])
+		g.browserCommitIframeURL(t, "F", "P", "https://frame.test/embed")
+		if g.held["S-F"] == nil {
+			t.Fatal("iframe released before confirm settled")
+		}
+		result, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": map[string]any{
+			"id": "P", "url": host + "/doc", "securityOrigin": host,
+		}}})
+		_ = g.confirmedTargetLocked(g.navTargets["P"], g.navTargets["P"].confirm, 0, message{Result: result})
+		settled := g.settleHeldWorkersLocked()
+		assertHeldHiddenAfterOwnerProtect(t, g, "confirm reply "+host)
+		if !chromeDetachSessions(settled.send)["S-F"] {
+			t.Fatalf("confirm reply %s: Chrome was not sent Target.detachFromTarget for the held session", host)
+		}
+		if clientSawDetach(settled.page, "S-F") {
+			t.Fatalf("confirm reply %s: client saw attach/detach for a session that stayed held until hide", host)
+		}
+	}
+}
+
+func TestIframeHoldOwnerURLChangedSevenHidesHeld(t *testing.T) {
+	for _, host := range []string{"https://seven.sliccy.ai", "https://vault.sliccy.ai"} {
+		g := heldOwnerSettleGuard(t)
+		delete(g.navTargets, "P")
+		raw, _ := json.Marshal(map[string]any{
+			"method": "Target.targetInfoChanged", "sessionId": "RELAY",
+			"params": map[string]any{"targetInfo": map[string]any{"targetId": "P", "type": "page", "url": host + "/doc"}},
+		})
+		v := g.fromBrowser(raw)
+		assertHeldHiddenAfterOwnerProtect(t, g, "targetInfoChanged "+host)
+		if !chromeDetachSessions(v.send)["S-F"] {
+			t.Fatalf("targetInfoChanged %s: Chrome was not sent Target.detachFromTarget for the held session", host)
+		}
+		if clientSawDetach(v.page, "S-F") {
+			t.Fatalf("targetInfoChanged %s: client saw attach/detach for a session that stayed held until hide", host)
+		}
+	}
+}
+
+func TestIframeHoldProtectReasonLogsOmitProtectedSecrets(t *testing.T) {
+	sevenURL := "https://seven.sliccy.ai/auth/callback?code=REVIEW_SECRET#token=REVIEW_TOKEN"
+	vaultURL := "https://vault.sliccy.ai/auth/callback?code=VAULT_SECRET#token=VAULT_TOKEN"
+	secrets := []string{"REVIEW_SECRET", "REVIEW_TOKEN", "VAULT_SECRET", "VAULT_TOKEN"}
+	g, buf := capturingGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "SEVEN", Type: "page", URL: sevenURL},
+		{TargetID: "VAULT", Type: "page", URL: vaultURL},
+		{TargetID: "ORD", Type: "page", URL: "https://ordinary.test/framed"},
+	})
+	_ = g.decide(g.targets["SEVEN"], false)
+	_ = g.decide(g.targets["VAULT"], false)
+	g.targets["SEVEN"].protected = true
+	g.targets["VAULT"].protected = true
+	_ = g.noteChildFrameLocked("SEVEN", sevenURL)
+	_ = g.noteChildFrameLocked("VAULT", vaultURL)
+	_ = g.creatorProtectRuleLocked("SEVEN")
+	_ = g.creatorProtectRuleLocked("VAULT")
+	_ = g.ancestorProtectStateLocked("SEVEN")
+	_ = g.ancestorProtectStateLocked("VAULT")
+	frame := &target{id: "F", typ: "iframe", url: "https://frame.test/embed", parentFrame: "SEVEN"}
+	g.targets["F"] = frame
+	_ = g.decide(frame, false)
+	_ = g.iframeProtectedAncestorReasonLocked(frame)
+	g.logf("cdp: iframe confirm blocked on pending ancestor target=%s parent=%s %s", "F", "SEVEN", g.ancestorProtectStateLocked("SEVEN"))
+	g.logf("cdp: iframe confirm blocked on pending ancestor target=%s parent=%s %s", "F", "VAULT", g.ancestorProtectStateLocked("VAULT"))
+	g.sessions["S-ORD"] = &session{id: "S-ORD", target: "ORD", typ: "page"}
+	g.attachParent = "S-ORD"
+	g.targets["DISPUTE"] = &target{id: "DISPUTE", typ: "iframe", url: sevenURL}
+	_ = g.noteIframeAttachParentLocked(targetInfo{TargetID: "DISPUTE", Type: "iframe", URL: sevenURL, ParentFrameID: "MISSING"})
+	_ = g.protectLocked(g.targets["SEVEN"])
+	_ = g.protectLocked(g.targets["VAULT"])
+	got := buf.String()
+	if !strings.Contains(got, "protecting target=SEVEN") || !strings.Contains(got, "reason=") {
+		t.Fatalf("expected protecting reason logs, got:\n%s", got)
+	}
+	if strings.Contains(got, "url=") {
+		t.Fatalf("protect reason logs still include url=:\n%s", got)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(got, secret) {
+			t.Fatalf("secret %q leaked into protect reason logs:\n%s", secret, got)
+		}
+	}
+}
+
+func TestIframeHoldContentScriptWorldDoesNotProtectSibling(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	ext := "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob"
+	raw, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S-P",
+		"params": map[string]any{"context": map[string]any{
+			"id": 2, "origin": ext, "name": "", "uniqueId": "ext-world",
+			"auxData": map[string]any{"isDefault": false, "type": "default", "frameId": "P"},
+		}},
+	})
+	_ = g.fromBrowser(raw)
+	if g.childFrames["P"] == ext {
+		t.Fatalf("content-script world origin was recorded as the page child frame: %q", g.childFrames["P"])
+	}
+	if g.creatorProtectedLocked("P") {
+		t.Fatal("ordinary page was creator-protected after a content-script world")
+	}
+	v := dualAttach(g, "S-P", "S-F", true, dualAttachInfo("F", "P", "https://frame.test/embed"))
+	if g.targets["F"].protected {
+		t.Fatalf("sibling iframe was protected by content-script world: reason=%q", g.targetReasonLocked("F"))
+	}
+	if len(v.forward)+len(v.page) == 0 && g.held["S-F"] != nil {
+		t.Fatal("ordinary iframe was held after content-script world on its page")
+	}
+}
+
+func TestIframeHoldPollutedExtensionChildFrameDoesNotProtectOrdinaryPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.childFrames["P"] = "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob"
+	if g.creatorProtectedLocked("P") || g.creatorProtectRuleLocked("P") != "none" {
+		t.Fatalf("polluted extension childFrame still protected the page: rule=%q", g.creatorProtectRuleLocked("P"))
+	}
+	frame := &target{id: "F", typ: "iframe", url: "https://frame.test/embed", parentFrame: "P"}
+	g.targets["F"] = frame
+	frame.protected = g.decide(frame, false)
+	if frame.protected {
+		t.Fatalf("ordinary iframe under polluted page was protected: reason=%q", g.targetReasonLocked("F"))
+	}
+}
+
+func TestIframeHoldDefaultProtectedContextStillLocksPage(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "P", Type: "page", URL: "https://ordinary.test/framed"}})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	raw, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S-P",
+		"params": map[string]any{"context": map[string]any{
+			"id": 1, "origin": "https://seven.sliccy.ai", "name": "", "uniqueId": "main",
+			"auxData": map[string]any{"isDefault": true, "type": "default", "frameId": "P"},
+		}},
+	})
+	v := g.fromBrowser(raw)
+	if g.childFrames["P"] != "https://seven.sliccy.ai" {
+		t.Fatalf("default protected context was not recorded: %q", g.childFrames["P"])
+	}
+	if !g.targets["P"].protected {
+		t.Fatalf("default protected context did not lock the page; send=%d", len(v.send))
+	}
+}
+
+func TestIframeHoldConfirmSettledSevenParentProtects(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "P", Type: "page", URL: "https://seven.sliccy.ai/doc"},
+		{TargetID: "F", Type: "iframe", URL: "https://frame.test/embed", ParentFrameID: "P"},
+	})
+	g.targets["P"].protected = true
+	send, blocked := g.confirmIframeParentLocked(g.targets["F"], "P")
+	if !blocked || !g.targets["F"].protected {
+		t.Fatalf("settled seven parent did not protect: blocked=%v protected=%v send=%d", blocked, g.targets["F"].protected, len(send))
 	}
 }

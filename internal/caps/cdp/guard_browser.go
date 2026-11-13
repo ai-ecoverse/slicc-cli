@@ -675,7 +675,10 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 		Context execContext `json:"context"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	decided := g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)
+	var decided [][]byte
+	if p.Context.AuxData.IsDefault {
+		decided = g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)
+	}
 	t := g.sessionTargetLocked(m.SessionID)
 	switch {
 	case t == nil:
