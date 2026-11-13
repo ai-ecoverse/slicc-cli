@@ -473,22 +473,37 @@ func (g *guard) frameParentOfLocked(id string) string {
 	return g.frameParents[id]
 }
 
-func (g *guard) noteFrameParentLocked(id, parent string) bool {
+func (g *guard) noteFrameParentLocked(id, parent string) ([][]byte, bool) {
 	if id == "" || parent == "" || id == parent {
-		return false
+		return nil, false
 	}
 	if prev, ok := g.frameParents[id]; ok {
-		return prev == parent
+		return nil, prev == parent
 	}
 	if len(g.frameParents) >= 4096 {
 		g.frameParentsFull = true
-		return false
+		return nil, false
 	}
 	g.frameParents[id] = parent
 	if t := g.targets[id]; t != nil && t.parentFrame == "" {
 		t.parentFrame = parent
 	}
-	return true
+	return g.redecideAfterFrameParentLocked(id), true
+}
+
+func (g *guard) redecideAfterFrameParentLocked(frame string) [][]byte {
+	if frame == "" {
+		return nil
+	}
+	var send [][]byte
+	if t := g.targets[frame]; t != nil && t.typ == "iframe" {
+		prev := t.protected
+		t.protected = g.decide(t, prev)
+		if t.protected && !prev {
+			send = append(send, g.protectLocked(t)...)
+		}
+	}
+	return append(send, g.redecideWorkersLocked(frame)...)
 }
 
 func (g *guard) forgetFrameParentLocked(id string) {
@@ -546,28 +561,34 @@ func (g *guard) iframeAncestorStartLocked(t *target) string {
 	return g.frameParents[t.id]
 }
 
-func (g *guard) noteIframeAttachParentLocked(info targetInfo) {
+func (g *guard) noteIframeAttachParentLocked(info targetInfo) [][]byte {
 	owner := g.sessionOwnerLocked(g.attachParent)
 	if owner == nil {
-		return
+		return nil
 	}
+	var send [][]byte
 	pf := parentFrameOf(info)
 	if pf != "" && pf != owner.id {
 		if _, ok := g.frameParents[pf]; ok {
 			if !g.frameParentChainReachesLocked(pf, owner.id) {
 				g.ancestryDisputed[info.TargetID] = true
 			}
-		} else if !g.noteFrameParentLocked(pf, owner.id) {
+		} else if part, ok := g.noteFrameParentLocked(pf, owner.id); !ok {
 			g.ancestryDisputed[info.TargetID] = true
+		} else {
+			send = append(send, part...)
 		}
 	}
 	parent := pf
 	if parent == "" {
 		parent = owner.id
 	}
-	if !g.noteFrameParentLocked(info.TargetID, parent) && g.frameParents[info.TargetID] != parent {
+	if part, ok := g.noteFrameParentLocked(info.TargetID, parent); !ok && g.frameParents[info.TargetID] != parent {
 		g.ancestryDisputed[info.TargetID] = true
+	} else {
+		send = append(send, part...)
 	}
+	return send
 }
 
 func (g *guard) iframeParentFromFramesLocked(t *target) *target {
@@ -1101,7 +1122,7 @@ func (g *guard) sessionOwnerLocked(id string) *target {
 	return g.targets[g.hiddenOwner[id]]
 }
 
-func (g *guard) record(info targetInfo) *target {
+func (g *guard) record(info targetInfo) (*target, [][]byte) {
 	t, ok := g.targets[info.TargetID]
 	if !ok {
 		t = &target{id: info.TargetID}
@@ -1123,8 +1144,10 @@ func (g *guard) record(info targetInfo) *target {
 	if parent == "" {
 		parent = g.frameParents[info.TargetID]
 	}
+	var send [][]byte
 	if parent != "" {
-		g.noteFrameParentLocked(info.TargetID, parent)
+		part, _ := g.noteFrameParentLocked(info.TargetID, parent)
+		send = append(send, part...)
 	}
 	if info.Type == "iframe" && (t.parentFrame != parent || t.url != info.URL) {
 		for id, page := range g.targets {
@@ -1140,23 +1163,22 @@ func (g *guard) record(info targetInfo) *target {
 	t.parentFrame = parent
 	t.typ, t.url, t.opener, t.openerFrame, t.ctx = info.Type, info.URL, info.OpenerID, info.OpenerFrameID, info.BrowserContextID
 	g.bindIframeDocumentLocked(t)
-	return t
+	return t, send
 }
 
 func (g *guard) observeLocked(info targetInfo) [][]byte {
 	if info.TargetID == "" {
 		return nil
 	}
-	t := g.record(info)
+	t, send := g.record(info)
 	t.gone = false
 	prev := t.protected
 	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && g.o.Loaded(t.url) && !protect.Unparseable(t.url) {
 		nt.historyLocked = true
 		g.beginConfirmLocked(nt)
-		return g.confirmTargetLocked(nt)
+		return append(send, g.confirmTargetLocked(nt)...)
 	}
 	t.protected = g.decide(t, prev)
-	var send [][]byte
 	if t.protected && !prev {
 		send = append(send, g.protectLocked(t)...)
 	}
