@@ -22,11 +22,12 @@ type heldSession struct {
 	params  map[string]any
 	waiting bool
 	resumed bool
+	at      time.Time
 }
 
 func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo, waiting bool) [][]byte {
 	sid, _ := params["sessionId"].(string)
-	h := &heldSession{id: sid, parent: parent, target: info.TargetID, typ: info.Type, params: params, waiting: waiting}
+	h := &heldSession{id: sid, parent: parent, target: info.TargetID, typ: info.Type, params: params, waiting: waiting, at: time.Now()}
 	g.held[sid] = h
 	if workerTypes[info.Type] {
 		g.logf("cdp: holding an auto-attached worker until its URL or creator frame is known target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
@@ -180,6 +181,7 @@ func (g *guard) noteHiddenLocked(id, target string) {
 }
 
 func (g *guard) hideLocked(h *heldSession) [][]byte {
+	g.refuseHeldWaitLocked(h.target)
 	g.noteHiddenLocked(h.id, h.target)
 	g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 	var send [][]byte
@@ -252,6 +254,7 @@ func (g *guard) dropHeldLocked(targetID string) {
 	for sid, h := range g.held {
 		if h.target == targetID {
 			delete(g.held, sid)
+			g.refuseHeldWaitLocked(h.target)
 			g.noteHiddenLocked(sid, h.target)
 		}
 	}

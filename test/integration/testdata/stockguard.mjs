@@ -103,6 +103,19 @@ proxy.on('upgrade', (req, socket, head) => {
 await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve));
 const endpoint = `http://127.0.0.1:${proxy.address().port}`;
 
+async function crossSiteFrame(page, url, frames) {
+  const cross = new URL('/inner', url);
+  cross.hostname = '127.0.0.1';
+  await page.goto(new URL('/cross', url).href, { waitUntil: 'load' });
+  const deadline = Date.now() + 20000;
+  for (;;) {
+    const found = frames().find((f) => f.url().startsWith(cross.href));
+    if (found) return found;
+    if (Date.now() > deadline) throw new Error(`cross-site iframe ${cross.href} never reached the client: ${frames().map((f) => f.url()).join(' ')}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 async function viaPlaywright(url, expectProtected) {
   const browser = await chromium.connectOverCDP(endpoint, { timeout: STEP });
   try {
@@ -139,6 +152,8 @@ async function viaPlaywright(url, expectProtected) {
     await page.goto(new URL('/frame', url).href, { waitUntil: 'domcontentloaded' });
     const frame = page.frameLocator('#f');
     await frame.locator('#ibtn').click();
+    const cross = await crossSiteFrame(page, url, () => page.frames());
+    if ((await cross.textContent('title')) !== 'inner') throw new Error('cross-site iframe unreadable');
     await page.close();
     await context.close();
   } finally {
@@ -181,6 +196,8 @@ async function viaPuppeteer(url, expectProtected) {
     const frame = page.frames().find((f) => f.url().includes('/inner'));
     if (!frame) throw new Error('iframe missing');
     await frame.click('#ibtn');
+    const cross = await crossSiteFrame(page, url, () => page.frames());
+    if ((await cross.$eval('title', (el) => el.textContent)) !== 'inner') throw new Error('cross-site iframe unreadable');
     await page.close();
   } finally {
     await browser.disconnect();

@@ -93,6 +93,10 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	defer g.resolveHeldWaitsLocked()
+	if reply, done := g.parkedAnswerLocked(c); done {
+		return pageVerdict{reply: reply}
+	}
 	if c.method == "Slicc.action" && c.id < relayIDBase {
 		g.verifiesInput = true
 		return pageVerdict{reply: acknowledgement(c.id, c.session)}

@@ -32,6 +32,11 @@ func stockFixture(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<!doctype html><title>frame</title><iframe id="f" src="/inner"></iframe>`))
 	})
+	mux.HandleFunc("/cross", func(w http.ResponseWriter, r *http.Request) {
+		_, port, _ := strings.Cut(r.Host, ":")
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><title>cross</title><iframe id="x" src="http://127.0.0.1:` + port + `/inner"></iframe>`))
+	})
 	mux.HandleFunc("/inner", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<!doctype html><title>inner</title><button id="ibtn">Inner</button>`))

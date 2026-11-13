@@ -138,6 +138,8 @@ type guard struct {
 	navTargets            map[string]*navTarget
 	navSessions           map[string]*navTarget
 	unknown               map[string]*navTarget
+	heldWaits             map[string]*heldWait
+	parkedAnswers         map[callKey]bool
 	keptURLLatch          map[string]bool
 	gone                  map[string]bool
 	goneOrder             []string
@@ -245,6 +247,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		navTargets:            map[string]*navTarget{},
 		navSessions:           map[string]*navTarget{},
 		unknown:               map[string]*navTarget{},
+		heldWaits:             map[string]*heldWait{},
+		parkedAnswers:         map[callKey]bool{},
 		keptURLLatch:          map[string]bool{},
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
