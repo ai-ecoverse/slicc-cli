@@ -465,7 +465,9 @@ func (g *guard) navWorldLocked(nt *navTarget, m *message) [][]byte {
 		}
 		var send [][]byte
 		if json.Unmarshal(m.Params, &p) == nil {
-			send = append(send, g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)...)
+			if p.Context.Origin == "null" && p.Context.AuxData.IsDefault {
+				send = append(send, g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)...)
+			}
 			g.worldContextLocked(nt.target, m.SessionID, p.Context)
 		}
 		return append(send, g.cutCastsLocked(nt.target)...)

@@ -709,9 +709,10 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 	}
 	seen := map[string]bool{t.id: true}
 	id := g.iframeAncestorStartLocked(t)
+	ext := g.extensionFrameTargetLocked(t)
 	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
 		if seen[id] {
-			return false
+			return ext
 		}
 		seen[id] = true
 		if g.creatorProtectedLocked(id) {
@@ -719,7 +720,7 @@ func (g *guard) iframeFromProtectedAncestorLocked(t *target) bool {
 		}
 		id = g.frameParentOfLocked(id)
 	}
-	return false
+	return ext && id != ""
 }
 
 func (g *guard) iframeAncestorPendingLocked(t *target) bool {
@@ -1016,6 +1017,9 @@ func (g *guard) creatorProtectedLocked(id string) bool {
 		return false
 	}
 	if g.targetProtectedLocked(id) {
+		return true
+	}
+	if t := g.targets[id]; t != nil && !t.gone && !g.extensionFrameTargetLocked(t) && g.o.Loaded(t.url) && !g.o.ExtensionFrame(t.url) {
 		return true
 	}
 	if g.o.Loaded(g.childFrames[id]) {

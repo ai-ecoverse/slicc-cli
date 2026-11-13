@@ -53,7 +53,11 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		} `json:"frameTree"`
 	}
 	var frame confirmFrame
-	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
+	parsed := m.Error == nil && json.Unmarshal(m.Result, &result) == nil && json.Unmarshal(result.FrameTree.Frame, &frame) == nil
+	if parsed && frame.ID != "" && frame.ParentID == "" && frame.ID != nt.target {
+		g.noteFrameParentLocked(frame.ID, nt.target)
+	}
+	if !parsed || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
 		check.settle(true)
 		return nil
 	}

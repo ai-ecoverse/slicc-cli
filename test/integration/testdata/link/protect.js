@@ -1461,7 +1461,7 @@ export function protectTest(getLink, describe) {
         await c.send('Runtime.enable', {}, sessionId);
         await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, sessionId);
         const mark = c.events.length;
-        const srcdoc = `<script>new Worker(${JSON.stringify(workerURL)});</script>`;
+        const srcdoc = `<script>new Worker(${JSON.stringify(workerURL)}, {type: 'module'});</script>`;
         await c.evaluate(`(() => { const f=document.createElement('iframe'); f.sandbox='allow-scripts'; f.srcdoc=${JSON.stringify(srcdoc)}; document.body.append(f); return true; })()`, sessionId);
         const deadline = Date.now() + 8000;
         let worker = null;

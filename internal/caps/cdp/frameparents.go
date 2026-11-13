@@ -130,6 +130,8 @@ func (g *guard) frameEventLocked(m *message) {
 		g.clearBlockedChildrenLocked(p.Frame.ID)
 		if p.Frame.ParentID != "" {
 			g.noteFrameParentLocked(p.Frame.ID, p.Frame.ParentID)
+		} else if p.Frame.ID != "" && p.Frame.ID != id {
+			g.noteFrameParentLocked(p.Frame.ID, id)
 		}
 		if p.Frame.ID == id && p.Frame.ParentID == "" {
 			if page := g.targets[id]; page != nil && page.typ == "page" {

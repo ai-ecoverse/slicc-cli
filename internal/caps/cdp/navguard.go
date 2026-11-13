@@ -231,6 +231,9 @@ func (g *guard) navFrameNavigatedChildLocked(m *message) [][]byte {
 	if protect.Inheriting(raw) {
 		raw = p.Frame.SecurityOrigin
 	}
+	if raw != "null" {
+		return nil
+	}
 	return g.noteChildFrameLocked(p.Frame.ID, raw)
 }
 
