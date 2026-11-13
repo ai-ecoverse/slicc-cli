@@ -52,13 +52,7 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 			Frame json.RawMessage `json:"frame"`
 		} `json:"frameTree"`
 	}
-	var frame struct {
-		ID             string `json:"id"`
-		ParentID       string `json:"parentId"`
-		URL            string `json:"url"`
-		SecurityOrigin string `json:"securityOrigin"`
-		UnreachableURL string `json:"unreachableUrl"`
-	}
+	var frame confirmFrame
 	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
 		check.settle(true)
 		return nil
@@ -68,6 +62,25 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		check.settle(true)
 		return nil
 	}
+	if nt.iframe {
+		if send, blocked := g.confirmIframeParentLocked(t, frame.ParentID); blocked {
+			check.reason = g.frameParentReasonLocked(t, frame.ParentID)
+			check.settle(true)
+			return send
+		}
+	}
+	return g.confirmFrameDocumentLocked(nt, check, t, frame, result.FrameTree.Frame)
+}
+
+type confirmFrame struct {
+	ID             string `json:"id"`
+	ParentID       string `json:"parentId"`
+	URL            string `json:"url"`
+	SecurityOrigin string `json:"securityOrigin"`
+	UnreachableURL string `json:"unreachableUrl"`
+}
+
+func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, frame confirmFrame, raw json.RawMessage) [][]byte {
 	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
 	g.noteErrorPageSnapshotLocked(nt, frame.URL, frame.SecurityOrigin, frame.UnreachableURL)
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
@@ -90,7 +103,7 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 	ev := protect.Evidence{DocumentURL: frame.URL, UnreachableURL: frame.UnreachableURL}
 	if protect.ErrorPage(frame.UnreachableURL, ev) && !protect.Inheriting(frame.UnreachableURL) {
 		check.settle(false)
-		return g.navEventLocked(nt, &message{Method: "Page.frameNavigated", Params: encode(map[string]any{"frame": result.FrameTree.Frame})})
+		return g.navEventLocked(nt, &message{Method: "Page.frameNavigated", Params: encode(map[string]any{"frame": raw})})
 	}
 	if frame.URL == "" || protect.Inheriting(frame.URL) || protect.Unparseable(frame.URL) || frame.UnreachableURL != "" {
 		check.settle(true)
@@ -98,6 +111,42 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 	}
 	check.settle(false)
 	return nil
+}
+
+func (g *guard) confirmIframeParentLocked(t *target, parentID string) ([][]byte, bool) {
+	if t == nil || t.typ != "iframe" {
+		return nil, false
+	}
+	if parentID == "" {
+		return nil, false
+	}
+	g.noteFrameParentLocked(t.id, parentID)
+	if t.parentFrame == "" {
+		t.parentFrame = parentID
+	}
+	blocked := g.iframeFromProtectedAncestorLocked(t) || g.iframeAncestorPendingLocked(t) || g.iframeAncestryUnknownLocked(t) || g.targetHeldLocked(parentID) || g.targetUnconfirmedLocked(parentID)
+	if !blocked {
+		parent := g.targets[parentID]
+		switch {
+		case parent == nil:
+			blocked = true
+		case parent.protected || g.decide(parent, parent.protected):
+			blocked = true
+		case parent.typ == "iframe" && g.iframeAncestryUnknownLocked(parent):
+			blocked = true
+		case g.creatorProtectedLocked(parentID):
+			blocked = true
+		}
+	}
+	if !blocked {
+		return nil, false
+	}
+	prev := t.protected
+	t.protected = true
+	if prev {
+		return nil, true
+	}
+	return g.protectLocked(t), true
 }
 
 func inheritedDocument(url, unreachable string) bool {
@@ -175,7 +224,10 @@ func (g *guard) confirmReasonLocked(nt *navTarget) string {
 }
 
 func (g *guard) targetReasonLocked(id string) string {
-	if g.targetProtectedLocked(id) || g.workerConcealedLocked(id) {
+	if g.targetProtectedLocked(id) || g.workerConcealedLocked(id) || g.iframeConcealedLocked(id) {
+		return refusedTarget
+	}
+	if t := g.targets[id]; t != nil && t.typ == "iframe" && !g.extensionFrameTargetLocked(t) && g.iframeAncestryUnknownLocked(t) {
 		return refusedTarget
 	}
 	if g.targetUnconfirmedLocked(id) {

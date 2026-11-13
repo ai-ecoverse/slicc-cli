@@ -86,9 +86,10 @@ func (g *guard) frameEventLocked(m *message) {
 		return
 	}
 	var p struct {
-		FrameID string `json:"frameId"`
-		Reason  string `json:"reason"`
-		Frame   struct {
+		FrameID       string `json:"frameId"`
+		ParentFrameID string `json:"parentFrameId"`
+		Reason        string `json:"reason"`
+		Frame         struct {
 			ID       string `json:"id"`
 			ParentID string `json:"parentId"`
 			LoaderID string `json:"loaderId"`
@@ -108,6 +109,11 @@ func (g *guard) frameEventLocked(m *message) {
 		if len(g.frames[id]) < g.maxWorlds {
 			g.frames[id][p.FrameID] = true
 		}
+		parent := p.ParentFrameID
+		if parent == "" {
+			parent = id
+		}
+		g.noteFrameParentLocked(p.FrameID, parent)
 		if t := g.targets[p.FrameID]; t != nil {
 			t.frameOwner = nil
 			t.frameDocument = ""
@@ -117,10 +123,14 @@ func (g *guard) frameEventLocked(m *message) {
 		g.forgetExtensionFrameURLLocked(id, p.FrameID)
 		if p.Reason == "remove" {
 			g.forgetChildFrameLocked(p.FrameID)
+			g.forgetFrameParentLocked(p.FrameID)
 			g.clearBlockedChildrenLocked(p.FrameID)
 		}
 	case "Page.frameNavigated":
 		g.clearBlockedChildrenLocked(p.Frame.ID)
+		if p.Frame.ParentID != "" {
+			g.noteFrameParentLocked(p.Frame.ID, p.Frame.ParentID)
+		}
 		if p.Frame.ID == id && p.Frame.ParentID == "" {
 			if page := g.targets[id]; page != nil && page.typ == "page" {
 				g.rootDocumentLocked(page, p.Frame.LoaderID)

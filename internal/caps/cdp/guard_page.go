@@ -122,7 +122,7 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	if reply := g.answerLocally(c); reply != nil {
 		return pageVerdict{reply: reply}
 	}
-	if c.method == "Target.getTargetInfo" && (g.protectedWorkerIDLocked(c.str("targetId")) || g.workerConcealedLocked(c.str("targetId"))) {
+	if c.method == "Target.getTargetInfo" && (g.protectedWorkerIDLocked(c.str("targetId")) || g.workerConcealedLocked(c.str("targetId")) || g.protectedIframeIDLocked(c.str("targetId")) || g.iframeConcealedLocked(c.str("targetId"))) {
 		return pageVerdict{reply: missingTarget(c.id, c.session)}
 	}
 	return g.admitLocked(c)
@@ -293,7 +293,7 @@ func (g *guard) sessionRefusedLocked(id string) bool {
 		return true
 	}
 	if s, ok := g.sessions[id]; ok {
-		return s.refused || g.targetProtectedLocked(s.target)
+		return s.refused || g.targetProtectedLocked(s.target) || g.iframeFollowRefusedLocked(id)
 	}
 	return false
 }

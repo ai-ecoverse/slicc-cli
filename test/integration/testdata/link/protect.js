@@ -1431,6 +1431,51 @@ export function protectTest(getLink, describe) {
           sevenAttach: await outcome(c.send('Target.attachToTarget', { targetId: 'W-data-seven', flatten: true })),
         };
       }),
+    protectedIframeShapes: (browser) =>
+      run(browser, async (c) => {
+        const hidden = [
+          'F-seven-ordinary',
+          'F-seven-srcdoc',
+          'F-seven-mid',
+          'F-seven-nest',
+          'F-vault-ordinary',
+          'F-vault-srcdoc',
+          'F-vault-mid',
+          'F-vault-nest',
+        ];
+        const snapshot = (events) =>
+          events.map((e) => ({
+            method: e.method,
+            sessionId: e.sessionId || e.params?.sessionId || '',
+            targetId: e.params?.targetInfo?.targetId || e.params?.targetId || '',
+            type: e.params?.targetInfo?.type || '',
+            url: e.params?.targetInfo?.url || '',
+            text: e.params?.args?.[0]?.value || '',
+          }));
+        const mark = c.events.length;
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        await c.send('Browser.getHistogram', { name: 'arm-protected-iframe' });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const infos = {};
+        const attach = {};
+        const evals = {};
+        for (const id of hidden) {
+          infos[id] = await outcome(c.send('Target.getTargetInfo', { targetId: id }));
+          attach[id] = await outcome(c.send('Target.attachToTarget', { targetId: id, flatten: true }));
+          evals[id] = await outcome(c.send('Runtime.evaluate', { expression: '1', returnByValue: true }, `S-${id}`));
+        }
+        return {
+          events: snapshot(c.events.slice(mark)),
+          list: (await c.send('Target.getTargets')).targetInfos,
+          infos,
+          attach,
+          evals,
+          plain: {
+            info: await outcome(c.send('Target.getTargetInfo', { targetId: 'F-plain' })),
+            attach: await outcome(c.send('Target.attachToTarget', { targetId: 'F-plain', flatten: true })),
+          },
+        };
+      }),
     unresolvedWorkerTimeout: (browser) =>
       run(browser, async (c) => {
         const start = Date.now();
@@ -2137,16 +2182,17 @@ export function protectTest(getLink, describe) {
       }),
     iframeListingScrub: (browser) =>
       run(browser, async (c) => {
-        const done = c.waitEvent((e) => e.method === 'Target.targetInfoChanged' && e.params.targetInfo.targetId === 'IFRAME', 15000);
         await c.send('Target.setDiscoverTargets', { discover: true });
-        await done;
-        const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === 'IFRAME');
-        const { targetInfo: info } = await c.send('Target.getTargetInfo', { targetId: 'IFRAME' });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const listed = (await c.send('Target.getTargets')).targetInfos.find((t) => t.targetId === 'IFRAME') || null;
+        const info = await outcome(c.send('Target.getTargetInfo', { targetId: 'IFRAME' }));
+        const attach = await outcome(c.send('Target.attachToTarget', { targetId: 'IFRAME', flatten: true }));
         return {
           listed,
           info,
+          attach,
           events: c.events
-            .filter((e) => ['Target.targetCreated', 'Target.targetInfoChanged'].includes(e.method) && e.params.targetInfo.targetId === 'IFRAME')
+            .filter((e) => ['Target.targetCreated', 'Target.targetInfoChanged'].includes(e.method) && e.params.targetInfo?.targetId === 'IFRAME')
             .map((e) => ({ method: e.method, url: e.params.targetInfo.url, title: e.params.targetInfo.title })),
         };
       }),

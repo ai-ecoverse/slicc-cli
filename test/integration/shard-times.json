@@ -523,6 +523,12 @@
     "TestWasiWatch": 6.5,
     "TestWatchJSONAndThinking": 2.1,
     "TestWatchLocalResumesWithoutDuplicates": 3.9,
-    "TestWatchOverTheTrayReconnects": 5.2
+    "TestWatchOverTheTrayReconnects": 5.2,
+    "TestCDPCloseProtectedAvailabilityEdges": 2.0,
+    "TestCDPWorkerHoldFollowUpEdges": 2.0,
+    "TestCDPHidesDataWorkersFromOrdinarySubFrames": 20.0,
+    "TestCDPHidesAProtectedIframeFromListings": 3.3,
+    "TestCDPIframeHoldAncestorEdges": 2.0,
+    "TestCDPHidesIframesInsideProtectedDocuments": 25.0
   }
 }
