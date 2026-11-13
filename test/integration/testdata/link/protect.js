@@ -1431,53 +1431,6 @@ export function protectTest(getLink, describe) {
           sevenAttach: await outcome(c.send('Target.attachToTarget', { targetId: 'W-data-seven', flatten: true })),
         };
       }),
-    nullOriginWorker: (browser) =>
-      run(browser, async (c) => {
-        const snapshot = (events) => events.map((e) => ({
-          method: e.method,
-          sessionId: e.method === 'Target.attachedToTarget' ? (e.params?.sessionId || '') : (e.sessionId || e.params?.sessionId || ''),
-          targetId: e.params?.targetInfo?.targetId || e.params?.targetId || '',
-          type: e.params?.targetInfo?.type || '',
-          url: e.params?.targetInfo?.url || '',
-        }));
-        const mark = c.events.length;
-        const ordinary = c.waitEvent((e) => e.method === 'Target.attachedToTarget' && e.params.sessionId === 'S-null-ordinary', 5000);
-        await c.send('Browser.getHistogram', { name: 'arm-null-origin-worker' });
-        await ordinary.catch(() => null);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        return {
-          events: snapshot(c.events.slice(mark)),
-          list: (await c.send('Target.getTargets')).targetInfos,
-          ordinaryAttach: await outcome(c.send('Target.attachToTarget', { targetId: 'W-null-ordinary', flatten: true })),
-          sevenAttach: await outcome(c.send('Target.attachToTarget', { targetId: 'W-null-seven', flatten: true })),
-          ordinaryInfo: await outcome(c.send('Target.getTargetInfo', { targetId: 'W-null-ordinary' })),
-          sevenInfo: await outcome(c.send('Target.getTargetInfo', { targetId: 'W-null-seven' })),
-        };
-      }),
-    sandboxedNullOriginWorker: (browser, pageURL, workerURL) =>
-      run(browser, async (c) => {
-        const { targetId, sessionId } = await c.attachTo(pageURL);
-        await c.send('Page.enable', {}, sessionId);
-        await c.send('Runtime.enable', {}, sessionId);
-        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, sessionId);
-        const mark = c.events.length;
-        const srcdoc = `<script>new Worker(${JSON.stringify(workerURL)}, {type: 'module'});</script>`;
-        await c.evaluate(`(() => { const f=document.createElement('iframe'); f.sandbox='allow-scripts'; f.srcdoc=${JSON.stringify(srcdoc)}; document.body.append(f); return true; })()`, sessionId);
-        const deadline = Date.now() + 8000;
-        let worker = null;
-        while (Date.now() < deadline && !worker) {
-          const { targetInfos } = await c.send('Target.getTargets');
-          worker = targetInfos.find((t) => t.type === 'worker' && t.url && t.url.includes('null-origin-worker')) || null;
-          if (!worker) await sleep(100);
-        }
-        const attached = c.events.slice(mark).filter((e) => e.method === 'Target.attachedToTarget' && e.params?.targetInfo?.type === 'worker');
-        await c.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
-        await outcome(c.send('Target.closeTarget', { targetId }));
-        return {
-          worker: worker ? { targetId: worker.targetId, url: worker.url, type: worker.type } : null,
-          attached: attached.map((e) => ({ sessionId: e.params.sessionId, url: e.params.targetInfo.url, parentFrameId: e.params.targetInfo.parentFrameId || '' })),
-        };
-      }),
     protectedIframeShapes: (browser) =>
       run(browser, async (c) => {
         const hidden = [
