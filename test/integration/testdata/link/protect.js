@@ -1479,13 +1479,15 @@ export function protectTest(getLink, describe) {
     lateIframeParent: (browser) =>
       run(browser, async (c) => {
         const probe = async (ids) => {
-          const list = (await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId);
-          const infos = {};
           const attach = {};
           for (const id of ids) {
-            infos[id] = await outcome(c.send('Target.getTargetInfo', { targetId: id }));
             attach[id] = await outcome(c.send('Target.attachToTarget', { targetId: id, flatten: true }));
           }
+          const infos = {};
+          for (const id of ids) {
+            infos[id] = await outcome(c.send('Target.getTargetInfo', { targetId: id }));
+          }
+          const list = (await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId);
           return { list, infos, attach };
         };
         await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
