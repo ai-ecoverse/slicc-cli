@@ -1677,3 +1677,162 @@ func TestIframeHoldConfirmSettledSevenParentProtects(t *testing.T) {
 		t.Fatalf("settled seven parent did not protect: blocked=%v protected=%v send=%d", blocked, g.targets["F"].protected, len(send))
 	}
 }
+
+func TestIframeHoldSrcdocUnderUnclassifiedLocalMidHeld(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.noteFrameParentLocked("FRAME-MID", "PAGE")
+	g.attachParent = "S-page"
+	info := targetInfo{TargetID: "F-srcdoc", Type: "iframe", URL: "about:srcdoc", ParentID: "PAGE", ParentFrameID: "FRAME-MID"}
+	g.observeAll([]targetInfo{info})
+	v := dualAttach(g, "S-page", "S-F-srcdoc", true, map[string]any{
+		"targetId": "F-srcdoc", "type": "iframe", "url": "about:srcdoc", "parentId": "PAGE", "parentFrameId": "FRAME-MID",
+	})
+	frame := g.targets["F-srcdoc"]
+	if frame == nil {
+		t.Fatal("srcdoc grandchild was not observed")
+	}
+	if frame.protected {
+		t.Fatal("unclassified local mid sticky-protected srcdoc before classification")
+	}
+	if !g.iframeUnresolvedLocked(frame) && !g.listingHiddenLocked(info) {
+		t.Fatalf("srcdoc under unclassified local mid was delivered: held=%v listingHidden=%v forward=%s page=%s", g.held["S-F-srcdoc"] != nil, g.listingHiddenLocked(info), v.forward, v.page)
+	}
+	if len(v.forward) > 0 || len(v.page) > 0 {
+		t.Fatalf("srcdoc under unclassified local mid reached the client: forward=%s page=%s", v.forward, v.page)
+	}
+	g.attachParent = ""
+}
+
+func TestIframeHoldSrcdocUnderRecordedProtectedLocalMidHidden(t *testing.T) {
+	for _, midURL := range []string{"https://seven.sliccy.ai/embed", "https://vault.sliccy.ai/embed"} {
+		g := iframeHoldGuard(t)
+		g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+		g.noteFrameParentLocked("FRAME-MID", "PAGE")
+		g.noteChildFrameLocked("FRAME-MID", midURL)
+		info := targetInfo{TargetID: "F-srcdoc", Type: "iframe", URL: "about:srcdoc", ParentID: "PAGE", ParentFrameID: "FRAME-MID"}
+		g.observeAll([]targetInfo{info})
+		frame := g.targets["F-srcdoc"]
+		frame.protected = g.decide(frame, false)
+		if !frame.protected || !g.listingHiddenLocked(info) || g.targetReasonLocked("F-srcdoc") == "" {
+			t.Fatalf("srcdoc under protected local mid %s was not hidden: protected=%v", midURL, frame.protected)
+		}
+	}
+}
+
+func TestIframeHoldMidIframeOwnerFollowAgreesWithPageChain(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "P"},
+		{TargetID: "G", Type: "iframe", URL: "https://inner.test/g", ParentFrameID: "MID"},
+	})
+	g.noteFrameParentLocked("MID", "P")
+	g.noteFrameParentLocked("G", "MID")
+	g.noteChildFrameLocked("MID", "https://cross.test/mid")
+	g.noteChildFrameLocked("G", "https://inner.test/g")
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.sessions["S-MID"] = &session{id: "S-MID", target: "MID", parent: "S-P", typ: "iframe"}
+	g.sessions["S-G"] = &session{id: "S-G", target: "G", parent: "S-MID", typ: "iframe"}
+	g.targets["G"].shown = true
+	g.targets["MID"].shown = true
+	if g.iframeFollowRefusedLocked("S-G") {
+		t.Fatal("ordinary grandchild under ordinary mid iframe was refused against the page chain")
+	}
+	if g.listingHiddenLocked(targetInfo{TargetID: "G", Type: "iframe", URL: "https://inner.test/g", ParentFrameID: "MID"}) {
+		t.Fatal("ordinary nested grandchild was listing-hidden")
+	}
+}
+
+func TestIframeHoldMidIframeOwnerNestedAttachDelivered(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "P"},
+	})
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.sessions["S-MID"] = &session{id: "S-MID", target: "MID", parent: "S-P", typ: "iframe"}
+	g.noteFrameParentLocked("MID", "P")
+	g.noteChildFrameLocked("MID", "https://cross.test/mid")
+	g.navTargets["P"] = &navTarget{target: "P", ready: make(chan struct{}), done: true}
+	v := dualAttach(g, "S-MID", "S-G", false, map[string]any{
+		"targetId": "G", "type": "iframe", "url": "https://inner.test/g", "parentId": "P", "parentFrameId": "MID",
+	})
+	if g.ancestryDisputed["G"] || (g.targets["G"] != nil && g.targets["G"].protected) {
+		t.Fatalf("mid-owned nested attach disputed: disputed=%v protected=%v parents=%v", g.ancestryDisputed["G"], g.targets["G"] != nil && g.targets["G"].protected, g.frameParents)
+	}
+	if len(v.forward) == 0 && len(v.page) == 0 {
+		t.Fatalf("mid-owned nested attach not delivered: forward=%s page=%s", v.forward, v.page)
+	}
+}
+
+func TestIframeHoldProtectedMidStillHidesDescendant(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://seven.sliccy.ai/mid", ParentFrameID: "P"},
+	})
+	g.targets["MID"].protected = true
+	g.noteFrameParentLocked("MID", "P")
+	g.sessions["S-P"] = &session{id: "S-P", target: "P", typ: "page"}
+	g.sessions["S-MID"] = &session{id: "S-MID", target: "MID", parent: "S-P", typ: "iframe"}
+	v := dualAttach(g, "S-MID", "S-G", true, map[string]any{
+		"targetId": "G", "type": "iframe", "url": "https://ordinary.test/g", "parentId": "P", "parentFrameId": "MID",
+	})
+	if len(v.forward) > 0 || len(v.page) > 0 {
+		t.Fatalf("descendant under protected mid was delivered: forward=%s page=%s", v.forward, v.page)
+	}
+	if g.targets["G"] == nil || !g.targets["G"].protected {
+		t.Fatal("descendant under protected mid was not protected")
+	}
+}
+
+func TestIframeHoldLocalNestHidesContextUnderProtectedLocalFrame(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.noteFrameParentLocked("FRAME-MID", "PAGE")
+	g.noteChildFrameLocked("FRAME-MID", "https://seven.sliccy.ai/embed")
+	g.noteFrameParentLocked("FRAME-GC", "FRAME-MID")
+	g.noteChildFrameLocked("FRAME-GC", "https://ordinary.test/inner")
+	ctx := execContext{
+		ID: 7, Origin: "https://ordinary.test", Name: "", UniqueID: "gc-main",
+	}
+	ctx.AuxData.IsDefault = true
+	ctx.AuxData.FrameID = "FRAME-GC"
+	if !g.worldContextLocked("PAGE", "S-page", ctx) {
+		t.Fatal("execution context under a protected local mid frame was shown")
+	}
+	if reason := g.worldCheckLocked(&command{method: "Runtime.evaluate", session: "S-page", id: 1, params: map[string]any{"contextId": json.Number("7"), "expression": "1"}}); reason == "" {
+		t.Fatal("Runtime.evaluate in a context under a protected local mid was allowed")
+	}
+}
+
+func TestIframeHoldRefusedSessionAnswerIsRefusalNotSilence(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://seven.sliccy.ai/mid", ParentFrameID: "P"},
+	})
+	g.targets["MID"].protected = true
+	g.sessions["S-MID"] = &session{id: "S-MID", target: "MID", typ: "iframe", refused: true}
+	g.addRefusedLocked("S-MID")
+	g.pending[callKey{"S-MID", 42}] = kindPlain
+	raw, _ := json.Marshal(map[string]any{"id": 42, "sessionId": "S-MID", "result": map[string]any{"ok": true}})
+	v := g.fromBrowser(raw)
+	if len(v.forward) == 0 {
+		t.Fatal("answer on a refused child session was silenced")
+	}
+	var m message
+	if json.Unmarshal(v.forward, &m) != nil || m.Error == nil {
+		t.Fatalf("refused-session answer was not an error: %s", v.forward)
+	}
+	var err struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(m.Error, &err) != nil || err.Code != -32000 || !strings.HasPrefix(err.Message, "slicc: refused: ") {
+		t.Fatalf("refused-session answer shape wrong: %s", v.forward)
+	}
+}

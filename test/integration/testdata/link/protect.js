@@ -2800,5 +2800,99 @@ export function protectTest(getLink, describe) {
           ownerKeys: owner.ok ? Object.keys(owner.result ?? {}).sort() : [],
         };
       }),
+    localNestProtected: (browser) =>
+      run(browser, async (c) => {
+        c.callTimeout = 8000;
+        const mark = c.events.length;
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        await c.send('Browser.getHistogram', { name: 'arm-local-nest' });
+        await sleep(400);
+        const pageAttach = await outcome(c.send('Target.attachToTarget', { targetId: 'P-top', flatten: true }));
+        const pageSession = pageAttach.ok ? pageAttach.result.sessionId : '';
+        if (pageSession) {
+          await outcome(c.send('Page.enable', {}, pageSession));
+          await outcome(c.send('Runtime.enable', {}, pageSession));
+          await outcome(c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, pageSession));
+        }
+        await sleep(400);
+        const tree = await outcome(c.send('Page.getFrameTree', {}, pageSession));
+        const treeText = tree.ok ? JSON.stringify(tree.result) : '';
+        const srcdocInfo = await outcome(c.send('Target.getTargetInfo', { targetId: 'F-srcdoc' }));
+        const srcdocAttach = await outcome(c.send('Target.attachToTarget', { targetId: 'F-srcdoc', flatten: true }));
+        let childEnable = { ok: false, error: { code: 0, message: '' } };
+        if (srcdocAttach.ok) {
+          childEnable = await outcome(c.send('Page.enable', {}, srcdocAttach.result.sessionId));
+        }
+        const contextEval = await outcome(c.send('Runtime.evaluate', { expression: '1', returnByValue: true, contextId: 3 }, pageSession));
+        const events = c.events.slice(mark);
+        return {
+          list: (await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId),
+          srcdocInfo,
+          srcdocAttach,
+          childEnable,
+          contextSeen: events.some((e) => e.method === 'Runtime.executionContextCreated' && e.params?.context?.auxData?.frameId === 'FRAME-GC'),
+          contextEval,
+          frameTreeHit: treeText.includes('FRAME-GC') || treeText.includes('F-srcdoc') || treeText.includes('FRAME-MID'),
+          childAttach: events.some((e) => e.method === 'Target.attachedToTarget' && e.params?.targetInfo?.targetId === 'F-srcdoc'),
+          targetEvents: events.some((e) => e.params?.targetInfo?.targetId === 'F-srcdoc' || e.params?.targetId === 'F-srcdoc'),
+          events: events.map((e) => e.method),
+        };
+      }),
+    localNestOrdinary: (browser) =>
+      run(browser, async (c) => {
+        c.callTimeout = 8000;
+        const mark = c.events.length;
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        await c.send('Browser.getHistogram', { name: 'arm-ordinary-nested' });
+        await sleep(400);
+        const midInfo = await outcome(c.send('Target.getTargetInfo', { targetId: 'F-mid' }));
+        const midAttach = await outcome(c.send('Target.attachToTarget', { targetId: 'F-mid', flatten: true }));
+        const gcInfo = await outcome(c.send('Target.getTargetInfo', { targetId: 'F-gc' }));
+        const gcAttach = await outcome(c.send('Target.attachToTarget', { targetId: 'F-gc', flatten: true }));
+        let gcEnable = { ok: false, error: { code: 0, message: '' } };
+        if (gcAttach.ok) {
+          gcEnable = await outcome(c.send('Page.enable', {}, gcAttach.result.sessionId));
+        }
+        const disputedInfo = await outcome(c.send('Target.getTargetInfo', { targetId: 'F-disputed' }));
+        const disputedAttach = await outcome(c.send('Target.attachToTarget', { targetId: 'F-disputed', flatten: true }));
+        const underSevenInfo = await outcome(c.send('Target.getTargetInfo', { targetId: 'F-under-seven' }));
+        const underSevenAttach = await outcome(c.send('Target.attachToTarget', { targetId: 'F-under-seven', flatten: true }));
+        const events = c.events.slice(mark);
+        return {
+          list: (await c.send('Target.getTargets')).targetInfos.map((t) => t.targetId),
+          midInfo,
+          midAttach,
+          gcInfo,
+          gcAttach,
+          gcEnable,
+          childAttach: events.some((e) => e.method === 'Target.attachedToTarget' && e.params?.targetInfo?.targetId === 'F-gc' && e.sessionId === 'S-mid'),
+          disputedInfo,
+          disputedAttach,
+          underSevenInfo,
+          underSevenAttach,
+          events: events.map((e) => e.method),
+        };
+      }),
+    localNestRefusedAnswer: (browser) =>
+      run(browser, async (c) => {
+        c.callTimeout = 8000;
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        await c.send('Browser.getHistogram', { name: 'arm-refused-answer' });
+        await sleep(300);
+        const attached = await outcome(c.send('Target.attachToTarget', { targetId: 'F-mid', flatten: true }));
+        const sessionId = attached.ok ? attached.result.sessionId : 'S-mid-client';
+        const start = Date.now();
+        const evalPromise = outcome(c.send('Runtime.evaluate', { expression: '1', returnByValue: true }, sessionId));
+        await sleep(100);
+        await c.send('Browser.getHistogram', { name: 'commit-mid-protected' });
+        await sleep(200);
+        await c.send('Browser.getHistogram', { name: 'flush:mid-eval' });
+        const enable = await outcome(c.send('Page.enable', {}, sessionId));
+        const evalResult = await evalPromise;
+        return { enable, eval: evalResult, ms: Date.now() - start };
+      }),
   };
 }
