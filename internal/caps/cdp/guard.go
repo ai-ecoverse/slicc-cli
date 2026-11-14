@@ -1129,6 +1129,11 @@ func (g *guard) iframeFollowRefusedLocked(sessionID string) bool {
 	if chain == nil {
 		chain = g.iframeParentTargetLocked(t)
 	}
+	if chain != nil && chain.typ == "iframe" {
+		if page := g.iframePageLocked(chain); page != nil {
+			chain = page
+		}
+	}
 	if chain != nil && (chain.protected || g.targetBlockedLocked(chain.id) || chain.typ == "iframe" && g.iframeAncestryUnknownLocked(chain)) {
 		return true
 	}

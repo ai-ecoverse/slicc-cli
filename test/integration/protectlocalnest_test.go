@@ -75,12 +75,6 @@ func localNestProtectedPageScript(midURL, allowed string) fakeScript {
 			}
 		case "Target.attachToTarget":
 			attaches++
-			if p.TargetID == "P-top" {
-				return `{"sessionId":"S-top-client"}`, nil
-			}
-			if p.TargetID == "F-srcdoc" {
-				return `{"sessionId":"S-srcdoc-explicit"}`, nil
-			}
 			return fmt.Sprintf(`{"sessionId":"S-x%d"}`, attaches), nil
 		case "Page.getFrameTree":
 			raw, _ := json.Marshal(map[string]any{"frameTree": map[string]any{
@@ -98,7 +92,7 @@ func localNestProtectedPageScript(midURL, allowed string) fakeScript {
 			return string(raw), nil
 		case "Runtime.evaluate":
 			return `{"result":{"type":"string","value":"leaked"}}`, nil
-		case "Page.enable", "Runtime.enable", "Runtime.runIfWaitingForDebugger", "Target.detachFromTarget", "Target.setAutoAttach", "Target.setDiscoverTargets":
+		case "Page.enable", "Runtime.enable", "Fetch.enable", "Network.enable", "Network.setBypassServiceWorker", "Page.getNavigationHistory", "Runtime.runIfWaitingForDebugger", "Target.detachFromTarget", "Target.setAutoAttach", "Target.setDiscoverTargets":
 			return "{}", nil
 		}
 		return "{}", nil
@@ -179,24 +173,10 @@ func localNestOrdinaryNestedScript(seven, allowed string) fakeScript {
 			}
 		case "Target.attachToTarget":
 			attaches++
-			switch p.TargetID {
-			case "P-top":
-				return `{"sessionId":"S-top-client"}`, nil
-			case "F-mid":
-				return `{"sessionId":"S-mid-explicit"}`, nil
-			case "F-gc":
-				return `{"sessionId":"S-gc-explicit"}`, nil
-			case "F-disputed":
-				return `{"sessionId":"S-disputed-explicit"}`, nil
-			case "F-under-seven":
-				return `{"sessionId":"S-under-explicit"}`, nil
-			case "F-seven-mid":
-				return `{"sessionId":"S-seven-explicit"}`, nil
-			}
 			return fmt.Sprintf(`{"sessionId":"S-x%d"}`, attaches), nil
-		case "Runtime.evaluate", "Page.enable", "Runtime.enable":
+		case "Runtime.evaluate", "Page.enable", "Runtime.enable", "Fetch.enable", "Network.enable", "Network.setBypassServiceWorker", "Page.getNavigationHistory", "Page.getFrameTree":
 			return "{}", nil
-		case "Runtime.runIfWaitingForDebugger", "Target.detachFromTarget", "Target.setAutoAttach", "Target.setDiscoverTargets", "Page.getFrameTree":
+		case "Runtime.runIfWaitingForDebugger", "Target.detachFromTarget", "Target.setAutoAttach", "Target.setDiscoverTargets":
 			return "{}", nil
 		}
 		return "{}", nil
@@ -211,6 +191,7 @@ func localNestRefusedAnswerScript(seven, allowed string) fakeScript {
 	}
 	bodies := map[string]map[string]any{"P-top": page, "F-mid": mid}
 	armed := false
+	attaches := 0
 	evaluatePending := false
 	return func(method string, params json.RawMessage) (string, []string) {
 		var p struct {
@@ -256,20 +237,15 @@ func localNestRefusedAnswerScript(seven, allowed string) fakeScript {
 				return string(raw), nil
 			}
 		case "Target.attachToTarget":
-			if p.TargetID == "F-mid" {
-				return `{"sessionId":"S-mid-client"}`, nil
-			}
-			if p.TargetID == "P-top" {
-				return `{"sessionId":"S-top-client"}`, nil
-			}
-			return `{"sessionId":"S-x"}`, nil
+			attaches++
+			return fmt.Sprintf(`{"sessionId":"S-r%d"}`, attaches), nil
 		case "Runtime.evaluate":
 			if !evaluatePending {
 				evaluatePending = true
 				return "#pending:mid-eval|{\"result\":{\"type\":\"string\",\"value\":\"late\"}}", nil
 			}
 			return `{"result":{"type":"string","value":"late"}}`, nil
-		case "Page.enable", "Runtime.enable", "Runtime.runIfWaitingForDebugger", "Target.detachFromTarget", "Target.setAutoAttach", "Target.setDiscoverTargets":
+		case "Page.enable", "Runtime.enable", "Fetch.enable", "Network.enable", "Network.setBypassServiceWorker", "Page.getNavigationHistory", "Runtime.runIfWaitingForDebugger", "Target.detachFromTarget", "Target.setAutoAttach", "Target.setDiscoverTargets":
 			return "{}", nil
 		}
 		return "{}", nil
