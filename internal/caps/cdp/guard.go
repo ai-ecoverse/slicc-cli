@@ -574,6 +574,18 @@ func (g *guard) frameParentChainReachesLocked(start, owner string) bool {
 	return false
 }
 
+func (g *guard) attachOwnerReachesParentFrameLocked(pf string, owner *target, disputeOwner string) bool {
+	if g.frameParentChainReachesLocked(pf, disputeOwner) {
+		return true
+	}
+	if owner != nil && owner.typ == "iframe" {
+		if page := g.iframePageLocked(owner); page != nil && g.frameParentChainReachesLocked(pf, page.id) {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *guard) iframeAncestorStartLocked(t *target) string {
 	if t == nil {
 		return ""
@@ -635,7 +647,7 @@ func (g *guard) noteIframeAttachParentLocked(info targetInfo) [][]byte {
 	pf := parentFrameOf(info)
 	if pf != "" && disputeOwner != "" && pf != disputeOwner {
 		if _, ok := g.frameParents[pf]; ok {
-			if !skipDispute && !g.frameParentChainReachesLocked(pf, disputeOwner) {
+			if !skipDispute && !g.attachOwnerReachesParentFrameLocked(pf, owner, disputeOwner) {
 				g.ancestryDisputed[info.TargetID] = true
 				g.logf("cdp: iframe ancestry disputed target=%s owner=%s ownerType=%s disputeOwner=%s parentFrame=%s chainMissesOwner=true", info.TargetID, owner.id, owner.typ, disputeOwner, pf)
 			}
@@ -725,15 +737,17 @@ func (g *guard) iframeParentTargetLocked(t *target) *target {
 	return nil
 }
 
+func (g *guard) localFrameClassifiedLocked(id string) (ok bool, known bool) {
+	_, recorded := g.frameParents[id]
+	if !recorded && g.childFrames[id] == "" {
+		return false, false
+	}
+	return g.creatorClassifiedLocked(id), true
+}
+
 func (g *guard) iframeAncestryClassifiedLocked(t *target) bool {
 	if t == nil {
 		return false
-	}
-	if parent := g.iframeParentTargetLocked(t); parent != nil {
-		if parent.typ == "iframe" && g.iframeAncestryUnknownLocked(parent) {
-			return false
-		}
-		return g.creatorClassifiedLocked(parent.id)
 	}
 	seen := map[string]bool{t.id: true}
 	id := g.iframeAncestorStartLocked(t)
@@ -742,15 +756,51 @@ func (g *guard) iframeAncestryClassifiedLocked(t *target) bool {
 			return false
 		}
 		seen[id] = true
-		if at := g.targets[id]; at != nil && at.typ == "iframe" && g.iframeAncestryUnknownLocked(at) {
-			return false
+		at := g.targets[id]
+		if at == nil {
+			ok, known := g.localFrameClassifiedLocked(id)
+			if !known {
+				break
+			}
+			if !ok {
+				return false
+			}
+			id = g.frameParentOfLocked(id)
+			continue
+		}
+		if at.typ == "page" || at.typ == "tab" {
+			return true
 		}
 		if g.creatorClassifiedLocked(id) {
 			return true
 		}
+		if g.iframeTargetStepBlocksLocked(at, id) {
+			return false
+		}
+		if g.targetHeldLocked(id) || g.targetUnconfirmedLocked(id) {
+			break
+		}
 		id = g.frameParentOfLocked(id)
 	}
-	return false
+	return g.iframeParentTargetClassifiedLocked(t)
+}
+
+func (g *guard) iframeTargetStepBlocksLocked(at *target, id string) bool {
+	return at.typ == "iframe" && !g.creatorClassifiedLocked(id) && !g.targetHeldLocked(id) && !g.targetUnconfirmedLocked(id) && g.iframeAncestryUnknownLocked(at)
+}
+
+func (g *guard) iframeParentTargetClassifiedLocked(t *target) bool {
+	parent := g.iframeParentTargetLocked(t)
+	if parent == nil {
+		return false
+	}
+	if parent.typ == "page" || parent.typ == "tab" {
+		return true
+	}
+	if parent.typ == "iframe" && g.iframeAncestryUnknownLocked(parent) {
+		return false
+	}
+	return g.creatorClassifiedLocked(parent.id)
 }
 
 func (g *guard) iframeBrowserRootedLocked(t *target) bool {
@@ -785,14 +835,14 @@ func (g *guard) iframeAncestryUnknownLocked(t *target) bool {
 	if g.frameParentsFull {
 		return true
 	}
-	if g.attachParent != "" {
-		return g.sessionOwnerLocked(g.attachParent) == nil
-	}
-	if g.iframeParentTargetLocked(t) != nil {
-		return false
+	if g.attachParent != "" && g.sessionOwnerLocked(g.attachParent) == nil {
+		return true
 	}
 	if g.iframeAncestorStartLocked(t) != "" {
 		return !g.iframeAncestryClassifiedLocked(t)
+	}
+	if g.iframeParentTargetLocked(t) != nil {
+		return false
 	}
 	return true
 }
@@ -1042,9 +1092,19 @@ func (g *guard) iframeAttachOwnerDisagreesLocked(parent string, chain *target) b
 		return owner != nil && g.targetBlockedLocked(owner.id)
 	}
 	compare := owner
-	if owner.typ == "tab" {
+	switch owner.typ {
+	case "tab":
 		if page := g.pageUnderTabLocked(owner); page != nil {
 			compare = page
+		}
+	case "iframe":
+		if page := g.iframePageLocked(owner); page != nil {
+			compare = page
+		}
+	}
+	if chain != nil && chain.typ == "iframe" {
+		if page := g.iframePageLocked(chain); page != nil {
+			chain = page
 		}
 	}
 	return g.targetBlockedLocked(owner.id) || (chain != nil && compare.id != chain.id)
@@ -1068,6 +1128,11 @@ func (g *guard) iframeFollowRefusedLocked(sessionID string) bool {
 	chain := g.iframePageLocked(t)
 	if chain == nil {
 		chain = g.iframeParentTargetLocked(t)
+	}
+	if chain != nil && chain.typ == "iframe" {
+		if page := g.iframePageLocked(chain); page != nil {
+			chain = page
+		}
 	}
 	if chain != nil && (chain.protected || g.targetBlockedLocked(chain.id) || chain.typ == "iframe" && g.iframeAncestryUnknownLocked(chain)) {
 		return true

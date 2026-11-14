@@ -142,9 +142,6 @@ func (g *guard) expireAnswer(k callKey) (page, send [][]byte, releases []*link.R
 	defer func() { releases = append(g.takeReleasesLocked(), h.reservation) }()
 	delete(g.heldAnswers, k)
 	v := g.refuseAnswerLocked(k, h.call, &h.m, refusedUnknown)
-	if g.sessionRefusedLocked(k.session) {
-		return nil, v.send, nil
-	}
 	return [][]byte{v.forward}, v.send, nil
 }
 

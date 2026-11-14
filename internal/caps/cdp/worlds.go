@@ -195,6 +195,10 @@ func (g *guard) worldContextLocked(target, session string, c execContext) bool {
 		g.hideContextLocked(target, session, c)
 		return true
 	}
+	if g.frameUnderProtectedLocked(c.AuxData.FrameID) {
+		g.hideContextLocked(target, session, c)
+		return true
+	}
 	if !g.o.Loaded(c.Origin) || (c.AuxData.IsDefault && c.AuxData.FrameID == target) {
 		if w := g.worlds[target]; w != nil {
 			g.forgetContextLocked(w, c.ID)
@@ -204,6 +208,28 @@ func (g *guard) worldContextLocked(target, session string, c execContext) bool {
 	}
 	g.hideContextLocked(target, session, c)
 	return true
+}
+
+func (g *guard) frameUnderProtectedLocked(frame string) bool {
+	if frame == "" {
+		return false
+	}
+	seen := map[string]bool{}
+	id := frame
+	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		if g.creatorProtectedLocked(id) {
+			return true
+		}
+		if t := g.targets[id]; t != nil && !t.gone && t.protected {
+			return true
+		}
+		id = g.frameParentOfLocked(id)
+	}
+	return false
 }
 
 func (g *guard) contextGoneLocked(target, session string, id int64, unique string) bool {
