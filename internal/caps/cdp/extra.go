@@ -58,10 +58,11 @@ func (g *guard) extraReadyLocked(k requestKey) bool {
 
 func (g *guard) filterExtraLocked(m *message, data []byte, marked bool) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
+		cred := g.credMarkedLocked(m.SessionID, requestIDOf(m))
 		if m.Method == requestExtraInfo {
-			return true, g.requestExtra(p, marked), nil
+			return true, g.requestExtra(p, marked, cred), nil
 		}
-		return true, g.responseExtra(p, marked), nil
+		return true, g.responseExtra(p, marked, cred), nil
 	})
 }
 

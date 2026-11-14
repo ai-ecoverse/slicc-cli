@@ -236,6 +236,7 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": "https://auth.services.adobe.com"}, "page"},
 		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": "https://adobeid-na1.services.adobe.com"}, "page"},
 		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": "https://x.ims-na1.adobelogin.com"}, "page"},
+		{"IndexedDB.requestDatabaseNames", map[string]any{"storageKey": "https://cdn.example.test/^0https://adobe.com"}, "page"},
 	}
 	out, b := outcomesOf(t, env, append(append([][]any{}, refused...), answered...))
 	for i, o := range out {

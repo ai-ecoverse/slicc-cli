@@ -286,6 +286,10 @@ func resultKind(method string) callKind {
 		return kindPaint
 	case "Page.addScriptToEvaluateOnNewDocument":
 		return kindScript
+	case "Storage.getTrustTokens":
+		return kindTrustTokens
+	case "Storage.getAffectedUrlsForThirdPartyCookieMetadata":
+		return kindAffectedURLs
 	}
 	return kindPlain
 }
@@ -460,7 +464,10 @@ func (g *guard) checkLocked(c *command) string {
 	if clientMutation(c) && c.str("requestId") == "" {
 		return refusedClientHop
 	}
-	return g.scan(c.params, c, exemptKeys[c.method], 0)
+	if reason := g.scan(c.params, c, exemptKeys[c.method], 0); reason != "" {
+		return reason
+	}
+	return credentialRule(c)
 }
 
 var destinationKeys = map[string]string{
@@ -628,8 +635,11 @@ func (g *guard) cookiesRule(c *command) string {
 }
 
 func (g *guard) cookieParamReasonLocked(p map[string]any) string {
-	if g.cookieProtected(p) {
+	if g.sevenCookie(p) {
 		return refusedCookies
+	}
+	if credentialCookie(p) {
+		return refusedCredential
 	}
 	if d, _ := p["domain"].(string); d != "" {
 		return ""
@@ -643,6 +653,8 @@ func (g *guard) cookieParamReasonLocked(p map[string]any) string {
 		return ""
 	case g.o.URL(raw) || g.o.CookieDomain(protect.Host(raw)):
 		return refusedCookies
+	case protect.CredentialURL(raw):
+		return refusedCredential
 	case protect.Unparseable(raw):
 		return refusedParse
 	}
