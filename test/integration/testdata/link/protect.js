@@ -1844,6 +1844,30 @@ export function protectTest(getLink, describe) {
         }
         return { out };
       }),
+    eventsAfter: (browser, calls, method, requestId) =>
+      run(browser, async (c) => {
+        const done = c.waitEvent((e) => e.method === method && e.params?.requestId === requestId, 15000);
+        const out = [];
+        for (const [m, params, sessionId] of calls) out.push({ method: m, ...(await outcome(c.send(m, params, sessionId))) });
+        await done;
+        await sleep(500);
+        return { out, events: c.events.map((e) => ({ method: e.method, text: JSON.stringify(e.params ?? {}) })) };
+      }),
+    drivePage: (browser, url) =>
+      run(browser, async (c) => {
+        const out = {};
+        out.create = await outcome(c.send('Target.createTarget', { url }));
+        const targetId = out.create.ok ? out.create.result.targetId : '';
+        out.targets = await outcome(c.send('Target.getTargets'));
+        out.attach = await outcome(c.send('Target.attachToTarget', { targetId, flatten: true }));
+        const sessionId = out.attach.ok ? out.attach.result.sessionId : 'none';
+        out.navigate = await outcome(c.send('Page.navigate', { url: `${url}?again=1` }, sessionId));
+        out.evaluate = await outcome(c.send('Runtime.evaluate', { expression: '1 + 1' }, sessionId));
+        out.document = await outcome(c.send('DOM.getDocument', {}, sessionId));
+        out.click = await outcome(c.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 5, y: 5, button: 'left', clickCount: 1 }, sessionId));
+        out.fill = await outcome(c.send('Input.insertText', { text: 'user@example.test' }, sessionId));
+        return out;
+      }),
     legacyInterception: (browser, all, last) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Network.requestIntercepted' && e.params.interceptionId === last, 15000);
