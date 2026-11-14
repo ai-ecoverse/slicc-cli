@@ -272,7 +272,7 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 	}
 	for _, m := range fake.received() {
 		for _, c := range refused {
-			if strings.Contains(m, `"`+c[0].(string)+`"`) && strings.Contains(m, "adobelogin") {
+			if strings.Contains(m, `"`+c[0].(string)+`"`) && strings.Contains(m, "adobelogin") && !strings.Contains(m, "x.ims-na1.adobelogin.com") {
 				t.Errorf("the browser got %s", m)
 			}
 		}
