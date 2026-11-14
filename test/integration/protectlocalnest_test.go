@@ -105,7 +105,7 @@ func localNestProtectedPageScript(midURL, allowed string) fakeScript {
 	}
 }
 
-func localNestOrdinaryNestedScript(allowed string) fakeScript {
+func localNestOrdinaryNestedScript(seven, allowed string) fakeScript {
 	page := map[string]any{"targetId": "P-top", "type": "page", "url": allowed + "/nest"}
 	mid := map[string]any{
 		"targetId": "F-mid", "type": "iframe", "url": "https://cross.test/mid",
@@ -118,10 +118,10 @@ func localNestOrdinaryNestedScript(allowed string) fakeScript {
 	other := map[string]any{"targetId": "P-other", "type": "page", "url": allowed + "/other"}
 	disputed := map[string]any{
 		"targetId": "F-disputed", "type": "iframe", "url": allowed + "/disputed",
-		"parentId": "P-top", "parentFrameId": "P-top", "attached": true,
+		"parentId": "P-top", "parentFrameId": "INNER", "attached": true,
 	}
 	protectedMid := map[string]any{
-		"targetId": "F-seven-mid", "type": "iframe", "url": "https://seven.sliccy.ai/mid",
+		"targetId": "F-seven-mid", "type": "iframe", "url": seven + "/mid",
 		"parentId": "P-top", "parentFrameId": "P-top", "attached": true,
 	}
 	protectedChild := map[string]any{
@@ -149,6 +149,10 @@ func localNestOrdinaryNestedScript(allowed string) fakeScript {
 			return "{}", []string{
 				localNestEvent("", "Target.targetCreated", map[string]any{"targetInfo": page}),
 				localNestEvent("", "Target.attachedToTarget", map[string]any{"sessionId": "S-top", "waitingForDebugger": false, "targetInfo": page}),
+				localNestEvent("S-top", "Page.frameAttached", map[string]any{"frameId": "INNER", "parentFrameId": "P-top"}),
+				localNestEvent("S-top", "Page.frameNavigated", map[string]any{"frame": map[string]any{
+					"id": "INNER", "parentId": "P-top", "url": allowed + "/slot", "securityOrigin": allowed,
+				}}),
 				localNestEvent("", "Target.targetCreated", map[string]any{"targetInfo": other}),
 				localNestEvent("", "Target.attachedToTarget", map[string]any{"sessionId": "S-other", "waitingForDebugger": false, "targetInfo": other}),
 				localNestEvent("", "Target.targetCreated", map[string]any{"targetInfo": mid}),
@@ -202,7 +206,7 @@ func localNestOrdinaryNestedScript(allowed string) fakeScript {
 func localNestRefusedAnswerScript(seven, allowed string) fakeScript {
 	page := map[string]any{"targetId": "P-top", "type": "page", "url": allowed + "/nest"}
 	mid := map[string]any{
-		"targetId": "F-mid", "type": "iframe", "url": seven + "/mid",
+		"targetId": "F-mid", "type": "iframe", "url": allowed + "/mid",
 		"parentId": "P-top", "parentFrameId": "P-top", "attached": true,
 	}
 	bodies := map[string]map[string]any{"P-top": page, "F-mid": mid}
@@ -327,7 +331,7 @@ func TestCDPHidesGrandchildUnderProtectedLocalMid(t *testing.T) {
 
 func TestCDPDeliversOrdinaryNestedOOPIFFromMidSession(t *testing.T) {
 	env, _ := setupFakeProtectPage(t, func(seven, allowed string) fakeScript {
-		return localNestOrdinaryNestedScript(allowed)
+		return localNestOrdinaryNestedScript(seven, allowed)
 	})
 	var result struct {
 		List             []string   `json:"list"`

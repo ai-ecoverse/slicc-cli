@@ -768,6 +768,9 @@ func (g *guard) iframeAncestryClassifiedLocked(t *target) bool {
 			id = g.frameParentOfLocked(id)
 			continue
 		}
+		if at.typ == "page" || at.typ == "tab" {
+			return true
+		}
 		if g.creatorClassifiedLocked(id) {
 			return true
 		}
@@ -790,6 +793,9 @@ func (g *guard) iframeParentTargetClassifiedLocked(t *target) bool {
 	parent := g.iframeParentTargetLocked(t)
 	if parent == nil {
 		return false
+	}
+	if parent.typ == "page" || parent.typ == "tab" {
+		return true
 	}
 	if parent.typ == "iframe" && g.iframeAncestryUnknownLocked(parent) {
 		return false
@@ -1094,6 +1100,11 @@ func (g *guard) iframeAttachOwnerDisagreesLocked(parent string, chain *target) b
 	case "iframe":
 		if page := g.iframePageLocked(owner); page != nil {
 			compare = page
+		}
+	}
+	if chain != nil && chain.typ == "iframe" {
+		if page := g.iframePageLocked(chain); page != nil {
+			chain = page
 		}
 	}
 	return g.targetBlockedLocked(owner.id) || (chain != nil && compare.id != chain.id)

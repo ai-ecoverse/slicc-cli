@@ -1842,3 +1842,18 @@ func TestIframeHoldRefusedSessionAnswerIsRefusalNotSilence(t *testing.T) {
 		t.Fatalf("refused-session answer shape wrong: %s", v.forward)
 	}
 }
+
+func TestIframeHoldBlankPageParentAncestryIsClassified(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "T1", Type: "page", URL: "about:blank"},
+		{TargetID: "T2", Type: "iframe", URL: "https://ordinary.test/fixture", ParentFrameID: "T1"},
+	})
+	frame := g.targets["T2"]
+	if g.iframeAncestryUnknownLocked(frame) || g.iframeUnresolvedLocked(frame) {
+		t.Fatal("iframe under an about:blank page parent stayed unresolved")
+	}
+	if g.listingHiddenLocked(targetInfo{TargetID: "T2", Type: "iframe", URL: frame.url, ParentFrameID: "T1"}) {
+		t.Fatal("iframe under an about:blank page parent was listing-hidden")
+	}
+}
