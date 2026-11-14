@@ -1853,6 +1853,14 @@ export function protectTest(getLink, describe) {
         await sleep(500);
         return { out, events: c.events.map((e) => ({ method: e.method, text: JSON.stringify(e.params ?? {}) })) };
       }),
+    callsOnPage: (browser, calls) =>
+      run(browser, async (c) => {
+        const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const out = [];
+        for (const [method, params, where] of calls) out.push({ method, ...(await outcome(c.send(method, params, where === 'page' ? sessionId : undefined))) });
+        return { out };
+      }),
     drivePage: (browser, url) =>
       run(browser, async (c) => {
         const out = {};

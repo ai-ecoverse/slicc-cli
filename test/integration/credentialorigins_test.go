@@ -30,12 +30,23 @@ func credentialLogClean(t *testing.T, env *protectEnv) {
 	}
 }
 
+func withPage(script fakeScript) fakeScript {
+	page := guardWaitScript("{}")
+	return func(method string, params json.RawMessage) (string, []string) {
+		switch method {
+		case "Target.createTarget", "Target.attachToTarget", "Browser.getVersion":
+			return page(method, params)
+		}
+		return script(method, params)
+	}
+}
+
 func outcomesOf(t *testing.T, env *protectEnv, calls [][]any) ([]callOutcome, string) {
 	t.Helper()
 	var r struct {
 		Out []callOutcome `json:"out"`
 	}
-	env.evalJSON(t, "linkTest.protect.calls("+jsArgs("chrome-2", calls)+")", &r)
+	env.evalJSON(t, "linkTest.protect.callsOnPage("+jsArgs("chrome-2", calls)+")", &r)
 	b, _ := json.Marshal(r)
 	if len(r.Out) != len(calls) {
 		t.Fatalf("calls: %s", b)
@@ -53,19 +64,19 @@ func TestCDPWithholdsSignInCookiesFromExport(t *testing.T) {
 		`{"name":"sub","value":"kept-sub","domain":"x.ims-na1.adobelogin.com","path":"/"},` +
 		`{"name":"lookalike","value":"kept-lookalike","domain":"ims-na1.adobelogin.com.example.test","path":"/"}]}`
 	env, _ := setupFakeProtect(t, func(string, string) fakeScript {
-		return scriptedAnswers(map[string]string{
+		return withPage(scriptedAnswers(map[string]string{
 			"Network.getAllCookies": jar,
 			"Network.getCookies":    jar,
 			"Storage.getCookies":    jar,
 			"Page.getCookies":       jar,
-		}, nil)
+		}, nil))
 	})
 	calls := [][]any{
 		{"Network.getAllCookies", map[string]any{}},
 		{"Network.getCookies", map[string]any{"urls": []string{idpOrigin + "/ims/authorize", env.allowed + "/"}}},
 		{"Network.getCookies", map[string]any{}},
 		{"Storage.getCookies", map[string]any{}},
-		{"Page.getCookies", map[string]any{}},
+		{"Page.getCookies", map[string]any{}, "page"},
 	}
 	out, b := outcomesOf(t, env, calls)
 	for i, o := range out {
@@ -78,7 +89,7 @@ func TestCDPWithholdsSignInCookiesFromExport(t *testing.T) {
 }
 
 func TestCDPRefusesSignInCookieWrites(t *testing.T) {
-	env, fake := setupFakeProtect(t, func(string, string) fakeScript { return scriptedAnswers(nil, nil) })
+	env, fake := setupFakeProtect(t, func(string, string) fakeScript { return withPage(scriptedAnswers(nil, nil)) })
 	partition := map[string]any{"topLevelSite": "https://adobelogin.com", "hasCrossSiteAncestor": false}
 	calls := [][]any{
 		{"Network.setCookie", map[string]any{"name": "w", "value": "secret-w1", "url": idpOrigin + "/"}},
@@ -88,7 +99,7 @@ func TestCDPRefusesSignInCookieWrites(t *testing.T) {
 		{"Network.setCookies", map[string]any{"cookies": []any{map[string]any{"name": "ok", "value": "1", "url": env.allowed + "/"}, map[string]any{"name": "w", "value": "secret-w5", "domain": "ims-na1.adobelogin.com", "path": "/"}}}},
 		{"Network.deleteCookies", map[string]any{"name": "secret-w6", "url": idpOrigin + "/"}},
 		{"Network.deleteCookies", map[string]any{"name": "secret-w7", "domain": "adobelogin.com"}},
-		{"Page.deleteCookie", map[string]any{"cookieName": "secret-w8", "url": idpOrigin + "/ims"}},
+		{"Page.deleteCookie", map[string]any{"cookieName": "secret-w8", "url": idpOrigin + "/ims"}, "page"},
 		{"Storage.setCookies", map[string]any{"cookies": []any{map[string]any{"name": "w", "value": "secret-w9", "domain": "ims-na1-stg1.adobelogin.com", "path": "/"}}}},
 		{"Network.clearBrowserCookies", map[string]any{}},
 		{"Storage.clearCookies", map[string]any{}},
@@ -176,7 +187,7 @@ func TestCDPStripsSignInCookiesFromEvents(t *testing.T) {
 
 func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 	env, fake := setupFakeProtect(t, func(string, string) fakeScript {
-		return func(method string, _ json.RawMessage) (string, []string) {
+		return withPage(func(method string, _ json.RawMessage) (string, []string) {
 			switch method {
 			case "Storage.getTrustTokens":
 				return `{"tokens":[{"issuerOrigin":"` + idpOrigin + `","count":1},{"issuerOrigin":"https://issuer.example.test","count":2}]}`, nil
@@ -189,18 +200,21 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 			case "CacheStorage.requestCacheNames":
 				return `{"caches":[{"cacheId":"c","securityOrigin":"https://x.ims-na1.adobelogin.com","storageKey":"https://x.ims-na1.adobelogin.com/","cacheName":"kept-subcache"}]}`, nil
 			}
-			return `{"entries":[{"key":"k","value":"secret-store"}]}`, nil
-		}
+			if strings.HasPrefix(method, "Storage.") || strings.HasPrefix(method, "DOMStorage.") || strings.HasPrefix(method, "IndexedDB.") || strings.HasPrefix(method, "CacheStorage.") || strings.HasPrefix(method, "FileSystem.") {
+				return `{"entries":[{"key":"k","value":"secret-store"}]}`, nil
+			}
+			return "{}", nil
+		})
 	})
 	refused := [][]any{
-		{"DOMStorage.getDOMStorageItems", map[string]any{"storageId": map[string]any{"securityOrigin": idpOrigin, "isLocalStorage": true}}},
-		{"DOMStorage.getDOMStorageItems", map[string]any{"storageId": map[string]any{"storageKey": stgOrigin + "/", "isLocalStorage": false}}},
-		{"DOMStorage.setDOMStorageItem", map[string]any{"storageId": map[string]any{"securityOrigin": idpOrigin, "isLocalStorage": true}, "key": "k", "value": "v"}},
-		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": idpOrigin}},
-		{"IndexedDB.requestData", map[string]any{"storageKey": idpOrigin + "/", "databaseName": "d", "objectStoreName": "o", "indexName": "", "skipCount": 0, "pageSize": 10}},
-		{"IndexedDB.getMetadata", map[string]any{"storageBucket": map[string]any{"storageKey": idpOrigin + "/"}, "databaseName": "d", "objectStoreName": "o"}},
-		{"CacheStorage.requestCacheNames", map[string]any{"securityOrigin": "https://IMS-NA1.adobelogin.com."}},
-		{"CacheStorage.requestEntries", map[string]any{"cacheId": idpOrigin + "/|c1"}},
+		{"DOMStorage.getDOMStorageItems", map[string]any{"storageId": map[string]any{"securityOrigin": idpOrigin, "isLocalStorage": true}}, "page"},
+		{"DOMStorage.getDOMStorageItems", map[string]any{"storageId": map[string]any{"storageKey": stgOrigin + "/", "isLocalStorage": false}}, "page"},
+		{"DOMStorage.setDOMStorageItem", map[string]any{"storageId": map[string]any{"securityOrigin": idpOrigin, "isLocalStorage": true}, "key": "k", "value": "v"}, "page"},
+		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": idpOrigin}, "page"},
+		{"IndexedDB.requestData", map[string]any{"storageKey": idpOrigin + "/", "databaseName": "d", "objectStoreName": "o", "indexName": "", "skipCount": 0, "pageSize": 10}, "page"},
+		{"IndexedDB.getMetadata", map[string]any{"storageBucket": map[string]any{"storageKey": idpOrigin + "/"}, "databaseName": "d", "objectStoreName": "o"}, "page"},
+		{"CacheStorage.requestCacheNames", map[string]any{"securityOrigin": "https://IMS-NA1.adobelogin.com."}, "page"},
+		{"CacheStorage.requestEntries", map[string]any{"cacheId": idpOrigin + "/|c1"}, "page"},
 		{"FileSystem.getDirectory", map[string]any{"bucketFileSystemLocator": map[string]any{"storageKey": idpOrigin + "/", "pathComponents": []string{}}}},
 		{"Storage.clearDataForOrigin", map[string]any{"origin": idpOrigin, "storageTypes": "all"}},
 		{"Storage.clearDataForStorageKey", map[string]any{"storageKey": "https://cdn.example.test/^0https://adobelogin.com", "storageTypes": "all"}},
@@ -213,8 +227,8 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 		{"Storage.getTrustTokens", map[string]any{}},
 		{"Storage.getAffectedUrlsForThirdPartyCookieMetadata", map[string]any{"firstPartyUrl": "https://example.test/", "thirdPartyUrls": []string{idpOrigin + "/x", "https://cdn.example.test/y"}}},
 		{"Storage.getStorageKeyForFrame", map[string]any{"frameId": "F"}},
-		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": env.allowed}},
-		{"CacheStorage.requestCacheNames", map[string]any{"securityOrigin": "https://x.ims-na1.adobelogin.com"}},
+		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": env.allowed}, "page"},
+		{"CacheStorage.requestCacheNames", map[string]any{"securityOrigin": "https://x.ims-na1.adobelogin.com"}, "page"},
 	}
 	out, b := outcomesOf(t, env, append(append([][]any{}, refused...), answered...))
 	for i, o := range out {
@@ -302,7 +316,7 @@ func deprecationIssue(id, url string) string {
 func TestCDPDropsCookieIssuesThatNameSignInOrSevensCookies(t *testing.T) {
 	env, _ := setupFakeProtect(t, func(seven, allowed string) fakeScript {
 		host := strings.TrimPrefix(strings.Split(seven, ":")[1], "//")
-		return scriptedAnswers(nil, map[string][]string{"Audits.enable": {
+		return scriptedAnswers(nil, map[string][]string{"Network.enable": {
 			cookieIssue("secret-req", `"request":{"requestId":"r1","url":"`+idpOrigin+`/ims/token"},"rawCookieLine":"s=1",`),
 			cookieIssue("secret-domain", `"cookie":{"name":"s","path":"/","domain":".adobelogin.com"},`),
 			cookieIssue("secret-url", `"cookieUrl":"`+stgOrigin+`/x",`),
@@ -322,7 +336,7 @@ func TestCDPDropsCookieIssuesThatNameSignInOrSevensCookies(t *testing.T) {
 			Text   string `json:"text"`
 		} `json:"events"`
 	}
-	env.evalJSON(t, "linkTest.protect.eventsAfter("+jsArgs("chrome-2", [][]any{{"Audits.enable", map[string]any{}}}, "Network.loadingFinished", "end")+")", &r)
+	env.evalJSON(t, "linkTest.protect.eventsAfter("+jsArgs("chrome-2", [][]any{{"Network.enable", map[string]any{}}}, "Network.loadingFinished", "end")+")", &r)
 	b, _ := json.Marshal(r)
 	for _, e := range r.Events {
 		if strings.Contains(e.Text, "secret") {
