@@ -7,8 +7,10 @@ import (
 )
 
 const (
-	idpOrigin = "https://ims-na1.adobelogin.com"
-	stgOrigin = "https://ims-na1-stg1.adobelogin.com"
+	idpOrigin  = "https://ims-na1.adobelogin.com"
+	stgOrigin  = "https://ims-na1-stg1.adobelogin.com"
+	authOrigin = "https://auth.services.adobe.com"
+	idOrigin   = "https://adobeid-na1.services.adobe.com"
 )
 
 func scriptedAnswers(answers map[string]string, after map[string][]string) fakeScript {
@@ -23,7 +25,7 @@ func scriptedAnswers(answers map[string]string, after map[string][]string) fakeS
 func credentialLogClean(t *testing.T, env *protectEnv) {
 	t.Helper()
 	log := env.a.stderr.String()
-	for _, leak := range []string{"secret", "adobelogin"} {
+	for _, leak := range []string{"secret", "adobelogin", "services.adobe.com"} {
 		if strings.Contains(log, leak) {
 			t.Errorf("slicc's debug log names %q:\n%s", leak, log)
 		}
@@ -61,6 +63,11 @@ func TestCDPWithholdsSignInCookiesFromExport(t *testing.T) {
 		`{"name":"stg","value":"secret-stg","domain":"IMS-NA1-STG1.adobelogin.com.","path":"/"},` +
 		`{"name":"chips","value":"secret-chips","domain":"cdn.example.test","path":"/","partitionKey":{"topLevelSite":"https://adobelogin.com","hasCrossSiteAncestor":true}},` +
 		`{"name":"plain","value":"kept-plain","domain":"localhost","path":"/"},` +
+		`{"name":"auth","value":"secret-auth","domain":"auth.services.adobe.com","path":"/"},` +
+		`{"name":"adobeid","value":"secret-adobeid","domain":".adobeid-na1.services.adobe.com","path":"/"},` +
+		`{"name":"adobe","value":"secret-adobe","domain":".adobe.com","path":"/"},` +
+		`{"name":"services","value":"secret-services","domain":"services.adobe.com","path":"/"},` +
+		`{"name":"www","value":"kept-www","domain":"www.adobe.com","path":"/"},` +
 		`{"name":"sub","value":"kept-sub","domain":"x.ims-na1.adobelogin.com","path":"/"},` +
 		`{"name":"lookalike","value":"kept-lookalike","domain":"ims-na1.adobelogin.com.example.test","path":"/"}]}`
 	env, _ := setupFakeProtect(t, func(string, string) fakeScript {
@@ -81,7 +88,7 @@ func TestCDPWithholdsSignInCookiesFromExport(t *testing.T) {
 	out, b := outcomesOf(t, env, calls)
 	for i, o := range out {
 		text := string(o.Result)
-		if !o.OK || strings.Contains(text, "secret") || !strings.Contains(text, "kept-plain") || !strings.Contains(text, "kept-lookalike") || !strings.Contains(text, "kept-sub") {
+		if !o.OK || strings.Contains(text, "secret") || !strings.Contains(text, "kept-plain") || !strings.Contains(text, "kept-lookalike") || !strings.Contains(text, "kept-sub") || !strings.Contains(text, "kept-www") {
 			t.Errorf("call %d %s: want the sign-in cookies withheld and the others kept, got %s", i, o.Method, b)
 		}
 	}
@@ -101,6 +108,9 @@ func TestCDPRefusesSignInCookieWrites(t *testing.T) {
 		{"Network.deleteCookies", map[string]any{"name": "secret-w7", "domain": "adobelogin.com"}},
 		{"Page.deleteCookie", map[string]any{"cookieName": "secret-w8", "url": idpOrigin + "/ims"}, "page"},
 		{"Storage.setCookies", map[string]any{"cookies": []any{map[string]any{"name": "w", "value": "secret-w9", "domain": "ims-na1-stg1.adobelogin.com", "path": "/"}}}},
+		{"Network.setCookie", map[string]any{"name": "w", "value": "secret-w10", "url": authOrigin + "/signin"}},
+		{"Network.setCookie", map[string]any{"name": "w", "value": "secret-w11", "domain": ".adobe.com", "path": "/"}},
+		{"Network.deleteCookies", map[string]any{"name": "secret-w12", "url": idOrigin + "/"}},
 		{"Network.clearBrowserCookies", map[string]any{}},
 		{"Storage.clearCookies", map[string]any{}},
 		{"Network.setCookie", map[string]any{"name": "plain", "value": "kept", "url": env.allowed + "/"}},
@@ -108,11 +118,11 @@ func TestCDPRefusesSignInCookieWrites(t *testing.T) {
 	}
 	out, b := outcomesOf(t, env, calls)
 	for i, o := range out {
-		refuse := i < 11
+		refuse := i < 14
 		switch {
 		case refuse && (o.OK || !strings.HasPrefix(o.Error.Message, "slicc: refused: ")):
 			t.Errorf("call %d %s: want refused, got %s", i, o.Method, b)
-		case refuse && strings.Contains(o.Error.Message, "adobelogin"):
+		case refuse && (strings.Contains(o.Error.Message, "adobelogin") || strings.Contains(o.Error.Message, "services.adobe.com")):
 			t.Errorf("call %d %s: the refusal names the origin: %q", i, o.Method, o.Error.Message)
 		case !refuse && !o.OK:
 			t.Errorf("call %d %s: the control was refused: %s", i, o.Method, b)
@@ -140,6 +150,9 @@ func credentialEventScript(allowed string) []string {
 		netEvent("requestWillBeSentExtraInfo", `{"requestId":"sib","associatedCookies":[{"blockedReasons":[],"cookie":{"name":"p","value":"secret-sibassoc","domain":".adobelogin.com","path":"/"}}],"headers":{"Cookie":"p=secret-sib"}}`),
 		netEvent("responseReceived", `{"requestId":"sib","response":{"url":"https://adobelogin.com/x","headers":{}}}`),
 		netEvent("responseReceivedExtraInfo", `{"requestId":"sib","statusCode":200,"headers":{"Set-Cookie":"p=secret-sibset; Domain=.adobelogin.com; Path=/"}}`),
+		netEvent("requestWillBeSent", `{"requestId":"auth","request":{"url":"`+authOrigin+`/signin/v2","headers":{"Cookie":"s=secret-authrq"}}}`),
+		netEvent("responseReceived", `{"requestId":"auth","response":{"url":"`+authOrigin+`/signin/v2","headers":{"Set-Cookie":"s=secret-authrs"}}}`),
+		netEvent("responseReceivedExtraInfo", `{"requestId":"wide","statusCode":200,"headers":{"Set-Cookie":"w=secret-wide; Domain=.adobe.com; Path=/"}}`),
 		netEvent("requestWillBeSent", `{"requestId":"plain","request":{"url":"`+allowed+`/x","headers":{}}}`),
 		netEvent("requestWillBeSentExtraInfo", `{"requestId":"plain","associatedCookies":[],"headers":{"Cookie":"a=kept-cookie"}}`),
 		netEvent("responseReceived", `{"requestId":"plain","response":{"url":"`+allowed+`/x","headers":{"Set-Cookie":"a=kept-set"}}}`),
@@ -177,7 +190,7 @@ func TestCDPStripsSignInCookiesFromEvents(t *testing.T) {
 			t.Errorf("%s carried a sign-in cookie or storage entry: %s", e.Method, e.Text)
 		}
 	}
-	for _, kept := range []string{"kept-auth", "kept-cookie", "kept-set", "kept-xset", "kept-fetch", "kept-fetchhdr", "kept-dom", "/ims/token", "/ims/authorize", "wss://ims-na1.adobelogin.com/socket"} {
+	for _, kept := range []string{"kept-auth", "kept-cookie", "kept-set", "kept-xset", "kept-fetch", "kept-fetchhdr", "kept-dom", "/ims/token", "/ims/authorize", "/signin/v2", "wss://ims-na1.adobelogin.com/socket"} {
 		if !strings.Contains(string(b), kept) {
 			t.Errorf("an event lost %s: %s", kept, b)
 		}
@@ -219,6 +232,8 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 		{"Storage.clearDataForOrigin", map[string]any{"origin": idpOrigin, "storageTypes": "all"}},
 		{"Storage.clearDataForStorageKey", map[string]any{"storageKey": "https://cdn.example.test/^0https://adobelogin.com", "storageTypes": "all"}},
 		{"Storage.getUsageAndQuota", map[string]any{"origin": "http://ims-na1.adobelogin.com:8080"}},
+		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": idOrigin}, "page"},
+		{"DOMStorage.getDOMStorageItems", map[string]any{"storageId": map[string]any{"securityOrigin": authOrigin, "isLocalStorage": true}}, "page"},
 		{"Storage.getSharedStorageEntries", map[string]any{"ownerOrigin": idpOrigin}},
 		{"Storage.getSharedStorageMetadata", map[string]any{"ownerOrigin": idpOrigin}},
 		{"Storage.getInterestGroupDetails", map[string]any{"ownerOrigin": idpOrigin, "name": "g"}},
@@ -235,7 +250,7 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 		switch {
 		case i < len(refused) && (o.OK || !strings.HasPrefix(o.Error.Message, "slicc: refused: ")):
 			t.Errorf("call %d %s: want refused, got %s", i, o.Method, b)
-		case i < len(refused) && strings.Contains(o.Error.Message, "adobelogin"):
+		case i < len(refused) && (strings.Contains(o.Error.Message, "adobelogin") || strings.Contains(o.Error.Message, "services.adobe.com")):
 			t.Errorf("call %d %s: the refusal names the origin: %q", i, o.Method, o.Error.Message)
 		case i >= len(refused) && !o.OK:
 			t.Errorf("call %d %s: refused: %s", i, o.Method, b)
@@ -259,7 +274,7 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 	}
 	for _, m := range fake.received() {
 		for _, c := range refused {
-			if strings.Contains(m, `"`+c[0].(string)+`"`) && strings.Contains(m, "adobelogin") {
+			if strings.Contains(m, `"`+c[0].(string)+`"`) && (strings.Contains(m, "adobelogin") || strings.Contains(m, "services.adobe.com")) {
 				t.Errorf("the browser got %s", m)
 			}
 		}
@@ -325,6 +340,7 @@ func TestCDPDropsCookieIssuesThatNameSignInOrSevensCookies(t *testing.T) {
 			cookieIssue("secret-sevenraw", `"rawCookieLine":"s=1; Domain=`+host+`",`),
 			cookieIssue("secret-sevenurl", `"cookieUrl":"`+seven+`/x",`),
 			deprecationIssue("secret-dep", idpOrigin+"/ims/app.js"),
+			cookieIssue("secret-adobe", `"cookie":{"name":"w","path":"/","domain":".adobe.com"},`),
 			cookieIssue("kept-issue", `"cookie":{"name":"a","path":"/","domain":"example.test"},"cookieUrl":"https://example.test/","request":{"requestId":"q","url":"https://example.test/"},"rawCookieLine":"a=1; Domain=example.test",`),
 			deprecationIssue("kept-dep", allowed+"/app.js"),
 			netEvent("loadingFinished", `{"requestId":"end","timestamp":1,"encodedDataLength":1}`),
