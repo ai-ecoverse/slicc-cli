@@ -290,3 +290,49 @@ func TestCDPKeepsSignInPagesDrivable(t *testing.T) {
 		t.Errorf("the sign-in page's listing lost its URL: %s", raw["targets"])
 	}
 }
+
+func cookieIssue(id, details string) string {
+	return `{"method":"Audits.issueAdded","params":{"issue":{"code":"CookieIssue","issueId":"` + id + `","details":{"cookieIssueDetails":{` + details + `"cookieWarningReasons":[],"cookieExclusionReasons":["ExcludeSameSiteStrict"],"operation":"SetCookie"}}}}}`
+}
+
+func deprecationIssue(id, url string) string {
+	return `{"method":"Audits.issueAdded","params":{"issue":{"code":"DeprecationIssue","issueId":"` + id + `","details":{"deprecationIssueDetails":{"sourceCodeLocation":{"url":"` + url + `","lineNumber":1,"columnNumber":1},"type":"X"}}}}}`
+}
+
+func TestCDPDropsCookieIssuesThatNameSignInOrSevensCookies(t *testing.T) {
+	env, _ := setupFakeProtect(t, func(seven, allowed string) fakeScript {
+		host := strings.TrimPrefix(strings.Split(seven, ":")[1], "//")
+		return scriptedAnswers(nil, map[string][]string{"Audits.enable": {
+			cookieIssue("secret-req", `"request":{"requestId":"r1","url":"`+idpOrigin+`/ims/token"},"rawCookieLine":"s=1",`),
+			cookieIssue("secret-domain", `"cookie":{"name":"s","path":"/","domain":".adobelogin.com"},`),
+			cookieIssue("secret-url", `"cookieUrl":"`+stgOrigin+`/x",`),
+			cookieIssue("secret-raw", `"rawCookieLine":"s=1; Domain=adobelogin.com",`),
+			cookieIssue("secret-rawonly", `"rawCookieLine":"s=1",`),
+			cookieIssue("secret-sevenraw", `"rawCookieLine":"s=1; Domain=`+host+`",`),
+			cookieIssue("secret-sevenurl", `"cookieUrl":"`+seven+`/x",`),
+			deprecationIssue("secret-dep", idpOrigin+"/ims/app.js"),
+			cookieIssue("kept-issue", `"cookie":{"name":"a","path":"/","domain":"example.test"},"cookieUrl":"https://example.test/","request":{"requestId":"q","url":"https://example.test/"},"rawCookieLine":"a=1; Domain=example.test",`),
+			deprecationIssue("kept-dep", allowed+"/app.js"),
+			netEvent("loadingFinished", `{"requestId":"end","timestamp":1,"encodedDataLength":1}`),
+		}})
+	})
+	var r struct {
+		Events []struct {
+			Method string `json:"method"`
+			Text   string `json:"text"`
+		} `json:"events"`
+	}
+	env.evalJSON(t, "linkTest.protect.eventsAfter("+jsArgs("chrome-2", [][]any{{"Audits.enable", map[string]any{}}}, "Network.loadingFinished", "end")+")", &r)
+	b, _ := json.Marshal(r)
+	for _, e := range r.Events {
+		if strings.Contains(e.Text, "secret") {
+			t.Errorf("%s reached the page: %s", e.Method, e.Text)
+		}
+	}
+	for _, kept := range []string{"kept-issue", "kept-dep"} {
+		if !strings.Contains(string(b), kept) {
+			t.Errorf("the control %s was dropped: %s", kept, b)
+		}
+	}
+	credentialLogClean(t, env)
+}
