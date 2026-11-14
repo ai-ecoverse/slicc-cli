@@ -61,6 +61,9 @@ func TestCDPWithholdsSignInCookiesFromExport(t *testing.T) {
 		`{"name":"stg","value":"secret-stg","domain":"IMS-NA1-STG1.adobelogin.com.","path":"/"},` +
 		`{"name":"chips","value":"secret-chips","domain":"cdn.example.test","path":"/","partitionKey":{"topLevelSite":"https://adobelogin.com","hasCrossSiteAncestor":true}},` +
 		`{"name":"plain","value":"kept-plain","domain":"localhost","path":"/"},` +
+		`{"name":"adobe","value":"kept-adobe","domain":".adobe.com","path":"/"},` +
+		`{"name":"authui","value":"kept-authui","domain":"auth.services.adobe.com","path":"/"},` +
+		`{"name":"adobeid","value":"kept-adobeid","domain":".adobeid-na1.services.adobe.com","path":"/"},` +
 		`{"name":"sub","value":"kept-sub","domain":"x.ims-na1.adobelogin.com","path":"/"},` +
 		`{"name":"lookalike","value":"kept-lookalike","domain":"ims-na1.adobelogin.com.example.test","path":"/"}]}`
 	env, _ := setupFakeProtect(t, func(string, string) fakeScript {
@@ -81,7 +84,7 @@ func TestCDPWithholdsSignInCookiesFromExport(t *testing.T) {
 	out, b := outcomesOf(t, env, calls)
 	for i, o := range out {
 		text := string(o.Result)
-		if !o.OK || strings.Contains(text, "secret") || !strings.Contains(text, "kept-plain") || !strings.Contains(text, "kept-lookalike") || !strings.Contains(text, "kept-sub") {
+		if !o.OK || strings.Contains(text, "secret") || !strings.Contains(text, "kept-plain") || !strings.Contains(text, "kept-lookalike") || !strings.Contains(text, "kept-sub") || !strings.Contains(text, "kept-adobe") || !strings.Contains(text, "kept-authui") || !strings.Contains(text, "kept-adobeid") {
 			t.Errorf("call %d %s: want the sign-in cookies withheld and the others kept, got %s", i, o.Method, b)
 		}
 	}
@@ -104,6 +107,7 @@ func TestCDPRefusesSignInCookieWrites(t *testing.T) {
 		{"Network.clearBrowserCookies", map[string]any{}},
 		{"Storage.clearCookies", map[string]any{}},
 		{"Network.setCookie", map[string]any{"name": "plain", "value": "kept", "url": env.allowed + "/"}},
+		{"Network.setCookie", map[string]any{"name": "adobe", "value": "kept", "domain": ".adobe.com", "path": "/"}},
 		{"Network.deleteCookies", map[string]any{"name": "plain", "url": env.allowed + "/"}},
 	}
 	out, b := outcomesOf(t, env, calls)
@@ -229,6 +233,9 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 		{"Storage.getStorageKeyForFrame", map[string]any{"frameId": "F"}},
 		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": env.allowed}, "page"},
 		{"CacheStorage.requestCacheNames", map[string]any{"securityOrigin": "https://x.ims-na1.adobelogin.com"}, "page"},
+		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": "https://auth.services.adobe.com"}, "page"},
+		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": "https://adobeid-na1.services.adobe.com"}, "page"},
+		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": "https://x.ims-na1.adobelogin.com"}, "page"},
 	}
 	out, b := outcomesOf(t, env, append(append([][]any{}, refused...), answered...))
 	for i, o := range out {
@@ -250,6 +257,11 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 	}
 	if sub := string(out[len(refused)+4].Result); !strings.Contains(sub, "kept-subcache") {
 		t.Errorf("a sub-host of a sign-in origin lost its caches: %s", sub)
+	}
+	for i := len(refused) + 5; i < len(out); i++ {
+		if !strings.Contains(string(out[i].Result), "kept-db") {
+			t.Errorf("call %d: a login-UI host or a sub-host lost its databases: %s", i, out[i].Result)
+		}
 	}
 	if !strings.Contains(key, "kept.example.test") || !strings.Contains(names, "kept-db") {
 		t.Errorf("the controls lost their answers: %s %s", key, names)
