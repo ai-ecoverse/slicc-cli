@@ -133,6 +133,7 @@ func TestIframeHoldInProcessFrameUnderOrdinaryParent(t *testing.T) {
 	g.targets["F"] = frame
 	g.attachParent = "S-page"
 	g.noteIframeAttachParentLocked(targetInfo{TargetID: "F", Type: "iframe", URL: frame.url, ParentFrameID: "FRAME-inprocess"})
+	g.noteChildFrameLocked("FRAME-inprocess", "https://ordinary.test/frame")
 	frame.protected = g.decide(frame, false)
 	if frame.protected {
 		t.Fatal("ordinary iframe under ordinary parent was protected because parentFrameId was not a target")
@@ -736,6 +737,9 @@ func TestIframeHoldOrdinaryLateParentStaysShown(t *testing.T) {
 	if !ok {
 		t.Fatal("late ordinary frameParents entry was not recorded")
 	}
+	g.noteChildFrameLocked("FRAME", "https://ordinary.test/frame")
+	x.protected = g.decide(x, false)
+	child.protected = g.decide(child, false)
 	if x.protected || child.protected {
 		t.Fatalf("ordinary late parent protected iframes: x=%t child=%t", x.protected, child.protected)
 	}
@@ -1139,6 +1143,7 @@ func TestIframeHoldTabOwnerNestedChainReachesPage(t *testing.T) {
 	})
 	g.sessions["S-tab"] = &session{id: "S-tab", target: "TAB", typ: "tab"}
 	g.noteFrameParentLocked("INNER", "P")
+	g.noteChildFrameLocked("INNER", "https://ordinary.test/inner")
 	v := dualAttach(g, "S-tab", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
 	if g.ancestryDisputed["X"] || g.targets["X"].protected {
 		t.Fatalf("tab nested disputed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"].protected)
@@ -1174,6 +1179,7 @@ func TestIframeHoldBrowserOwnerNestedChainNoDispute(t *testing.T) {
 	g.sessions["S-browser"] = &session{id: "S-browser", target: "BROWSER", typ: "browser"}
 	g.browserSessions["S-browser"] = true
 	g.noteFrameParentLocked("INNER", "P")
+	g.noteChildFrameLocked("INNER", "https://ordinary.test/inner")
 	v := dualAttach(g, "S-browser", "S-X", false, dualAttachInfo("X", "INNER", "https://frame.test/embed"))
 	if g.ancestryDisputed["X"] || g.targets["X"].protected {
 		t.Fatalf("browser nested disputed: disputed=%v protected=%v", g.ancestryDisputed["X"], g.targets["X"].protected)

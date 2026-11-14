@@ -164,7 +164,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget)}
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
-		return browserVerdict{send: g.closeStreamLocked(bc, m)}
+		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: g.closeStreamLocked(bc, m)}
 	}
 	if outlived {
 		g.logf("cdp: dropped an answer from before a protected error page committed")
