@@ -1,11 +1,11 @@
 module github.com/ai-ecoverse/slicc-cli
 
-go 1.26.5
+go 1.26.7
 
 require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.1
-	charm.land/lipgloss/v2 v2.0.6
+	charm.land/lipgloss/v2 v2.1.0
 	github.com/ai-ecoverse/go-optel v1.0.1
 	github.com/ai-ecoverse/slicc-browsers v1.24.0
 	github.com/andybalholm/brotli v1.2.8
