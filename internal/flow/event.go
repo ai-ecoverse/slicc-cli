@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/browser"
+	"github.com/ai-ecoverse/slicc-cli/internal/signal"
 )
 
 const Schema = 1
@@ -43,10 +44,12 @@ const (
 	Clients   Kind = "clients"
 
 	ForeignBrowser Kind = "foreign-browser"
+
+	Waiting Kind = "waiting"
 )
 
 var Public = map[Kind]bool{
-	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, BrowserSlow: true, Closed: true, Error: true, ForeignBrowser: true, Credential: true,
+	Discovered: true, Launched: true, Attached: true, Linked: true, LinkLost: true, BrowserGone: true, BrowserBack: true, BrowserSlow: true, Closed: true, Error: true, ForeignBrowser: true, Credential: true, Waiting: true,
 }
 
 var Loopback = map[Kind]bool{Mode: true, Pairing: true}
@@ -116,6 +119,7 @@ type Event struct {
 	ExpiresAt    string          `json:"expiresAt,omitempty"`
 	By           string          `json:"by,omitempty"`
 	Upstream     *bool           `json:"upstream,omitempty"`
+	Candidates   *int            `json:"candidates,omitempty"`
 	Kept         []string        `json:"-"`
 	Time         time.Time       `json:"-"`
 }
@@ -160,6 +164,11 @@ func keptList(kept []string) *[]string {
 		return nil
 	}
 	return &kept
+}
+
+func WaitingEvent(w signal.Waiting) Event {
+	n := w.Candidates
+	return Event{Event: Waiting, Reason: w.Reason, Message: w.Message, Candidates: &n}
 }
 
 func SlowLine(name string, elapsed int) string {

@@ -434,7 +434,7 @@ func plainLine(e flow.Event) string {
 		return fmt.Sprintf("linked with %q in %s", firstNonEmpty(e.Peer, "seven"), firstNonEmpty(e.Tab, "the seven tab"))
 	case flow.LinkLost:
 		return "link lost: " + firstNonEmpty(e.Message, e.Reason, "closed")
-	case flow.Status:
+	case flow.Status, flow.Waiting:
 		return e.Message
 	case flow.ForeignBrowser:
 		return foreignLine(e)

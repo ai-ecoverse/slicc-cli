@@ -147,7 +147,7 @@ function byNonce(nonce) {
   return null;
 }
 
-globalThis.sliccLinkReceive = (raw) => {
+const receive = (raw) => {
   const msg = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (msg.t === 'hello') return void setup(msg.nonce, msg.node);
   const entry = byNonce(msg.nonce);
@@ -156,6 +156,15 @@ globalThis.sliccLinkReceive = (raw) => {
   if (msg.t === 'candidate' && msg.candidate) entry.pc.addIceCandidate(msg.candidate);
   if (msg.t === 'bye') remove(entry);
 };
+
+if (params.has('single')) {
+  const late = Number(params.get('late') ?? 0);
+  navigator.locks.request('slicc-link-test-single', () => new Promise(() => {
+    setTimeout(() => { globalThis.sliccLinkReceive = receive; }, late);
+  }));
+} else {
+  globalThis.sliccLinkReceive = receive;
+}
 
 function randomBytes(n) {
   const out = new Uint8Array(n);
