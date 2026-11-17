@@ -99,7 +99,8 @@
       "mode",
       "native-screen-verification",
       "pairing",
-      "reconnecting"
+      "reconnecting",
+      "waiting"
     ]
   },
   "agent": {

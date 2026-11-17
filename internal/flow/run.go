@@ -87,6 +87,8 @@ type run struct {
 	allowed  *signal.Origins
 	sixHome  bool
 	kernel   int
+	host     func() string
+	deduped  bool
 }
 
 func PageOrigins(page string, extra []string) ([]string, error) {
@@ -105,15 +107,17 @@ func PageOrigins(page string, extra []string) ([]string, error) {
 }
 
 func Go(ctx context.Context, cfg Config, sel []browser.Entry) error {
-	sixHome := false
-	if cfg.Page == "" {
-		cfg.Page = DefaultPage
-		if len(sel) > 0 && IsSix(sel[0]) {
-			cfg.Page, sixHome = SixPage, true
-		}
-	}
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}
+	}
+	sixHome := false
+	switch {
+	case len(sel) > 0 && IsSix(sel[0]) && cfg.Page == "":
+		cfg.Page, sixHome = SixPage, true
+	case len(sel) > 0 && IsSix(sel[0]):
+		cfg.Page, sixHome = SixPageFor(cfg.Page)
+	case cfg.Page == "":
+		cfg.Page = DefaultPage
 	}
 	if cfg.Register == nil {
 		cfg.Register = func(context.Context, *node.Node, *policy.Policy, []Browser) (Caps, error) { return Caps{}, nil }
@@ -446,7 +450,11 @@ func (r *run) serveLink(ctx context.Context) (bool, error) {
 		Tab:     r.tab,
 		Logf:    r.cfg.Logf,
 		Status:  func(format string, a ...any) { r.emit(Event{Event: Status, Message: fmt.Sprintf(format, a...)}) },
+		Waiting: func(w signal.Waiting) { r.emit(WaitingEvent(w)) },
 	})
+	r.mu.Lock()
+	r.host = sig.HostTarget
+	r.mu.Unlock()
 	if caps.SetHostTarget != nil {
 		caps.SetHostTarget(sig.HostTarget)
 	}
@@ -636,6 +644,15 @@ func (r *run) pump(q *queue, n *node.Node, pol *policy.Policy) {
 			tab := r.sevenTab(ctx)
 			cancel()
 			r.emit(Event{Event: Linked, Peer: ev.Peer.Name, Tab: tab, Caps: n.Caps(), Policy: pol.Summary()})
+			if !r.deduped {
+				r.deduped = true
+				r.mu.Lock()
+				host := r.host
+				r.mu.Unlock()
+				if host != nil {
+					go r.closeDuplicates(host())
+				}
+			}
 		case node.EventLinkDown:
 			e := Event{Event: LinkLost, Reason: ev.Reason}
 			if ev.Err != nil {
@@ -763,6 +780,76 @@ func (q *queue) pop() (node.Event, bool) {
 }
 
 var sixPaths = []string{"/7/", "/os/"}
+
+func SixPageFor(page string) (string, bool) {
+	u, err := url.Parse(page)
+	if err != nil || browser.OriginOf(page) != browser.OriginOf(SixPage) {
+		return page, false
+	}
+	if (u.Path == "" || u.Path == "/") && u.RawQuery == "" && u.Fragment == "" {
+		return SixPage, true
+	}
+	for _, p := range sixPaths {
+		if strings.HasPrefix(u.Path, p) {
+			return page, true
+		}
+	}
+	return page, false
+}
+
+func (r *run) tabKey(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if r.sixHome {
+		return browser.OriginOf(raw)
+	}
+	return browser.OriginOf(raw) + u.EscapedPath()
+}
+
+func (r *run) closeDuplicates(linked string) {
+	if linked == "" || r.hostProcess() == nil {
+		return
+	}
+	client := r.client
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	targets, err := client.Targets(ctx)
+	if err != nil {
+		return
+	}
+	key := ""
+	for _, t := range targets {
+		if t.TargetID == linked {
+			key = r.tabKey(t.URL)
+		}
+	}
+	if key == "" {
+		return
+	}
+	closed := 0
+	for _, t := range targets {
+		if t.TargetID == linked || t.Type != "page" || !r.allowed.AllowedURL(t.URL) || !r.tab(t.URL) || r.tabKey(t.URL) != key {
+			continue
+		}
+		if signal.Probe(ctx, client, t.TargetID).Ready {
+			continue
+		}
+		if err := client.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": t.TargetID}, nil); err != nil {
+			r.cfg.Logf("close an extra seven tab: %v", err)
+			continue
+		}
+		closed++
+	}
+	switch closed {
+	case 0:
+	case 1:
+		r.emit(Event{Event: Status, Message: "closed an extra seven tab that wasn't linked; seven runs in one tab per profile"})
+	default:
+		r.emit(Event{Event: Status, Message: fmt.Sprintf("closed %d extra seven tabs that weren't linked; seven runs in one tab per profile", closed)})
+	}
+}
 
 func (r *run) tab(raw string) bool {
 	if !r.sixHome {
