@@ -2226,6 +2226,31 @@ export function protectTest(getLink, describe) {
           text: c.events.filter((e) => ['Page.frameNavigated', 'Console.messageAdded'].includes(e.method)).map((e) => e.method === 'Page.frameNavigated' ? e.params.frame.name : e.params.message.text),
         };
       }),
+    scale: async (browser, shown, hidden) => {
+      const began = performance.now();
+      let c;
+      try {
+        c = await CdpClient.open(getLink(), browser);
+      } catch (error) {
+        return { ...describe(error), cdpError: error.cdp ?? null };
+      }
+      const open = performance.now() - began;
+      let at = performance.now();
+      const list = (await c.send('Target.getTargets')).targetInfos;
+      const listMs = performance.now() - at;
+      at = performance.now();
+      const infos = await Promise.all([...shown, ...hidden].map((targetId) => outcome(c.send('Target.getTargetInfo', { targetId }))));
+      const infoMs = performance.now() - at;
+      return {
+        open,
+        list: listMs,
+        info: infoMs,
+        listed: list.map((t) => t.targetId),
+        shown: infos.slice(0, shown.length).filter((r) => r.ok && r.result.targetInfo?.targetId).map((r) => r.result.targetInfo.targetId),
+        hidden: infos.slice(shown.length).map((r) => (r.ok ? { ok: true, targetId: r.result.targetInfo?.targetId ?? '' } : { ok: false, code: r.error.code ?? 0 })),
+        closed: await c.close(),
+      };
+    },
     iframeListingScrub: (browser) =>
       run(browser, async (c) => {
         await c.send('Target.setDiscoverTargets', { discover: true });

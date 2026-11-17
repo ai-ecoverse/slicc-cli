@@ -339,7 +339,7 @@ func (g *guard) frameContentCheckLocked(c *command, target string) string {
 		}
 	}
 	if frame := c.str("frameId"); frame != "" {
-		if t := g.targets[frame]; t != nil && !t.gone && t.typ == "iframe" && (t.protected || g.o.Loaded(t.url)) && !g.extensionFrameTargetLocked(t) {
+		if t := g.targets[frame]; t != nil && !t.gone && t.typ == "iframe" && (t.protected || g.targetLoadedLocked(t)) && !g.extensionFrameTargetLocked(t) {
 			return refusedTarget
 		}
 	}
