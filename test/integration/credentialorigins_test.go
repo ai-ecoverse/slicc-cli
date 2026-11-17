@@ -363,3 +363,62 @@ func TestCDPDropsCookieIssuesThatNameSignInOrSevensCookies(t *testing.T) {
 	}
 	credentialLogClean(t, env)
 }
+
+func cookieLineScript(allowed string) []string {
+	entry := func(line string) string {
+		b, _ := json.Marshal(map[string]any{"blockedReasons": []string{"SecureOnly"}, "cookieLine": line})
+		return string(b)
+	}
+	lines := func(ls ...string) string {
+		out := make([]string, len(ls))
+		for i, l := range ls {
+			out[i] = entry(l)
+		}
+		return "[" + strings.Join(out, ",") + "]"
+	}
+	mismatch := `{"blockedReasons":[],"cookieLine":"id=secret-mismatch; Domain=.adobelogin.com","cookie":{"name":"id","value":"x","domain":"example.test","path":"/"}}`
+	return []string{
+		netEvent("requestWillBeSent", `{"requestId":"line","request":{"url":"`+allowed+`/line","headers":{}}}`),
+		netEvent("requestWillBeSentExtraInfo", `{"requestId":"line","associatedCookies":`+lines("id=secret-assocline; Domain=.adobelogin.com", "a=kept-assocline; Domain=example.test")+`,"headers":{}}`),
+		netEvent("responseReceived", `{"requestId":"line","response":{"url":"`+allowed+`/line","headers":{}}}`),
+		netEvent("responseReceivedExtraInfo", `{"requestId":"line","statusCode":200,"headers":{},"blockedCookies":`+lines(
+			`id=secret-quoted; Domain=".adobelogin.com"; Path=/`,
+			"id=secret-case; DoMaIn=IMS-NA1.AdobeLogin.COM",
+			"id=secret-dot; domain=.ims-na1-stg1.adobelogin.com.",
+			"id=secret-repeat; Domain=example.test; Domain=adobelogin.com",
+			"id=secret-ctl\x01; Domain=example.test",
+			"id=secret-nonhost; Domain=ad obe/login",
+			"a=kept-line; Domain=example.test; Path=/",
+			"b=kept-hostonly; Path=/",
+			"c=kept-adobe; Domain=.adobe.com",
+		)+`,"exemptedCookies":[`+mismatch+`,`+entry("id=secret-exempt; Domain=ims-na1.adobelogin.com")+`,`+entry("d=kept-exempt; Domain=www.adobe.com")+`]}`),
+		netEvent("loadingFinished", `{"requestId":"line","timestamp":1,"encodedDataLength":1}`),
+		netEvent("requestWillBeSent", `{"requestId":"end","request":{"url":"`+allowed+`/end","headers":{}}}`),
+		netEvent("loadingFinished", `{"requestId":"end","timestamp":1,"encodedDataLength":1}`),
+	}
+}
+
+func TestCDPDropsSignInCookieLinesFromExtraInfo(t *testing.T) {
+	env, _ := setupFakeProtect(t, func(_, allowed string) fakeScript {
+		return afterEnable(cookieLineScript(allowed))
+	})
+	var r struct {
+		Events []struct {
+			Method string `json:"method"`
+			Text   string `json:"text"`
+		} `json:"events"`
+	}
+	env.evalJSON(t, "linkTest.protect.eventsAfter("+jsArgs("chrome-2", [][]any{{"Network.enable", map[string]any{}}}, "Network.loadingFinished", "end")+")", &r)
+	b, _ := json.Marshal(r)
+	for _, e := range r.Events {
+		if strings.Contains(e.Text, "secret") {
+			t.Errorf("%s carried a sign-in cookie line: %s", e.Method, e.Text)
+		}
+	}
+	for _, kept := range []string{"kept-assocline", "kept-line", "kept-hostonly", "kept-adobe", "kept-exempt"} {
+		if !strings.Contains(string(b), kept) {
+			t.Errorf("an ordinary cookie line lost %s: %s", kept, b)
+		}
+	}
+	credentialLogClean(t, env)
+}
