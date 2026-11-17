@@ -41,17 +41,13 @@ func localNestProtectedPageScript(midURL, allowed string) fakeScript {
 			return "{}", []string{
 				localNestEvent("", "Target.targetCreated", map[string]any{"targetInfo": page}),
 				localNestEvent("", "Target.attachedToTarget", map[string]any{"sessionId": "S-top", "waitingForDebugger": false, "targetInfo": page}),
-				localNestEvent("S-top", "Page.frameAttached", map[string]any{"frameId": "FRAME-MID", "parentFrameId": "P-top"}),
-				localNestEvent("S-top", "Page.frameNavigated", map[string]any{"frame": map[string]any{
-					"id": "FRAME-MID", "parentId": "P-top", "url": midURL, "securityOrigin": midURL,
+				localNestEvent("S-top", "Runtime.executionContextCreated", map[string]any{"context": map[string]any{
+					"id": 1, "origin": allowed, "name": "", "uniqueId": "top-main",
+					"auxData": map[string]any{"isDefault": true, "type": "default", "frameId": "P-top"},
 				}}),
 				localNestEvent("S-top", "Runtime.executionContextCreated", map[string]any{"context": map[string]any{
 					"id": 2, "origin": midURL, "name": "", "uniqueId": "mid-main",
 					"auxData": map[string]any{"isDefault": true, "type": "default", "frameId": "FRAME-MID"},
-				}}),
-				localNestEvent("S-top", "Page.frameAttached", map[string]any{"frameId": "FRAME-GC", "parentFrameId": "FRAME-MID"}),
-				localNestEvent("S-top", "Page.frameNavigated", map[string]any{"frame": map[string]any{
-					"id": "FRAME-GC", "parentId": "FRAME-MID", "url": allowed + "/inner", "securityOrigin": allowed,
 				}}),
 				localNestEvent("S-top", "Runtime.executionContextCreated", map[string]any{"context": map[string]any{
 					"id": 3, "origin": allowed, "name": "", "uniqueId": "gc-main",

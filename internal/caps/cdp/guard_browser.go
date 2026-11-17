@@ -59,6 +59,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		settled := g.settleHeldWorkersLocked()
 		verdict.send = append(verdict.send, settled.send...)
 		verdict.page = append(verdict.page, settled.page...)
+		verdict.page = append(verdict.page, g.settleHeldContextsLocked()...)
 		verdict.send = append(verdict.send, frameSend...)
 	}()
 	g.progressLocked(&m)
@@ -147,6 +148,8 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	delete(g.extensionMarkCalls, k)
 	kind := g.pending[k]
 	delete(g.pending, k)
+	treeCall := g.treeCalls[k]
+	delete(g.treeCalls, k)
 	g.clientRequestAnsweredLocked(k, m.Error != nil)
 	g.continuedLocked(k, m.Error != nil)
 	attached := g.attachCalls[k]
@@ -179,8 +182,16 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	}
 	g.noteVersionReplyLocked(k, !versionCall || m.Error != nil)
 	g.noteExtensionMarkReplyLocked(k, markMethod, m.Error != nil)
+	var treePage [][]byte
+	if treeCall && m.Error == nil {
+		g.noteFrameTreeResultLocked(m.Result)
+		treePage = g.settleHeldContextsLocked()
+		if !g.frameTreeCleanLocked(*m) {
+			return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), page: treePage, send: g.closeStreamLocked(bc, m)}
+		}
+	}
 	if m.Error != nil || kind == kindPlain {
-		return browserVerdict{forward: data}
+		return browserVerdict{forward: data, page: treePage}
 	}
 	res, ok := decodeObject(m.Result)
 	if !ok {
@@ -189,10 +200,10 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	send, hide := g.applyResultKindLocked(kind, attached, m.SessionID, res)
 	acceptedAttach = kind != kindAttach || !hide
 	if hide {
-		return browserVerdict{forward: missingTarget(*m.ID, m.SessionID), send: send}
+		return browserVerdict{forward: missingTarget(*m.ID, m.SessionID), send: send, page: treePage}
 	}
 	m.Result = encode(res)
-	return browserVerdict{forward: encode(m), send: send}
+	return browserVerdict{forward: encode(m), send: send, page: treePage}
 }
 
 func (g *guard) applyResultKindLocked(kind callKind, attached, session string, res map[string]any) ([][]byte, bool) {
@@ -686,6 +697,12 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 		return browserVerdict{forward: data, send: decided}
 	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.Loaded(p.Context.Origin):
 		return browserVerdict{send: append(decided, g.markLocked(t)...)}
+	case g.frameUnderProtectedLocked(p.Context.AuxData.FrameID):
+		g.hideContextLocked(t.id, m.SessionID, p.Context)
+		return browserVerdict{send: append(decided, g.cutCastsLocked(t.id)...)}
+	case !g.frameContextAncestrySettledLocked(p.Context.AuxData.FrameID, t.id):
+		g.holdContextLocked(t.id, m.SessionID, p.Context, data)
+		return browserVerdict{send: decided}
 	case g.worldContextLocked(t.id, m.SessionID, p.Context):
 		return browserVerdict{send: append(decided, g.cutCastsLocked(t.id)...)}
 	}

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
 const (
@@ -48,6 +49,160 @@ type execContext struct {
 		IsDefault bool   `json:"isDefault"`
 		FrameID   string `json:"frameId"`
 	} `json:"auxData"`
+}
+
+type heldContextKey struct {
+	target string
+	id     int64
+}
+
+type heldContext struct {
+	target  string
+	session string
+	context execContext
+	data    []byte
+}
+
+const maxHeldContexts = 4096
+
+func (g *guard) frameContextAncestrySettledLocked(frame, page string) bool {
+	if frame == "" || frame == page {
+		return true
+	}
+	seen := map[string]bool{}
+	id := frame
+	for depth := 0; id != "" && depth < maxFrameAncestors; depth++ {
+		if seen[id] || id == page {
+			return id == page
+		}
+		seen[id] = true
+		settled, cont := g.frameContextStepSettledLocked(id)
+		if settled || !cont {
+			return settled
+		}
+		parent := g.frameParentOfLocked(id)
+		if parent == "" {
+			return false
+		}
+		id = parent
+	}
+	return false
+}
+
+func (g *guard) frameContextStepSettledLocked(id string) (settled, cont bool) {
+	if t := g.targets[id]; t != nil && !t.gone {
+		if t.typ == "page" || t.typ == "tab" || t.protected || g.targetLoadedLocked(t) {
+			return true, false
+		}
+		if t.typ == "iframe" && (g.iframeAncestryUnknownLocked(t) || g.targetHeldLocked(t.id) || g.targetUnconfirmedLocked(t.id)) {
+			return false, false
+		}
+		if !g.creatorClassifiedLocked(id) && protect.Inheriting(t.url) {
+			return false, false
+		}
+		return false, true
+	}
+	ok, known := g.localFrameClassifiedLocked(id)
+	if !known || !ok {
+		return false, false
+	}
+	return g.creatorProtectedLocked(id), !g.creatorProtectedLocked(id)
+}
+
+func (g *guard) holdContextLocked(target, session string, c execContext, data []byte) {
+	if target == "" || c.ID == 0 {
+		return
+	}
+	key := heldContextKey{target: target, id: c.ID}
+	if prev := g.heldContexts[key]; prev != nil {
+		prev.session = session
+		prev.context = c
+		prev.data = data
+		return
+	}
+	if len(g.heldContexts) >= maxHeldContexts {
+		g.logf("cdp: too many execution contexts wait for frame ancestry; dropping one")
+		return
+	}
+	g.heldContexts[key] = &heldContext{target: target, session: session, context: c, data: data}
+}
+
+func (g *guard) contextHeldLocked(target string, id int64) bool {
+	return g.heldContexts[heldContextKey{target: target, id: id}] != nil
+}
+
+func (g *guard) forgetHeldContextLocked(target string, id int64) {
+	delete(g.heldContexts, heldContextKey{target: target, id: id})
+}
+
+func (g *guard) forgetHeldContextsLocked(target, session string) {
+	for key, h := range g.heldContexts {
+		if key.target == target && (session == "" || h.session == session) {
+			delete(g.heldContexts, key)
+		}
+	}
+}
+
+func (g *guard) settleHeldContextsLocked() [][]byte {
+	var page [][]byte
+	for key, h := range g.heldContexts {
+		if !g.frameContextAncestrySettledLocked(h.context.AuxData.FrameID, h.target) {
+			continue
+		}
+		delete(g.heldContexts, key)
+		if g.frameUnderProtectedLocked(h.context.AuxData.FrameID) {
+			g.hideContextLocked(h.target, h.session, h.context)
+			continue
+		}
+		if g.worldContextLocked(h.target, h.session, h.context) {
+			continue
+		}
+		if h.data != nil {
+			page = append(page, h.data)
+		}
+	}
+	return page
+}
+
+func (g *guard) noteFrameTreeResultLocked(raw json.RawMessage) {
+	var result struct {
+		FrameTree *frameTreeNode `json:"frameTree"`
+	}
+	if json.Unmarshal(raw, &result) != nil || result.FrameTree == nil {
+		return
+	}
+	g.walkFrameTreeLocked(result.FrameTree, "")
+}
+
+type frameTreeNode struct {
+	Frame struct {
+		ID             string `json:"id"`
+		ParentID       string `json:"parentId"`
+		URL            string `json:"url"`
+		SecurityOrigin string `json:"securityOrigin"`
+	} `json:"frame"`
+	ChildFrames []*frameTreeNode `json:"childFrames"`
+}
+
+func (g *guard) walkFrameTreeLocked(node *frameTreeNode, parent string) {
+	if node == nil || node.Frame.ID == "" {
+		return
+	}
+	pid := node.Frame.ParentID
+	if pid == "" {
+		pid = parent
+	}
+	if pid != "" {
+		_, _ = g.noteFrameParentLocked(node.Frame.ID, pid)
+	}
+	raw := node.Frame.URL
+	if protect.Inheriting(raw) {
+		raw = node.Frame.SecurityOrigin
+	}
+	_ = g.noteChildFrameLocked(node.Frame.ID, raw)
+	for _, child := range node.ChildFrames {
+		g.walkFrameTreeLocked(child, node.Frame.ID)
+	}
 }
 
 func (g *guard) worldsLocked(target string) *worldSet {
@@ -224,7 +379,7 @@ func (g *guard) frameUnderProtectedLocked(frame string) bool {
 		if g.creatorProtectedLocked(id) {
 			return true
 		}
-		if t := g.targets[id]; t != nil && !t.gone && t.protected {
+		if t := g.targets[id]; t != nil && !t.gone && (t.protected || g.targetLoadedLocked(t)) {
 			return true
 		}
 		id = g.frameParentOfLocked(id)
@@ -234,6 +389,7 @@ func (g *guard) frameUnderProtectedLocked(frame string) bool {
 
 func (g *guard) contextGoneLocked(target, session string, id int64, unique string) bool {
 	g.shownGoneLocked(target, id, unique)
+	g.forgetHeldContextLocked(target, id)
 	if t, ok := g.worldUniques[unique]; ok && unique != "" {
 		target = t
 	}
@@ -258,6 +414,7 @@ func (g *guard) contextGoneLocked(target, session string, id int64, unique strin
 }
 
 func (g *guard) contextsClearedLocked(target, session string) {
+	g.forgetHeldContextsLocked(target, session)
 	if s := g.shown[target]; s != nil {
 		for id, sc := range s.contexts {
 			if sc.seen[session] {
@@ -410,6 +567,8 @@ func (g *guard) numericContextLocked(target string, params map[string]any) strin
 		case err != nil:
 		case g.contextHiddenLocked(target, id):
 			return refusedWorld
+		case g.contextHeldLocked(target, id):
+			return refusedUnexposed
 		case g.shown[target] == nil || g.shown[target].contexts[id] == nil:
 			return refusedUnexposed
 		}

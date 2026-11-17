@@ -179,6 +179,8 @@ type guard struct {
 	gone                  map[string]bool
 	goneOrder             []string
 	held                  map[string]*heldSession
+	heldContexts          map[heldContextKey]*heldContext
+	treeCalls             map[callKey]bool
 	childFrames           map[string]string
 	frameParents          map[string]string
 	frameParentsFull      bool
@@ -287,6 +289,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		keptURLLatch:          map[string]bool{},
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
+		heldContexts:          map[heldContextKey]*heldContext{},
+		treeCalls:             map[callKey]bool{},
 		childFrames:           map[string]string{},
 		frameParents:          map[string]string{},
 		ancestryDisputed:      map[string]bool{},

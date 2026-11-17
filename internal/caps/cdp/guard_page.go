@@ -143,6 +143,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	k := callKey{c.session, c.id}
 	kind := resultKind(c.method)
 	g.pending[k] = kind
+	g.noteTreeCallLocked(k, c.method)
 	if kind == kindPaint || framePaintMethods[c.method] || kind == kindStreams && protect.ExtensionPresentMethod(c.method) {
 		g.paintMethods[k] = c.method
 	}
@@ -288,6 +289,12 @@ func resultKind(method string) callKind {
 		return kindScript
 	}
 	return kindPlain
+}
+
+func (g *guard) noteTreeCallLocked(k callKey, method string) {
+	if method == "Page.getFrameTree" || method == "Page.getResourceTree" {
+		g.treeCalls[k] = true
+	}
 }
 
 func (g *guard) sessionRefusedLocked(id string) bool {

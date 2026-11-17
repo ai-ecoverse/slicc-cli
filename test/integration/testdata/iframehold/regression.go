@@ -1815,6 +1815,58 @@ func TestIframeHoldLocalNestHidesContextUnderProtectedLocalFrame(t *testing.T) {
 	}
 }
 
+func TestIframeHoldContextCreatedBeforeAncestryHeldThenHidden(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	mid := execContext{ID: 2, Origin: "https://seven.sliccy.ai/embed", UniqueID: "mid-main"}
+	mid.AuxData.IsDefault = true
+	mid.AuxData.FrameID = "FRAME-MID"
+	gc := execContext{ID: 3, Origin: "https://ordinary.test", UniqueID: "gc-main"}
+	gc.AuxData.IsDefault = true
+	gc.AuxData.FrameID = "FRAME-GC"
+	midRaw, _ := json.Marshal(map[string]any{"method": "Runtime.executionContextCreated", "sessionId": "S-page", "params": map[string]any{"context": mid}})
+	gcRaw, _ := json.Marshal(map[string]any{"method": "Runtime.executionContextCreated", "sessionId": "S-page", "params": map[string]any{"context": gc}})
+	if v := g.fromBrowser(midRaw); len(v.forward) > 0 || len(v.page) > 0 {
+		t.Fatalf("mid context before ancestry settled was delivered: %s %s", v.forward, v.page)
+	}
+	if v := g.fromBrowser(gcRaw); len(v.forward) > 0 || len(v.page) > 0 {
+		t.Fatalf("grandchild context before ancestry settled was delivered: %s %s", v.forward, v.page)
+	}
+	if reason := g.worldCheckLocked(&command{method: "Runtime.evaluate", session: "S-page", id: 1, params: map[string]any{"contextId": json.Number("3"), "expression": "1"}}); reason == "" {
+		t.Fatal("evaluate on a held unclassified-frame context was allowed")
+	}
+	tree, _ := json.Marshal(map[string]any{"frameTree": map[string]any{
+		"frame": map[string]any{"id": "PAGE", "url": "https://ordinary.test/", "securityOrigin": "https://ordinary.test"},
+		"childFrames": []any{map[string]any{
+			"frame": map[string]any{"id": "FRAME-MID", "parentId": "PAGE", "url": "https://seven.sliccy.ai/embed", "securityOrigin": "https://seven.sliccy.ai"},
+			"childFrames": []any{map[string]any{
+				"frame": map[string]any{"id": "FRAME-GC", "parentId": "FRAME-MID", "url": "https://ordinary.test/inner", "securityOrigin": "https://ordinary.test"},
+			}},
+		}},
+	}})
+	g.pending[callKey{"S-page", 9}] = kindPlain
+	g.treeCalls[callKey{"S-page", 9}] = true
+	answer, _ := json.Marshal(map[string]any{"id": 9, "sessionId": "S-page", "result": json.RawMessage(tree)})
+	v := g.fromBrowser(answer)
+	if len(v.forward) == 0 {
+		t.Fatal("getFrameTree with a protected mid was silenced instead of refused")
+	}
+	var m message
+	if json.Unmarshal(v.forward, &m) != nil || m.Error == nil {
+		t.Fatalf("getFrameTree with a protected mid was not refused: %s", v.forward)
+	}
+	if g.contextHeldLocked("PAGE", 3) {
+		t.Fatal("grandchild context stayed held after the frame tree classified the protected mid")
+	}
+	if !g.contextHiddenLocked("PAGE", 3) {
+		t.Fatal("grandchild context under a protected local mid was not hidden after settle")
+	}
+	if reason := g.worldCheckLocked(&command{method: "Runtime.evaluate", session: "S-page", id: 2, params: map[string]any{"contextId": json.Number("3"), "expression": "1"}}); reason == "" {
+		t.Fatal("evaluate under a settled protected local mid was allowed")
+	}
+}
+
 func TestIframeHoldRefusedSessionAnswerIsRefusalNotSilence(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.observeAll([]targetInfo{
