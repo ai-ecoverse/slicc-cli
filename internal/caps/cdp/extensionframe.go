@@ -426,7 +426,7 @@ func (g *guard) forgetExtensionProbeWorldContextLocked(session string, id int64)
 }
 
 func (g *guard) extensionFrameTargetLocked(t *target) bool {
-	return t != nil && !t.gone && t.typ == "iframe" && g.o.ExtensionFrame(t.url)
+	return t != nil && !t.gone && t.typ == "iframe" && g.targetVerdictLocked(t).extensionFrame
 }
 
 func (g *guard) extensionFrameURLLocked(raw string) bool {
