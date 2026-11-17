@@ -43,7 +43,7 @@ func (g *guard) rootDocumentLocked(page *target, loader string) {
 func (g *guard) probeIframeOwnersLocked() [][]byte {
 	var send [][]byte
 	for _, t := range g.targets {
-		if t.gone || t.typ != "iframe" || (!t.protected && !g.o.Loaded(t.url) && !g.framesProtectedLocked(t.id)) {
+		if t.gone || t.typ != "iframe" || (!t.protected && !g.targetLoadedLocked(t) && !g.framesProtectedLocked(t.id)) {
 			continue
 		}
 		g.bindIframeDocumentLocked(t)

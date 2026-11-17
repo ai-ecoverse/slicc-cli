@@ -255,7 +255,7 @@ func (g *guard) applyTargetsResultLocked(res map[string]any) [][]byte {
 			}
 		}
 		send = append(send, g.infoLocked(item)...)
-		if listed(info) && !g.listingHiddenLocked(info) {
+		if g.listedLocked(info) && !g.listingHiddenLocked(info) {
 			kept = append(kept, item)
 			g.noteWorkerShownLocked(info)
 		}
@@ -301,7 +301,7 @@ func (g *guard) infoLocked(v any) [][]byte {
 }
 
 func (g *guard) redactInfoLocked(obj map[string]any, info targetInfo) bool {
-	if obj == nil || !g.targetProtectedLocked(info.TargetID) && !g.o.URL(info.URL) {
+	if obj == nil || !g.targetProtectedLocked(info.TargetID) && !g.infoVerdictLocked(info).protected {
 		return false
 	}
 	redacted := redactURL(info.URL)
@@ -409,16 +409,16 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 		if g.listingHiddenLocked(info) {
 			return false, false, send
 		}
-		keep := listed(info)
+		keep := g.listedLocked(info)
 		if keep {
 			g.noteWorkerShownLocked(info)
 		}
-		return keep, obj != nil && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL)), send
+		return keep, obj != nil && (g.targetProtectedLocked(info.TargetID) || g.infoVerdictLocked(info).protected), send
 	})
 }
 
 func (g *guard) protectedWorkerLocked(info targetInfo) bool {
-	return workerTypes[info.Type] && (g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL) || g.workerConcealedLocked(info.TargetID))
+	return workerTypes[info.Type] && (g.targetProtectedLocked(info.TargetID) || g.infoVerdictLocked(info).loaded() || g.workerConcealedLocked(info.TargetID))
 }
 
 func (g *guard) iframeHiddenForParentLocked(t *target) bool {
@@ -430,10 +430,11 @@ func (g *guard) protectedIframeLocked(info targetInfo) bool {
 		return false
 	}
 	t := g.targets[info.TargetID]
-	if g.extensionFrameTargetLocked(t) || g.o.ExtensionFrame(info.URL) {
+	v := g.infoVerdictLocked(info)
+	if g.extensionFrameTargetLocked(t) || v.extensionFrame {
 		return g.iframeHiddenForParentLocked(t)
 	}
-	return g.targetProtectedLocked(info.TargetID) || g.o.URL(info.URL) || protect.Unparseable(info.URL) || g.iframeConcealedLocked(info.TargetID)
+	return g.targetProtectedLocked(info.TargetID) || v.loaded() || g.iframeConcealedLocked(info.TargetID)
 }
 
 func (g *guard) listingHiddenLocked(info targetInfo) bool {
@@ -456,8 +457,8 @@ func (g *guard) protectedIframeIDLocked(id string) bool {
 	return t.protected
 }
 
-func listed(info targetInfo) bool {
-	return !protect.HiddenType(info.Type) && !protect.Unparseable(info.URL)
+func (g *guard) listedLocked(info targetInfo) bool {
+	return !protect.HiddenType(info.Type) && !g.infoVerdictLocked(info).unparseable
 }
 
 func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {

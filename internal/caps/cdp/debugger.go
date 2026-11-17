@@ -107,7 +107,7 @@ func debuggerDomain(method string) bool {
 
 func (g *guard) debuggerAdmissionLocked(c *command) string {
 	t := g.sessionTargetLocked(c.session)
-	if t == nil || t.gone || !navTypes[t.typ] || g.o.Loaded(t.url) {
+	if t == nil || t.gone || !navTypes[t.typ] || g.targetLoadedLocked(t) {
 		return refusedTarget
 	}
 	if reason := g.frameContentCheckLocked(&command{method: "Page.getFrameTree", params: map[string]any{}}, t.id); reason != "" {
