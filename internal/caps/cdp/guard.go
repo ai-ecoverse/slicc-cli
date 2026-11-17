@@ -81,6 +81,41 @@ type target struct {
 	framePage        *target
 	frameDocument    string
 	frameOwner       *frameOwnership
+	verdict          urlVerdict
+}
+
+type urlVerdict struct {
+	url            string
+	known          bool
+	protected      bool
+	unparseable    bool
+	extensionFrame bool
+}
+
+func (v urlVerdict) loaded() bool {
+	return v.protected || v.unparseable
+}
+
+func (g *guard) urlVerdict(raw string) urlVerdict {
+	return urlVerdict{url: raw, known: true, protected: g.o.URL(raw), unparseable: protect.Unparseable(raw), extensionFrame: g.o.ExtensionFrame(raw)}
+}
+
+func (g *guard) targetVerdictLocked(t *target) urlVerdict {
+	if !t.verdict.known || t.verdict.url != t.url {
+		t.verdict = g.urlVerdict(t.url)
+	}
+	return t.verdict
+}
+
+func (g *guard) targetLoadedLocked(t *target) bool {
+	return g.targetVerdictLocked(t).loaded()
+}
+
+func (g *guard) infoVerdictLocked(info targetInfo) urlVerdict {
+	if t := g.targets[info.TargetID]; t != nil && t.url == info.URL {
+		return g.targetVerdictLocked(t)
+	}
+	return g.urlVerdict(info.URL)
 }
 
 type session struct {
@@ -1206,7 +1241,7 @@ func (g *guard) creatorChildFrameProtectedLocked(id string) bool {
 		return false
 	}
 	if protect.Scheme(raw) == "chrome-extension" {
-		if t := g.targets[id]; t != nil && !t.gone && !g.o.Loaded(t.url) {
+		if t := g.targets[id]; t != nil && !t.gone && !g.targetLoadedLocked(t) {
 			return false
 		}
 	}
@@ -1241,7 +1276,7 @@ func (g *guard) workerUnresolvedLocked(t *target) bool {
 	if t == nil || t.gone || !workerTypes[t.typ] || t.protected || g.explicit[t.id] > 0 {
 		return false
 	}
-	if g.o.URL(t.url) || protect.Unparseable(t.url) {
+	if g.targetLoadedLocked(t) {
 		return false
 	}
 	if t.openerFrame != "" && !g.creatorClassifiedLocked(t.openerFrame) {
@@ -1337,6 +1372,7 @@ func (g *guard) record(info targetInfo) (*target, [][]byte) {
 	}
 	t.parentFrame = parent
 	t.typ, t.url, t.opener, t.openerFrame, t.ctx = info.Type, info.URL, info.OpenerID, info.OpenerFrameID, info.BrowserContextID
+	g.targetVerdictLocked(t)
 	g.bindIframeDocumentLocked(t)
 	return t, send
 }
@@ -1348,7 +1384,8 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	t, send := g.record(info)
 	t.gone = false
 	prev := t.protected
-	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && g.o.Loaded(t.url) && !protect.Unparseable(t.url) {
+	v := g.targetVerdictLocked(t)
+	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && v.protected && !v.unparseable {
 		nt.historyLocked = true
 		g.beginConfirmLocked(nt)
 		return append(send, g.confirmTargetLocked(nt)...)
