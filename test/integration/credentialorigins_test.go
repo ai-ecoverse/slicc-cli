@@ -3,14 +3,37 @@ package integration
 import (
 	"encoding/base64"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
+
+	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
-const (
-	idpOrigin = "https://ims-na1.adobelogin.com"
-	stgOrigin = "https://ims-na1-stg1.adobelogin.com"
+var (
+	catalogCredential = sliccbrowsers.Default().CredentialOrigins
+	idpOrigin         = catalogCredential.Origins[0]
+	stgOrigin         = catalogCredential.Origins[1]
+	credentialRefusal = catalogCredential.Refusal
+	credentialReason  = strings.TrimPrefix(credentialRefusal, "slicc: refused: ")
 )
+
+func TestProtectCredentialOriginsFollowCatalog(t *testing.T) {
+	if len(catalogCredential.Origins) < 2 || credentialReason == "" || credentialRefusal != "slicc: refused: "+credentialReason {
+		t.Fatalf("catalog.credentialOrigins is unusable: %+v", catalogCredential)
+	}
+	if got := protect.CredentialOrigins(); !slices.Equal(got, catalogCredential.Origins) {
+		t.Errorf("CredentialOrigins() = %v, want catalog %v", got, catalogCredential.Origins)
+	}
+	if got := protect.CredentialReason(); got != credentialReason {
+		t.Errorf("CredentialReason() = %q, want catalog %q", got, credentialReason)
+	}
+}
+
+func refusedCredentialMessage(msg string) bool {
+	return msg == credentialRefusal
+}
 
 func scriptedAnswers(answers map[string]string, after map[string][]string) fakeScript {
 	return func(method string, _ json.RawMessage) (string, []string) {
@@ -115,8 +138,8 @@ func TestCDPRefusesSignInCookieWrites(t *testing.T) {
 	for i, o := range out {
 		refuse := i < 11
 		switch {
-		case refuse && (o.OK || !strings.HasPrefix(o.Error.Message, "slicc: refused: ")):
-			t.Errorf("call %d %s: want refused, got %s", i, o.Method, b)
+		case refuse && (o.OK || !refusedCredentialMessage(o.Error.Message)):
+			t.Errorf("call %d %s: want %q, got %s", i, o.Method, credentialRefusal, b)
 		case refuse && strings.Contains(o.Error.Message, "adobelogin"):
 			t.Errorf("call %d %s: the refusal names the origin: %q", i, o.Method, o.Error.Message)
 		case !refuse && !o.OK:
@@ -268,8 +291,8 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 	out, b := outcomesOf(t, env, calls)
 	for i, o := range out {
 		switch {
-		case i < len(refused) && (o.OK || !strings.HasPrefix(o.Error.Message, "slicc: refused: ")):
-			t.Errorf("call %d %s: want refused, got %s", i, o.Method, b)
+		case i < len(refused) && (o.OK || !refusedCredentialMessage(o.Error.Message)):
+			t.Errorf("call %d %s: want %q, got %s", i, o.Method, credentialRefusal, b)
 		case i < len(refused) && strings.Contains(o.Error.Message, "adobelogin"):
 			t.Errorf("call %d %s: the refusal names the origin: %q", i, o.Method, o.Error.Message)
 		case i >= len(refused) && !o.OK:
@@ -535,8 +558,8 @@ func TestCDPRefusesPlantingSignInCookiesThroughFetch(t *testing.T) {
 		t.Fatalf("calls: %s", b)
 	}
 	refused := map[int]string{
-		1: "sign-in origin", 2: "sign-in origin", 3: "sign-in origin", 4: "sign-in origin", 5: "sign-in origin",
-		6: "sign-in origin", 7: "sign-in origin", 8: "sign-in origin", 9: "sign-in origin",
+		1: credentialReason, 2: credentialReason, 3: credentialReason, 4: credentialReason, 5: credentialReason,
+		6: credentialReason, 7: credentialReason, 8: credentialReason, 9: credentialReason,
 		16: "didn't pass this paused request", 17: "didn't pass this paused request",
 	}
 	allowed := map[int]bool{0: true, 10: true, 11: true, 12: true, 13: true, 14: true, 15: true}
@@ -639,8 +662,8 @@ func TestCDPRefusesHostilePlantFetchShapes(t *testing.T) {
 		switch {
 		case i == 0 && !o.OK:
 			t.Errorf("Network.enable refused: %s", b)
-		case refuse && (o.OK || !strings.HasPrefix(o.Error.Message, "slicc: refused: ") || !strings.Contains(o.Error.Message, "sign-in origin")):
-			t.Errorf("call %d %s %s: want hostile shape refused, got %+v (%s)", i, o.Method, id, o, b)
+		case refuse && (o.OK || !refusedCredentialMessage(o.Error.Message)):
+			t.Errorf("call %d %s %s: want %q, got %+v (%s)", i, o.Method, id, credentialRefusal, o, b)
 		case refuse && strings.Contains(o.Error.Message, "adobelogin"):
 			t.Errorf("call %d %s: the refusal names the origin: %q", i, o.Method, o.Error.Message)
 		case !refuse && i > 0 && !o.OK:
@@ -727,8 +750,8 @@ func TestCDPRefusesHostileBinaryPlantFetchShapes(t *testing.T) {
 			t.Errorf("Network.enable refused: %s", b)
 		case i == 1 && !o.OK:
 			t.Errorf("sanity control refused (fixture never handed the pause): %s", b)
-		case refuse && (o.OK || !strings.HasPrefix(o.Error.Message, "slicc: refused: ") || !strings.Contains(o.Error.Message, "sign-in origin")):
-			t.Errorf("call %d %s %s: want hostile shape refused, got %+v (%s)", i, o.Method, id, o, b)
+		case refuse && (o.OK || !refusedCredentialMessage(o.Error.Message)):
+			t.Errorf("call %d %s %s: want %q, got %+v (%s)", i, o.Method, id, credentialRefusal, o, b)
 		case refuse && strings.Contains(o.Error.Message, "adobelogin"):
 			t.Errorf("call %d %s: the refusal names the origin: %q", i, o.Method, o.Error.Message)
 		case !refuse && i > 0 && !o.OK:
