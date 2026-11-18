@@ -1931,3 +1931,195 @@ func TestIframeHoldBlankPageParentAncestryIsClassified(t *testing.T) {
 		t.Fatal("iframe under an about:blank page parent was listing-hidden")
 	}
 }
+
+func refusalFromVerdict(t *testing.T, v pageVerdict) {
+	t.Helper()
+	if len(v.reply) == 0 {
+		t.Fatal("expected a refusal reply")
+	}
+	var m message
+	if json.Unmarshal(v.reply, &m) != nil || m.Error == nil {
+		t.Fatalf("expected error reply: %s", v.reply)
+	}
+	var err struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(m.Error, &err) != nil || err.Code != -32000 || !strings.HasPrefix(err.Message, "slicc: refused: ") {
+		t.Fatalf("refusal shape wrong: %s", v.reply)
+	}
+}
+
+func TestIframeHoldHeldContextEvaluateAnswersRefusal(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), done: true}
+	gc := execContext{ID: 5, Origin: "https://ordinary.test", UniqueID: "gc-main"}
+	gc.AuxData.IsDefault = true
+	gc.AuxData.FrameID = "FRAME-GC"
+	raw, _ := json.Marshal(map[string]any{"method": "Runtime.executionContextCreated", "sessionId": "S-page", "params": map[string]any{"context": gc}})
+	if v := g.fromBrowser(raw); len(v.forward) > 0 || len(v.page) > 0 {
+		t.Fatalf("held context was delivered: %s %s", v.forward, v.page)
+	}
+	if !g.contextHeldLocked("PAGE", 5) {
+		t.Fatal("grandchild context was not held")
+	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":11,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"location.href","contextId":5}}`))
+}
+
+func TestIframeHoldHiddenContextEvaluateAnswersRefusal(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), done: true}
+	g.noteFrameParentLocked("FRAME-MID", "PAGE")
+	g.noteChildFrameLocked("FRAME-MID", "https://seven.sliccy.ai/embed")
+	g.noteFrameParentLocked("FRAME-GC", "FRAME-MID")
+	g.noteChildFrameLocked("FRAME-GC", "https://ordinary.test/inner")
+	gc := execContext{ID: 5, Origin: "https://ordinary.test", UniqueID: "gc-main"}
+	gc.AuxData.IsDefault = true
+	gc.AuxData.FrameID = "FRAME-GC"
+	if !g.worldContextLocked("PAGE", "S-page", gc) {
+		t.Fatal("context under protected local mid was shown")
+	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":12,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"location.href","contextId":5}}`))
+}
+
+func TestIframeHoldRefusedSessionEvaluateAnswersRefusal(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "P", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://seven.sliccy.ai/mid", ParentFrameID: "P"},
+	})
+	g.targets["MID"].protected = true
+	g.sessions["S-MID"] = &session{id: "S-MID", target: "MID", typ: "iframe", refused: true}
+	g.addRefusedLocked("S-MID")
+	refusalFromVerdict(t, reviewCommand(g, `{"id":13,"sessionId":"S-MID","method":"Runtime.evaluate","params":{"expression":"1","contextId":5}}`))
+}
+
+func TestIframeHoldIsolatedWorldHeldBeforeAncestryThenHidden(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), done: true}
+	g.noteFrameParentLocked("FRAME-MID", "PAGE")
+	g.noteFrameParentLocked("FRAME-GC", "FRAME-MID")
+	iso := execContext{ID: 9, Origin: "https://ordinary.test", Name: "__playwright_world__", UniqueID: "iso-gc"}
+	iso.AuxData.IsDefault = false
+	iso.AuxData.FrameID = "FRAME-GC"
+	raw, _ := json.Marshal(map[string]any{"method": "Runtime.executionContextCreated", "sessionId": "S-page", "params": map[string]any{"context": iso}})
+	if v := g.fromBrowser(raw); len(v.forward) > 0 || len(v.page) > 0 {
+		t.Fatalf("isolated world before ancestry settled was delivered: %s %s", v.forward, v.page)
+	}
+	if !g.contextHeldLocked("PAGE", 9) {
+		t.Fatal("isolated world under unsettled mid was not held")
+	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":14,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"1","contextId":9}}`))
+	tree, _ := json.Marshal(map[string]any{"frameTree": map[string]any{
+		"frame": map[string]any{"id": "PAGE", "url": "https://ordinary.test/", "securityOrigin": "https://ordinary.test"},
+		"childFrames": []any{map[string]any{
+			"frame": map[string]any{"id": "FRAME-MID", "parentId": "PAGE", "url": "https://seven.sliccy.ai/embed", "securityOrigin": "https://seven.sliccy.ai"},
+			"childFrames": []any{map[string]any{
+				"frame": map[string]any{"id": "FRAME-GC", "parentId": "FRAME-MID", "url": "https://ordinary.test/inner", "securityOrigin": "https://ordinary.test"},
+			}},
+		}},
+	}})
+	g.pending[callKey{"S-page", 20}] = kindPlain
+	g.treeCalls[callKey{"S-page", 20}] = true
+	answer, _ := json.Marshal(map[string]any{"id": 20, "sessionId": "S-page", "result": json.RawMessage(tree)})
+	_ = g.fromBrowser(answer)
+	if g.contextHeldLocked("PAGE", 9) {
+		t.Fatal("isolated world stayed held after mid classified protected")
+	}
+	if !g.contextHiddenLocked("PAGE", 9) {
+		t.Fatal("isolated world under protected mid was not hidden after settle")
+	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":15,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"1","contextId":9}}`))
+}
+
+func TestIframeHoldCreateIsolatedWorldParksUntilOrdinarySettles(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), done: true}
+	g.noteFrameParentLocked("FRAME-A", "PAGE")
+	v := reviewCommand(g, `{"id":30,"sessionId":"S-page","method":"Page.createIsolatedWorld","params":{"frameId":"FRAME-A","worldName":"pw"}}`)
+	if v.wait == nil {
+		t.Fatal("createIsolatedWorld on unsettled ordinary frame was not parked")
+	}
+	if len(v.reply) > 0 || len(v.forward) > 0 {
+		t.Fatalf("createIsolatedWorld answered before settle: reply=%s forward=%s", v.reply, v.forward)
+	}
+	_ = g.noteChildFrameLocked("FRAME-A", "https://ordinary.test/a")
+	g.queueContextSettleLocked()
+	_ = g.takeContextSettlePageLocked()
+	v = reviewCommand(g, `{"id":30,"sessionId":"S-page","method":"Page.createIsolatedWorld","params":{"frameId":"FRAME-A","worldName":"pw"}}`)
+	if v.wait != nil {
+		t.Fatal("createIsolatedWorld stayed parked after ordinary ancestry settled")
+	}
+	if len(v.reply) > 0 {
+		t.Fatalf("createIsolatedWorld refused on settled ordinary frame: %s", v.reply)
+	}
+	if len(v.forward) == 0 {
+		t.Fatal("createIsolatedWorld on settled ordinary frame was not forwarded")
+	}
+}
+
+func TestIframeHoldCreateIsolatedWorldRefusedUnderProtected(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), done: true}
+	g.noteFrameParentLocked("FRAME-MID", "PAGE")
+	g.noteChildFrameLocked("FRAME-MID", "https://seven.sliccy.ai/embed")
+	g.noteFrameParentLocked("FRAME-GC", "FRAME-MID")
+	g.noteChildFrameLocked("FRAME-GC", "https://ordinary.test/inner")
+	refusalFromVerdict(t, reviewCommand(g, `{"id":31,"sessionId":"S-page","method":"Page.createIsolatedWorld","params":{"frameId":"FRAME-GC","worldName":"pw"}}`))
+}
+
+func TestIframeHoldShownDefaultHiddenWhenAncestorFlipsProtected(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), done: true}
+	g.noteFrameParentLocked("FRAME-MID", "PAGE")
+	g.noteChildFrameLocked("FRAME-MID", "https://ordinary.test/mid")
+	g.noteFrameParentLocked("FRAME-GC", "FRAME-MID")
+	g.noteChildFrameLocked("FRAME-GC", "https://ordinary.test/inner")
+	gc := execContext{ID: 4, Origin: "https://ordinary.test", UniqueID: "gc-main"}
+	gc.AuxData.IsDefault = true
+	gc.AuxData.FrameID = "FRAME-GC"
+	raw, _ := json.Marshal(map[string]any{"method": "Runtime.executionContextCreated", "sessionId": "S-page", "params": map[string]any{"context": gc}})
+	v := g.fromBrowser(raw)
+	if len(v.forward) == 0 {
+		t.Fatal("default context under ordinary mid was not delivered")
+	}
+	if g.shown["PAGE"] == nil || g.shown["PAGE"].contexts[4] == nil {
+		t.Fatal("default context under ordinary mid was not shown")
+	}
+	_ = g.noteChildFrameLocked("FRAME-MID", "https://seven.sliccy.ai/embed")
+	g.queueContextSettleLocked()
+	page := g.takeContextSettlePageLocked()
+	if g.shown["PAGE"] != nil && g.shown["PAGE"].contexts[4] != nil {
+		t.Fatal("shown default context stayed exposed after mid flipped to seven")
+	}
+	if !g.contextHiddenLocked("PAGE", 4) {
+		t.Fatal("shown default context was not hidden after mid flipped to seven")
+	}
+	found := false
+	for _, msg := range page {
+		var m message
+		if json.Unmarshal(msg, &m) != nil {
+			continue
+		}
+		if m.Method == "Runtime.executionContextDestroyed" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no executionContextDestroyed after mid flip: %s", page)
+	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":32,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"1","contextId":4}}`))
+}
