@@ -2321,6 +2321,66 @@ func TestIframeHoldProtectedContextEvaluateAnswersWithinBound(t *testing.T) {
 	refusalFromVerdict(t, reviewCommand(g, `{"id":53,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"1","contextId":6}}`))
 }
 
+func TestIframeHoldWaitingWithoutNavTargetResumes(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page", waiting: true}
+	resume, id, ok := parseCommand([]byte(`{"id":70,"sessionId":"S-mid","method":"Runtime.runIfWaitingForDebugger","params":{}}`))
+	if !ok || id != 70 {
+		t.Fatal("resume command did not parse")
+	}
+	if !g.startsUnheld(resume) {
+		t.Fatal("waiting mid without a navTarget stayed held")
+	}
+	if wait := g.commandWait(resume); wait != nil {
+		t.Fatal("waiting mid without a navTarget parked the resume")
+	}
+	admit := reviewCommand(g, `{"id":70,"sessionId":"S-mid","method":"Runtime.runIfWaitingForDebugger","params":{}}`)
+	if len(admit.forward) == 0 || len(admit.reply) > 0 {
+		t.Fatalf("waiting mid without a navTarget did not forward resume: forward=%s reply=%s", admit.forward, admit.reply)
+	}
+}
+
+func TestIframeHoldClientCommandOnHeldSessionIsMissing(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.held["S-mid"] = &heldSession{id: "S-mid", parent: "S-page", target: "MID", typ: "iframe", waiting: true, at: time.Now()}
+	v := reviewCommand(g, `{"id":71,"sessionId":"S-mid","method":"Runtime.runIfWaitingForDebugger","params":{}}`)
+	if len(v.forward) > 0 {
+		t.Fatalf("client resume on a held session was forwarded: %s", v.forward)
+	}
+	if len(v.reply) == 0 {
+		t.Fatal("client resume on a held session was silenced")
+	}
+	var m message
+	if json.Unmarshal(v.reply, &m) != nil || m.Error == nil {
+		t.Fatalf("held-session reply was not an error: %s", v.reply)
+	}
+	var err struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(m.Error, &err) != nil || err.Code != -32000 || !strings.Contains(err.Message, refusedSession) {
+		t.Fatalf("held-session reply was not the missing-session refusal: %s", v.reply)
+	}
+	enable := reviewCommand(g, `{"id":72,"sessionId":"S-mid","method":"Page.enable","params":{}}`)
+	if len(enable.forward) > 0 {
+		t.Fatalf("client Page.enable on a held session was forwarded: %s", enable.forward)
+	}
+	refusalFromVerdict(t, enable)
+	if !strings.Contains(string(enable.reply), refusedSession) {
+		t.Fatalf("Page.enable on a held session was not the missing-session refusal: %s", enable.reply)
+	}
+}
+
 func TestIframeHoldPausedChildResumeBypassesOpenConfirm(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.observeAll([]targetInfo{

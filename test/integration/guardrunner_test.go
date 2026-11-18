@@ -599,7 +599,31 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		}
 	}
 	t.Logf("%d rows in %s with %d slots on %s", len(sum.Results), time.Since(begin).Round(time.Second), n, runtime.GOOS)
+	for _, r := range sum.Results {
+		if r.Control == "skip" || r.Control == "not-run" {
+			continue
+		}
+		if r.Control != "pass" || r.Guarded != "pass" || r.Live != "pass" {
+			dumpCmdtrace(t, env.a.stderr.String())
+			break
+		}
+	}
 	return sum
+}
+
+func dumpCmdtrace(t testing.TB, stderr string) {
+	t.Helper()
+	var lines []string
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "cdp: cmdtrace") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		t.Logf("cmdtrace: no cdp: cmdtrace lines in slicc attach stderr")
+		return
+	}
+	t.Logf("cmdtrace (%d lines):\n%s", len(lines), strings.Join(lines, "\n"))
 }
 
 func TestCDPProtectVectorsIgnoreChromeUITargets(t *testing.T) {

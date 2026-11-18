@@ -15,9 +15,11 @@ func (g *guard) beginConfirmLocked(nt *navTarget) {
 		nt.confirming = false
 		nt.confirm = &navTarget{ready: make(chan struct{}), start: time.Now()}
 		nt.confirm.awayAt = g.reads.away(nt.confirm.start)
+		g.cmdTraceStateLocked("confirm-begin", nt.session, nt.target, "rev="+strconv.Itoa(nt.revision))
 	}
 	if nt.failed {
 		nt.confirm.settle(true)
+		g.cmdTraceStateLocked("confirm-settle", nt.session, nt.target, "failed=true", "why=nav-failed")
 	}
 }
 
@@ -48,6 +50,7 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		if time.Since(check.start) >= holdTimeout() {
 			g.logf("cdp: confirm retries hit the hold bound target=%s", nt.target)
 			check.settle(true)
+			g.cmdTraceStateLocked("confirm-settle", nt.session, nt.target, "failed=true", "why=churn-bound")
 			return nil
 		}
 		return g.confirmTargetLocked(nt)
@@ -60,17 +63,20 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 	var frame confirmFrame
 	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
 		check.settle(true)
+		g.cmdTraceStateLocked("confirm-settle", nt.session, nt.target, "failed=true", "why=frame-unusable")
 		return nil
 	}
 	t := g.targets[nt.target]
 	if t == nil || t.gone {
 		check.settle(true)
+		g.cmdTraceStateLocked("confirm-settle", nt.session, nt.target, "failed=true", "why=target-gone")
 		return nil
 	}
 	if nt.iframe {
 		if send, blocked := g.confirmIframeParentLocked(t, frame.ParentID); blocked {
 			check.reason = g.frameParentReasonLocked(t, frame.ParentID)
 			check.settle(true)
+			g.cmdTraceStateLocked("confirm-settle", nt.session, nt.target, "failed=true", "why=parent-blocked")
 			return send
 		}
 	}
@@ -85,36 +91,41 @@ type confirmFrame struct {
 	UnreachableURL string `json:"unreachableUrl"`
 }
 
+func (g *guard) settleConfirmLocked(nt, check *navTarget, failed bool, why string) {
+	check.settle(failed)
+	g.cmdTraceStateLocked("confirm-settle", nt.session, nt.target, "failed="+strconv.FormatBool(failed), "why="+why)
+}
+
 func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, frame confirmFrame, raw json.RawMessage) [][]byte {
 	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
 	g.noteErrorPageSnapshotLocked(nt, frame.URL, frame.SecurityOrigin, frame.UnreachableURL)
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
-		check.settle(false)
+		g.settleConfirmLocked(nt, check, false, "loaded")
 		return g.markLocked(t)
 	}
 	if inheritedDocument(frame.URL, frame.UnreachableURL) {
 		if g.o.Target(frame.URL, t.protected, g.openerState(t)) || !g.ordinaryFrameParentLocked(t, frame.ParentID) {
 			check.reason = g.frameParentReasonLocked(t, frame.ParentID)
-			check.settle(true)
+			g.settleConfirmLocked(nt, check, true, "inherited-parent")
 			return nil
 		}
-		check.settle(false)
+		g.settleConfirmLocked(nt, check, false, "inherited-ordinary")
 		return nil
 	}
 	if frame.SecurityOrigin == "" {
-		check.settle(true)
+		g.settleConfirmLocked(nt, check, true, "empty-origin")
 		return nil
 	}
 	ev := protect.Evidence{DocumentURL: frame.URL, UnreachableURL: frame.UnreachableURL}
 	if protect.ErrorPage(frame.UnreachableURL, ev) && !protect.Inheriting(frame.UnreachableURL) {
-		check.settle(false)
+		g.settleConfirmLocked(nt, check, false, "error-page")
 		return g.navEventLocked(nt, &message{Method: "Page.frameNavigated", Params: encode(map[string]any{"frame": raw})})
 	}
 	if frame.URL == "" || protect.Inheriting(frame.URL) || protect.Unparseable(frame.URL) || frame.UnreachableURL != "" {
-		check.settle(true)
+		g.settleConfirmLocked(nt, check, true, "frame-incomplete")
 		return nil
 	}
-	check.settle(false)
+	g.settleConfirmLocked(nt, check, false, "ordinary")
 	return nil
 }
 

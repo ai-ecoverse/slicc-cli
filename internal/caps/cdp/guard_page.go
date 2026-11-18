@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -94,7 +95,15 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	defer g.resolveHeldWaitsLocked()
+	g.cmdArrivalLocked(c)
+	if c.method == "Target.setAutoAttach" {
+		g.cmdTraceLocked(c, "autoAttach",
+			"autoAttach="+boolParam(c, "autoAttach"),
+			"waitForDebuggerOnStart="+boolParam(c, "waitForDebuggerOnStart"),
+			"flatten="+boolParam(c, "flatten"))
+	}
 	if reply, done := g.parkedAnswerLocked(c); done {
+		g.cmdTraceLocked(c, "parked-answer")
 		return pageVerdict{reply: reply}
 	}
 	if c.method == "Slicc.action" && c.id < relayIDBase {
@@ -102,37 +111,64 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 		return pageVerdict{reply: acknowledgement(c.id, c.session)}
 	}
 	if wait := g.isolatedWorldWaitLocked(c); wait != nil {
+		g.cmdTraceLocked(c, "park", "why=isolated-world")
 		return pageVerdict{wait: wait}
 	}
 	if reason := g.checkLocked(c); reason != "" {
 		if reason == extensionShownPending {
+			g.cmdTraceLocked(c, "park", "why=extension-shown")
 			return pageVerdict{extension: c}
 		}
 		if reason == closeProofPending {
+			g.cmdTraceLocked(c, "park", "why=close-proof")
 			return pageVerdict{closeProof: c}
 		}
 		g.logf("cdp: refused %s: %s", c.method, reason)
+		g.cmdTraceLocked(c, "refuse", "why="+reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
 	}
 	if gate := g.framesGateLocked(c.session); gate != nil {
+		g.cmdTraceLocked(c, "park", "why=frames-gate")
 		return pageVerdict{wait: gate}
 	}
 	if c.method == "Page.navigateToHistoryEntry" {
 		if reason := g.historyRefusalLocked(c); reason != "" {
+			g.cmdTraceLocked(c, "refuse", "why="+reason)
 			return pageVerdict{reply: refusal(c.id, c.session, reason)}
 		}
 		return pageVerdict{history: c}
 	}
 	if g.needsExtensionShownProbeLocked(c) {
+		g.cmdTraceLocked(c, "park", "why=extension-shown-probe")
 		return pageVerdict{extension: c}
 	}
 	if reply := g.answerLocally(c); reply != nil {
+		g.cmdTraceLocked(c, "local")
 		return pageVerdict{reply: reply}
 	}
 	if c.method == "Target.getTargetInfo" && (g.protectedWorkerIDLocked(c.str("targetId")) || g.workerConcealedLocked(c.str("targetId")) || g.protectedIframeIDLocked(c.str("targetId")) || g.iframeConcealedLocked(c.str("targetId"))) {
+		g.cmdTraceLocked(c, "refuse", "why=missing-target")
 		return pageVerdict{reply: missingTarget(c.id, c.session)}
 	}
 	return g.admitLocked(c)
+}
+
+func boolParam(c *command, key string) string {
+	if c == nil || c.params == nil {
+		return "absent"
+	}
+	v, ok := c.params[key]
+	if !ok {
+		return "absent"
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return "other"
+	}
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 func (g *guard) admitLocked(c *command) pageVerdict {
@@ -166,6 +202,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 		g.noteWireTouchLocked(k, t)
 	}
 	v := pageVerdict{forward: c.bytes(), cmd: c}
+	g.cmdTraceLocked(c, "forward", "startsUnheld="+strconv.FormatBool(g.startsUnheldLocked(c)))
 	v.send = append(v.send, g.releaseOnAutoAttachStopLocked(c)...)
 	if c.method == "DOM.getFrameOwner" {
 		if frame := c.str("frameId"); frame != "" {
@@ -433,6 +470,9 @@ func (g *guard) checkLocked(c *command) string {
 	}
 	if g.lost {
 		return refusedLost
+	}
+	if g.held[c.session] != nil {
+		return refusedSession
 	}
 	if reason := g.unknownCheckLocked(c.session); reason != "" {
 		return reason

@@ -51,11 +51,11 @@ func (g *guard) resumeBeforeDecideLocked(s *session) bool {
 		return false
 	}
 	if g.held[s.id] != nil {
-		return true
+		return false
 	}
 	nt := g.navTargets[s.target]
 	if nt == nil {
-		return g.targetUnconfirmedLocked(s.target)
+		return true
 	}
 	return !nt.done || (nt.confirm != nil && !nt.confirm.done)
 }

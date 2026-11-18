@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -141,6 +142,8 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if !g.ownsClientAnswerLocked(k) {
 		return browserVerdict{}
 	}
+	c := &command{id: *m.ID, session: m.SessionID, method: "(chrome-reply)"}
+	g.cmdTraceLocked(c, "chrome-reply", "error="+strconv.FormatBool(m.Error != nil))
 	ownerFrame, ownerCall := g.extensionOwnerCalls[k]
 	delete(g.extensionOwnerCalls, k)
 	versionCall := g.versionCalls[k]
@@ -168,10 +171,12 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget)}
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
+		g.cmdTraceLocked(c, "drop-reply", "why=session-refused")
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: g.closeStreamLocked(bc, m)}
 	}
 	if outlived {
 		g.logf("cdp: dropped an answer from before a protected error page committed")
+		g.cmdTraceLocked(c, "drop-reply", "why=outlived")
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedOutlived), send: g.closeStreamLocked(bc, m)}
 	}
 	data = g.plainErrorLocked(m, data)
@@ -561,6 +566,7 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		g.browserSessions[p.SessionID] = true
 	}
 	send = append(send, g.touchLocked(info.TargetID, info.Type)...)
+	g.cmdTraceStateLocked("attached-forward", p.SessionID, info.TargetID, "waiting="+strconv.FormatBool(p.WaitingForDebugger), "typ="+info.Type, "path=immediate")
 	if params := decodeParams(m.Params); params != nil {
 		if obj, _ := params["targetInfo"].(map[string]any); g.redactInfoLocked(obj, info) {
 			m.Params = encode(params)

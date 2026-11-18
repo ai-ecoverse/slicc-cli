@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
@@ -29,6 +30,7 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 	sid, _ := params["sessionId"].(string)
 	h := &heldSession{id: sid, parent: parent, target: info.TargetID, typ: info.Type, params: params, waiting: waiting, at: time.Now()}
 	g.held[sid] = h
+	g.cmdTraceStateLocked("hold", sid, info.TargetID, "waiting="+strconv.FormatBool(waiting), "typ="+info.Type)
 	if workerTypes[info.Type] {
 		g.logf("cdp: holding an auto-attached worker until its URL or creator frame is known target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 		return nil
@@ -42,6 +44,7 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 		return nil
 	}
 	h.resumed = true
+	g.cmdTraceStateLocked("guard-resume", sid, info.TargetID, "why=hold-waiting")
 	return [][]byte{g.resumeLocked(sid, info.TargetID)}
 }
 
@@ -114,6 +117,7 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	if h.parent != "" {
 		ev["sessionId"] = h.parent
 	}
+	g.cmdTraceStateLocked("attached-forward", h.id, h.target, "waiting="+strconv.FormatBool(waiting), "typ="+h.typ)
 	v.page = append(v.page, encode(ev))
 	return v
 }
@@ -160,11 +164,14 @@ func (g *guard) settleHeldWorkersLocked() browserVerdict {
 }
 
 func (g *guard) resumeLocked(sessionID, targetID string) []byte {
+	g.cmdTraceStateLocked("guard-resume", sessionID, targetID, "path=callback")
 	return g.callbackLocked(sessionID, "Runtime.runIfWaitingForDebugger", nil, func(m message) [][]byte {
 		if m.Error != nil {
 			g.logf("cdp: could not resume an auto-attached session target=%s session=%s", targetID, sessionID)
+			g.cmdTraceStateLocked("guard-resume-result", sessionID, targetID, "ok=false")
 		} else {
 			g.logf("cdp: resumed an auto-attached session target=%s session=%s", targetID, sessionID)
+			g.cmdTraceStateLocked("guard-resume-result", sessionID, targetID, "ok=true")
 		}
 		return nil
 	})

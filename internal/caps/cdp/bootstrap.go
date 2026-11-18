@@ -210,7 +210,14 @@ const (
 
 func (rl *relay) park(data []byte) bool {
 	c, _, ok := parseCommand(data)
-	if !ok || rl.g.startsUnheld(c) {
+	if !ok {
+		return false
+	}
+	if rl.g.startsUnheld(c) {
+		rl.g.mu.Lock()
+		rl.g.cmdArrivalLocked(c)
+		rl.g.cmdTraceLocked(c, "unheld-resume")
+		rl.g.mu.Unlock()
 		return false
 	}
 	key := parkKey{session: c.session}
@@ -227,9 +234,17 @@ func (rl *relay) park(data []byte) bool {
 		if rl.g.commandWait(c) == nil {
 			return false
 		}
+		rl.g.mu.Lock()
+		rl.g.cmdArrivalLocked(c)
+		rl.g.cmdTraceLocked(c, "park", "why=command-wait")
+		rl.g.mu.Unlock()
 		go rl.release(key)
 	} else {
 		rl.g.commandWait(c)
+		rl.g.mu.Lock()
+		rl.g.cmdArrivalLocked(c)
+		rl.g.cmdTraceLocked(c, "park", "why=command-wait-queued")
+		rl.g.mu.Unlock()
 	}
 	if rl.parkedCount >= maxParked || rl.parkedBytes+len(data) > maxParkedBytes {
 		rl.kill("ENOBUFS: too many commands wait for a target's guard")

@@ -253,6 +253,7 @@ type guard struct {
 	versionCalls          map[callKey]bool
 	versionReplies        map[callKey]int
 	scripts               map[string]bool
+	cmdArrivals           map[callKey]time.Time
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -289,6 +290,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		unknown:               map[string]*navTarget{},
 		heldWaits:             map[string]*heldWait{},
 		parkedAnswers:         map[callKey]bool{},
+		cmdArrivals:           map[callKey]time.Time{},
 		keptURLLatch:          map[string]bool{},
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
