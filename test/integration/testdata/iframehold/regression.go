@@ -2123,3 +2123,100 @@ func TestIframeHoldShownDefaultHiddenWhenAncestorFlipsProtected(t *testing.T) {
 	}
 	refusalFromVerdict(t, reviewCommand(g, `{"id":32,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"1","contextId":4}}`))
 }
+
+func assertIsolatedRescanArmsFrameGate(t *testing.T, host string) {
+	t.Helper()
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), done: true}
+	g.noteFrameParentLocked("FRAME-MID", "PAGE")
+	g.noteChildFrameLocked("FRAME-MID", "https://ordinary.test/mid")
+	g.noteFrameParentLocked("FRAME-GC", "FRAME-MID")
+	g.noteChildFrameLocked("FRAME-GC", "https://ordinary.test/inner")
+	def := execContext{ID: 4, Origin: "https://ordinary.test", UniqueID: "gc-main"}
+	def.AuxData.IsDefault = true
+	def.AuxData.FrameID = "FRAME-GC"
+	iso := execContext{ID: 5, Origin: "https://ordinary.test", Name: "__playwright_world__", UniqueID: "gc-iso"}
+	iso.AuxData.IsDefault = false
+	iso.AuxData.FrameID = "FRAME-GC"
+	for _, c := range []execContext{def, iso} {
+		raw, _ := json.Marshal(map[string]any{"method": "Runtime.executionContextCreated", "sessionId": "S-page", "params": map[string]any{"context": c}})
+		if v := g.fromBrowser(raw); len(v.forward) == 0 {
+			t.Fatalf("context %d under ordinary mid was not delivered", c.ID)
+		}
+	}
+	if g.shown["PAGE"] == nil || g.shown["PAGE"].contexts[4] == nil || g.shown["PAGE"].contexts[5] == nil {
+		t.Fatal("default and isolated worlds were not both shown under ordinary mid")
+	}
+	g.casting["S-page"] = true
+	gone, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextDestroyed", "sessionId": "S-page",
+		"params": map[string]any{"executionContextId": 4, "executionContextUniqueId": "gc-main"},
+	})
+	_ = g.fromBrowser(gone)
+	if g.shown["PAGE"] != nil && g.shown["PAGE"].contexts[4] != nil {
+		t.Fatal("destroyed default context stayed in shown")
+	}
+	if g.shown["PAGE"] == nil || g.shown["PAGE"].contexts[5] == nil {
+		t.Fatal("isolated world left shown after default was destroyed")
+	}
+	if g.framesProtectedLocked("PAGE") {
+		t.Fatal("framesProtected latched before mid flipped protected")
+	}
+	send := g.noteChildFrameLocked("FRAME-MID", host+"/embed")
+	g.queueContextSettleLocked()
+	page := g.takeContextSettlePageLocked()
+	send = append(send, g.takeContextSettleSendLocked()...)
+	send = append(send, g.cutFrameCastsLocked()...)
+	if g.shown["PAGE"] != nil && g.shown["PAGE"].contexts[5] != nil {
+		t.Fatal("isolated world stayed shown after mid flipped protected")
+	}
+	if !g.contextHiddenLocked("PAGE", 5) {
+		t.Fatal("isolated world was not hidden after mid flip")
+	}
+	if !g.framesProtectedLocked("PAGE") {
+		t.Fatal("framesProtected stayed false after hiding only an isolated world under protected mid")
+	}
+	foundDestroy := false
+	for _, msg := range page {
+		var m message
+		if json.Unmarshal(msg, &m) != nil {
+			continue
+		}
+		if m.Method == "Runtime.executionContextDestroyed" {
+			foundDestroy = true
+			break
+		}
+	}
+	if !foundDestroy {
+		t.Fatalf("no executionContextDestroyed for isolated world after mid flip: %s", page)
+	}
+	cut := false
+	for _, raw := range send {
+		var m struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(raw, &m) == nil && m.Method == "Page.stopScreencast" {
+			cut = true
+			break
+		}
+	}
+	if !cut {
+		t.Fatalf("running screencast was not cut after isolated-only rescan: send=%s casting=%v", send, g.casting)
+	}
+	if g.casting["S-page"] {
+		t.Fatal("casting map still lists the page after cut")
+	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":40,"sessionId":"S-page","method":"DOM.getDocument","params":{}}`))
+	refusalFromVerdict(t, reviewCommand(g, `{"id":41,"sessionId":"S-page","method":"Page.captureScreenshot","params":{}}`))
+	refusalFromVerdict(t, reviewCommand(g, `{"id":42,"sessionId":"S-page","method":"Page.startScreencast","params":{}}`))
+}
+
+func TestIframeHoldIsolatedRescanArmsFrameGateSeven(t *testing.T) {
+	assertIsolatedRescanArmsFrameGate(t, "https://seven.sliccy.ai")
+}
+
+func TestIframeHoldIsolatedRescanArmsFrameGateVault(t *testing.T) {
+	assertIsolatedRescanArmsFrameGate(t, "https://vault.sliccy.ai")
+}
