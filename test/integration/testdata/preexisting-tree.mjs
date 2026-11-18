@@ -6,7 +6,8 @@ const LIMIT = 64 * 1024 * 1024;
 const STEP_MS = 8000;
 const FIRST_MS = 300;
 const CONNECT_MS = 5000;
-const result = { steps: [], pages: {}, puppeteer: null };
+const ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+const result = { steps: [], pages: {}, puppeteer: null, events: { methods: {}, attached: [], created: [] } };
 
 function scrub(url) {
   if (typeof url !== 'string') return url;
@@ -119,38 +120,29 @@ class Raw {
       this.waiters.delete(m.id);
       return;
     }
-    if (m.method) this.events.push({ ...m, at: Date.now() });
-  }
-  waitPageUnderTab(name, tabSession, ms = 20000) {
-    const at = Date.now();
-    const seen = new Set();
-    return new Promise((resolve, reject) => {
-      const tick = () => {
-        for (let i = 0; i < this.events.length; i++) {
-          if (seen.has(i)) continue;
-          const e = this.events[i];
-          if (e.method !== 'Target.attachedToTarget') continue;
-          if (e.sessionId !== tabSession) continue;
-          const info = e.params?.targetInfo;
-          if (!matchPage(info, name)) continue;
-          seen.add(i);
-          resolve({
-            sessionId: e.params.sessionId,
-            targetId: info.targetId,
-            url: info.url,
-            under: e.sessionId || '',
-            waiting: !!e.params.waitingForDebugger,
+    if (m.method) {
+      this.events.push({ ...m, at: Date.now() });
+      result.events.methods[m.method] = (result.events.methods[m.method] || 0) + 1;
+      if (m.method === 'Target.targetCreated' && m.params?.targetInfo) {
+        const info = m.params.targetInfo;
+        if (result.events.created.length < 32) {
+          result.events.created.push({ type: info.type, id: (info.targetId || '').slice(0, 8), url: scrub(info.url || ''), attached: !!info.attached });
+        }
+      }
+      if (m.method === 'Target.attachedToTarget' && m.params?.targetInfo) {
+        const info = m.params.targetInfo;
+        if (result.events.attached.length < 32) {
+          result.events.attached.push({
+            type: info.type,
+            id: (info.targetId || '').slice(0, 8),
+            url: scrub(info.url || ''),
+            session: (m.params.sessionId || '').slice(0, 8),
+            under: (m.sessionId || '').slice(0, 8),
+            waiting: !!m.params.waitingForDebugger,
           });
-          return;
         }
-        if (Date.now() - at > ms) {
-          reject(new Error(`page ${name} did not attach under tab session`));
-          return;
-        }
-        setTimeout(tick, 10);
-      };
-      tick();
-    });
+      }
+    }
   }
   close() {
     this.ws.close();
@@ -202,16 +194,32 @@ async function isolatedWorld(c, sessionId, frameId) {
 
 const client = new Raw();
 await client.ready;
+await step('getBrowserContexts', () => client.call('Target.getBrowserContexts', {}));
 await step('discover', () => client.call('Target.setDiscoverTargets', { discover: true }));
-await step('browser auto-attach', () =>
-  client.call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true })
-);
+await step('browser auto-attach', () => client.call('Target.setAutoAttach', ATTACH));
 
 const wanted = ['framed', 'nest', 'blank', 'protected'];
 const pending = new Map(wanted.map((name) => [name, true]));
 const tabs = new Map();
+const tabSessions = new Set();
 const seenAttach = new Set();
 result.tabs = [];
+
+const waitForTabEvent = async (ms = 5000) => {
+  const at = Date.now();
+  while (Date.now() - at < ms) {
+    for (const e of client.events) {
+      if (e.method === 'Target.targetCreated' && e.params?.targetInfo?.type === 'tab') return true;
+      if (e.method === 'Target.attachedToTarget' && e.params?.targetInfo?.type === 'tab') return true;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return false;
+};
+
+await step('wait tab targets from events', async () => {
+  if (!(await waitForTabEvent(10000))) throw new Error('no Target.targetCreated/attachedToTarget tab from events after discover+auto-attach');
+});
 
 const ingest = async () => {
   for (let i = 0; i < client.events.length; i++) {
@@ -230,10 +238,11 @@ const ingest = async () => {
     if (info.type === 'tab' && !e.sessionId) {
       const tabSession = e.params.sessionId;
       tabs.set(info.targetId, info);
-      await step(`tab auto-attach ${info.targetId.slice(0, 8)}`, () =>
-        client.call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, tabSession)
-      );
-      client.fire('Runtime.runIfWaitingForDebugger', {}, tabSession);
+      if (!tabSessions.has(tabSession)) {
+        tabSessions.add(tabSession);
+        await step(`tab auto-attach ${info.targetId.slice(0, 8)}`, () => client.call('Target.setAutoAttach', ATTACH, tabSession));
+        client.fire('Runtime.runIfWaitingForDebugger', {}, tabSession);
+      }
       continue;
     }
     if (info.type !== 'page' || !e.sessionId) continue;
@@ -282,6 +291,7 @@ while (pending.size > 0 && Date.now() < deadline) {
 }
 await ingest();
 result.tabCount = tabs.size;
+result.tabSessions = tabSessions.size;
 
 for (const name of pending.keys()) {
   result.pages[name] = { attached: false, error: 'no tab delivered this page under a tab session' };
