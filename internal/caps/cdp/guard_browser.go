@@ -185,7 +185,9 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	g.noteExtensionMarkReplyLocked(k, markMethod, m.Error != nil)
 	var treePage, treeSend [][]byte
 	if treeCall && m.Error == nil {
-		g.noteFrameTreeResultLocked(m.Result)
+		if t := g.sessionTargetLocked(m.SessionID); t != nil {
+			g.noteFrameTreeResultLocked(t.id, m.Result)
+		}
 		treePage = g.takeContextSettlePageLocked()
 		treeSend = g.takeContextSettleSendLocked()
 	}

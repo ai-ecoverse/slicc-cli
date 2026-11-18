@@ -199,6 +199,13 @@ func getVersion(ctx context.Context, conn *websocket.Conn, reader *messageReader
 type parkedMessage struct {
 	data        []byte
 	reservation *link.Reservation
+	admitted    *admitted
+}
+
+type admitted struct {
+	c  *command
+	id int64
+	v  pageVerdict
 }
 
 type parkKey struct {
@@ -511,9 +518,12 @@ func (rl *relay) toBrowser() {
 		if rl.park(buf) {
 			continue
 		}
-		out, ok := rl.checkPage(buf)
+		out, ok, parked := rl.admitOrPark(buf)
 		if !ok {
 			return
+		}
+		if parked {
+			continue
 		}
 		if out == nil {
 			continue
