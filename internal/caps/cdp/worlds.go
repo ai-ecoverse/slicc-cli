@@ -540,13 +540,17 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 			w.full = true
 		}
 	}
+	protectedFrame := frame
+	if protectedFrame != "" && g.o.ExtensionFrame(c.Origin) {
+		protectedFrame = ""
+	}
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true
 		if c.AuxData.FrameID != "" {
 			wc.frame = c.AuxData.FrameID
 		}
-		if frame != "" {
-			wc.protectedFrame = frame
+		if protectedFrame != "" {
+			wc.protectedFrame = protectedFrame
 		}
 		return
 	}
@@ -557,7 +561,7 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 		w.full = true
 		return
 	}
-	w.contexts[c.ID] = &worldCtx{frame: c.AuxData.FrameID, unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: frame}
+	w.contexts[c.ID] = &worldCtx{frame: c.AuxData.FrameID, unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: protectedFrame}
 	if c.UniqueID != "" {
 		g.worldUniques[c.UniqueID] = target
 	}

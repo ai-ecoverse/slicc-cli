@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -182,11 +183,42 @@ type stockLinkConnect struct {
 	Preexisting        map[string]stockLinkPage `json:"preexisting"`
 }
 
-type stockLinkResult struct {
-	Connect   stockLinkConnect           `json:"connect"`
-	Reconnect stockLinkConnect           `json:"reconnect"`
-	Probes    map[string]json.RawMessage `json:"probes"`
+type stockLinkInput struct {
+	OK           bool   `json:"ok"`
+	Error        string `json:"error"`
+	Delivered    int    `json:"delivered"`
+	ValueChanged bool   `json:"valueChanged"`
 }
+
+type stockLinkOrdinary struct {
+	Found     bool   `json:"found"`
+	Click     string `json:"click"`
+	Type      string `json:"type"`
+	Hits      *int   `json:"hits"`
+	Value     string `json:"value"`
+	ReadError string `json:"readError"`
+}
+type stockLinkResult struct {
+	Connect   stockLinkConnect `json:"connect"`
+	Reconnect stockLinkConnect `json:"reconnect"`
+	Nested    *struct {
+		Goto             string                       `json:"goto"`
+		FramesSettled    bool                         `json:"framesSettled"`
+		Embedded         any                          `json:"embedded"`
+		ProtectedFrames  []string                     `json:"protectedFrames"`
+		ExtensionFocused bool                         `json:"extensionFocused"`
+		Inputs           map[string]stockLinkInput    `json:"inputs"`
+		Ordinary         map[string]stockLinkOrdinary `json:"ordinary"`
+		Control          struct {
+			Mouse int    `json:"mouse"`
+			Text  bool   `json:"text"`
+			Error string `json:"error"`
+		} `json:"control"`
+	} `json:"nested"`
+	Probes map[string]json.RawMessage `json:"probes"`
+}
+
+const stockShownRefusal = "slicc: refused: a browser extension's frame (chrome-extension://) is showing or focused in this tab, such as a password manager's autofill list; close it or reload the tab"
 
 func checkStockConnect(t *testing.T, name string, c stockLinkConnect) {
 	t.Helper()
@@ -305,6 +337,53 @@ func TestStockPuppeteerConnectsThroughLinkBesideHeldTabs(t *testing.T) {
 	for name, c := range map[string]stockLinkConnect{"connect": res.Connect, "reconnect": res.Reconnect} {
 		checkStockConnect(t, name, c)
 		checkStockPreexisting(t, name, c)
+	}
+	checkStockProbes(t, res.Probes)
+}
+
+func TestStockPuppeteerInputThroughLinkStaysOutOfNestedExtensionFrame(t *testing.T) {
+	env := setupExtensionFrameProtect(t)
+	res := runStockLink(t, env, "nested", func(string) {})
+	checkStockConnect(t, "connect", res.Connect)
+	checkStockConnect(t, "reconnect", res.Reconnect)
+	n := res.Nested
+	if n == nil {
+		t.Fatal("the nested-frame flow did not run")
+	}
+	if n.Goto != "ok" || !n.FramesSettled || n.Embedded != true {
+		t.Fatalf("the nested-frame page: goto=%s, ordinary frames reached the client=%v, extension frame embedded=%v", n.Goto, n.FramesSettled, n.Embedded)
+	}
+	for _, k := range []string{"same", "cross", "nested"} {
+		o := n.Ordinary[k]
+		if !o.Found || o.Click != "ok" || o.Type != "ok" || o.Hits == nil || *o.Hits != 1 || o.Value != "ok" {
+			t.Errorf("input into the ordinary %s frame: %s", k, fmt.Sprintf("%+v", o))
+		}
+	}
+	if n.Control.Error != "" || n.Control.Mouse < 1 || !n.Control.Text {
+		t.Fatalf("control: unguarded input did not reach the nested extension frame, so a zero count proves nothing: %+v", n.Control)
+	}
+	if !n.ExtensionFocused {
+		t.Errorf("the observer could not focus the nested extension frame for the keyboard rows")
+	}
+	if len(n.ProtectedFrames) != 0 {
+		t.Errorf("the extension frame is visible to the client: %v", n.ProtectedFrames)
+	}
+	if len(n.Inputs) < 8 {
+		t.Errorf("only %d protected input rows ran", len(n.Inputs))
+	}
+	for name, in := range n.Inputs {
+		if in.Delivered != 0 || in.ValueChanged {
+			t.Errorf("%s reached the extension frame: delivered %d events, value changed %v (answer ok=%v %s)", name, in.Delivered, in.ValueChanged, in.OK, in.Error)
+		}
+		if strings.HasPrefix(name, "Target.attachToTarget") {
+			if in.OK {
+				t.Errorf("%s: the client attached to the extension frame", name)
+			}
+			continue
+		}
+		if in.OK || !strings.Contains(in.Error, stockShownRefusal) {
+			t.Errorf("%s: want the shown-or-focused refusal, got ok=%v %q", name, in.OK, in.Error)
+		}
 	}
 	checkStockProbes(t, res.Probes)
 }

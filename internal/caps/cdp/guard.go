@@ -1328,10 +1328,8 @@ func (g *guard) creatorChildFrameProtectedLocked(id string) bool {
 	if !g.o.Loaded(raw) {
 		return false
 	}
-	if protect.Scheme(raw) == "chrome-extension" {
-		if t := g.targets[id]; t != nil && !t.gone && !g.targetLoadedLocked(t) {
-			return false
-		}
+	if g.o.ExtensionFrame(raw) || protect.Scheme(raw) == "chrome-extension" {
+		return false
 	}
 	return true
 }
