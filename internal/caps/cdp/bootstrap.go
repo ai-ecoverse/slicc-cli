@@ -76,8 +76,15 @@ func (rl *relay) checkPage(data []byte) ([]byte, bool) {
 	return rl.admit(c, id, ok)
 }
 
+func (v pageVerdict) blocks() bool {
+	return v.wait != nil || v.history != nil || v.extension != nil || v.closeProof != nil
+}
+
 func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
-	v := rl.g.fromCommand(c, id, ok)
+	return rl.finish(c, id, ok, rl.g.fromCommand(c, id, ok))
+}
+
+func (rl *relay) finish(c *command, id int64, ok bool, v pageVerdict) ([]byte, bool) {
 	for {
 		if v.history != nil {
 			v = rl.resolveHistory(v.history)
@@ -90,6 +97,9 @@ func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 		}
 		if v.wait == nil {
 			break
+		}
+		if !rl.sendBrowser(v.send) {
+			return nil, false
 		}
 		select {
 		case <-v.wait:
@@ -104,15 +114,72 @@ func (rl *relay) admit(c *command, id int64, ok bool) ([]byte, bool) {
 			return nil, false
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), HistoryTimeout)
-	defer cancel()
-	for _, msg := range v.send {
-		if err := rl.conn.Write(ctx, websocket.MessageText, msg); err != nil {
-			_ = rl.conn.CloseNow()
-			return nil, false
-		}
+	if !rl.sendBrowser(v.send) {
+		return nil, false
 	}
 	return v.forward, true
+}
+
+func (rl *relay) sendBrowser(send [][]byte) bool {
+	if len(send) == 0 {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), HistoryTimeout)
+	defer cancel()
+	for _, msg := range send {
+		if err := rl.conn.Write(ctx, websocket.MessageText, msg); err != nil {
+			_ = rl.conn.CloseNow()
+			return false
+		}
+	}
+	return true
+}
+
+func (rl *relay) parkKeyOf(c *command) (parkKey, bool) {
+	key := parkKey{session: c.session}
+	if rl.g.browserScope(c.session) {
+		key.target = c.str("targetId")
+		if key.target == "" {
+			return key, false
+		}
+	}
+	return key, true
+}
+
+func (rl *relay) admitOrPark(data []byte) ([]byte, bool, bool) {
+	c, id, ok := parseCommand(data)
+	v := rl.g.fromCommand(c, id, ok)
+	if ok && v.blocks() {
+		if key, keyed := rl.parkKeyOf(c); keyed {
+			return nil, true, rl.parkVerdict(key, data, c, id, v)
+		}
+	}
+	out, alive := rl.finish(c, id, ok, v)
+	return out, alive, false
+}
+
+func (rl *relay) parkVerdict(key parkKey, data []byte, c *command, id int64, v pageVerdict) bool {
+	rl.parkMu.Lock()
+	defer rl.parkMu.Unlock()
+	if rl.parkedCount >= maxParked || rl.parkedBytes+len(data) > maxParkedBytes {
+		rl.kill("ENOBUFS: too many commands wait for a target's guard")
+		return true
+	}
+	reservation := rl.s.ReserveAllocation(len(data), false)
+	if reservation == nil {
+		rl.kill("ENOBUFS: shared HTTP/CDP allocation limit")
+		return true
+	}
+	rl.parkedCount++
+	rl.parkedBytes += len(data)
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	_, waiting := rl.parked[key]
+	rl.parked[key] = append(rl.parked[key], parkedMessage{data: copyData, reservation: reservation, admitted: &admitted{c: c, id: id, v: v}})
+	if !waiting {
+		go rl.release(key)
+	}
+	return true
 }
 
 func (rl *relay) resolveExtensionShown(c *command) pageVerdict {
@@ -261,7 +328,7 @@ func (rl *relay) release(key parkKey) {
 		item := q[0]
 		data := item.data
 		rl.parkMu.Unlock()
-		if c, _, ok := parseCommand(data); ok {
+		if c, _, ok := parseCommand(data); ok && item.admitted == nil {
 			rl.g.awaitCommand(c, rl.g.commandWait(c), rl.s.Done())
 		}
 		select {
@@ -276,7 +343,13 @@ func (rl *relay) release(key parkKey) {
 		rl.parkedCount--
 		rl.parkedBytes -= len(data)
 		rl.parkMu.Unlock()
-		out, ok := rl.checkPage(data)
+		var out []byte
+		var ok bool
+		if a := item.admitted; a != nil {
+			out, ok = rl.finish(a.c, a.id, true, a.v)
+		} else {
+			out, ok = rl.checkPage(data)
+		}
 		if ok && out != nil {
 			ok = rl.conn.Write(context.Background(), websocket.MessageText, out) == nil
 		}
