@@ -547,7 +547,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	opts := map[string]any{
 		"browsers":       slots,
 		"targets":        targets,
-		"capabilities":   map[string]bool{"autoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "extensionFrame": true, "inboundDelay": true, "forwardAudit": true, "stockSetup": true, "closeProtected": true, "secureOrigin": true},
+		"capabilities":   map[string]bool{"autoAttach": true, "iframeAutoAttach": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "extensionFrame": true, "inboundDelay": true, "forwardAudit": true, "stockSetup": true, "closeProtected": true, "secureOrigin": true},
 		"variants":       []string{run.variant},
 		"parallel":       n,
 		"log":            "http://127.0.0.1:" + strconv.Itoa(fix.log),
