@@ -122,6 +122,10 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 			g.cmdTraceLocked(c, "park", "why=close-proof")
 			return pageVerdict{closeProof: c}
 		}
+		if reason == missingSessionMessage {
+			g.logf("cdp: missing session on %s", c.method)
+			return pageVerdict{reply: missingSession(c.id, c.session)}
+		}
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		g.cmdTraceLocked(c, "refuse", "why="+reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
@@ -268,6 +272,10 @@ func (g *guard) afterHistory(c *command, res message, ok bool) pageVerdict {
 		}
 		if reason == closeProofPending {
 			return pageVerdict{closeProof: c}
+		}
+		if reason == missingSessionMessage {
+			g.logf("cdp: missing session on %s", c.method)
+			return pageVerdict{reply: missingSession(c.id, c.session)}
 		}
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}

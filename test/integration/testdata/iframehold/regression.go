@@ -2340,20 +2340,194 @@ func TestIframeHoldUnknownSessionRefusesWithinBound(t *testing.T) {
 	if !u.done || u.reason == "" {
 		t.Fatalf("unknown session did not settle within the bound: done=%v reason=%q", u.done, u.reason)
 	}
-	if !strings.Contains(u.reason, unknownSessionIdle.String()) || strings.Contains(u.reason, GuardIdle.String()) {
-		t.Fatalf("unknown session refusal text did not match the 3s bound: %q", u.reason)
-	}
 	if g.commandWait(c) != nil {
 		t.Fatal("unknown session stayed parked after the bound")
 	}
 	v := reviewCommand(g, `{"id":80,"sessionId":"S-unknown","method":"Runtime.evaluate","params":{"expression":"1"}}`)
-	refusalFromVerdict(t, v)
-	if !strings.Contains(string(v.reply), refusedSession) {
-		t.Fatalf("unknown session refusal missing: %s", v.reply)
-	}
+	missingSessionFromVerdict(t, v)
 	if len(v.forward) > 0 {
 		t.Fatalf("unknown session evaluate was forwarded: %s", v.forward)
 	}
+}
+
+func missingSessionFromVerdict(t *testing.T, v pageVerdict) {
+	t.Helper()
+	if len(v.reply) == 0 {
+		t.Fatal("expected a missing-session reply")
+	}
+	var m message
+	if json.Unmarshal(v.reply, &m) != nil || m.Error == nil {
+		t.Fatalf("expected error reply: %s", v.reply)
+	}
+	var err struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(m.Error, &err) != nil || err.Code != -32001 || err.Message != missingSessionMessage {
+		t.Fatalf("missing-session shape wrong: %s", v.reply)
+	}
+}
+
+func TestIframeHoldParentDetachCascadesOrphanChild(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+		{TargetID: "CHILD", Type: "iframe", URL: "https://ordinary.test/inner", ParentFrameID: "MID"},
+		{TargetID: "OTHER", Type: "iframe", URL: "https://ordinary.test/other", ParentFrameID: "PAGE"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page"}
+	g.sessions["S-child"] = &session{id: "S-child", target: "CHILD", typ: "iframe", parent: "S-mid"}
+	g.sessions["S-other"] = &session{id: "S-other", target: "OTHER", typ: "iframe", parent: "S-page"}
+	for _, id := range []string{"PAGE", "MID", "CHILD", "OTHER"} {
+		g.navTargets[id] = &navTarget{target: id, ready: make(chan struct{}), done: true}
+	}
+	g.pending[callKey{"S-child", 90}] = kindPlain
+	detach := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-mid","targetId":"MID"}}`))
+	if g.sessions["S-child"] != nil || !g.gone["S-child"] {
+		t.Fatal("orphan child session record was kept after parent chrome-detach")
+	}
+	if g.sessions["S-other"] == nil {
+		t.Fatal("sibling under a live parent was removed by orphan cascade")
+	}
+	if g.sessions["S-page"] == nil {
+		t.Fatal("page session was removed by mid detach")
+	}
+	var sawChildDetach, sawParentDetach, sawPending bool
+	for _, raw := range detach.page {
+		var m message
+		if json.Unmarshal(raw, &m) != nil {
+			continue
+		}
+		if m.Method == "Target.detachedFromTarget" {
+			var p struct {
+				SessionID string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			switch p.SessionID {
+			case "S-child":
+				sawChildDetach = true
+			case "S-mid":
+				sawParentDetach = true
+			}
+		}
+		if m.ID != nil && *m.ID == 90 {
+			sawPending = true
+			missingSessionFromVerdict(t, pageVerdict{reply: raw})
+		}
+	}
+	if !sawChildDetach {
+		t.Fatal("client was not told Target.detachedFromTarget for the orphan child")
+	}
+	if !sawParentDetach {
+		t.Fatal("client was not told Target.detachedFromTarget for the parent")
+	}
+	if !sawPending {
+		t.Fatal("pending command on the orphan child was not answered")
+	}
+	if sawChildDetach && sawParentDetach {
+		childAt, parentAt := -1, -1
+		for i, raw := range detach.page {
+			var m message
+			if json.Unmarshal(raw, &m) != nil || m.Method != "Target.detachedFromTarget" {
+				continue
+			}
+			var p struct {
+				SessionID string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			if p.SessionID == "S-child" {
+				childAt = i
+			}
+			if p.SessionID == "S-mid" {
+				parentAt = i
+			}
+		}
+		if childAt < 0 || parentAt < 0 || childAt > parentAt {
+			t.Fatalf("detach order want child before parent: childAt=%d parentAt=%d", childAt, parentAt)
+		}
+	}
+	for _, raw := range []string{
+		`{"id":91,"sessionId":"S-child","method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":false,"flatten":true}}`,
+		`{"id":92,"sessionId":"S-child","method":"Page.enable","params":{}}`,
+		`{"id":93,"sessionId":"S-child","method":"Runtime.evaluate","params":{"expression":"1"}}`,
+	} {
+		v := reviewCommand(g, raw)
+		if len(v.forward) > 0 {
+			t.Fatalf("command on orphan child reached Chrome: %s", v.forward)
+		}
+		missingSessionFromVerdict(t, v)
+	}
+	live := reviewCommand(g, `{"id":94,"sessionId":"S-other","method":"Page.enable","params":{}}`)
+	if len(live.forward) == 0 || len(live.reply) > 0 {
+		t.Fatalf("live sibling was not forwarded: forward=%s reply=%s", live.forward, live.reply)
+	}
+}
+
+func TestIframeHoldParentDetachCascadesGrandchild(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+		{TargetID: "CHILD", Type: "iframe", URL: "https://ordinary.test/inner", ParentFrameID: "MID"},
+		{TargetID: "GC", Type: "iframe", URL: "https://ordinary.test/gc", ParentFrameID: "CHILD"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page"}
+	g.sessions["S-child"] = &session{id: "S-child", target: "CHILD", typ: "iframe", parent: "S-mid"}
+	g.sessions["S-gc"] = &session{id: "S-gc", target: "GC", typ: "iframe", parent: "S-child"}
+	detach := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-mid","targetId":"MID"}}`))
+	if g.sessions["S-gc"] != nil || g.sessions["S-child"] != nil {
+		t.Fatal("grandchild or child survived parent chrome-detach")
+	}
+	order := []string{}
+	for _, raw := range detach.page {
+		var m message
+		if json.Unmarshal(raw, &m) != nil || m.Method != "Target.detachedFromTarget" {
+			continue
+		}
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(m.Params, &p)
+		order = append(order, p.SessionID)
+	}
+	want := []string{"S-gc", "S-child", "S-mid"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Fatalf("detach order=%v want %v", order, want)
+	}
+	missingSessionFromVerdict(t, reviewCommand(g, `{"id":95,"sessionId":"S-gc","method":"Page.enable","params":{}}`))
+}
+
+func TestIframeHoldParentDetachSkipsHeldChildEvent(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+		{TargetID: "HELD", Type: "iframe", URL: "https://seven.sliccy.ai/embed", ParentFrameID: "MID"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page"}
+	g.held["S-held"] = &heldSession{id: "S-held", parent: "S-mid", target: "HELD", typ: "iframe", waiting: true, at: time.Now()}
+	detach := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-mid","targetId":"MID"}}`))
+	if g.held["S-held"] != nil || !g.gone["S-held"] {
+		t.Fatal("held child was not cleaned on parent chrome-detach")
+	}
+	for _, raw := range detach.page {
+		var m message
+		if json.Unmarshal(raw, &m) != nil || m.Method != "Target.detachedFromTarget" {
+			continue
+		}
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(m.Params, &p)
+		if p.SessionID == "S-held" {
+			t.Fatal("invented Target.detachedFromTarget for a held child the client never saw attach")
+		}
+	}
+	missingSessionFromVerdict(t, reviewCommand(g, `{"id":96,"sessionId":"S-held","method":"Page.enable","params":{}}`))
 }
 
 func TestIframeHoldWaitingWithoutNavTargetResumes(t *testing.T) {
