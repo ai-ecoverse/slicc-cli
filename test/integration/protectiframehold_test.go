@@ -250,6 +250,14 @@ func lateIframeParentScript(seven, vault, allowed string) fakeScript {
 		})
 		return string(event)
 	}
+	frameNavigated := func(session, id, parent, raw string) string {
+		event, _ := json.Marshal(map[string]any{
+			"sessionId": session,
+			"method":    "Page.frameNavigated",
+			"params":    map[string]any{"frame": map[string]any{"id": id, "parentId": parent, "url": raw, "securityOrigin": raw}},
+		})
+		return string(event)
+	}
 	armed := false
 	revealed := false
 	return func(method string, params json.RawMessage) (string, []string) {
@@ -281,8 +289,11 @@ func lateIframeParentScript(seven, vault, allowed string) fakeScript {
 				revealed = true
 				return "{}", []string{
 					frameAttached("S-page", "FRAME-seven-late", "P-seven"),
+					frameNavigated("S-page", "FRAME-seven-late", "P-seven", seven+"/late"),
 					frameAttached("S-page", "FRAME-vault-late", "P-vault"),
+					frameNavigated("S-page", "FRAME-vault-late", "P-vault", vault+"/late"),
 					frameAttached("S-page", "FRAME-plain-late", "P-ordinary"),
+					frameNavigated("S-page", "FRAME-plain-late", "P-ordinary", allowed+"/late"),
 				}
 			}
 		case "Target.getTargets":
@@ -422,6 +433,14 @@ func lateIframeWorkerCascadeScript(seven, vault, allowed string) fakeScript {
 		})
 		return string(event)
 	}
+	frameNavigated := func(session, id, parent, raw string) string {
+		event, _ := json.Marshal(map[string]any{
+			"sessionId": session,
+			"method":    "Page.frameNavigated",
+			"params":    map[string]any{"frame": map[string]any{"id": id, "parentId": parent, "url": raw, "securityOrigin": raw}},
+		})
+		return string(event)
+	}
 	armed := false
 	revealed := false
 	return func(method string, params json.RawMessage) (string, []string) {
@@ -457,8 +476,11 @@ func lateIframeWorkerCascadeScript(seven, vault, allowed string) fakeScript {
 				revealed = true
 				return "{}", []string{
 					frameAttached("S-page", "FRAME-seven-late", "P-seven"),
+					frameNavigated("S-page", "FRAME-seven-late", "P-seven", seven+"/late"),
 					frameAttached("S-page", "FRAME-vault-late", "P-vault"),
+					frameNavigated("S-page", "FRAME-vault-late", "P-vault", vault+"/late"),
 					frameAttached("S-page", "FRAME-plain-late", "P-ordinary"),
+					frameNavigated("S-page", "FRAME-plain-late", "P-ordinary", allowed+"/late"),
 				}
 			}
 		case "Target.getTargets":

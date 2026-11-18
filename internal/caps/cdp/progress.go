@@ -8,11 +8,12 @@ import (
 )
 
 const (
-	GuardIdle      = 30 * time.Second
-	GuardLimit     = 5 * time.Minute
-	GuardIdleEnv   = "SLICC_CDP_GUARD_IDLE"
-	GuardLimitEnv  = "SLICC_CDP_GUARD_LIMIT"
-	minWatchPeriod = 50 * time.Millisecond
+	GuardIdle          = 30 * time.Second
+	GuardLimit         = 5 * time.Minute
+	GuardIdleEnv       = "SLICC_CDP_GUARD_IDLE"
+	GuardLimitEnv      = "SLICC_CDP_GUARD_LIMIT"
+	unknownSessionIdle = 3 * time.Second
+	minWatchPeriod     = 50 * time.Millisecond
 )
 
 type guardBounds struct {
@@ -124,11 +125,13 @@ func (g *guard) navWatch(now time.Time) {
 		}
 	}
 	g.resolveUnknownLocked()
+	unknownIdle := min(unknownSessionIdle, g.bounds.idle)
 	for _, u := range g.unknown {
 		if u.done {
 			continue
 		}
-		if reason := g.bounds.expired(u, now, away); reason != "" {
+		b := guardBounds{idle: unknownIdle, limit: g.bounds.limit}
+		if reason := b.expired(u, now, away); reason != "" {
 			g.logf("cdp: a session slicc doesn't know never registered: %s; refusing its commands", reason)
 			u.reason = reason
 			u.settle(true)

@@ -101,12 +101,19 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 		g.verifiesInput = true
 		return pageVerdict{reply: acknowledgement(c.id, c.session)}
 	}
+	if wait := g.isolatedWorldWaitLocked(c); wait != nil {
+		return pageVerdict{wait: wait}
+	}
 	if reason := g.checkLocked(c); reason != "" {
 		if reason == extensionShownPending {
 			return pageVerdict{extension: c}
 		}
 		if reason == closeProofPending {
 			return pageVerdict{closeProof: c}
+		}
+		if reason == missingSessionMessage {
+			g.logf("cdp: missing session on %s", c.method)
+			return pageVerdict{reply: missingSession(c.id, c.session)}
 		}
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
@@ -143,6 +150,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	k := callKey{c.session, c.id}
 	kind := resultKind(c.method)
 	g.pending[k] = kind
+	g.noteTreeCallLocked(k, c.method)
 	if kind == kindPaint || framePaintMethods[c.method] || kind == kindStreams && protect.ExtensionPresentMethod(c.method) {
 		g.paintMethods[k] = c.method
 	}
@@ -229,6 +237,10 @@ func (g *guard) afterHistory(c *command, res message, ok bool) pageVerdict {
 		if reason == closeProofPending {
 			return pageVerdict{closeProof: c}
 		}
+		if reason == missingSessionMessage {
+			g.logf("cdp: missing session on %s", c.method)
+			return pageVerdict{reply: missingSession(c.id, c.session)}
+		}
 		g.logf("cdp: refused %s: %s", c.method, reason)
 		return pageVerdict{reply: refusal(c.id, c.session, reason)}
 	}
@@ -292,6 +304,12 @@ func resultKind(method string) callKind {
 		return kindAffectedURLs
 	}
 	return kindPlain
+}
+
+func (g *guard) noteTreeCallLocked(k callKey, method string) {
+	if method == "Page.getFrameTree" || method == "Page.getResourceTree" {
+		g.treeCalls[k] = true
+	}
 }
 
 func (g *guard) sessionRefusedLocked(id string) bool {
@@ -428,6 +446,9 @@ func (g *guard) checkLocked(c *command) string {
 	if g.lost {
 		return refusedLost
 	}
+	if g.held[c.session] != nil {
+		return missingSessionMessage
+	}
 	if reason := g.unknownCheckLocked(c.session); reason != "" {
 		return reason
 	}
@@ -542,6 +563,7 @@ var methodRules = map[string]func(g *guard, c *command) string{
 		}
 		return ""
 	},
+	"Page.createIsolatedWorld":    (*guard).createIsolatedWorldRule,
 	"Fetch.enable":                (*guard).fetchRule,
 	"Network.loadNetworkResource": (*guard).loadResourceRule,
 	"Page.getResourceContent":     (*guard).resourceRule,

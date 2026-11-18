@@ -45,6 +45,11 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		return nil
 	}
 	if revision != nt.revision {
+		if time.Since(check.start) >= holdTimeout() {
+			g.logf("cdp: confirm retries hit the hold bound target=%s", nt.target)
+			check.settle(true)
+			return nil
+		}
 		return g.confirmTargetLocked(nt)
 	}
 	var result struct {
