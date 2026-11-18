@@ -181,6 +181,7 @@ type guard struct {
 	held                  map[string]*heldSession
 	heldContexts          map[heldContextKey]*heldContext
 	contextSettlePage     [][]byte
+	contextSettleSend     [][]byte
 	frameWorldWaits       map[string]*frameWorldWait
 	treeCalls             map[callKey]bool
 	childFrames           map[string]string

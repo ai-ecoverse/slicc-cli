@@ -2123,3 +2123,196 @@ func TestIframeHoldShownDefaultHiddenWhenAncestorFlipsProtected(t *testing.T) {
 	}
 	refusalFromVerdict(t, reviewCommand(g, `{"id":32,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"1","contextId":4}}`))
 }
+
+func assertIsolatedRescanArmsFrameGate(t *testing.T, host string) {
+	t.Helper()
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), done: true}
+	g.noteFrameParentLocked("FRAME-MID", "PAGE")
+	g.noteChildFrameLocked("FRAME-MID", "https://ordinary.test/mid")
+	g.noteFrameParentLocked("FRAME-GC", "FRAME-MID")
+	g.noteChildFrameLocked("FRAME-GC", "https://ordinary.test/inner")
+	def := execContext{ID: 4, Origin: "https://ordinary.test", UniqueID: "gc-main"}
+	def.AuxData.IsDefault = true
+	def.AuxData.FrameID = "FRAME-GC"
+	iso := execContext{ID: 5, Origin: "https://ordinary.test", Name: "__playwright_world__", UniqueID: "gc-iso"}
+	iso.AuxData.IsDefault = false
+	iso.AuxData.FrameID = "FRAME-GC"
+	for _, c := range []execContext{def, iso} {
+		raw, _ := json.Marshal(map[string]any{"method": "Runtime.executionContextCreated", "sessionId": "S-page", "params": map[string]any{"context": c}})
+		if v := g.fromBrowser(raw); len(v.forward) == 0 {
+			t.Fatalf("context %d under ordinary mid was not delivered", c.ID)
+		}
+	}
+	if g.shown["PAGE"] == nil || g.shown["PAGE"].contexts[4] == nil || g.shown["PAGE"].contexts[5] == nil {
+		t.Fatal("default and isolated worlds were not both shown under ordinary mid")
+	}
+	g.casting["S-page"] = true
+	gone, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextDestroyed", "sessionId": "S-page",
+		"params": map[string]any{"executionContextId": 4, "executionContextUniqueId": "gc-main"},
+	})
+	_ = g.fromBrowser(gone)
+	if g.shown["PAGE"] != nil && g.shown["PAGE"].contexts[4] != nil {
+		t.Fatal("destroyed default context stayed in shown")
+	}
+	if g.shown["PAGE"] == nil || g.shown["PAGE"].contexts[5] == nil {
+		t.Fatal("isolated world left shown after default was destroyed")
+	}
+	if g.framesProtectedLocked("PAGE") {
+		t.Fatal("framesProtected latched before mid flipped protected")
+	}
+	send := g.noteChildFrameLocked("FRAME-MID", host+"/embed")
+	g.queueContextSettleLocked()
+	page := g.takeContextSettlePageLocked()
+	send = append(send, g.takeContextSettleSendLocked()...)
+	send = append(send, g.cutFrameCastsLocked()...)
+	if g.shown["PAGE"] != nil && g.shown["PAGE"].contexts[5] != nil {
+		t.Fatal("isolated world stayed shown after mid flipped protected")
+	}
+	if !g.contextHiddenLocked("PAGE", 5) {
+		t.Fatal("isolated world was not hidden after mid flip")
+	}
+	if !g.framesProtectedLocked("PAGE") {
+		t.Fatal("framesProtected stayed false after hiding only an isolated world under protected mid")
+	}
+	foundDestroy := false
+	for _, msg := range page {
+		var m message
+		if json.Unmarshal(msg, &m) != nil {
+			continue
+		}
+		if m.Method == "Runtime.executionContextDestroyed" {
+			foundDestroy = true
+			break
+		}
+	}
+	if !foundDestroy {
+		t.Fatalf("no executionContextDestroyed for isolated world after mid flip: %s", page)
+	}
+	cut := false
+	for _, raw := range send {
+		var m struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(raw, &m) == nil && m.Method == "Page.stopScreencast" {
+			cut = true
+			break
+		}
+	}
+	if !cut {
+		t.Fatalf("running screencast was not cut after isolated-only rescan: send=%s casting=%v", send, g.casting)
+	}
+	if g.casting["S-page"] {
+		t.Fatal("casting map still lists the page after cut")
+	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":40,"sessionId":"S-page","method":"DOM.getDocument","params":{}}`))
+	refusalFromVerdict(t, reviewCommand(g, `{"id":41,"sessionId":"S-page","method":"Page.captureScreenshot","params":{}}`))
+	refusalFromVerdict(t, reviewCommand(g, `{"id":42,"sessionId":"S-page","method":"Page.startScreencast","params":{}}`))
+}
+
+func TestIframeHoldIsolatedRescanArmsFrameGateSeven(t *testing.T) {
+	assertIsolatedRescanArmsFrameGate(t, "https://seven.sliccy.ai")
+}
+
+func TestIframeHoldIsolatedRescanArmsFrameGateVault(t *testing.T) {
+	assertIsolatedRescanArmsFrameGate(t, "https://vault.sliccy.ai")
+}
+
+func TestIframeHoldOrdinaryChildPageEnableForwardsWhenNavSettled(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page"}
+	g.navTargets["MID"] = &navTarget{target: "MID", ready: make(chan struct{}), start: time.Now(), iframe: true, done: true}
+	admit := reviewCommand(g, `{"id":50,"sessionId":"S-mid","method":"Page.enable","params":{}}`)
+	if len(admit.forward) == 0 || len(admit.reply) > 0 {
+		t.Fatalf("Page.enable on settled ordinary mid was not forwarded promptly: forward=%s reply=%s", admit.forward, admit.reply)
+	}
+}
+
+func TestIframeHoldOrdinaryChildPageEnableParksOnlyWhileNavOpen(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page"}
+	g.navTargets["MID"] = &navTarget{target: "MID", ready: make(chan struct{}), start: time.Now(), iframe: true}
+	c, id, ok := parseCommand([]byte(`{"id":51,"sessionId":"S-mid","method":"Page.enable","params":{}}`))
+	if !ok || id != 51 {
+		t.Fatal("Page.enable command did not parse")
+	}
+	if wait := g.commandWait(c); wait == nil {
+		t.Fatal("Page.enable on ordinary mid with open nav guard was not parked")
+	}
+	g.navTargets["MID"].settle(false)
+	if wait := g.commandWait(c); wait != nil {
+		t.Fatal("Page.enable stayed parked after ordinary mid nav guard settled")
+	}
+	admit := reviewCommand(g, `{"id":51,"sessionId":"S-mid","method":"Page.enable","params":{}}`)
+	if len(admit.forward) == 0 || len(admit.reply) > 0 {
+		t.Fatalf("Page.enable after nav settle was not forwarded: forward=%s reply=%s", admit.forward, admit.reply)
+	}
+}
+
+func TestIframeHoldFailedConfirmParentNotNavPending(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+	})
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), start: time.Now(), done: true}
+	g.beginConfirmLocked(g.navTargets["PAGE"])
+	g.navTargets["PAGE"].confirm.settle(true)
+	if g.targetUnconfirmedLocked("PAGE") {
+		t.Fatal("failed confirm left the page unconfirmed")
+	}
+	if g.iframeAncestorNavPendingLocked(g.targets["MID"]) {
+		t.Fatal("ordinary mid stayed nav-pending solely because the parent confirm failed")
+	}
+}
+
+func TestIframeHoldConfirmRevisionChurnSettlesWithinHold(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	nt := &navTarget{target: "PAGE", session: "S-page", ready: make(chan struct{}), start: time.Now(), done: true}
+	g.navTargets["PAGE"] = nt
+	g.beginConfirmLocked(nt)
+	check := nt.confirm
+	check.start = time.Now().Add(-holdTimeout() - time.Second)
+	nt.revision = 2
+	_ = g.confirmedTargetLocked(nt, check, 1, message{Result: json.RawMessage(`{"frameTree":{"frame":{"id":"PAGE","url":"https://ordinary.test/"}}}`)})
+	if !check.done || !check.failed {
+		t.Fatalf("confirm churn past hold bound did not settle failed: done=%v failed=%v", check.done, check.failed)
+	}
+	if g.commandWait(&command{session: "S-page", method: "Page.enable", id: 52}) != nil {
+		t.Fatal("Page.enable stayed parked after confirm churn settled")
+	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":52,"sessionId":"S-page","method":"Page.enable","params":{}}`))
+}
+
+func TestIframeHoldProtectedContextEvaluateAnswersWithinBound(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), done: true}
+	g.noteFrameParentLocked("FRAME-MID", "PAGE")
+	g.noteChildFrameLocked("FRAME-MID", "https://seven.sliccy.ai/embed")
+	g.noteFrameParentLocked("FRAME-GC", "FRAME-MID")
+	g.noteChildFrameLocked("FRAME-GC", "https://ordinary.test/inner")
+	gc := execContext{ID: 6, Origin: "https://ordinary.test", UniqueID: "gc-main"}
+	gc.AuxData.IsDefault = true
+	gc.AuxData.FrameID = "FRAME-GC"
+	if !g.worldContextLocked("PAGE", "S-page", gc) {
+		t.Fatal("context under protected mid was shown")
+	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":53,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"1","contextId":6}}`))
+}

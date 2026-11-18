@@ -264,6 +264,12 @@ func (g *guard) takeContextSettlePageLocked() [][]byte {
 	return out
 }
 
+func (g *guard) takeContextSettleSendLocked() [][]byte {
+	out := g.contextSettleSend
+	g.contextSettleSend = nil
+	return out
+}
+
 func (g *guard) settleHeldContextsLocked() [][]byte {
 	deadline := holdTimeout()
 	now := time.Now()
@@ -331,9 +337,16 @@ func (g *guard) hideShownUnderProtectedLocked() [][]byte {
 		}
 	}
 	var page [][]byte
+	cut := map[string]bool{}
 	for _, h := range hits {
 		g.hideContextLocked(h.target, h.session, h.context)
 		page = append(page, g.destroyShownContextLocked(h.target, h.session, h.context)...)
+		if h.target != "" {
+			cut[h.target] = true
+		}
+	}
+	for target := range cut {
+		g.contextSettleSend = append(g.contextSettleSend, g.cutCastsLocked(target)...)
 	}
 	return page
 }
@@ -451,7 +464,7 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	g.unshowLocked(target, c.ID)
 	w := g.worldsLocked(target)
 	frame := ""
-	if c.AuxData.IsDefault && c.AuxData.FrameID != target {
+	if c.AuxData.FrameID != target {
 		frame = c.AuxData.FrameID
 		if frame == "" {
 			w.full = true
