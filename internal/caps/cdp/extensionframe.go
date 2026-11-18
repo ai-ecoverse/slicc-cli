@@ -315,6 +315,7 @@ type extensionWorldPending struct {
 	frame    string
 	document string
 	revision uint64
+	at       time.Time
 	waiters  []func(context int64, name string, ok bool) [][]byte
 }
 
@@ -374,7 +375,7 @@ func (g *guard) storeExtensionProbeWorldLocked(session, frame, document string, 
 }
 
 func (g *guard) noteExtensionProbeUniqueLocked(id int64, unique string) {
-	if id == 0 || unique == "" || g.extensionProbeIDs == nil || !g.extensionProbeIDs[id] {
+	if id == 0 || unique == "" || !g.extensionProbeIDs[id] {
 		return
 	}
 	if g.extensionProbeUniques == nil {
@@ -383,11 +384,50 @@ func (g *guard) noteExtensionProbeUniqueLocked(id int64, unique string) {
 	g.extensionProbeUniques[unique] = true
 }
 
-func (g *guard) ownExtensionProbeContextLocked(c execContext) bool {
+func (g *guard) pendingExtensionProbeMatchLocked(session string, c execContext) *extensionWorldPending {
+	if session == "" || c.Name == "" || c.AuxData.IsDefault || c.AuxData.FrameID == "" || g.extensionProbePending == nil {
+		return nil
+	}
+	key := extensionWorldKey{session, c.AuxData.FrameID}
+	p := g.extensionProbePending[key]
+	if p == nil || p.name != c.Name || p.session != session || p.frame != c.AuxData.FrameID {
+		return nil
+	}
+	if !p.at.IsZero() && time.Since(p.at) >= holdTimeout() {
+		delete(g.extensionProbeWorlds, p.name)
+		delete(g.extensionProbePending, key)
+		return nil
+	}
+	return p
+}
+
+func (g *guard) bindExtensionProbeFromEventLocked(session string, c execContext) bool {
+	if g.pendingExtensionProbeMatchLocked(session, c) == nil {
+		return false
+	}
+	if g.extensionProbeIDs == nil {
+		g.extensionProbeIDs = map[int64]bool{}
+	}
+	if c.ID != 0 {
+		g.extensionProbeIDs[c.ID] = true
+	}
+	if c.UniqueID != "" {
+		if g.extensionProbeUniques == nil {
+			g.extensionProbeUniques = map[string]bool{}
+		}
+		g.extensionProbeUniques[c.UniqueID] = true
+	}
+	return c.ID != 0 || c.UniqueID != ""
+}
+
+func (g *guard) ownExtensionProbeContextLocked(session string, c execContext) bool {
 	if c.ID != 0 && g.extensionProbeIDs[c.ID] {
 		return true
 	}
-	return c.UniqueID != "" && g.extensionProbeUniques[c.UniqueID]
+	if c.UniqueID != "" && g.extensionProbeUniques[c.UniqueID] {
+		return true
+	}
+	return g.pendingExtensionProbeMatchLocked(session, c) != nil
 }
 
 func (g *guard) forgetExtensionProbeWorldLocked(w *extensionProbeWorld) {
@@ -914,6 +954,7 @@ func (g *guard) extensionDocumentAnsweredLocked(state *extensionProbe, frame, pa
 		frame:    parent,
 		document: document,
 		revision: revision,
+		at:       time.Now(),
 	}
 	return [][]byte{g.callbackLocked(state.session, "Page.createIsolatedWorld", map[string]any{"frameId": parent, "worldName": state.world}, func(world message) [][]byte {
 		return g.extensionWorldAnsweredLocked(state, frame, parent, world)

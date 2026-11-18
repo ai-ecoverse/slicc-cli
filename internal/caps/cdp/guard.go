@@ -1239,6 +1239,11 @@ func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
 	prev := g.childFrames[id]
 	g.childFrames[id] = raw
 	switch {
+	case g.extensionFrameURLLocked(raw) || protect.Scheme(raw) == "chrome-extension":
+		g.releaseFrameLatchLocked(id)
+		if !g.o.Loaded(prev) || g.extensionFrameURLLocked(prev) {
+			g.queueContextSettleLocked()
+		}
 	case g.o.Loaded(raw) && !g.o.Loaded(prev):
 		g.latchFrameWorldsLocked(id)
 		g.queueContextSettleLocked()

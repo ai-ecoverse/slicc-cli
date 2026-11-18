@@ -337,7 +337,7 @@ func (g *guard) settleHeldContextsLocked() [][]byte {
 		}
 		delete(g.heldContexts, key)
 		if expired || g.frameUnderProtectedLocked(h.context.AuxData.FrameID) {
-			g.hideContextLocked(h.target, h.session, h.context)
+			g.hideContextLocked(h.target, h.session, h.context, expired)
 			continue
 		}
 		if g.worldContextLocked(h.target, h.session, h.context) {
@@ -530,8 +530,30 @@ func (g *guard) shownGoneLocked(target string, id int64, unique string) {
 	g.unshowLocked(target, id)
 }
 
-func (g *guard) hideContextLocked(target, session string, c execContext) {
+func (g *guard) contextLatchFrameLocked(target, session string, c execContext, frame string, forceUnclassified, probeMatched bool) string {
+	if frame == "" {
+		return ""
+	}
+	underProtected := g.frameUnderProtectedLocked(frame) || g.frameURLProtectedLocked(frame)
+	extFrame := g.extensionFrameIDLocked(frame) || g.o.ExtensionFrame(c.Origin) || protect.Scheme(c.Origin) == "chrome-extension"
+	class := g.frameLatchClassLocked(frame, target)
+	own := probeMatched || g.ownExtensionProbeContextLocked(session, c)
+	switch {
+	case underProtected && !extFrame:
+		return frame
+	case own || extFrame || class == "ordinary" || class == "extension":
+		return ""
+	case class == "unclassified" && !forceUnclassified:
+		return ""
+	default:
+		return frame
+	}
+}
+
+func (g *guard) hideContextLocked(target, session string, c execContext, latchUnclassified ...bool) {
+	forceUnclassified := len(latchUnclassified) > 0 && latchUnclassified[0]
 	g.unshowLocked(target, c.ID)
+	probeMatched := g.bindExtensionProbeFromEventLocked(session, c)
 	g.noteExtensionProbeUniqueLocked(c.ID, c.UniqueID)
 	w := g.worldsLocked(target)
 	frame := ""
@@ -541,19 +563,9 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 			w.full = true
 		}
 	}
-	protectedFrame := frame
-	switch {
-	case protectedFrame == "":
-	case g.ownExtensionProbeContextLocked(c):
-		protectedFrame = ""
-	case g.o.ExtensionFrame(c.Origin) || protect.Scheme(c.Origin) == "chrome-extension":
-		protectedFrame = ""
-	case g.frameUnderProtectedLocked(protectedFrame) || g.frameURLProtectedLocked(protectedFrame):
-	case g.frameContextAncestrySettledLocked(protectedFrame, target):
-		protectedFrame = ""
-	}
+	protectedFrame := g.contextLatchFrameLocked(target, session, c, frame, forceUnclassified, probeMatched)
 	if protectedFrame != "" {
-		g.logf("cdp: latch protectedFrame=%s target=%s session=%s origin=%s name=%s default=%v", protectedFrame, target, session, c.Origin, c.Name, c.AuxData.IsDefault)
+		g.logf("cdp: latch protectedFrame=%s target=%s session=%s origin=%s name=%s default=%v class=%s probe=%v", protectedFrame, target, session, c.Origin, c.Name, c.AuxData.IsDefault, g.frameLatchClassLocked(frame, target), probeMatched || g.ownExtensionProbeContextLocked(session, c))
 	}
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true
@@ -587,7 +599,29 @@ func (g *guard) frameURLProtectedLocked(frame string) bool {
 		return false
 	}
 	raw := g.childFrames[frame]
-	return raw != "" && g.o.Loaded(raw)
+	if raw == "" || g.extensionFrameURLLocked(raw) || protect.Scheme(raw) == "chrome-extension" {
+		return false
+	}
+	return g.o.Loaded(raw)
+}
+
+func (g *guard) frameLatchClassLocked(frame, page string) string {
+	if frame == "" || frame == page {
+		return "ordinary"
+	}
+	if g.extensionFrameIDLocked(frame) {
+		return "extension"
+	}
+	if raw := g.childFrames[frame]; g.extensionFrameURLLocked(raw) || protect.Scheme(raw) == "chrome-extension" {
+		return "extension"
+	}
+	if g.frameUnderProtectedLocked(frame) || g.frameURLProtectedLocked(frame) {
+		return "protected"
+	}
+	if g.frameContextAncestrySettledLocked(frame, page) {
+		return "ordinary"
+	}
+	return "unclassified"
 }
 
 func (g *guard) releaseFrameLatchLocked(frame string) {
@@ -607,7 +641,10 @@ func (g *guard) releaseFrameLatchLocked(frame string) {
 }
 
 func (g *guard) latchFrameWorldsLocked(frame string) {
-	if frame == "" {
+	if frame == "" || g.extensionFrameIDLocked(frame) {
+		return
+	}
+	if raw := g.childFrames[frame]; g.extensionFrameURLLocked(raw) || protect.Scheme(raw) == "chrome-extension" {
 		return
 	}
 	for _, w := range g.worlds {
@@ -622,7 +659,7 @@ func (g *guard) latchFrameWorldsLocked(frame string) {
 				continue
 			}
 			c.protectedFrame = frame
-			g.logf("cdp: latch protectedFrame=%s target-frame=%s ctx=%s name=%s late=true", frame, c.frame, itoa(id), c.name)
+			g.logf("cdp: latch protectedFrame=%s target-frame=%s ctx=%s name=%s class=%s probe=false late=true", frame, c.frame, itoa(id), c.name, g.frameLatchClassLocked(frame, ""))
 		}
 	}
 }

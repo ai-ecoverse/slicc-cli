@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
@@ -294,6 +295,33 @@ func TestExtensionCopiedProbeTokenAfterRecordGoneIsNotOwn(t *testing.T) {
 	}
 	if locked {
 		t.Fatalf("a forged probe-named world in a chrome-extension frame must not latch the page after the record is gone")
+	}
+}
+
+func TestExtensionPendingProbeRecordExpires(t *testing.T) {
+	t.Setenv(HoldTimeoutEnv, "20ms")
+	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001"}), t.Logf)
+	ordinaryNestPage(t, g)
+	const token = "slicc-ext-probe-expire-me"
+	g.mu.Lock()
+	if g.extensionProbePending == nil {
+		g.extensionProbePending = map[extensionWorldKey]*extensionWorldPending{}
+	}
+	g.extensionProbePending[extensionWorldKey{"S", "HOST"}] = &extensionWorldPending{
+		name: token, session: "S", frame: "HOST", document: "doc", revision: 1, at: time.Now().Add(-time.Second),
+	}
+	if g.extensionProbeWorlds == nil {
+		g.extensionProbeWorlds = map[string]bool{}
+	}
+	g.extensionProbeWorlds[token] = true
+	var ctx execContext
+	ctx.Name = token
+	ctx.AuxData.FrameID = "HOST"
+	matched := g.pendingExtensionProbeMatchLocked("S", ctx)
+	_, pendingLeft := g.extensionProbePending[extensionWorldKey{"S", "HOST"}]
+	g.mu.Unlock()
+	if matched != nil || pendingLeft {
+		t.Fatalf("expired pending probe record must be removed: matched=%v pending=%v", matched != nil, pendingLeft)
 	}
 }
 

@@ -4,7 +4,14 @@ func (g *guard) refuseWhyLocked(c *command, target, frame, why string) string {
 	if why == "" {
 		why = "unspecified"
 	}
-	g.logf("cdp: refused %s session=%s target=%s frame=%s why=%s", c.method, c.session, target, frame, why)
+	class := ""
+	probe := ""
+	if frame != "" {
+		class = g.frameLatchClassLocked(frame, target)
+	} else if target != "" {
+		class = g.framesProtectedWhyLocked(target)
+	}
+	g.logf("cdp: refused %s session=%s target=%s frame=%s why=%s class=%s%s", c.method, c.session, target, frame, why, class, probe)
 	return refusedTarget
 }
 
