@@ -317,21 +317,6 @@ func stageCredentialExportProbeNotes(t *testing.T, src string) string {
 		t.Fatal("credential-export.mjs plantPartitionedInTop shape changed; update probe notes")
 	}
 	text = strings.Replace(text, topNeedle, topInject, 1)
-	pageNeedle := "  const pageGet = await tryMethod(client, 'Page.getCookies', {}, clientSession);\n  if (pageGet.skip) result.skips.push(pageGet.skip);\n"
-	pageInject := `  const pageGet = await tryMethod(client, 'Page.getCookies', {}, clientSession);
-  note('diag.pageGetCookies', {
-    skip: pageGet.skip || null,
-    ok: pageGet.out?.ok === true,
-    code: pageGet.out?.error?.code ?? null,
-    text: String(pageGet.out?.error?.message ?? '').slice(0, 160),
-    refused: refused(pageGet.out),
-  });
-  if (pageGet.skip) result.skips.push(pageGet.skip);
-`
-	if !strings.Contains(text, pageNeedle) {
-		t.Fatal("credential-export.mjs Page.getCookies call shape changed; update probe notes")
-	}
-	text = strings.Replace(text, pageNeedle, pageInject, 1)
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
