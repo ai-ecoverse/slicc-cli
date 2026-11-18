@@ -42,6 +42,7 @@ type crashBrowser struct {
 	held        []held
 	unavailable atomic.Bool
 	onEval      func(expr string)
+	ready       func(target string) bool
 }
 
 type held struct {
@@ -220,6 +221,17 @@ func (f *crashBrowser) handle(c *websocket.Conn, id int64, method, session strin
 			Expression string `json:"expression"`
 		}
 		_ = json.Unmarshal(params, &p)
+		f.mu.Lock()
+		ready := f.ready
+		f.mu.Unlock()
+		if ready != nil && strings.Contains(p.Expression, "visibilityState") {
+			reply(map[string]any{"result": map[string]any{"type": "object", "value": []bool{ready(target), true}}})
+			return
+		}
+		if ready != nil && strings.Contains(p.Expression, `"t":"hello"`) && !ready(target) {
+			reply(map[string]any{"result": map[string]any{"type": "string", "value": "receiver"}})
+			return
+		}
 		if strings.Contains(p.Expression, `"t":"hello"`) {
 			if m := helloNonce.FindStringSubmatch(p.Expression); m != nil {
 				f.mu.Lock()

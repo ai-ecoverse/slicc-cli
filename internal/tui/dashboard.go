@@ -122,21 +122,15 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 	case flow.Dropped:
 		d.count(e.Stream).dropped += e.Count
 	case flow.BrowserGone:
-		if e.Reason == flow.NoBrowserSession {
-			b := d.browser(e.Browser)
-			b.unlisted, b.gone = true, false
-			d.note(now, levelWarn, e.Name+" isn't listed for cdp: it has no browser session")
-			break
-		}
-		b := d.browser(e.Browser)
-		b.gone, b.unlisted = true, false
-		d.note(now, levelWarn, e.Name+" quit")
+		d.browserGone(e, now)
 	case flow.BrowserBack:
 		b := d.browser(e.Browser)
 		b.gone, b.unlisted = false, false
 		d.log(now, e.Name+" is back")
 	case flow.BrowserSlow:
 		d.log(now, flow.SlowLine(e.Name, e.Elapsed))
+	case flow.Waiting:
+		d.note(now, levelWarn, e.Message)
 	case flow.Kernel:
 		d.kernel, d.kernOff = e.Kernel, ""
 	case flow.Status:
@@ -155,6 +149,17 @@ func (d *dashboard) apply(e flow.Event, now time.Time) {
 	case flow.Pairing:
 		d.pairURL = e.URL
 	}
+}
+
+func (d *dashboard) browserGone(e flow.Event, now time.Time) {
+	b := d.browser(e.Browser)
+	if e.Reason == flow.NoBrowserSession {
+		b.unlisted, b.gone = true, false
+		d.note(now, levelWarn, e.Name+" isn't listed for cdp: it has no browser session")
+		return
+	}
+	b.gone, b.unlisted = true, false
+	d.note(now, levelWarn, e.Name+" quit")
 }
 
 func firstOf(s ...string) string {
