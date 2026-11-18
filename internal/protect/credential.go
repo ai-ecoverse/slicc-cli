@@ -3,13 +3,15 @@ package protect
 import (
 	"slices"
 	"strings"
+
+	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
-var credentialOrigins = []string{"https://ims-na1.adobelogin.com", "https://ims-na1-stg1.adobelogin.com"}
-
-const credentialRefusal = refusedPrefix + "cookies and storage of a sign-in origin can't be read or changed through CDP"
-
-var credentialHosts = hostsOf(credentialOrigins)
+var (
+	credentialRules   = sliccbrowsers.Default().CredentialOrigins
+	credentialOrigins = credentialRules.Origins
+	credentialHosts   = hostsOf(credentialOrigins)
+)
 
 func hostsOf(origins []string) []string {
 	var hosts []string
@@ -30,7 +32,7 @@ func CredentialOrigins() []string {
 }
 
 func CredentialReason() string {
-	return strings.TrimPrefix(credentialRefusal, refusedPrefix)
+	return strings.TrimPrefix(credentialRules.Refusal, refusedPrefix)
 }
 
 func CredentialURL(raw string) bool {
