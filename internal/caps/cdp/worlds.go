@@ -65,7 +65,112 @@ type heldContext struct {
 	at      time.Time
 }
 
+type frameWorldWait struct {
+	frame   string
+	page    string
+	ch      chan struct{}
+	timer   *time.Timer
+	at      time.Time
+	expired bool
+}
+
 const maxHeldContexts = 256
+
+func (g *guard) isolatedWorldReadyLocked(frame, page string) (ready, refuse bool) {
+	if frame == "" || page == "" || frame == page {
+		return true, false
+	}
+	if g.frameUnderProtectedLocked(frame) {
+		return true, true
+	}
+	if g.frameContextAncestrySettledLocked(frame, page) {
+		return true, false
+	}
+	if w := g.frameWorldWaits[frame]; w != nil && w.expired {
+		return true, true
+	}
+	return false, false
+}
+
+func (g *guard) isolatedWorldWaitLocked(c *command) <-chan struct{} {
+	if c == nil || c.method != "Page.createIsolatedWorld" {
+		return nil
+	}
+	t := g.sessionTargetLocked(c.session)
+	frame := c.str("frameId")
+	if t == nil || frame == "" || frame == t.id {
+		return nil
+	}
+	ready, _ := g.isolatedWorldReadyLocked(frame, t.id)
+	if ready {
+		return nil
+	}
+	w := g.frameWorldWaits[frame]
+	if w != nil {
+		if w.expired {
+			return nil
+		}
+		return w.ch
+	}
+	w = &frameWorldWait{frame: frame, page: t.id, ch: make(chan struct{}), at: time.Now()}
+	g.frameWorldWaits[frame] = w
+	w.timer = time.AfterFunc(holdTimeout(), func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if g.frameWorldWaits[frame] != w || w.expired {
+			return
+		}
+		w.expired = true
+		g.closeFrameWorldWaitLocked(w)
+	})
+	g.logf("cdp: holding Page.createIsolatedWorld until frame ancestry settles frame=%s", frame)
+	return w.ch
+}
+
+func (g *guard) closeFrameWorldWaitLocked(w *frameWorldWait) {
+	if w == nil {
+		return
+	}
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	select {
+	case <-w.ch:
+	default:
+		close(w.ch)
+	}
+}
+
+func (g *guard) resolveFrameWorldWaitsLocked() {
+	for frame, w := range g.frameWorldWaits {
+		if w == nil {
+			delete(g.frameWorldWaits, frame)
+			continue
+		}
+		ready, _ := g.isolatedWorldReadyLocked(frame, w.page)
+		if !ready && !w.expired {
+			continue
+		}
+		delete(g.frameWorldWaits, frame)
+		g.closeFrameWorldWaitLocked(w)
+	}
+}
+
+func (g *guard) createIsolatedWorldRule(c *command) string {
+	t := g.sessionTargetLocked(c.session)
+	frame := c.str("frameId")
+	if t == nil || frame == "" || frame == t.id {
+		return ""
+	}
+	ready, refuse := g.isolatedWorldReadyLocked(frame, t.id)
+	if !ready {
+		return ""
+	}
+	if refuse {
+		return refusedUnexposed
+	}
+	return ""
+}
 
 func (g *guard) frameContextAncestrySettledLocked(frame, page string) bool {
 	if frame == "" || frame == page {
@@ -115,7 +220,7 @@ func (g *guard) frameContextStepSettledLocked(id string) (settled, cont bool) {
 }
 
 func (g *guard) holdContextLocked(target, session string, c execContext, data []byte) {
-	if target == "" || c.ID == 0 || !c.AuxData.IsDefault || c.AuxData.FrameID == "" || c.AuxData.FrameID == target {
+	if target == "" || c.ID == 0 || c.AuxData.FrameID == "" || c.AuxData.FrameID == target {
 		return
 	}
 	key := heldContextKey{target: target, id: c.ID}
@@ -160,9 +265,6 @@ func (g *guard) takeContextSettlePageLocked() [][]byte {
 }
 
 func (g *guard) settleHeldContextsLocked() [][]byte {
-	if len(g.heldContexts) == 0 {
-		return nil
-	}
 	deadline := holdTimeout()
 	now := time.Now()
 	var page [][]byte
@@ -182,6 +284,56 @@ func (g *guard) settleHeldContextsLocked() [][]byte {
 		if h.data != nil {
 			page = append(page, h.data)
 		}
+	}
+	page = append(page, g.hideShownUnderProtectedLocked()...)
+	g.resolveFrameWorldWaitsLocked()
+	return page
+}
+
+func (g *guard) destroyShownContextLocked(target, session string, c execContext) [][]byte {
+	if target == "" || c.ID == 0 {
+		return nil
+	}
+	params := map[string]any{"executionContextId": c.ID}
+	if c.UniqueID != "" {
+		params["executionContextUniqueId"] = c.UniqueID
+	}
+	ev := map[string]any{"method": "Runtime.executionContextDestroyed", "params": params}
+	if session != "" {
+		ev["sessionId"] = session
+	}
+	return [][]byte{encode(ev)}
+}
+
+func (g *guard) hideShownUnderProtectedLocked() [][]byte {
+	type hit struct {
+		target, session string
+		context         execContext
+	}
+	var hits []hit
+	for target, s := range g.shown {
+		if s == nil {
+			continue
+		}
+		for id, sc := range s.contexts {
+			if sc == nil || sc.frame == "" || !g.frameUnderProtectedLocked(sc.frame) {
+				continue
+			}
+			session := ""
+			for sid := range sc.seen {
+				session = sid
+				break
+			}
+			c := execContext{ID: id, UniqueID: sc.unique}
+			c.AuxData.IsDefault = sc.defaultWorld
+			c.AuxData.FrameID = sc.frame
+			hits = append(hits, hit{target: target, session: session, context: c})
+		}
+	}
+	var page [][]byte
+	for _, h := range hits {
+		g.hideContextLocked(h.target, h.session, h.context)
+		page = append(page, g.destroyShownContextLocked(h.target, h.session, h.context)...)
 	}
 	return page
 }

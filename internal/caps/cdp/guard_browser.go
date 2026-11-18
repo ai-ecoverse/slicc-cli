@@ -700,7 +700,7 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 	case g.frameUnderProtectedLocked(p.Context.AuxData.FrameID):
 		g.hideContextLocked(t.id, m.SessionID, p.Context)
 		return browserVerdict{send: append(decided, g.cutCastsLocked(t.id)...), page: g.takeContextSettlePageLocked()}
-	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID != "" && p.Context.AuxData.FrameID != t.id && !g.frameContextAncestrySettledLocked(p.Context.AuxData.FrameID, t.id):
+	case p.Context.AuxData.FrameID != "" && p.Context.AuxData.FrameID != t.id && !g.frameContextAncestrySettledLocked(p.Context.AuxData.FrameID, t.id):
 		g.holdContextLocked(t.id, m.SessionID, p.Context, data)
 		return browserVerdict{send: decided, page: g.takeContextSettlePageLocked()}
 	case g.worldContextLocked(t.id, m.SessionID, p.Context):

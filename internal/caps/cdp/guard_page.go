@@ -101,6 +101,9 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 		g.verifiesInput = true
 		return pageVerdict{reply: acknowledgement(c.id, c.session)}
 	}
+	if wait := g.isolatedWorldWaitLocked(c); wait != nil {
+		return pageVerdict{wait: wait}
+	}
 	if reason := g.checkLocked(c); reason != "" {
 		if reason == extensionShownPending {
 			return pageVerdict{extension: c}
@@ -542,6 +545,7 @@ var methodRules = map[string]func(g *guard, c *command) string{
 		}
 		return ""
 	},
+	"Page.createIsolatedWorld":    (*guard).createIsolatedWorldRule,
 	"Fetch.enable":                (*guard).fetchRule,
 	"Network.loadNetworkResource": (*guard).loadResourceRule,
 	"Page.getResourceContent":     (*guard).resourceRule,

@@ -181,6 +181,7 @@ type guard struct {
 	held                  map[string]*heldSession
 	heldContexts          map[heldContextKey]*heldContext
 	contextSettlePage     [][]byte
+	frameWorldWaits       map[string]*frameWorldWait
 	treeCalls             map[callKey]bool
 	childFrames           map[string]string
 	frameParents          map[string]string
@@ -291,6 +292,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
 		heldContexts:          map[heldContextKey]*heldContext{},
+		frameWorldWaits:       map[string]*frameWorldWait{},
 		treeCalls:             map[callKey]bool{},
 		childFrames:           map[string]string{},
 		frameParents:          map[string]string{},
@@ -1218,7 +1220,11 @@ func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
 	} else if len(g.childFrames) >= 4096 {
 		return nil
 	}
+	prev := g.childFrames[id]
 	g.childFrames[id] = raw
+	if g.o.Loaded(raw) && !g.o.Loaded(prev) {
+		g.queueContextSettleLocked()
+	}
 	return g.redecideWorkersLocked(id)
 }
 
