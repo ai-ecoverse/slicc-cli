@@ -64,6 +64,7 @@ type capsDoc struct {
 	Agent struct {
 		Events []string `json:"events"`
 		Own    []string `json:"own"`
+		Ops    []string `json:"ops"`
 	} `json:"agent"`
 	Screen struct {
 		V         int  `json:"v"`
@@ -286,6 +287,11 @@ func TestCapabilitiesNameEveryCommandEventAndOp(t *testing.T) {
 	for _, e := range agent {
 		if !slices.Contains(c.Agent.Events, e) {
 			t.Errorf("agent event %q is missing from slicc capabilities --json", e)
+		}
+	}
+	for _, op := range []string{"prompt", "watch", "abort", "inventory", "approvals", "decide"} {
+		if !slices.Contains(c.Agent.Ops, op) {
+			t.Errorf("agent.ops %v lacks %s", c.Agent.Ops, op)
 		}
 	}
 	if !slices.Contains(c.Agent.Own, "settled") {

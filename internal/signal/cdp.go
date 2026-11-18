@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,7 +30,29 @@ const (
 	QuietTimeout  = 15 * time.Second
 	NoSevenTab    = "still no seven tab. Open seven in this browser. If it's open and slicc can't see it, the browser hides it from debugging clients, so link it through seven's Link a device with slicc <join-url> follow"
 	KeepsCrashing = "the seven tab keeps crashing. Reload it and slicc links it again"
+	ReadyEnv      = "SLICC_SEVEN_READY"
+	ReadyTimeout  = 5 * time.Second
+	WaitNoTab     = "no-seven-tab"
+	WaitNotReady  = "no-ready-seven"
+	MovedTab      = "moved to another seven tab"
 )
+
+type Waiting struct {
+	Reason     string
+	Candidates int
+	Message    string
+}
+
+func NotReady(n int) string {
+	if n <= 1 {
+		return "the seven tab isn't ready to link yet; waiting for it. Reload it if this lasts"
+	}
+	return fmt.Sprintf("%d seven tabs are open and none is ready to link yet; waiting for one. seven runs in one tab per profile, so close the extra tabs or reload the one you use if this lasts", n)
+}
+
+const probeTimeout = 2 * time.Second
+
+const probeExpr = "[typeof globalThis." + ReceiverName + " === 'function', document.visibilityState === 'visible']"
 
 const crashGrace = time.Second
 
@@ -39,7 +62,9 @@ type CDPOptions struct {
 	Tab           func(url string) bool
 	Logf          func(format string, args ...any)
 	Status        func(format string, args ...any)
+	Waiting       func(Waiting)
 	SetupTimeout  time.Duration
+	ReadyTimeout  time.Duration
 	RetryMin      time.Duration
 	RetryMax      time.Duration
 	ReloadTimeout time.Duration
@@ -57,6 +82,8 @@ type CDP struct {
 
 	reloads []time.Time
 	avoid   string
+	prefer  string
+	waited  string
 
 	wake      chan struct{}
 	due       string
@@ -91,6 +118,9 @@ func NewCDP(opts CDPOptions) *CDP {
 	}
 	if opts.ReloadTimeout <= 0 {
 		opts.ReloadTimeout = ReloadTimeout
+	}
+	if opts.ReadyTimeout <= 0 {
+		opts.ReadyTimeout = readyFor()
 	}
 	if opts.Tab == nil {
 		opts.Tab = func(string) bool { return true }
@@ -291,7 +321,7 @@ func (c *CDP) round(ctx context.Context) (bool, error) {
 		err = c.recover(ctx, sub, target)
 	}
 	switch {
-	case err == nil, errors.Is(err, errTargetGone):
+	case err == nil, errors.Is(err, errTargetGone), errors.Is(err, errTargetMoved):
 		return linked, nil
 	case ctx.Err() == nil && c.gone(ctx, target.TargetID):
 		c.opts.Logf("signal: the seven tab went away during setup: %v", err)
@@ -325,25 +355,15 @@ func (c *CDP) findTarget(ctx context.Context, sub *cdp.Subscription) (cdp.Target
 	if err != nil {
 		return cdp.TargetInfo{}, err
 	}
-	var avoided *cdp.TargetInfo
-	for _, t := range targets {
-		if t.Type != "page" || !c.opts.Origins.AllowedURL(t.URL) || !c.opts.Tab(t.URL) {
-			continue
-		}
-		if t.TargetID != c.avoid {
-			return t, nil
-		}
-		avoided = &t
-	}
-	if avoided != nil {
-		return *avoided, nil
+	if found := c.candidates(targets); len(found) > 0 {
+		return c.choose(ctx, found), nil
 	}
 	c.opts.Status("waiting for a seven tab")
 	quiet := time.After(quietFor())
 	for {
 		select {
 		case <-quiet:
-			c.opts.Status("%s", NoSevenTab)
+			c.waiting(Waiting{Reason: WaitNoTab, Message: NoSevenTab})
 		case ev, ok := <-sub.Events():
 			if !ok {
 				return cdp.TargetInfo{}, cl.Err()
@@ -355,6 +375,98 @@ func (c *CDP) findTarget(ctx context.Context, sub *cdp.Subscription) (cdp.Target
 			return cdp.TargetInfo{}, ctx.Err()
 		}
 	}
+}
+
+func (c *CDP) accepts(t cdp.TargetInfo) bool {
+	return t.Type == "page" && c.opts.Origins.AllowedURL(t.URL) && c.opts.Tab(t.URL)
+}
+
+func (c *CDP) candidates(targets []cdp.TargetInfo) []cdp.TargetInfo {
+	var out []cdp.TargetInfo
+	for _, t := range targets {
+		if c.accepts(t) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (c *CDP) choose(ctx context.Context, found []cdp.TargetInfo) cdp.TargetInfo {
+	prefer := c.prefer
+	c.prefer = ""
+	for _, t := range found {
+		if prefer != "" && t.TargetID == prefer {
+			return t
+		}
+	}
+	if len(found) == 1 {
+		return found[0]
+	}
+	best, score := 0, -1
+	for i, t := range found {
+		s := 0
+		if t.TargetID != c.avoid {
+			s = 4
+			r := Probe(ctx, c.opts.Client, t.TargetID)
+			if r.Ready {
+				s += 2
+			}
+			if r.Visible {
+				s++
+			}
+		}
+		if s > score {
+			best, score = i, s
+		}
+	}
+	c.opts.Logf("signal: %d seven tabs; chose #%d (ready %t, visible %t)", len(found), best+1, score&2 != 0, score&1 != 0)
+	return found[best]
+}
+
+type Readiness struct {
+	Ready   bool
+	Visible bool
+}
+
+func Probe(ctx context.Context, cl *cdp.Client, targetID string) Readiness {
+	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	s, err := cl.Attach(pctx, targetID)
+	if err != nil {
+		return Readiness{}
+	}
+	defer func() {
+		dctx, cancel := context.WithTimeout(context.Background(), detachTimeout)
+		defer cancel()
+		_ = s.Detach(dctx)
+	}()
+	var v []bool
+	if err := s.Evaluate(pctx, probeExpr, cdp.EvaluateOptions{ReturnByValue: true}, &v); err != nil || len(v) != 2 {
+		return Readiness{}
+	}
+	return Readiness{Ready: v[0], Visible: v[1]}
+}
+
+func (c *CDP) waiting(w Waiting) {
+	key := w.Reason + "/" + strconv.Itoa(w.Candidates)
+	c.mu.Lock()
+	same := c.waited == key
+	c.waited = key
+	c.mu.Unlock()
+	if same {
+		return
+	}
+	if c.opts.Waiting != nil {
+		c.opts.Waiting(w)
+		return
+	}
+	c.opts.Status("%s", w.Message)
+}
+
+func (c *CDP) ready() {
+	c.mu.Lock()
+	c.waited = ""
+	c.mu.Unlock()
 }
 
 func (c *CDP) sevenPage(ev cdp.Event) (cdp.TargetInfo, bool) {
@@ -375,6 +487,13 @@ func quietFor() time.Duration {
 		return d
 	}
 	return QuietTimeout
+}
+
+func readyFor() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv(ReadyEnv)); err == nil && d > 0 {
+		return d
+	}
+	return ReadyTimeout
 }
 
 func (c *CDP) serveTarget(ctx context.Context, sub *cdp.Subscription, t cdp.TargetInfo) (bool, error) {
@@ -599,11 +718,14 @@ type watch struct {
 	cancel      context.CancelFunc
 	helloDone   chan struct{}
 	mainContext cdp.ExecutionContext
+	delivered   atomic.Bool
+	readyAt     *time.Timer
 }
 
 var (
 	errTargetGone    = errors.New("signal: seven tab is gone")
 	errTargetCrashed = errors.New("signal: seven tab crashed")
+	errTargetMoved   = errors.New("signal: moved to another seven tab")
 )
 
 func targetEvent(ev cdp.Event, targetID, sessionID string) error {
@@ -638,12 +760,17 @@ func targetEvent(ev cdp.Event, targetID, sessionID string) error {
 
 func (w *watch) loop(ctx context.Context, sub *cdp.Subscription, early []cdp.Event) error {
 	reason := "seven tab closed"
+	w.readyAt = time.NewTimer(w.c.opts.ReadyTimeout)
+	defer w.readyAt.Stop()
 	defer func() { w.drop(ctx, reason) }()
 	end := func(err error) error {
 		switch {
 		case errors.Is(err, errTargetGone):
 			w.c.opts.Status("seven tab closed")
 			return nil
+		case errors.Is(err, errTargetMoved):
+			reason = MovedTab
+			return err
 		case errors.Is(err, errTargetCrashed):
 			reason = "seven tab crashed"
 			w.c.opts.Status("seven tab crashed")
@@ -666,10 +793,64 @@ func (w *watch) loop(ctx context.Context, sub *cdp.Subscription, early []cdp.Eve
 			}
 		case <-w.c.wake:
 			w.retry(ctx)
+		case <-w.readyAt.C:
+			if err := w.checkReady(ctx); err != nil {
+				return end(err)
+			}
+			w.readyAt.Reset(w.c.opts.ReadyTimeout)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
+}
+
+func (w *watch) restartReady() {
+	w.delivered.Store(false)
+	if w.readyAt != nil {
+		w.readyAt.Reset(w.c.opts.ReadyTimeout)
+	}
+}
+
+func (w *watch) checkReady(ctx context.Context) error {
+	if w.delivered.Load() {
+		return nil
+	}
+	var targets []cdp.TargetInfo
+	if err := w.c.bounded(ctx, func(cctx context.Context) (err error) {
+		targets, err = w.c.opts.Client.Targets(cctx)
+		return err
+	}); err != nil {
+		w.c.opts.Logf("signal: list tabs: %v", err)
+		return nil
+	}
+	here := false
+	var others []cdp.TargetInfo
+	for _, t := range w.c.candidates(targets) {
+		if t.TargetID == w.targetID {
+			here = true
+		} else {
+			others = append(others, t)
+		}
+	}
+	for _, t := range others {
+		if t.TargetID != w.c.avoid && Probe(ctx, w.c.opts.Client, t.TargetID).Ready {
+			w.c.prefer = t.TargetID
+			w.c.opts.Status("the seven tab isn't ready to link; moving to another seven tab that is")
+			return errTargetMoved
+		}
+	}
+	if !here && len(others) > 0 {
+		w.c.prefer = others[0].TargetID
+		w.c.opts.Status("the seven tab left seven; moving to another seven tab")
+		return errTargetMoved
+	}
+	if !here {
+		w.c.waiting(Waiting{Reason: WaitNoTab, Message: NoSevenTab})
+		return nil
+	}
+	n := len(others) + 1
+	w.c.waiting(Waiting{Reason: WaitNotReady, Candidates: n, Message: NotReady(n)})
+	return nil
 }
 
 func (w *watch) handle(ctx context.Context, ev cdp.Event) error {
@@ -762,6 +943,7 @@ func (w *watch) contextCreated(ctx context.Context, ec cdp.ExecutionContext) {
 
 func (w *watch) greet(ctx context.Context, ctxID int) {
 	w.stopHello()
+	w.restartReady()
 	nonce := NewNonce()
 	w.c.mu.Lock()
 	w.c.ctxID = ctxID
@@ -819,6 +1001,7 @@ func (w *watch) drop(ctx context.Context, reason string) {
 	w.c.unschedule()
 	w.c.mu.Unlock()
 	if had {
+		w.restartReady()
 		w.c.emit(ctx, Message{T: TypeBye, Nonce: nonce, Reason: reason})
 	}
 }
@@ -832,6 +1015,8 @@ func (w *watch) deliverHello(ctx context.Context, ctxID int, nonce string) {
 		err := w.s.Evaluate(ctx, expr, cdp.EvaluateOptions{ContextID: ctxID, ReturnByValue: true}, &state)
 		if err == nil && state == "ok" {
 			w.c.opts.Logf("signal: hello delivered to context %d", ctxID)
+			w.delivered.Store(true)
+			w.c.ready()
 			return
 		}
 		var ce *cdp.Error

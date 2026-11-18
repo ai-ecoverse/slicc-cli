@@ -20,6 +20,8 @@ usage:
   slicc <join-url> wait [--allsettled <quiet>] [--timeout <limit>]
                             wait until that agent has nothing left to do
   slicc <join-url> abort    abort that agent's run
+  slicc <join-url> approvals [--watch]
+                            list what that seven's approvals wait for
   slicc tray                this seven's tray: its state and linked devices
   slicc tray url|rotate|unlink <device>|retry
                             print or rotate the join URL, drop a device,
@@ -71,11 +73,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if len(args) < 2 {
-		fmt.Fprint(stderr, "slicc: a join URL must be followed by a command: prompt, watch, wait or abort\n")
+		fmt.Fprint(stderr, "slicc: a join URL must be followed by a command: prompt, watch, wait, abort or approvals\n")
 		return 2
 	}
 	switch args[1] {
-	case "prompt", "watch", "wait", "abort":
+	case "prompt", "watch", "wait", "abort", "approvals":
 		return runAgent(args[1], args[0], args[2:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
 	}
 	return unavailable(stderr, args[1])

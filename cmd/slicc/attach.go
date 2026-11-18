@@ -194,7 +194,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if f.signal == "cdp" {
 		out.emit(flow.Event{Event: flow.Connecting, Mode: modeCDP})
 	}
-	conn, closer, err := openSignal(ctx, f, origins, stdin, stdout, status, logf)
+	conn, closer, err := openSignal(ctx, f, origins, stdin, stdout, status, logf, attachWaiting(status, out))
 	if err != nil {
 		return fail(err, 1)
 	}
@@ -248,7 +248,7 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func openSignal(ctx context.Context, f attachFlags, origins *signal.Origins, stdin io.Reader, stdout io.Writer, status, logf func(string, ...any)) (signal.Conn, func(), error) {
+func openSignal(ctx context.Context, f attachFlags, origins *signal.Origins, stdin io.Reader, stdout io.Writer, status, logf func(string, ...any), waiting func(signal.Waiting)) (signal.Conn, func(), error) {
 	if f.signal == "stdio" {
 		s, err := signal.NewStdio(stdin, stdout)
 		if err != nil {
@@ -264,8 +264,17 @@ func openSignal(ctx context.Context, f attachFlags, origins *signal.Origins, std
 		return nil, nil, err
 	}
 	status("connected to %s", cdp.Redact(target))
-	s := signal.NewCDP(signal.CDPOptions{Client: client, Origins: origins, Logf: logf, Status: status})
+	s := signal.NewCDP(signal.CDPOptions{Client: client, Origins: origins, Logf: logf, Status: status, Waiting: waiting})
 	return s, func() { _ = s.Close(); _ = client.Close() }, nil
+}
+
+func attachWaiting(status func(string, ...any), out *jsonLines) func(signal.Waiting) {
+	return func(w signal.Waiting) {
+		status("%s", w.Message)
+		e := flow.WaitingEvent(w)
+		e.Mode = modeCDP
+		out.emit(e)
+	}
 }
 
 func kernelPolicyPort(f attachFlags) uint16 {
