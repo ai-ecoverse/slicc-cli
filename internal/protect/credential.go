@@ -21,15 +21,34 @@ var (
 	credentialRefusal = credentialRefusalOrFallback(credentialRules.Refusal)
 )
 
+func catalogOriginAccepted(o string) bool {
+	o = strings.TrimSpace(o)
+	if o == "" {
+		return false
+	}
+	u := parse(o)
+	return u != nil && scheme(u) == "https" && hostOf(u) != ""
+}
+
+func RejectedCatalogOrigins(catalog []string) []string {
+	var rejected []string
+	for _, o := range catalog {
+		raw := strings.TrimSpace(o)
+		if raw == "" {
+			continue
+		}
+		if !catalogOriginAccepted(raw) {
+			rejected = append(rejected, raw)
+		}
+	}
+	return rejected
+}
+
 func unionCredentialOrigins(floor, catalog []string) []string {
 	out := slices.Clone(floor)
 	for _, o := range catalog {
 		o = strings.TrimSpace(o)
-		if o == "" || slices.Contains(out, o) {
-			continue
-		}
-		u := parse(o)
-		if u == nil || scheme(u) != "https" || hostOf(u) == "" {
+		if o == "" || slices.Contains(out, o) || !catalogOriginAccepted(o) {
 			continue
 		}
 		out = append(out, o)

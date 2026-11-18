@@ -67,6 +67,42 @@ func TestCredentialFloorUnionsCatalog(t *testing.T) {
 	}
 }
 
+func TestPinnedCatalogCredentialOriginsAreAccepted(t *testing.T) {
+	cat := sliccbrowsers.Default().CredentialOrigins.Origins
+	if rejected := protect.RejectedCatalogOrigins(cat); len(rejected) != 0 {
+		t.Fatalf("pinned catalog entries dropped by the https parser: %v", rejected)
+	}
+	union := protect.MergeCredentialOrigins(cat)
+	seen := map[string]bool{}
+	for _, o := range protect.CredentialFloor() {
+		seen[o] = true
+	}
+	for _, o := range cat {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			seen[o] = true
+		}
+	}
+	if len(union) != len(seen) {
+		t.Fatalf("union len %d, want floor∪catalog %d (union=%v catalog=%v)", len(union), len(seen), union, cat)
+	}
+	bad := []string{
+		"http://ims-na1.adobelogin.com",
+		"ftp://ims-na1.adobelogin.com",
+		"not a url",
+		"://missing-scheme.test",
+		"https://",
+	}
+	rejected := protect.RejectedCatalogOrigins(bad)
+	if len(rejected) != len(bad) {
+		t.Fatalf("rejected %v, want all of %v", rejected, bad)
+	}
+	merged := protect.MergeCredentialOrigins(append(slices.Clone(cat), bad...))
+	if !slices.Equal(merged, protect.MergeCredentialOrigins(cat)) {
+		t.Fatalf("malformed catalog entries changed the union: %v", merged)
+	}
+}
+
 func refusedCredentialMessage(msg string) bool {
 	return msg == credentialRefusal
 }

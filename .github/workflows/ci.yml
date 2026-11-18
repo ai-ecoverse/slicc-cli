@@ -56,4 +56,3 @@ jobs:
         Run `npm run lint` and the integration tests a change touches. Don't report style preferences, or anything you haven't confirmed in the code or by a run.
 
         Severity: deny for a confirmed P1 or P2: a security or secret exposure, a policy or guard bypass, a broken link or a protocol change seven can't follow, a crash, a release that can't install or update, a behaviour change without its test, or a fix whose test passes without it. A narrow problem with a workaround is P3: comment with a repro and approve. A problem on seven's side belongs to ai-ecoverse/slicc-bios, one in the shared pipeline to ai-ecoverse/slicc-shared-web: open it there as an issue.
-
