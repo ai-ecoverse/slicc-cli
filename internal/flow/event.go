@@ -39,6 +39,8 @@ const (
 	Reconnecting Kind = "reconnecting"
 
 	Inventory Kind = "inventory"
+	Approvals Kind = "approvals"
+	Decided   Kind = "decided"
 
 	Listening Kind = "listening"
 	Clients   Kind = "clients"
@@ -56,7 +58,7 @@ var Loopback = map[Kind]bool{Mode: true, Pairing: true}
 
 var Lifecycle = map[Kind]bool{Connecting: true, Reconnecting: true}
 
-var Agents = map[Kind]bool{Inventory: true}
+var Agents = map[Kind]bool{Inventory: true, Approvals: true, Decided: true}
 
 var Endpoint = map[Kind]bool{Listening: true, Clients: true}
 

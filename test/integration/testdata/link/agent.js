@@ -19,6 +19,12 @@ export const agent = {
   inventory: null,
   inventoryReset: null,
   inventories: new Set(),
+  approvals: null,
+  approvalsReset: null,
+  approvalWatches: new Set(),
+  refusals: {},
+  decideReset: null,
+  decisions: [],
 };
 
 function busyNow() {
@@ -217,6 +223,43 @@ function onInventory(stream) {
   })();
 }
 
+function approvalsSnapshot() {
+  return { approvals: agent.approvals };
+}
+
+function approvalsChanged() {
+  for (const w of agent.approvalWatches) w.send({ t: 'approvals', ...approvalsSnapshot() });
+}
+
+function onApprovals(stream) {
+  if (agent.approvalsReset) return stream.reset(agent.approvalsReset);
+  if (!agent.approvals) return stream.reset('EINVAL');
+  stream.accept(approvalsSnapshot());
+  if (!stream.open.watch) return stream.end();
+  const w = sink(stream, false);
+  agent.approvalWatches.add(w);
+  stream.done.then(() => agent.approvalWatches.delete(w), () => agent.approvalWatches.delete(w));
+  (async () => {
+    try {
+      while (await stream.read());
+    } catch {}
+  })();
+}
+
+function onDecide(stream) {
+  const { id, answer, reason } = stream.open;
+  agent.decisions.push({ id, answer, reason });
+  if (agent.decideReset) return stream.reset(agent.decideReset);
+  if (!agent.approvals) return stream.reset('EINVAL');
+  const item = agent.approvals.find((a) => a.id === id);
+  if (!item) return stream.reset('ENOENT');
+  if (agent.refusals[id]) return stream.reset(`EINVAL: ${agent.refusals[id]}`);
+  agent.approvals = agent.approvals.filter((a) => a.id !== id);
+  stream.accept({ ok: true });
+  stream.end();
+  approvalsChanged();
+}
+
 export function onAgent(stream) {
   agent.opens.push({ ...stream.open, text: undefined, textLength: stream.open?.text?.length });
   if (!agent.allow) return stream.reset('EACCES');
@@ -229,6 +272,10 @@ export function onAgent(stream) {
       return onAbort(stream);
     case 'inventory':
       return onInventory(stream);
+    case 'approvals':
+      return onApprovals(stream);
+    case 'decide':
+      return onDecide(stream);
     default:
       return stream.reset('EINVAL: unknown op');
   }
@@ -277,6 +324,26 @@ export const agentTest = {
     agent.inventories.clear();
     return n;
   },
+  approvals(items, reset = null) {
+    agent.approvalsReset = reset;
+    agent.approvals = items;
+    if (items) approvalsChanged();
+    return agent.approvalWatches.size;
+  },
+  refuse(id, sentence) {
+    agent.refusals[id] = sentence;
+    return Object.keys(agent.refusals).length;
+  },
+  decideWith(reset = null) {
+    agent.decideReset = reset;
+    return 0;
+  },
+  resetApprovals(reason = 'ECONNRESET') {
+    const n = agent.approvalWatches.size;
+    for (const w of agent.approvalWatches) w.stream.reset(reason);
+    agent.approvalWatches.clear();
+    return n;
+  },
   resetWatches(reason = 'ECONNRESET') {
     const n = agent.watches.size;
     for (const w of agent.watches) w.stream.reset(reason);
@@ -295,6 +362,8 @@ export const agentTest = {
       scoops: agent.scoops.size,
       log: agent.log.length,
       inventories: agent.inventories.size,
+      approvalWatches: agent.approvalWatches.size,
+      decisions: agent.decisions,
     };
   },
 };

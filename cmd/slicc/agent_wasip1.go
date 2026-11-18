@@ -34,6 +34,8 @@ this seven's link facade refuses.
 Ctrl-C.
 `
 
+	approvalsSynopsis = ""
+
 	abortSynopsis = ""
 	abortFlags    = ""
 )
@@ -60,6 +62,13 @@ func (fl facadeLinks) next(context.Context) (agentctl.Link, error) {
 
 func (facadeLinks) close() {}
 
-const agentsUsage = ""
+const (
+	agentsUsage = ""
+	decideUsage = ""
+)
+
+func checkDecide(agentFlags, agentIO) int { return 2 }
+
+func runDecide(context.Context, agentFlags, agentIO) int { return 2 }
 
 func agentsCommand(context.Context, agentFlags, agentIO) int { return 2 }

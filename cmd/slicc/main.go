@@ -81,7 +81,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runUnpair(args[1:], stdout, stderr)
 	case "tray":
 		return runTray(args[1:], stdout, stderr)
-	case "prompt", "watch", "wait", "abort", "agents":
+	case "prompt", "watch", "wait", "abort", "agents", "approvals", "decide":
 		return runAgent(args[0], "", args[1:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
 	case "cdp":
 		return runCDP("", args[1:], agentIO{stdin: os.Stdin, stdout: stdout, stderr: stderr})
