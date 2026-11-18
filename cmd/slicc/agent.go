@@ -38,6 +38,7 @@ type agentFlags struct {
 	settle           bool
 	since            string
 	watch            bool
+	reason           string
 	quiet            time.Duration
 	timeout          time.Duration
 	args             []string
@@ -64,6 +65,10 @@ func agentUsage(verb string) string {
 		return waitUsage
 	case "agents":
 		return agentsUsage
+	case "approvals":
+		return approvalsUsage
+	case "decide":
+		return decideUsage
 	default:
 		return abortUsage
 	}
@@ -80,7 +85,8 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 		fs.StringVar(&f.signal, "signal", "cdp", "")
 	}
 	f.verbFlags(fs)
-	if err := fs.Parse(args); err != nil {
+	args, err := parseInterspersed(fs, args, verb == "decide")
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(aio.stdout, usage)
 			return f, 0
@@ -88,7 +94,7 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 		fmt.Fprintf(aio.stderr, "slicc %s: %v\n\n%s", verb, err, usage)
 		return f, 2
 	}
-	f.args = fs.Args()
+	f.args = args
 	fs.Visit(func(fl *flag.Flag) { f.settle = f.settle || fl.Name == "allsettled" })
 	if code := f.checkDurations(aio); code >= 0 {
 		return f, code
@@ -96,8 +102,13 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 	if code := f.checkSignal(aio); code >= 0 {
 		return f, code
 	}
+	if verb == "decide" {
+		if code := checkDecide(f, aio); code >= 0 {
+			return f, code
+		}
+	}
 	switch {
-	case verb != "prompt" && len(f.args) > 0:
+	case verb != "prompt" && verb != "decide" && len(f.args) > 0:
 		fmt.Fprintf(aio.stderr, "slicc %s: unexpected arguments\n\n%s", verb, usage)
 		return f, 2
 	case verb == "prompt" && len(f.args) == 0:
@@ -111,6 +122,21 @@ func parseAgent(verb, joinURL string, args []string, aio agentIO) (agentFlags, i
 		return f, 2
 	}
 	return f, -1
+}
+
+func parseInterspersed(fs *flag.FlagSet, args []string, interspersed bool) ([]string, error) {
+	var rest []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		args = fs.Args()
+		if !interspersed || len(args) == 0 {
+			return append(rest, args...), nil
+		}
+		rest = append(rest, args[0])
+		args = args[1:]
+	}
 }
 
 func (f *agentFlags) verbFlags(fs *flag.FlagSet) {
@@ -130,8 +156,14 @@ func (f *agentFlags) verbFlags(fs *flag.FlagSet) {
 	if f.verb == "watch" {
 		fs.StringVar(&f.since, "since", "", "")
 	}
-	if f.verb == "agents" {
+	if f.verb == "agents" || f.verb == "approvals" {
 		fs.BoolVar(&f.watch, "watch", false, "")
+	}
+	if f.verb == "approvals" {
+		fs.BoolVar(&f.plain, "plain", false, "")
+	}
+	if f.verb == "decide" {
+		fs.StringVar(&f.reason, "reason", "", "")
 	}
 	if f.verb == "prompt" {
 		fs.BoolVar(&f.steer, "steer", false, "")
@@ -254,6 +286,10 @@ func runAgent(verb, joinURL string, args []string, aio agentIO) int {
 		return runWait(ctx, f, aio)
 	case "agents":
 		return agentsCommand(ctx, f, aio)
+	case "approvals":
+		return runApprovals(ctx, f, aio)
+	case "decide":
+		return runDecide(ctx, f, aio)
 	default:
 		return runAbort(ctx, f, aio)
 	}

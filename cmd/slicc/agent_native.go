@@ -54,6 +54,10 @@ usage, 3 when seven doesn't allow remote control from this device.
 	waitExit = `this device, 124 on timeout, 130 on Ctrl-C.
 `
 
+	approvalsSynopsis = `       slicc approvals --cdp <url> [--origin <origin>]... [--watch] [--json] [--plain]
+       slicc approvals --signal stdio [--watch] [--json]
+`
+
 	abortSynopsis = `       slicc abort --cdp <url> [--origin <origin>]...
        slicc abort --signal stdio
 `

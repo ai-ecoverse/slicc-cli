@@ -11,7 +11,7 @@ func TestAgentTelemetrySendsTheVerbOnly(t *testing.T) {
 	bin := buildVersion(t, "1.0.0", t.TempDir())
 	env := append(os.Environ(), append(col.env(), "SLICC_NO_UPDATE_CHECK=1")...)
 	cdp := "http://" + closedAddr(t)
-	for _, args := range [][]string{{"prompt", "--cdp", cdp, "s3cr3t", "prompt"}, {"watch", "--cdp", cdp}, {"abort", "--cdp", cdp}} {
+	for _, args := range [][]string{{"prompt", "--cdp", cdp, "s3cr3t", "prompt"}, {"watch", "--cdp", cdp}, {"abort", "--cdp", cdp}, {"approvals", "--cdp", cdp}, {"decide", "--cdp", cdp, "apr-s3cr3t", "once", "--reason", "s3cr3t"}} {
 		before := len(col.got())
 		r := runBin(t, env, bin, args...)
 		if r.code != 1 {
