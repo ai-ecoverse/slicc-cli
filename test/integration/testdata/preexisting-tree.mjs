@@ -79,8 +79,7 @@ class Raw {
   constructor() {
     this.waiters = new Map();
     this.next = 1;
-    this.pageHits = new Map();
-    this.pageWaiters = new Map();
+    this.events = [];
     this.ws = new WebSocket(upstream, { maxPayload: LIMIT, perMessageDeflate: false });
     this.ready = new Promise((resolve, reject) => {
       this.ws.once('open', resolve);
@@ -109,38 +108,6 @@ class Raw {
     if (m.error) throw new Error(`${method}: ${m.error.code} ${m.error.message}`);
     return m.result;
   }
-  notePage(e) {
-    const info = e.params.targetInfo;
-    for (const name of ['framed', 'nest', 'blank', 'protected']) {
-      if (!matchPage(info, name) || this.pageHits.has(name)) continue;
-      const hit = {
-        sessionId: e.params.sessionId,
-        targetId: info.targetId,
-        url: info.url,
-        under: e.sessionId || '',
-        waiting: !!e.params.waitingForDebugger,
-      };
-      this.pageHits.set(name, hit);
-      const wait = this.pageWaiters.get(name);
-      if (wait) {
-        this.pageWaiters.delete(name);
-        wait(hit);
-      }
-    }
-  }
-  waitPage(name, ms = 20000) {
-    if (this.pageHits.has(name)) return Promise.resolve(this.pageHits.get(name));
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pageWaiters.delete(name);
-        reject(new Error(`page ${name} did not attach`));
-      }, ms);
-      this.pageWaiters.set(name, (hit) => {
-        clearTimeout(timer);
-        resolve(hit);
-      });
-    });
-  }
   onMessage(text) {
     const m = JSON.parse(text);
     if (m.id !== undefined && this.waiters.has(m.id)) {
@@ -148,17 +115,38 @@ class Raw {
       this.waiters.delete(m.id);
       return;
     }
-    if (m.method !== 'Target.attachedToTarget') return;
-    const info = m.params.targetInfo;
-    if (info.type === 'tab') {
-      this.fire('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, m.params.sessionId);
-      if (m.params.waitingForDebugger) this.fire('Runtime.runIfWaitingForDebugger', {}, m.params.sessionId);
-      return;
-    }
-    if (info.type === 'page') {
-      this.notePage(m);
-      if (m.params.waitingForDebugger) this.fire('Runtime.runIfWaitingForDebugger', {}, m.params.sessionId);
-    }
+    if (m.method) this.events.push({ ...m, at: Date.now() });
+  }
+  waitPageUnderTab(name, tabSession, ms = 20000) {
+    const at = Date.now();
+    const seen = new Set();
+    return new Promise((resolve, reject) => {
+      const tick = () => {
+        for (let i = 0; i < this.events.length; i++) {
+          if (seen.has(i)) continue;
+          const e = this.events[i];
+          if (e.method !== 'Target.attachedToTarget') continue;
+          if (e.sessionId !== tabSession) continue;
+          const info = e.params?.targetInfo;
+          if (!matchPage(info, name)) continue;
+          seen.add(i);
+          resolve({
+            sessionId: e.params.sessionId,
+            targetId: info.targetId,
+            url: info.url,
+            under: e.sessionId || '',
+            waiting: !!e.params.waitingForDebugger,
+          });
+          return;
+        }
+        if (Date.now() - at > ms) {
+          reject(new Error(`page ${name} did not attach under tab session`));
+          return;
+        }
+        setTimeout(tick, 10);
+      };
+      tick();
+    });
   }
   close() {
     this.ws.close();
@@ -177,7 +165,7 @@ async function firstCommands(c, targetId, sessionId) {
     };
   };
   const [info, tree, history, resource] = await Promise.all([
-    timed('Target.getTargetInfo', { targetId }),
+    timed('Target.getTargetInfo', { targetId }, sessionId),
     timed('Page.getFrameTree', {}, sessionId),
     timed('Page.getNavigationHistory', {}, sessionId),
     timed('Page.getResourceTree', {}, sessionId),
@@ -197,27 +185,60 @@ async function firstCommands(c, targetId, sessionId) {
   };
 }
 
-const client = new Raw();
-await client.ready;
-await step('discover', () => client.call('Target.setDiscoverTargets', { discover: true }));
-await step('browser auto-attach', () => client.call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }));
-
-for (const name of ['framed', 'nest', 'blank', 'protected']) {
-  const attached = await step(`wait page ${name}`, () => client.waitPage(name), 25000);
-  if (!attached.ok) {
-    result.pages[name] = { attached: false, error: attached.error };
-    continue;
-  }
-  const { sessionId, targetId, url, under } = attached.value;
-  const first = await firstCommands(client, targetId, sessionId);
-  result.pages[name] = {
+function summarize(name, hit, first) {
+  return {
     attached: true,
-    underTab: under !== '',
-    url: scrub(url),
+    underTab: hit.under !== '',
+    waiting: hit.waiting,
+    url: scrub(hit.url),
     first,
     childrenOk: name === 'protected' ? null : childrenOk(name, first.tree.frames),
     refused: !!(first.tree.error && String(first.tree.error).includes("seven's origin")),
   };
+}
+
+const client = new Raw();
+await client.ready;
+await step('discover', () => client.call('Target.setDiscoverTargets', { discover: true }));
+
+const listed = await step('getTargets', () => client.call('Target.getTargets'));
+const tabs = listed.ok ? (listed.value.targetInfos || []).filter((i) => i.type === 'tab') : [];
+result.tabCount = tabs.length;
+
+const wanted = ['framed', 'nest', 'blank', 'protected'];
+const pending = new Map(wanted.map((name) => [name, true]));
+
+for (const tab of tabs) {
+  if (pending.size === 0) break;
+  const attached = await step(`attach tab ${tab.targetId.slice(0, 8)}`, () => client.call('Target.attachToTarget', { targetId: tab.targetId, flatten: true }));
+  if (!attached.ok) continue;
+  const tabSession = attached.value.sessionId;
+  await step(`tab auto-attach ${tab.targetId.slice(0, 8)}`, () =>
+    client.call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, tabSession)
+  );
+  client.fire('Runtime.runIfWaitingForDebugger', {}, tabSession);
+  for (const name of [...pending.keys()]) {
+    const page = await step(`wait page ${name} under tab`, () => client.waitPageUnderTab(name, tabSession, 3000), 4000);
+    if (!page.ok) continue;
+    pending.delete(name);
+    const hit = page.value;
+    const atAttach = await firstCommands(client, hit.targetId, hit.sessionId);
+    if (hit.waiting) {
+      await step(`resume page ${name}`, () => client.call('Runtime.runIfWaitingForDebugger', {}, hit.sessionId));
+    } else {
+      client.fire('Runtime.runIfWaitingForDebugger', {}, hit.sessionId);
+    }
+    const afterResume = await firstCommands(client, hit.targetId, hit.sessionId);
+    result.pages[name] = {
+      ...summarize(name, hit, atAttach),
+      afterResume: summarize(name, hit, afterResume).first,
+      afterResumeChildrenOk: name === 'protected' ? null : childrenOk(name, afterResume.tree.frames),
+    };
+  }
+}
+
+for (const name of pending.keys()) {
+  result.pages[name] = { attached: false, error: 'no tab delivered this page under a tab session' };
 }
 
 client.close();

@@ -52,29 +52,52 @@ type preexistingCmd struct {
 	} `json:"frames"`
 }
 
+type preexistingFirst struct {
+	Info     preexistingCmd `json:"info"`
+	Tree     preexistingCmd `json:"tree"`
+	History  preexistingCmd `json:"history"`
+	Resource preexistingCmd `json:"resource"`
+}
+
 type preexistingPage struct {
-	Attached   bool   `json:"attached"`
-	UnderTab   bool   `json:"underTab"`
-	URL        string `json:"url"`
-	ChildrenOK *bool  `json:"childrenOk"`
-	Refused    bool   `json:"refused"`
-	Error      string `json:"error"`
-	First      struct {
-		Info     preexistingCmd `json:"info"`
-		Tree     preexistingCmd `json:"tree"`
-		History  preexistingCmd `json:"history"`
-		Resource preexistingCmd `json:"resource"`
-	} `json:"first"`
+	Attached              bool             `json:"attached"`
+	UnderTab              bool             `json:"underTab"`
+	Waiting               bool             `json:"waiting"`
+	URL                   string           `json:"url"`
+	ChildrenOK            *bool            `json:"childrenOk"`
+	AfterResumeChildrenOK *bool            `json:"afterResumeChildrenOk"`
+	Refused               bool             `json:"refused"`
+	Error                 string           `json:"error"`
+	First                 preexistingFirst `json:"first"`
+	AfterResume           preexistingFirst `json:"afterResume"`
 }
 
 type preexistingResult struct {
-	Steps []struct {
+	TabCount int `json:"tabCount"`
+	Steps    []struct {
 		Name  string `json:"name"`
 		OK    bool   `json:"ok"`
 		MS    int    `json:"ms"`
 		Error string `json:"error"`
 	} `json:"steps"`
 	Pages map[string]preexistingPage `json:"pages"`
+}
+
+func checkCommandsOK(t *testing.T, name, when string, first preexistingFirst, children *bool, wantChildren bool) {
+	t.Helper()
+	for label, c := range map[string]preexistingCmd{
+		"Target.getTargetInfo":      first.Info,
+		"Page.getFrameTree":         first.Tree,
+		"Page.getNavigationHistory": first.History,
+		"Page.getResourceTree":      first.Resource,
+	} {
+		if !c.OK || c.MS > 300 {
+			t.Errorf("%s %s: %s on the page session: ok=%v after %d ms (%s)", name, when, label, c.OK, c.MS, c.Error)
+		}
+	}
+	if wantChildren && (children == nil || !*children) {
+		t.Errorf("%s %s: Page.getFrameTree did not contain the expected child frames: %+v", name, when, first.Tree.Frames)
+	}
 }
 
 func checkFirstOK(t *testing.T, name string, p preexistingPage, wantChildren bool) {
@@ -86,19 +109,8 @@ func checkFirstOK(t *testing.T, name string, p preexistingPage, wantChildren boo
 	if !p.UnderTab {
 		t.Errorf("%s: page attach was not under a tab session (bios path)", name)
 	}
-	for label, c := range map[string]preexistingCmd{
-		"Target.getTargetInfo":      p.First.Info,
-		"Page.getFrameTree":         p.First.Tree,
-		"Page.getNavigationHistory": p.First.History,
-		"Page.getResourceTree":      p.First.Resource,
-	} {
-		if !c.OK || c.MS > 300 {
-			t.Errorf("%s: first %s on the fresh page session: ok=%v after %d ms (%s)", name, label, c.OK, c.MS, c.Error)
-		}
-	}
-	if wantChildren && (p.ChildrenOK == nil || !*p.ChildrenOK) {
-		t.Errorf("%s: first Page.getFrameTree did not contain the expected child frames: %+v", name, p.First.Tree.Frames)
-	}
+	checkCommandsOK(t, name, "at attach", p.First, p.ChildrenOK, wantChildren)
+	checkCommandsOK(t, name, "after runIfWaitingForDebugger", p.AfterResume, p.AfterResumeChildrenOK, wantChildren)
 }
 
 func TestRawCDPFirstCommandsOnPreexistingFramedPages(t *testing.T) {
@@ -130,6 +142,9 @@ func TestRawCDPFirstCommandsOnPreexistingFramedPages(t *testing.T) {
 	}
 	if err != nil || !found {
 		t.Fatalf("the raw CDP preexisting-tree script did not finish: %v\n%s", err, out)
+	}
+	if res.TabCount < 1 {
+		t.Errorf("bios path needs Chrome tab targets (Target.getTargets type=tab); got tabCount=%d", res.TabCount)
 	}
 
 	checkFirstOK(t, "framed-same", res.Pages["framed"], true)
