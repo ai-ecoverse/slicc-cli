@@ -2,11 +2,18 @@ package integration
 
 import (
 	"bufio"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -134,6 +141,36 @@ type idpTLS struct {
 	spki string
 }
 
+func idpTLSCertificate(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ims-na1.adobelogin.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames: []string{
+			"ims-na1.adobelogin.com",
+			"ims-na1-stg1.adobelogin.com",
+			"adobelogin.com",
+			"adobe.com",
+			"www.adobe.com",
+			"localhost",
+		},
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
 func startIdPTLS(t *testing.T, fixturePort int) idpTLS {
 	t.Helper()
 	upstream := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(fixturePort)}
@@ -141,13 +178,16 @@ func startIdPTLS(t *testing.T, fixturePort int) idpTLS {
 		r.SetURL(upstream)
 		r.Out.Host = r.In.Host
 	}}
-	srv := httptest.NewTLSServer(proxy)
+	leaf := idpTLSCertificate(t)
+	srv := httptest.NewUnstartedServer(proxy)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
 	t.Cleanup(srv.Close)
-	cert := srv.Certificate()
-	if cert == nil {
-		t.Fatal("the IdP TLS fixture has no certificate")
+	parsed, err := x509.ParseCertificate(leaf.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
 	}
-	pub, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+	pub, err := x509.MarshalPKIXPublicKey(parsed.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,6 +283,7 @@ type guardRow struct {
 	Live        string          `json:"live"`
 	Reason      string          `json:"reason"`
 	Why         json.RawMessage `json:"why"`
+	Notes       []string        `json:"notes"`
 	Errors      []string        `json:"errors"`
 	Observed    json.RawMessage `json:"observations"`
 	Diagnostics json.RawMessage `json:"diagnostics,omitempty"`
@@ -543,12 +584,22 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		"idp-stg":            idpStgOrigin,
 	}
 	n := run.slots
-	rules := "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1,MAP sliccy.ai 127.0.0.1,MAP *.test 127.0.0.1,MAP ims-na1.adobelogin.com 127.0.0.1,MAP ims-na1-stg1.adobelogin.com 127.0.0.1,MAP *.adobelogin.com 127.0.0.1"
+	rules := "--host-resolver-rules=" + strings.Join([]string{
+		"MAP *.sliccy.ai 127.0.0.1",
+		"MAP sliccy.ai 127.0.0.1",
+		"MAP *.test 127.0.0.1",
+		"MAP ims-na1.adobelogin.com 127.0.0.1",
+		"MAP ims-na1-stg1.adobelogin.com 127.0.0.1",
+		"MAP *.adobelogin.com 127.0.0.1",
+		"MAP adobelogin.com 127.0.0.1",
+		"MAP adobe.com 127.0.0.1",
+		"MAP *.adobe.com 127.0.0.1",
+	}, ",")
 	secure := "--unsafely-treat-insecure-origin-as-secure=" + strings.Join([]string{targets["ordinary"], targets["seven"], targets["vault"], targets["sevenOopif"]}, ",")
 	spki := "--ignore-certificate-errors-spki-list=" + idp.spki
 	chromes := make([]*chromeProc, n)
 	for i := range chromes {
-		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL, secure, spki)
+		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL, secure, spki, "--ignore-certificate-errors")
 	}
 	gates := make([]*guardGate, n)
 	for i, b := range chromes {
@@ -706,7 +757,10 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 				t.Logf("%s: WAIVED (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, reason, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
 				continue
 			}
-			t.Errorf("%s: control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
+			if r.ID == "C7.credential-export" && len(r.Notes) > 0 {
+				t.Logf("%s: credential-export notes: %v", name, r.Notes)
+			}
+			t.Errorf("%s: control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s\n  notes %v", name, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed, r.Notes)
 		}
 	}
 	t.Logf("counts %s; not run %v", sum.Counts, sum.NotRun)
