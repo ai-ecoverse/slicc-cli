@@ -2,8 +2,18 @@ package integration
 
 import (
 	"bufio"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -17,6 +27,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -126,6 +137,192 @@ type guardFixture struct {
 	log  int
 }
 
+type idpTLS struct {
+	port string
+	spki string
+}
+
+func idpTLSCertificate(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ims-na1.adobelogin.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames: []string{
+			"ims-na1.adobelogin.com",
+			"ims-na1-stg1.adobelogin.com",
+			"adobelogin.com",
+			"adobe.com",
+			"www.adobe.com",
+			"localhost",
+		},
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+func certSPKI(t *testing.T, leaf tls.Certificate) string {
+	t.Helper()
+	parsed, err := x509.ParseCertificate(leaf.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := x509.MarshalPKIXPublicKey(parsed.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(pub)
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func fixtureProxy(fixturePort int) http.Handler {
+	upstream := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(fixturePort)}
+	return &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(upstream)
+		r.Out.Host = r.In.Host
+	}}
+}
+
+func startIdPTLS(t *testing.T, fixturePort int, leaf tls.Certificate) idpTLS {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(fixtureProxy(fixturePort))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil || u.Port() == "" {
+		t.Fatalf("IdP TLS URL %q: %v", srv.URL, err)
+	}
+	return idpTLS{port: u.Port(), spki: certSPKI(t, leaf)}
+}
+
+type peekConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *peekConn) Read(p []byte) (int, error) {
+	return c.r.Read(p)
+}
+
+type onceListener struct {
+	addr net.Addr
+	c    net.Conn
+	once sync.Once
+}
+
+func (l *onceListener) Accept() (net.Conn, error) {
+	var c net.Conn
+	l.once.Do(func() { c = l.c })
+	if c == nil {
+		return nil, net.ErrClosed
+	}
+	return c, nil
+}
+
+func (l *onceListener) Close() error { return nil }
+
+func (l *onceListener) Addr() net.Addr { return l.addr }
+
+func startDualFrontDoor(t *testing.T, fixturePort int, leaf tls.Certificate) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	handler := fixtureProxy(fixturePort)
+	httpSrv := &http.Server{Handler: handler}
+	tlsCfg := &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveDualFrontDoor(c, httpSrv, tlsCfg)
+		}
+	}()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil || port == "" {
+		t.Fatalf("dual front door addr %q: %v", ln.Addr(), err)
+	}
+	return port
+}
+
+func serveDualFrontDoor(c net.Conn, httpSrv *http.Server, tlsCfg *tls.Config) {
+	br := bufio.NewReader(c)
+	peek, err := br.Peek(1)
+	pc := &peekConn{Conn: c, r: br}
+	if err != nil {
+		_ = c.Close()
+		return
+	}
+	conn := net.Conn(pc)
+	if peek[0] == 0x16 {
+		tc := tls.Server(pc, tlsCfg)
+		if err := tc.Handshake(); err != nil {
+			_ = tc.Close()
+			return
+		}
+		conn = tc
+	}
+	_ = httpSrv.Serve(&onceListener{addr: c.LocalAddr(), c: conn})
+}
+
+func stageCredentialExportProbeNotes(t *testing.T, src string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.CopyFS(root, os.DirFS(src)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "credential-export.mjs")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	noteHook := "const note = (label, evidence) => notes.push(`${label}: ${JSON.stringify(evidence)}`);\n"
+	noteInject := "const note = (label, evidence) => notes.push(`${label}: ${JSON.stringify(evidence)}`);\n  globalThis.__credProbeNote = note;\n"
+	if !strings.Contains(text, noteHook) {
+		t.Fatal("credential-export.mjs note hook shape changed; update probe notes")
+	}
+	text = strings.Replace(text, noteHook, noteInject, 1)
+	topNeedle := "const topSession = attach.result?.sessionId;\n  if (!topSession) return { ok: false, storageKey: null, reportedKey: null, topId };\n"
+	topInject := topNeedle + `  if (typeof globalThis.__credProbeNote === 'function') {
+    const info = await outcome(reader.send('Target.getTargetInfo', { targetId: topId }));
+    const got = String(info.result?.targetInfo?.url ?? '');
+    const asked = String(topUrl);
+    globalThis.__credProbeNote('diag.topTarget', {
+      askedScheme: asked.startsWith('https:') ? 'https' : asked.startsWith('http:') ? 'http' : 'other',
+      askedHost: asked.replace(/^https?:\/\//, '').split('/')[0].split(':')[0],
+      gotScheme: got.startsWith('https:') ? 'https' : got.startsWith('http:') ? 'http' : got.startsWith('chrome-error:') ? 'chrome-error' : 'other',
+      gotHost: got.replace(/^https?:\/\//, '').split('/')[0].split(':')[0],
+      title: String(info.result?.targetInfo?.title ?? '').slice(0, 80),
+    });
+  }
+`
+	if !strings.Contains(text, topNeedle) {
+		t.Fatal("credential-export.mjs plantPartitionedInTop shape changed; update probe notes")
+	}
+	text = strings.Replace(text, topNeedle, topInject, 1)
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func startGuardFixture(t *testing.T) guardFixture {
 	t.Helper()
 	cmd := exec.Command("node", filepath.Join("testdata", "guard", "fixture.mjs"))
@@ -210,6 +407,7 @@ type guardRow struct {
 	Live        string          `json:"live"`
 	Reason      string          `json:"reason"`
 	Why         json.RawMessage `json:"why"`
+	Notes       []string        `json:"notes"`
 	Errors      []string        `json:"errors"`
 	Observed    json.RawMessage `json:"observations"`
 	Diagnostics json.RawMessage `json:"diagnostics,omitempty"`
@@ -481,17 +679,22 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	if len(guardSkips) > 0 {
 		t.Logf("skipping %d C9 vectors: %s", len(guardSkips), guardC9MacReason)
 	}
-	pkg := guardPackage(t)
+	pkg := stageCredentialExportProbeNotes(t, guardPackage(t))
 	ext := filepath.Join("..", "..", "node_modules", "@ai-ecoverse", "slicc-shared-web", "harness", "extension")
 	if _, err := os.Stat(filepath.Join(ext, "manifest.json")); err != nil {
 		t.Fatalf("slicc-shared-web's harness extension is missing; run npm ci: %v", err)
 	}
 	ext = stage1GuardFixture(t, ext)
 	fix := startGuardFixture(t)
+	leaf := idpTLSCertificate(t)
+	front := startDualFrontDoor(t, fix.port, leaf)
 	srv := guardPageServer(t, pkg, fix.port)
-	fp := strconv.Itoa(fix.port)
+	idp := startIdPTLS(t, fix.port, leaf)
+	fp := front
 	seven := "http://seven.guard.test:" + fp
 	sevenOopif := "http://seven.oopif.test:" + fp
+	idpOrigin := "https://ims-na1.adobelogin.com:" + idp.port
+	idpStgOrigin := "https://ims-na1-stg1.adobelogin.com:" + idp.port
 	targets := map[string]string{
 		"seven":              seven,
 		"sevenOopif":         sevenOopif,
@@ -503,13 +706,26 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		"ordinary":           "http://ordinary.guard.test:" + fp,
 		"ordinary-same-site": "http://page.guard.test:" + fp,
 		"cross":              "http://cross.test:" + fp,
+		"idp":                idpOrigin,
+		"idp-stg":            idpStgOrigin,
 	}
 	n := run.slots
-	rules := "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1,MAP sliccy.ai 127.0.0.1,MAP *.test 127.0.0.1"
+	rules := "--host-resolver-rules=" + strings.Join([]string{
+		"MAP *.sliccy.ai 127.0.0.1",
+		"MAP sliccy.ai 127.0.0.1",
+		"MAP *.test 127.0.0.1",
+		"MAP ims-na1.adobelogin.com 127.0.0.1",
+		"MAP ims-na1-stg1.adobelogin.com 127.0.0.1",
+		"MAP *.adobelogin.com 127.0.0.1",
+		"MAP adobelogin.com 127.0.0.1",
+		"MAP adobe.com 127.0.0.1",
+		"MAP *.adobe.com 127.0.0.1",
+	}, ",")
 	secure := "--unsafely-treat-insecure-origin-as-secure=" + strings.Join([]string{targets["ordinary"], targets["seven"], targets["vault"], targets["sevenOopif"]}, ",")
+	spki := "--ignore-certificate-errors-spki-list=" + idp.spki
 	chromes := make([]*chromeProc, n)
 	for i := range chromes {
-		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL, secure)
+		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL, secure, spki, "--ignore-certificate-errors")
 	}
 	gates := make([]*guardGate, n)
 	for i, b := range chromes {
@@ -667,7 +883,14 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 				t.Logf("%s: WAIVED (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, reason, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
 				continue
 			}
-			t.Errorf("%s: control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
+			if r.ID == "C7.credential-export" {
+				for _, n := range r.Notes {
+					if strings.Contains(n, "diag.pageGetCookies") || strings.Contains(n, "diag.topTarget") || strings.Contains(n, "partitioned:") || strings.Contains(n, "result:") {
+						t.Logf("%s: %s", name, n)
+					}
+				}
+			}
+			t.Errorf("%s: control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s\n  notes %v", name, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed, r.Notes)
 		}
 	}
 	t.Logf("counts %s; not run %v", sum.Counts, sum.NotRun)

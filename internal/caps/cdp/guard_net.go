@@ -15,6 +15,27 @@ func (g *guard) siteProtected(site string) bool {
 }
 
 func (g *guard) cookieProtected(c map[string]any) bool {
+	return g.sevenCookie(c) || credentialCookie(c)
+}
+
+func credentialCookie(c map[string]any) bool {
+	if c == nil {
+		return false
+	}
+	if d, _ := c["domain"].(string); protect.CredentialCookieDomain(d) {
+		return true
+	}
+	switch pk := c["partitionKey"].(type) {
+	case string:
+		return protect.CredentialSite(pk)
+	case map[string]any:
+		site, _ := pk["topLevelSite"].(string)
+		return protect.CredentialSite(site)
+	}
+	return false
+}
+
+func (g *guard) sevenCookie(c map[string]any) bool {
 	if c == nil {
 		return false
 	}
@@ -66,6 +87,9 @@ func (g *guard) socketCreatedEvent(m *message, data []byte) browserVerdict {
 		if g.o.Loaded(socketURL(strings.TrimSpace(u))) || world {
 			g.markRequestLocked(m.SessionID, id)
 		}
+		if protect.CredentialURL(socketURL(u)) {
+			g.credMarkLocked(m.SessionID, id)
+		}
 		return true, false, nil
 	})
 }
@@ -73,8 +97,88 @@ func (g *guard) socketCreatedEvent(m *message, data []byte) browserVerdict {
 func (g *guard) markedDropEvent(m *message, data []byte) browserVerdict {
 	return g.withParams(m, data, func(p map[string]any) (bool, bool, [][]byte) {
 		id, _ := p["requestId"].(string)
-		return !g.requestMarkedLocked(m.SessionID, id), false, nil
+		if g.requestMarkedLocked(m.SessionID, id) {
+			return false, false, nil
+		}
+		changed := false
+		if req, _ := p["request"].(map[string]any); req != nil && (g.credMarkedLocked(m.SessionID, id) || g.credentialSetCookie(req["headers"])) {
+			changed = stripHeaders(req["headers"], requestCookies...)
+		}
+		if r, _ := p["response"].(map[string]any); r != nil && (g.credMarkedLocked(m.SessionID, id) || g.credentialSetCookie(r["headers"])) {
+			changed = stripCookieResponse(r) || changed
+		}
+		return true, changed, nil
 	})
+}
+
+var (
+	requestCookies  = []string{"cookie"}
+	responseCookies = []string{"set-cookie", "set-cookie2"}
+)
+
+func stripCookieResponse(r map[string]any) bool {
+	if r == nil {
+		return false
+	}
+	changed := stripHeaders(r["headers"], responseCookies...)
+	changed = stripHeaders(r["requestHeaders"], requestCookies...) || changed
+	changed = stripHeaderLines(r, "headersText", responseCookies...) || changed
+	return stripHeaderLines(r, "requestHeadersText", requestCookies...) || changed
+}
+
+func setCookieCredential(value string) bool {
+	for _, line := range strings.Split(value, "\n") {
+		if credentialCookieLine(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) credentialSetCookie(headers any) bool {
+	switch h := headers.(type) {
+	case map[string]any:
+		for k, v := range h {
+			s, _ := v.(string)
+			for _, n := range responseCookies {
+				if strings.EqualFold(k, n) && setCookieCredential(s) {
+					return true
+				}
+			}
+		}
+	case []any:
+		for _, item := range h {
+			e, _ := item.(map[string]any)
+			n, _ := e["name"].(string)
+			s, _ := e["value"].(string)
+			for _, want := range responseCookies {
+				if strings.EqualFold(n, want) && setCookieCredential(s) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func credentialSetCookieLines(p map[string]any, field string) bool {
+	text, _ := p[field].(string)
+	for _, line := range strings.Split(text, "\r\n") {
+		name, v, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		for _, n := range responseCookies {
+			if strings.EqualFold(strings.TrimSpace(name), n) && setCookieCredential(v) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (g *guard) credentialResponse(r map[string]any) bool {
+	return r != nil && (g.credentialSetCookie(r["headers"]) || credentialSetCookieLines(r, "headersText"))
 }
 
 var requestCredentials = []string{"cookie", "authorization", "proxy-authorization"}
@@ -165,37 +269,57 @@ func (g *guard) requestEvent(m *message, data []byte) browserVerdict {
 		if g.o.Loaded(u) || g.o.Loaded(ru) || world {
 			g.markRequestLocked(m.SessionID, id)
 		}
+		if protect.CredentialURL(u) || protect.CredentialURL(ru) {
+			g.credMarkLocked(m.SessionID, id)
+		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
-			return true, world, nil
+			if !g.credMarkedLocked(m.SessionID, id) && !g.credentialResponse(redirect) {
+				return true, world, nil
+			}
+			changed := stripHeaders(req["headers"], requestCookies...) || world
+			return true, stripCookieResponse(redirect) || changed, nil
 		}
 		changed := stripHeaders(req["headers"], requestCredentials...) || world
 		return true, stripResponse(redirect) || changed, nil
 	})
 }
 
-func (g *guard) requestExtra(p map[string]any, marked bool) bool {
-	changed := g.filterAssociated(p, "associatedCookies")
-	if changed || marked {
+func (g *guard) requestExtra(p map[string]any, marked, cred bool) bool {
+	seven, credential := g.filterAssociated(p, "associatedCookies")
+	changed := seven || credential
+	switch {
+	case seven || marked:
 		changed = stripHeaders(p["headers"], requestCredentials...) || changed
+	case credential || cred:
+		changed = stripHeaders(p["headers"], requestCookies...) || changed
 	}
 	return changed
 }
 
-func (g *guard) filterAssociated(p map[string]any, field string) bool {
+func (g *guard) filterAssociated(p map[string]any, field string) (bool, bool) {
 	list, ok := p[field].([]any)
 	if !ok {
-		return false
+		return false, false
 	}
 	kept := make([]any, 0, len(list))
+	seven, credential := false, false
 	for _, item := range list {
 		e, _ := item.(map[string]any)
-		if c, _ := e["cookie"].(map[string]any); g.cookieProtected(c) {
+		c, _ := e["cookie"].(map[string]any)
+		raw, hasLine := e["cookieLine"]
+		line, isString := raw.(string)
+		if g.sevenCookie(c) || isString && g.sevenCookieLine(line) {
+			seven = true
+			continue
+		}
+		if credentialCookie(c) || hasLine && (!isString || credentialCookieLine(line)) {
+			credential = true
 			continue
 		}
 		kept = append(kept, item)
 	}
 	p[field] = kept
-	return len(kept) != len(list)
+	return seven, credential
 }
 
 func (g *guard) responseEvent(m *message, data []byte) browserVerdict {
@@ -206,17 +330,24 @@ func (g *guard) responseEvent(m *message, data []byte) browserVerdict {
 		if g.o.Loaded(u) {
 			g.markRequestLocked(m.SessionID, id)
 		}
+		if protect.CredentialURL(u) {
+			g.credMarkLocked(m.SessionID, id)
+		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
+			if g.credMarkedLocked(m.SessionID, id) || g.credentialResponse(r) {
+				return true, stripCookieResponse(r), nil
+			}
 			return true, false, nil
 		}
 		return true, stripResponse(r), nil
 	})
 }
 
-func (g *guard) responseExtra(p map[string]any, marked bool) bool {
-	changed := g.filterAssociated(p, "blockedCookies")
-	changed = g.filterAssociated(p, "exemptedCookies") || changed
-	if !marked {
+func (g *guard) responseExtra(p map[string]any, marked, cred bool) bool {
+	s1, c1 := g.filterAssociated(p, "blockedCookies")
+	s2, c2 := g.filterAssociated(p, "exemptedCookies")
+	changed := s1 || c1 || s2 || c2
+	if !marked && !cred && !g.credentialResponse(p) {
 		return changed
 	}
 	changed = stripHeaders(p["headers"], "set-cookie", "set-cookie2") || changed
@@ -250,18 +381,28 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 			return false, false, [][]byte{msg}
 		}
 		if g.o.Loaded(u) {
-			delete(g.handed, requestKey{m.SessionID, id})
+			g.dropHandedLocked(requestKey{m.SessionID, id})
 			g.markRequestLocked(m.SessionID, id)
 			g.markRequestLocked(m.SessionID, other)
 			return false, false, g.settlePausedLocked(m, p, id)
 		}
-		g.handOutLocked(requestKey{m.SessionID, id})
+		g.handOutLocked(requestKey{m.SessionID, id}, u)
 		if g.requestMarkedLocked(m.SessionID, other) || g.namesProtectedLocked(p["responseHeaders"]) {
 			g.markRequestLocked(m.SessionID, id)
 			g.markRequestLocked(m.SessionID, other)
 		}
+		if protect.CredentialURL(u) || g.credMarkedLocked(m.SessionID, other) {
+			g.credMarkLocked(m.SessionID, id)
+			g.credMarkLocked(m.SessionID, other)
+		}
 		if !g.requestMarkedLocked(m.SessionID, id) {
-			return true, false, nil
+			if !g.credMarkedLocked(m.SessionID, id) && !g.credentialSetCookie(p["responseHeaders"]) {
+				return true, false, nil
+			}
+			changed := stripHeaderList(p, "responseHeaders", responseCookies...)
+			changed = stripHeaders(p["responseHeaders"], responseCookies...) || changed
+			changed = stripHeaders(req["headers"], requestCookies...) || changed
+			return true, changed, nil
 		}
 		changed := stripHeaderList(p, "responseHeaders", "set-cookie", "set-cookie2")
 		changed = stripHeaders(p["responseHeaders"], "set-cookie", "set-cookie2") || changed
@@ -289,7 +430,7 @@ func (g *guard) continuedLocked(k callKey, failed bool) {
 	}
 	delete(g.continues, k)
 	if !failed && g.handed[h.req] == h.pause {
-		delete(g.handed, h.req)
+		g.dropHandedLocked(h.req)
 	}
 }
 
@@ -342,16 +483,22 @@ type handedPause struct {
 	pause int
 }
 
-func (g *guard) handOutLocked(k requestKey) {
+func (g *guard) dropHandedLocked(k requestKey) {
+	delete(g.handed, k)
+	delete(g.pauseURLs, k)
+}
+
+func (g *guard) handOutLocked(k requestKey, url string) {
 	if k.request == "" {
 		return
 	}
 	g.pauses++
 	g.handed[k] = g.pauses
+	g.pauseURLs[k] = url
 	g.handedOrder = append(g.handedOrder, handedPause{k, g.pauses})
 	for len(g.handedOrder) > maxSettled {
 		if old := g.handedOrder[0]; g.handed[old.req] == old.pause {
-			delete(g.handed, old.req)
+			g.dropHandedLocked(old.req)
 		}
 		g.handedOrder = g.handedOrder[1:]
 	}
