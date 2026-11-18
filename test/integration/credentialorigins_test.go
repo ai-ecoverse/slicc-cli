@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -418,6 +419,107 @@ func TestCDPDropsSignInCookieLinesFromExtraInfo(t *testing.T) {
 	for _, kept := range []string{"kept-assocline", "kept-line", "kept-hostonly", "kept-adobe", "kept-exempt"} {
 		if !strings.Contains(string(b), kept) {
 			t.Errorf("an ordinary cookie line lost %s: %s", kept, b)
+		}
+	}
+	credentialLogClean(t, env)
+}
+
+func plantDoorPaused(id, url string) string {
+	return `{"method":"Fetch.requestPaused","params":{"requestId":"` + id + `","request":{"url":"` + url + `","headers":{}},"resourceType":"XHR","responseStatusCode":200}}`
+}
+
+func plantDoorScript(seven, allowed string) fakeScript {
+	sub := "https://x.ims-na1.adobelogin.com/x"
+	events := []string{
+		plantDoorPaused("fidp-dom", idpOrigin+"/ims"),
+		plantDoorPaused("fidp-host", idpOrigin+"/ims"),
+		plantDoorPaused("fidp-sc2", idpOrigin+"/ims"),
+		plantDoorPaused("fidp-bin", idpOrigin+"/ims"),
+		plantDoorPaused("fidp-cont", idpOrigin+"/ims"),
+		plantDoorPaused("fplain-dom", allowed+"/x"),
+		plantDoorPaused("fplain-bin", allowed+"/x"),
+		plantDoorPaused("fplain-badbin", allowed+"/x"),
+		plantDoorPaused("fplain-ok", allowed+"/x"),
+		plantDoorPaused("fplain-adobe", allowed+"/x"),
+		plantDoorPaused("fplain-cont", allowed+"/x"),
+		plantDoorPaused("fsub-dom", sub),
+		plantDoorPaused("fsub-host", sub),
+		plantDoorPaused("fwww", "https://www.adobe.com/"),
+		plantDoorPaused("fcookie-hdr", allowed+"/y"),
+		plantDoorPaused("fseven", seven+"/x"),
+		plantDoorPaused("fvault", "https://vault.sliccy.ai/x"),
+	}
+	return afterEnable(events)
+}
+
+func setCookieHeaders(name, value string) []map[string]string {
+	return []map[string]string{{"name": name, "value": value}}
+}
+
+func TestCDPRefusesPlantingSignInCookiesThroughFetch(t *testing.T) {
+	env, fake := setupFakeProtect(t, plantDoorScript)
+	plantDom := "sid=PLANTED; Domain=.adobelogin.com; HttpOnly"
+	plantHost := "sid=PLANTED; Path=/; HttpOnly"
+	plantAdobe := "sid=kept; Domain=.adobe.com; Path=/"
+	plantBin := base64.StdEncoding.EncodeToString([]byte("Set-Cookie: sid=PLANTED; Domain=.adobelogin.com"))
+	calls := [][]any{
+		{"Network.enable", map[string]any{}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fidp-dom", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantDom)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fidp-host", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantHost)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fidp-sc2", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie2", plantHost)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fidp-bin", "responseCode": 200, "binaryResponseHeaders": plantBin}},
+		{"Fetch.continueResponse", map[string]any{"requestId": "fidp-cont", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantDom)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain-dom", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantDom)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain-bin", "responseCode": 200, "binaryResponseHeaders": plantBin}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain-badbin", "responseCode": 200, "binaryResponseHeaders": "@@@"}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fsub-dom", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantDom)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fsub-host", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantHost)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain-ok", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", "a=kept; Path=/")}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain-adobe", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantAdobe)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fwww", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", "a=kept; Path=/")}},
+		{"Fetch.continueResponse", map[string]any{"requestId": "fplain-cont", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", "a=kept; Path=/")}},
+		{"Fetch.continueRequest", map[string]any{"requestId": "fcookie-hdr", "headers": []map[string]string{{"name": "Cookie", "value": "sid=injected"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fseven", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantHost)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fvault", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantHost)}},
+	}
+	var r struct {
+		Out []callOutcome `json:"out"`
+	}
+	env.evalJSON(t, "linkTest.protect.calls("+jsArgs("chrome-2", calls)+")", &r)
+	b, _ := json.Marshal(r)
+	if len(r.Out) != len(calls) {
+		t.Fatalf("calls: %s", b)
+	}
+	refused := map[int]string{
+		1: "sign-in origin", 2: "sign-in origin", 3: "sign-in origin", 4: "sign-in origin", 5: "sign-in origin",
+		6: "sign-in origin", 7: "sign-in origin", 8: "sign-in origin", 9: "sign-in origin",
+		16: "didn't pass this paused request", 17: "didn't pass this paused request",
+	}
+	allowed := map[int]bool{0: true, 10: true, 11: true, 12: true, 13: true, 14: true, 15: true}
+	for i, o := range r.Out {
+		want, refuse := refused[i]
+		switch {
+		case refuse && (o.OK || !strings.HasPrefix(o.Error.Message, "slicc: refused: ") || !strings.Contains(o.Error.Message, want)):
+			t.Errorf("call %d %s: want refused with %q, got %+v (%s)", i, o.Method, want, o, b)
+		case refuse && strings.Contains(o.Error.Message, "adobelogin"):
+			t.Errorf("call %d %s: the refusal names the origin: %q", i, o.Method, o.Error.Message)
+		case allowed[i] && !o.OK:
+			t.Errorf("call %d %s: the control was refused: %s", i, o.Method, b)
+		case !refuse && !allowed[i]:
+			t.Fatalf("call %d unclassified", i)
+		}
+	}
+	if r.Out[16].OK || r.Out[17].OK {
+		t.Fatalf("seven/vault pause is client-fulfillable; stop — pre-existing hole: seven=%+v vault=%+v", r.Out[16], r.Out[17])
+	}
+	for _, m := range fake.received() {
+		if strings.Contains(m, "PLANTED") {
+			t.Errorf("the browser got a planted cookie: %s", m)
+		}
+		for _, id := range []string{"fidp-dom", "fidp-host", "fidp-sc2", "fidp-bin", "fidp-cont", "fplain-dom", "fplain-bin", "fplain-badbin", "fsub-dom", "fseven", "fvault"} {
+			if strings.Contains(m, `"requestId":"`+id+`"`) && (strings.Contains(m, `"Fetch.fulfillRequest"`) || strings.Contains(m, `"Fetch.continueResponse"`)) {
+				t.Errorf("a refused plant reached the browser: %s", m)
+			}
 		}
 	}
 	credentialLogClean(t, env)
