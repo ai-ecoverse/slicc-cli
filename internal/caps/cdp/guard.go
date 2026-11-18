@@ -180,6 +180,7 @@ type guard struct {
 	navTargets            map[string]*navTarget
 	navSessions           map[string]*navTarget
 	unknown               map[string]*navTarget
+	watchStopped          bool
 	heldWaits             map[string]*heldWait
 	parkedAnswers         map[callKey]bool
 	keptURLLatch          map[string]bool

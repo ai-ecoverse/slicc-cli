@@ -28,6 +28,7 @@ func (g *guard) sessionWait(sessionID string) <-chan struct{} {
 		u = &navTarget{ready: make(chan struct{}), start: time.Now()}
 		u.awayAt = g.reads.away(u.start)
 		g.unknown[sessionID] = u
+		g.armUnknownLocked(sessionID, u, u.start)
 		g.logf("cdp: holding commands on a session slicc doesn't know yet")
 	}
 	if u.done {
