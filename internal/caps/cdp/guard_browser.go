@@ -604,21 +604,25 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.lost = true
 		return browserVerdict{lost: true}
 	}
+	page := g.cascadeOrphansLocked(p.SessionID)
+	page = append(page, g.takePendingMissingLocked(p.SessionID)...)
+	g.navDetachedLocked(p.SessionID)
 	if h, ok := g.held[p.SessionID]; ok {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		delete(g.held, p.SessionID)
 		g.refuseHeldWaitLocked(h.target)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{page: g.takePendingPageLocked()}
+		return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)
 		delete(g.hiddenOwner, p.SessionID)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{page: g.takePendingPageLocked()}
+		return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
 	}
 	g.forgetSessionLocked(p.SessionID)
-	return browserVerdict{forward: data, page: g.takePendingPageLocked()}
+	page = append(page, data)
+	return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
 }
 
 func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {

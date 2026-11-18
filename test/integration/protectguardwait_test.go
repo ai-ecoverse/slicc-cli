@@ -152,8 +152,8 @@ func TestCDPRefusesCommandsOnASessionThatNeverRegisters(t *testing.T) {
 	fake.every(`{"method":"Target.targetInfoChanged","sessionId":"RELAY","params":{"targetInfo":{"targetId":"T1","type":"page","url":"about:blank","title":"","attached":false}}}`)
 	var r lateSessionResult
 	env.evalJSON(t, "linkTest.protect.lateSession('chrome-2', 'NOSUCH', null)", &r)
-	if !r.Enable.refused() || r.Enable.Error.Message != "slicc: refused: slicc doesn't know which target this session belongs to: its guard made no progress in 2s" || r.Enable.MS < 1500 || r.Enable.MS > 15000 {
-		t.Errorf("Page.enable on a session nobody attached: %+v, want it held and refused at the 2 s idle bound", r.Enable)
+	if r.Enable.OK || r.Enable.Error.Code != -32001 || r.Enable.Error.Message != "Session with given id not found" || r.Enable.MS < 2000 || r.Enable.MS > 3500 {
+		t.Errorf("Page.enable on a session nobody attached: %+v, want Chrome missing-session (-32001) after the test's 2s idle bound (tolerate [2s, 3.5s] for the watch ticker)", r.Enable)
 	}
 	if at := pageCommandsOn(fake, "NOSUCH"); len(at) > 0 {
 		t.Errorf("the browser got %d commands on the unknown session", len(at))

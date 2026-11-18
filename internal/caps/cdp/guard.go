@@ -382,6 +382,14 @@ func refusal(id int64, sessionID, reason string) []byte {
 	return encode(m)
 }
 
+func missingSession(id int64, sessionID string) []byte {
+	m := map[string]any{"id": id, "error": map[string]any{"code": -32001, "message": missingSessionMessage}}
+	if sessionID != "" {
+		m["sessionId"] = sessionID
+	}
+	return encode(m)
+}
+
 func missingTarget(id int64, sessionID string) []byte {
 	m := map[string]any{"id": id, "error": map[string]any{"code": -32602, "message": "No target with given id found"}}
 	if sessionID != "" {
