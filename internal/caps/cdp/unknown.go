@@ -7,7 +7,7 @@ import (
 
 const (
 	refusedSession        = "slicc doesn't know which target this session belongs to"
-	missingSessionMessage = "Session with given id not found"
+	missingSessionMessage = "Session with given id not found."
 )
 
 func (g *guard) sessionKnownLocked(id string) bool {
@@ -105,10 +105,7 @@ func (g *guard) unknownCheckLocked(sessionID string) string {
 		if !u.done {
 			return ""
 		}
-		if u.reason != "" {
-			return missingSessionMessage
-		}
-		return ""
+		return missingSessionMessage
 	}
 	return missingSessionMessage
 }
@@ -182,18 +179,26 @@ func (g *guard) takePendingMissingLocked(session string) [][]byte {
 	return out
 }
 
-func (g *guard) detachEventLocked(id, target string) []byte {
+func (g *guard) detachEventLocked(id, target, envelope string) []byte {
 	params := map[string]any{"sessionId": id}
 	if target != "" {
 		params["targetId"] = target
 	}
-	return encode(map[string]any{"method": "Target.detachedFromTarget", "params": params})
+	m := map[string]any{"method": "Target.detachedFromTarget", "params": params}
+	if envelope != "" {
+		m["sessionId"] = envelope
+	}
+	return encode(m)
 }
 
 func (g *guard) forgetOrphanLocked(id string, shown bool, target string) [][]byte {
 	var page [][]byte
 	if shown {
-		page = append(page, g.detachEventLocked(id, target))
+		envelope := ""
+		if s := g.sessions[id]; s != nil {
+			envelope = s.parent
+		}
+		page = append(page, g.detachEventLocked(id, target, envelope))
 	}
 	if h := g.held[id]; h != nil {
 		delete(g.held, id)

@@ -625,6 +625,9 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.lost = true
 		return browserVerdict{lost: true}
 	}
+	if p.SessionID != "" && g.gone[p.SessionID] {
+		return browserVerdict{}
+	}
 	page := g.cascadeOrphansLocked(p.SessionID)
 	page = append(page, g.takePendingMissingLocked(p.SessionID)...)
 	g.navDetachedLocked(p.SessionID)
