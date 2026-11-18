@@ -187,12 +187,38 @@ function frameLeakFailure(evidence) {
   return '';
 }
 
+const nonAnswerRejections = [];
+
+function isVectorAnswer(error) {
+  const cdp = error?.cdp;
+  if (cdp && typeof cdp.code === 'number') return true;
+  const message = String(cdp?.message ?? error?.message ?? error ?? '');
+  return /^slicc: refused:/.test(message);
+}
+
 function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
   const calls = new Map();
   const events = [];
   const fake = new Set();
   const forwarded = [];
+  const detachedAt = new Map();
   let probingAttach = false;
+  const noteNonAnswer = (method, sessionId, error, via) => {
+    if (isVectorAnswer(error)) return;
+    const message = String(error?.cdp?.message ?? error?.message ?? error ?? '');
+    const detachedMs = detachedAt.get(sessionId);
+    nonAnswerRejections.push({
+      client: name,
+      method,
+      sessionId: sessionId ?? '',
+      message,
+      cdp: Boolean(error?.cdp),
+      cdpCode: error?.cdp?.code ?? null,
+      via,
+      detachSeen: detachedMs != null,
+      detachBeforeReject: detachedMs != null && Date.now() >= detachedMs,
+    });
+  };
   const onEvent = (e) => {
     noteSession(name, e);
     const info = e.params?.targetInfo;
@@ -210,8 +236,10 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
     }
     events.push(e);
     if (e.method !== 'Target.detachedFromTarget') return;
-    for (const reject of calls.get(e.params.sessionId) ?? []) reject(new Error('the session detached'));
-    calls.delete(e.params.sessionId);
+    const sid = e.params.sessionId;
+    detachedAt.set(sid, Date.now());
+    for (const entry of calls.get(sid) ?? []) entry.reject(new Error('the session detached'));
+    calls.delete(sid);
   };
   c.on?.(onEvent);
   const injectChromeUI = async (result) => {
@@ -340,11 +368,33 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
       return new Promise((resolve, reject) => {
         const set = calls.get(sessionId) ?? new Set();
         calls.set(sessionId, set);
-        set.add(reject);
+        let settled = false;
+        const entry = {
+          method,
+          reject: (error) => {
+            if (settled) return;
+            settled = true;
+            noteNonAnswer(method, sessionId, error, 'detachedFromTarget');
+            reject(error);
+          },
+        };
+        set.add(entry);
         foregroundMouseCall(c, method, params, sessionId)
           .then((result) => afterSend(before, result))
-          .then(resolve, reject)
-          .finally(() => set.delete(reject));
+          .then(
+            (result) => {
+              if (settled) return;
+              settled = true;
+              resolve(result);
+            },
+            (error) => {
+              if (settled) return;
+              settled = true;
+              noteNonAnswer(method, sessionId, error, 'send-reject');
+              reject(error);
+            },
+          )
+          .finally(() => set.delete(entry));
       });
     },
   };
@@ -591,6 +641,24 @@ export function guardStart(getLink, opts) {
             row.errors = [...(row.errors ?? []), fail];
           }
           frameLeakByRow.delete(rowKey(row));
+        }
+        if (String(row.id ?? '').startsWith('C3.protected-parent') || String(row.id ?? '').startsWith('C3.ordinary-parent')) {
+          const dump = nonAnswerRejections.splice(0, nonAnswerRejections.length);
+          row.diagnostics = {
+            ...(row.diagnostics && typeof row.diagnostics === 'object' ? row.diagnostics : {}),
+            nonAnswerRejections: dump,
+          };
+          if (dump.length) {
+            row.errors = [
+              ...(row.errors ?? []),
+              ...dump.map(
+                (r) =>
+                  `non-answer ${r.client} ${r.method} session=${r.sessionId} message=${JSON.stringify(r.message)} cdp=${r.cdp} cdpCode=${r.cdpCode} via=${r.via} detachSeen=${r.detachSeen}`,
+              ),
+            ];
+          }
+        } else {
+          nonAnswerRejections.length = 0;
         }
         state.started.delete(rowKey(row));
         if (row.inFlight) row.errors = [...(row.errors ?? []), ...describeSessions(row)];
