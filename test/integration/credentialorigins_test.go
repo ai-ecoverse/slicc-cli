@@ -204,6 +204,11 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 				return `{"databaseNames":["kept-db"]}`, nil
 			case "CacheStorage.requestCacheNames":
 				return `{"caches":[{"cacheId":"c","securityOrigin":"https://x.ims-na1.adobelogin.com","storageKey":"https://x.ims-na1.adobelogin.com/","cacheName":"kept-subcache"}]}`, nil
+			case "Storage.overrideQuotaForOrigin", "Storage.trackIndexedDBForOrigin", "Storage.untrackIndexedDBForOrigin",
+				"Storage.trackCacheStorageForOrigin", "Storage.trackCacheStorageForStorageKey",
+				"IndexedDB.deleteDatabase", "CacheStorage.deleteCache",
+				"DOMStorage.removeDOMStorageItem", "DOMStorage.clearDOMStorageItems":
+				return `{"entries":[{"key":"k","value":"kept-store"}]}`, nil
 			}
 			if strings.HasPrefix(method, "Storage.") || strings.HasPrefix(method, "DOMStorage.") || strings.HasPrefix(method, "IndexedDB.") || strings.HasPrefix(method, "CacheStorage.") || strings.HasPrefix(method, "FileSystem.") {
 				return `{"entries":[{"key":"k","value":"secret-store"}]}`, nil
@@ -288,6 +293,11 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 	}
 	if !strings.Contains(key, "kept.example.test") || !strings.Contains(names, "kept-db") {
 		t.Errorf("the controls lost their answers: %s %s", key, names)
+	}
+	for i := len(refused) + len(answered); i < len(out); i++ {
+		if !strings.Contains(string(out[i].Result), "kept-store") {
+			t.Errorf("call %d %s: ordinary control lost its neutral answer: %s", i, out[i].Method, out[i].Result)
+		}
 	}
 	if strings.Contains(b, "secret") {
 		t.Errorf("an answer carried sign-in storage: %s", b)
