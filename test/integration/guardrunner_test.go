@@ -375,6 +375,23 @@ func tabIframeLeakObserverMissesFrame(diagnostics json.RawMessage) bool {
 	return err == nil && len(ev.Frames) == 0
 }
 
+func logOrphanControlFrames(t testing.TB, r guardRow) {
+	t.Helper()
+	var diag struct {
+		OrphanControlFrames []map[string]any `json:"orphanControlFrames"`
+		OrphanProbesPending int              `json:"orphanProbesPendingAtLog"`
+	}
+	if err := json.Unmarshal(r.Diagnostics, &diag); err != nil {
+		t.Logf("%s %s %s: orphan-control-frame: diagnostics unreadable: %v", r.ID, r.Target, r.Variant, err)
+		return
+	}
+	t.Logf("%s %s %s: orphan-control-frame count=%d probesPendingAtLog=%d", r.ID, r.Target, r.Variant, len(diag.OrphanControlFrames), diag.OrphanProbesPending)
+	for i, frame := range diag.OrphanControlFrames {
+		raw, _ := json.Marshal(frame)
+		t.Logf("%s %s %s: orphan-control-frame[%d]=%s", r.ID, r.Target, r.Variant, i, raw)
+	}
+}
+
 func tabIframeLeakGuardedHidesFrame(observed, diagnostics json.RawMessage) error {
 	var sides map[string]map[string]any
 	if err := json.Unmarshal(observed, &sides); err != nil {
@@ -668,6 +685,9 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 		}
 		if r.ID == "C3.tab-iframe-leak" {
 			logTabIframeLeakEvidence(t, r)
+		}
+		if strings.HasPrefix(r.ID, "C3.protected-parent") || strings.HasPrefix(r.ID, "C3.ordinary-parent") {
+			logOrphanControlFrames(t, r)
 		}
 		if len(r.Errors) != 0 {
 			if reason, ok := waivedGuardRow(r); ok {

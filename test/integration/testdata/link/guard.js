@@ -188,12 +188,107 @@ function frameLeakFailure(evidence) {
 }
 
 const nonAnswerRejections = [];
+const orphanControlFrames = [];
+const orphanProbePending = [];
+const orphanProbed = new Set();
 
 function isVectorAnswer(error) {
   const cdp = error?.cdp;
   if (cdp && typeof cdp.code === 'number') return true;
   const message = String(cdp?.message ?? error?.message ?? error ?? '');
   return /^slicc: refused:/.test(message);
+}
+
+function ancestorDetached(sessionId) {
+  let cur = sessionId;
+  const seen = new Set();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const meta = seenSessions.get(cur);
+    if (!meta) return false;
+    if (meta.detached) return true;
+    cur = meta.parent;
+  }
+  return false;
+}
+
+function noteOrphanControlFrame(frame) {
+  orphanControlFrames.push(frame);
+}
+
+function isDescendantOf(sessionId, ancestorId) {
+  let cur = seenSessions.get(sessionId)?.parent;
+  const seen = new Set();
+  while (cur && !seen.has(cur)) {
+    if (cur === ancestorId) return true;
+    seen.add(cur);
+    cur = seenSessions.get(cur)?.parent;
+  }
+  return false;
+}
+
+function probeOrphanChildren(c, parentSessionId) {
+  for (const [childId, meta] of seenSessions) {
+    if (meta.detached || orphanProbed.has(childId) || !isDescendantOf(childId, parentSessionId)) continue;
+    orphanProbed.add(childId);
+    const started = Date.now();
+    let settled = false;
+    let timer;
+    const finish = (frame) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      noteOrphanControlFrame(frame);
+    };
+    timer = setTimeout(() => {
+      finish({
+        client: 'unguarded',
+        kind: 'probe-silence',
+        method: 'Page.enable',
+        id: null,
+        sessionId: childId,
+        envelopeSessionId: null,
+        parentSessionId,
+        cdpCode: null,
+        cdpMessage: 'no chrome reply within 2s',
+        via: 'orphan-probe',
+        ms: 2000,
+      });
+    }, 2000);
+    const probe = c.send('Page.enable', {}, childId).then(
+      () => {
+        finish({
+          client: 'unguarded',
+          kind: 'probe-reply',
+          method: 'Page.enable',
+          id: null,
+          sessionId: childId,
+          envelopeSessionId: null,
+          parentSessionId,
+          cdpCode: null,
+          cdpMessage: null,
+          via: 'orphan-probe',
+          ms: Date.now() - started,
+        });
+      },
+      (error) => {
+        finish({
+          client: 'unguarded',
+          kind: 'probe-error',
+          method: 'Page.enable',
+          id: null,
+          sessionId: childId,
+          envelopeSessionId: null,
+          parentSessionId,
+          cdpCode: error?.cdp?.code ?? null,
+          cdpMessage: error?.cdp?.message ?? String(error?.message ?? error),
+          via: 'orphan-probe',
+          ms: Date.now() - started,
+        });
+      },
+    );
+    orphanProbePending.push(probe.catch(() => {}));
+  }
 }
 
 function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
@@ -219,6 +314,20 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
       detachBeforeReject: detachedMs != null && Date.now() >= detachedMs,
     });
   };
+  const noteOrphanReply = (method, sessionId, msgId, error, via) => {
+    if (name !== 'unguarded' || !sessionId || !ancestorDetached(sessionId)) return;
+    noteOrphanControlFrame({
+      client: name,
+      kind: error ? (via === 'detachedFromTarget' ? 'detach-reject' : error?.cdp ? 'error' : 'timeout-or-reject') : 'reply',
+      method,
+      id: msgId ?? null,
+      sessionId,
+      envelopeSessionId: null,
+      cdpCode: error?.cdp?.code ?? null,
+      cdpMessage: error?.cdp?.message ?? (error ? String(error.message ?? error) : null),
+      via: via ?? (error ? 'send-reject' : 'ok'),
+    });
+  };
   const onEvent = (e) => {
     noteSession(name, e);
     const info = e.params?.targetInfo;
@@ -237,6 +346,21 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
     events.push(e);
     if (e.method !== 'Target.detachedFromTarget') return;
     const sid = e.params.sessionId;
+    if (name === 'unguarded') {
+      noteOrphanControlFrame({
+        client: name,
+        kind: 'event',
+        method: 'Target.detachedFromTarget',
+        id: null,
+        sessionId: sid ?? '',
+        envelopeSessionId: e.sessionId ?? '',
+        targetId: e.params?.targetId ?? '',
+        cdpCode: null,
+        cdpMessage: null,
+        via: 'chrome-event',
+      });
+      probeOrphanChildren(c, sid);
+    }
     detachedAt.set(sid, Date.now());
     for (const entry of calls.get(sid) ?? []) entry.reject(new Error('the session detached'));
     calls.delete(sid);
@@ -374,6 +498,7 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
           reject: (error) => {
             if (settled) return;
             settled = true;
+            noteOrphanReply(method, sessionId, c.sent[before]?.id, error, 'detachedFromTarget');
             noteNonAnswer(method, sessionId, error, 'detachedFromTarget');
             reject(error);
           },
@@ -385,11 +510,13 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
             (result) => {
               if (settled) return;
               settled = true;
+              noteOrphanReply(method, sessionId, c.sent[before]?.id, null, 'ok');
               resolve(result);
             },
             (error) => {
               if (settled) return;
               settled = true;
+              noteOrphanReply(method, sessionId, c.sent[before]?.id, error, 'send-reject');
               noteNonAnswer(method, sessionId, error, 'send-reject');
               reject(error);
             },
@@ -644,9 +771,13 @@ export function guardStart(getLink, opts) {
         }
         if (String(row.id ?? '').startsWith('C3.protected-parent') || String(row.id ?? '').startsWith('C3.ordinary-parent')) {
           const dump = nonAnswerRejections.splice(0, nonAnswerRejections.length);
+          const orphanDump = orphanControlFrames.splice(0, orphanControlFrames.length);
+          const probesLeft = orphanProbePending.splice(0, orphanProbePending.length).length;
           row.diagnostics = {
             ...(row.diagnostics && typeof row.diagnostics === 'object' ? row.diagnostics : {}),
             nonAnswerRejections: dump,
+            orphanControlFrames: orphanDump,
+            orphanProbesPendingAtLog: probesLeft,
           };
           if (dump.length) {
             row.errors = [
@@ -659,6 +790,8 @@ export function guardStart(getLink, opts) {
           }
         } else {
           nonAnswerRejections.length = 0;
+          orphanControlFrames.length = 0;
+          orphanProbePending.length = 0;
         }
         state.started.delete(rowKey(row));
         if (row.inFlight) row.errors = [...(row.errors ?? []), ...describeSessions(row)];
