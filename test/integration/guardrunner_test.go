@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,18 +172,8 @@ func idpTLSCertificate(t *testing.T) tls.Certificate {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
-func startIdPTLS(t *testing.T, fixturePort int) idpTLS {
+func certSPKI(t *testing.T, leaf tls.Certificate) string {
 	t.Helper()
-	upstream := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(fixturePort)}
-	proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
-		r.SetURL(upstream)
-		r.Out.Host = r.In.Host
-	}}
-	leaf := idpTLSCertificate(t)
-	srv := httptest.NewUnstartedServer(proxy)
-	srv.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}
-	srv.StartTLS()
-	t.Cleanup(srv.Close)
 	parsed, err := x509.ParseCertificate(leaf.Certificate[0])
 	if err != nil {
 		t.Fatal(err)
@@ -192,11 +183,159 @@ func startIdPTLS(t *testing.T, fixturePort int) idpTLS {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(pub)
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func fixtureProxy(fixturePort int) http.Handler {
+	upstream := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(fixturePort)}
+	return &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(upstream)
+		r.Out.Host = r.In.Host
+	}}
+}
+
+func startIdPTLS(t *testing.T, fixturePort int, leaf tls.Certificate) idpTLS {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(fixtureProxy(fixturePort))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
 	u, err := url.Parse(srv.URL)
 	if err != nil || u.Port() == "" {
 		t.Fatalf("IdP TLS URL %q: %v", srv.URL, err)
 	}
-	return idpTLS{port: u.Port(), spki: base64.StdEncoding.EncodeToString(sum[:])}
+	return idpTLS{port: u.Port(), spki: certSPKI(t, leaf)}
+}
+
+type peekConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *peekConn) Read(p []byte) (int, error) {
+	return c.r.Read(p)
+}
+
+type onceListener struct {
+	addr net.Addr
+	c    net.Conn
+	once sync.Once
+}
+
+func (l *onceListener) Accept() (net.Conn, error) {
+	var c net.Conn
+	l.once.Do(func() { c = l.c })
+	if c == nil {
+		return nil, net.ErrClosed
+	}
+	return c, nil
+}
+
+func (l *onceListener) Close() error { return nil }
+
+func (l *onceListener) Addr() net.Addr { return l.addr }
+
+func startDualFrontDoor(t *testing.T, fixturePort int, leaf tls.Certificate) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	handler := fixtureProxy(fixturePort)
+	httpSrv := &http.Server{Handler: handler}
+	tlsCfg := &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveDualFrontDoor(c, httpSrv, tlsCfg)
+		}
+	}()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil || port == "" {
+		t.Fatalf("dual front door addr %q: %v", ln.Addr(), err)
+	}
+	return port
+}
+
+func serveDualFrontDoor(c net.Conn, httpSrv *http.Server, tlsCfg *tls.Config) {
+	br := bufio.NewReader(c)
+	peek, err := br.Peek(1)
+	pc := &peekConn{Conn: c, r: br}
+	if err != nil {
+		_ = c.Close()
+		return
+	}
+	conn := net.Conn(pc)
+	if peek[0] == 0x16 {
+		tc := tls.Server(pc, tlsCfg)
+		if err := tc.Handshake(); err != nil {
+			_ = tc.Close()
+			return
+		}
+		conn = tc
+	}
+	_ = httpSrv.Serve(&onceListener{addr: c.LocalAddr(), c: conn})
+}
+
+func stageCredentialExportProbeNotes(t *testing.T, src string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.CopyFS(root, os.DirFS(src)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "credential-export.mjs")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	noteHook := "const note = (label, evidence) => notes.push(`${label}: ${JSON.stringify(evidence)}`);\n"
+	noteInject := "const note = (label, evidence) => notes.push(`${label}: ${JSON.stringify(evidence)}`);\n  globalThis.__credProbeNote = note;\n"
+	if !strings.Contains(text, noteHook) {
+		t.Fatal("credential-export.mjs note hook shape changed; update probe notes")
+	}
+	text = strings.Replace(text, noteHook, noteInject, 1)
+	topNeedle := "const topSession = attach.result?.sessionId;\n  if (!topSession) return { ok: false, storageKey: null, reportedKey: null, topId };\n"
+	topInject := topNeedle + `  if (typeof globalThis.__credProbeNote === 'function') {
+    const info = await outcome(reader.send('Target.getTargetInfo', { targetId: topId }));
+    const got = String(info.result?.targetInfo?.url ?? '');
+    const asked = String(topUrl);
+    globalThis.__credProbeNote('diag.topTarget', {
+      askedScheme: asked.startsWith('https:') ? 'https' : asked.startsWith('http:') ? 'http' : 'other',
+      askedHost: asked.replace(/^https?:\/\//, '').split('/')[0].split(':')[0],
+      gotScheme: got.startsWith('https:') ? 'https' : got.startsWith('http:') ? 'http' : got.startsWith('chrome-error:') ? 'chrome-error' : 'other',
+      gotHost: got.replace(/^https?:\/\//, '').split('/')[0].split(':')[0],
+      title: String(info.result?.targetInfo?.title ?? '').slice(0, 80),
+    });
+  }
+`
+	if !strings.Contains(text, topNeedle) {
+		t.Fatal("credential-export.mjs plantPartitionedInTop shape changed; update probe notes")
+	}
+	text = strings.Replace(text, topNeedle, topInject, 1)
+	pageNeedle := "  const pageGet = await tryMethod(client, 'Page.getCookies', {}, clientSession);\n  if (pageGet.skip) result.skips.push(pageGet.skip);\n"
+	pageInject := `  const pageGet = await tryMethod(client, 'Page.getCookies', {}, clientSession);
+  note('diag.pageGetCookies', {
+    skip: pageGet.skip || null,
+    ok: pageGet.out?.ok === true,
+    code: pageGet.out?.error?.code ?? null,
+    text: String(pageGet.out?.error?.message ?? '').slice(0, 160),
+    refused: refused(pageGet.out),
+  });
+  if (pageGet.skip) result.skips.push(pageGet.skip);
+`
+	if !strings.Contains(text, pageNeedle) {
+		t.Fatal("credential-export.mjs Page.getCookies call shape changed; update probe notes")
+	}
+	text = strings.Replace(text, pageNeedle, pageInject, 1)
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func startGuardFixture(t *testing.T) guardFixture {
@@ -555,16 +694,18 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	if len(guardSkips) > 0 {
 		t.Logf("skipping %d C9 vectors: %s", len(guardSkips), guardC9MacReason)
 	}
-	pkg := guardPackage(t)
+	pkg := stageCredentialExportProbeNotes(t, guardPackage(t))
 	ext := filepath.Join("..", "..", "node_modules", "@ai-ecoverse", "slicc-shared-web", "harness", "extension")
 	if _, err := os.Stat(filepath.Join(ext, "manifest.json")); err != nil {
 		t.Fatalf("slicc-shared-web's harness extension is missing; run npm ci: %v", err)
 	}
 	ext = stage1GuardFixture(t, ext)
 	fix := startGuardFixture(t)
+	leaf := idpTLSCertificate(t)
+	front := startDualFrontDoor(t, fix.port, leaf)
 	srv := guardPageServer(t, pkg, fix.port)
-	idp := startIdPTLS(t, fix.port)
-	fp := strconv.Itoa(fix.port)
+	idp := startIdPTLS(t, fix.port, leaf)
+	fp := front
 	seven := "http://seven.guard.test:" + fp
 	sevenOopif := "http://seven.oopif.test:" + fp
 	idpOrigin := "https://ims-na1.adobelogin.com:" + idp.port
@@ -757,8 +898,12 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 				t.Logf("%s: WAIVED (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, reason, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
 				continue
 			}
-			if r.ID == "C7.credential-export" && len(r.Notes) > 0 {
-				t.Logf("%s: credential-export notes: %v", name, r.Notes)
+			if r.ID == "C7.credential-export" {
+				for _, n := range r.Notes {
+					if strings.Contains(n, "diag.pageGetCookies") || strings.Contains(n, "diag.topTarget") || strings.Contains(n, "partitioned:") || strings.Contains(n, "result:") {
+						t.Logf("%s: %s", name, n)
+					}
+				}
 			}
 			t.Errorf("%s: control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s\n  notes %v", name, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed, r.Notes)
 		}
