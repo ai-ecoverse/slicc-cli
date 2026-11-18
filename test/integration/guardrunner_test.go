@@ -2,6 +2,9 @@ package integration
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -124,6 +127,36 @@ func guardPackage(t *testing.T) string {
 type guardFixture struct {
 	port int
 	log  int
+}
+
+type idpTLS struct {
+	port string
+	spki string
+}
+
+func startIdPTLS(t *testing.T, fixturePort int) idpTLS {
+	t.Helper()
+	upstream := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(fixturePort)}
+	proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(upstream)
+		r.Out.Host = r.In.Host
+	}}
+	srv := httptest.NewTLSServer(proxy)
+	t.Cleanup(srv.Close)
+	cert := srv.Certificate()
+	if cert == nil {
+		t.Fatal("the IdP TLS fixture has no certificate")
+	}
+	pub, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(pub)
+	u, err := url.Parse(srv.URL)
+	if err != nil || u.Port() == "" {
+		t.Fatalf("IdP TLS URL %q: %v", srv.URL, err)
+	}
+	return idpTLS{port: u.Port(), spki: base64.StdEncoding.EncodeToString(sum[:])}
 }
 
 func startGuardFixture(t *testing.T) guardFixture {
@@ -489,9 +522,12 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	ext = stage1GuardFixture(t, ext)
 	fix := startGuardFixture(t)
 	srv := guardPageServer(t, pkg, fix.port)
+	idp := startIdPTLS(t, fix.port)
 	fp := strconv.Itoa(fix.port)
 	seven := "http://seven.guard.test:" + fp
 	sevenOopif := "http://seven.oopif.test:" + fp
+	idpOrigin := "https://ims-na1.adobelogin.com:" + idp.port
+	idpStgOrigin := "https://ims-na1-stg1.adobelogin.com:" + idp.port
 	targets := map[string]string{
 		"seven":              seven,
 		"sevenOopif":         sevenOopif,
@@ -503,13 +539,16 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		"ordinary":           "http://ordinary.guard.test:" + fp,
 		"ordinary-same-site": "http://page.guard.test:" + fp,
 		"cross":              "http://cross.test:" + fp,
+		"idp":                idpOrigin,
+		"idp-stg":            idpStgOrigin,
 	}
 	n := run.slots
-	rules := "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1,MAP sliccy.ai 127.0.0.1,MAP *.test 127.0.0.1"
+	rules := "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1,MAP sliccy.ai 127.0.0.1,MAP *.test 127.0.0.1,MAP ims-na1.adobelogin.com 127.0.0.1,MAP ims-na1-stg1.adobelogin.com 127.0.0.1,MAP *.adobelogin.com 127.0.0.1"
 	secure := "--unsafely-treat-insecure-origin-as-secure=" + strings.Join([]string{targets["ordinary"], targets["seven"], targets["vault"], targets["sevenOopif"]}, ",")
+	spki := "--ignore-certificate-errors-spki-list=" + idp.spki
 	chromes := make([]*chromeProc, n)
 	for i := range chromes {
-		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL, secure)
+		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL, secure, spki)
 	}
 	gates := make([]*guardGate, n)
 	for i, b := range chromes {
@@ -519,7 +558,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	for _, g := range gates[1:] {
 		args = append(args, "--cdp-extra", g.srv.URL)
 	}
-	args = append(args, "--origin", srv.URL, "--origin", seven, "--origin", sevenOopif, "--name", "it-node")
+	args = append(args, "--origin", srv.URL, "--origin", seven, "--origin", sevenOopif, "--origin", idpOrigin, "--origin", idpStgOrigin, "--name", "it-node")
 	env := &linkEnv{t: t, b: chromes[0], origin: srv.URL}
 	env.a = startAttach(t, args...)
 	env.p = chromes[0].openPage(t, srv.URL+"/index.html")
