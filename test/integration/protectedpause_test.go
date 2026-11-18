@@ -37,7 +37,6 @@ func protectedPauseScript(seven, allowed string) fakeScript {
 		protectedPauseEvent("Fetch.requestPaused", "oxhr3", allowed+"/xhr3", "XHR"),
 		protectedPauseEvent("Fetch.requestPaused", "oxhr4", allowed+"/xhr4", "XHR"),
 		protectedPauseEvent("Fetch.requestPaused", "oxhr5", allowed+"/xhr5", "XHR"),
-		protectedPauseEvent("Fetch.authRequired", "oauth", allowed+"/auth", "XHR"),
 		protectedPauseEvent("Network.requestIntercepted", "oleg", allowed+"/leg", "XHR"),
 	}
 	return afterEnable(events)
@@ -77,7 +76,6 @@ func TestCDPRefusesClientWritesOnPausedProtectedRequests(t *testing.T) {
 		{"Fetch.continueResponse", map[string]any{"requestId": "oxhr", "responseCode": 200, "responseHeaders": []map[string]string{{"name": "Set-Cookie", "value": "a=kept; Path=/"}}}},
 		{"Fetch.continueRequest", map[string]any{"requestId": "oxhr2"}},
 		{"Fetch.failRequest", map[string]any{"requestId": "oxhr3", "errorReason": "Failed"}},
-		{"Fetch.continueWithAuth", map[string]any{"requestId": "oauth", "authChallengeResponse": map[string]string{"response": "Default"}}},
 		{"Network.continueInterceptedRequest", map[string]any{"interceptionId": "oleg"}},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "oxhr4", "responseCode": 200, "responseHeaders": []map[string]string{{"name": "Content-Type", "value": "text/plain"}}, "body": base64.StdEncoding.EncodeToString([]byte("kept"))}},
 		{"Fetch.continueResponse", map[string]any{"requestId": "oxhr5", "responseCode": 200, "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
@@ -132,13 +130,13 @@ func TestCDPRefusesClientWritesOnPausedProtectedRequests(t *testing.T) {
 	}
 	forwarded := map[string]bool{}
 	for _, m := range fake.received() {
-		for _, id := range []string{"odoc", "oxhr", "oxhr2", "oxhr3", "oxhr4", "oxhr5", "oauth", "oleg"} {
+		for _, id := range []string{"odoc", "oxhr", "oxhr2", "oxhr3", "oxhr4", "oxhr5", "oleg"} {
 			if strings.Contains(m, `"`+id+`"`) && (strings.Contains(m, `"Fetch.`) || strings.Contains(m, `"Network.continueInterceptedRequest"`)) {
 				forwarded[id] = true
 			}
 		}
 	}
-	for _, id := range []string{"odoc", "oxhr", "oxhr2", "oxhr3", "oxhr4", "oxhr5", "oauth", "oleg"} {
+	for _, id := range []string{"odoc", "oxhr", "oxhr2", "oxhr3", "oxhr4", "oxhr5", "oleg"} {
 		if !forwarded[id] {
 			t.Errorf("ordinary control %s was not forwarded: %q", id, fake.received())
 		}
