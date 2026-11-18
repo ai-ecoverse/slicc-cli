@@ -2680,30 +2680,14 @@ func TestIframeHoldClientCommandOnHeldSessionIsMissing(t *testing.T) {
 	g.held["S-mid"] = &heldSession{id: "S-mid", parent: "S-page", target: "MID", typ: "iframe", waiting: true, at: time.Now()}
 	v := reviewCommand(g, `{"id":71,"sessionId":"S-mid","method":"Runtime.runIfWaitingForDebugger","params":{}}`)
 	if len(v.forward) > 0 {
-		t.Fatalf("client resume on a held session was forwarded: %s", v.forward)
+		t.Errorf("client resume on a held session was forwarded: %s", v.forward)
 	}
-	if len(v.reply) == 0 {
-		t.Fatal("client resume on a held session was silenced")
-	}
-	var m message
-	if json.Unmarshal(v.reply, &m) != nil || m.Error == nil {
-		t.Fatalf("held-session reply was not an error: %s", v.reply)
-	}
-	var err struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	}
-	if json.Unmarshal(m.Error, &err) != nil || err.Code != -32000 || !strings.Contains(err.Message, refusedSession) {
-		t.Fatalf("held-session reply was not the missing-session refusal: %s", v.reply)
-	}
+	missingSessionFromVerdict(t, v)
 	enable := reviewCommand(g, `{"id":72,"sessionId":"S-mid","method":"Page.enable","params":{}}`)
 	if len(enable.forward) > 0 {
-		t.Fatalf("client Page.enable on a held session was forwarded: %s", enable.forward)
+		t.Errorf("client Page.enable on a held session was forwarded: %s", enable.forward)
 	}
-	refusalFromVerdict(t, enable)
-	if !strings.Contains(string(enable.reply), refusedSession) {
-		t.Fatalf("Page.enable on a held session was not the missing-session refusal: %s", enable.reply)
-	}
+	missingSessionFromVerdict(t, enable)
 }
 
 func TestIframeHoldPausedChildResumeBypassesOpenConfirm(t *testing.T) {
