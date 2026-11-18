@@ -90,6 +90,14 @@ func (b guardBounds) expired(nt *navTarget, now time.Time, away time.Duration) s
 	return ""
 }
 
+func (b guardBounds) left(nt *navTarget, now time.Time, away time.Duration) time.Duration {
+	last := nt.start
+	if nt.progress.After(last) {
+		last = nt.progress
+	}
+	return min(b.limit-now.Sub(nt.start), b.idle-(now.Sub(last)-(away-nt.awayAt)))
+}
+
 func (g *guard) progressLocked(m *message) {
 	if len(g.navTargets) == 0 && len(g.unknown) == 0 {
 		return
@@ -125,16 +133,60 @@ func (g *guard) navWatch(now time.Time) {
 		}
 	}
 	g.resolveUnknownLocked()
-	unknownIdle := min(unknownSessionIdle, g.bounds.idle)
 	for _, u := range g.unknown {
-		if u.done {
-			continue
+		if !u.done {
+			g.expireUnknownLocked(u, now, away)
 		}
-		b := guardBounds{idle: unknownIdle, limit: g.bounds.limit}
-		if reason := b.expired(u, now, away); reason != "" {
-			g.logf("cdp: a session slicc doesn't know never registered: %s; refusing its commands", reason)
-			u.reason = reason
-			u.settle(true)
+	}
+}
+
+func (g *guard) unknownBounds() guardBounds {
+	return guardBounds{idle: min(unknownSessionIdle, g.bounds.idle), limit: g.bounds.limit}
+}
+
+func (g *guard) expireUnknownLocked(u *navTarget, now time.Time, away time.Duration) bool {
+	reason := g.unknownBounds().expired(u, now, away)
+	if reason == "" {
+		return false
+	}
+	g.logf("cdp: a session slicc doesn't know never registered: %s; refusing its commands", reason)
+	u.reason = reason
+	u.settle(true)
+	return true
+}
+
+func (g *guard) armUnknownLocked(id string, u *navTarget, now time.Time) {
+	if g.watchStopped || u.done {
+		return
+	}
+	d := max(g.unknownBounds().left(u, now, g.reads.away(now)), time.Millisecond)
+	if u.wake != nil {
+		u.wake.Reset(d)
+		return
+	}
+	u.wake = time.AfterFunc(d, func() { g.unknownWake(id, u) })
+}
+
+func (g *guard) unknownWake(id string, u *navTarget) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.resolveUnknownLocked()
+	if g.unknown[id] != u || u.done {
+		return
+	}
+	now := time.Now()
+	if !g.expireUnknownLocked(u, now, g.reads.away(now)) {
+		g.armUnknownLocked(id, u, now)
+	}
+}
+
+func (g *guard) stopUnknownWakes() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.watchStopped = true
+	for _, u := range g.unknown {
+		if u.wake != nil {
+			u.wake.Stop()
 		}
 	}
 }
@@ -147,6 +199,7 @@ func (g *guard) watch(stop <-chan struct{}) {
 		case now := <-t.C:
 			g.navWatch(now)
 		case <-stop:
+			g.stopUnknownWakes()
 			return
 		}
 	}
