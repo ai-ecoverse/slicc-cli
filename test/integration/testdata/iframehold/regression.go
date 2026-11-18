@@ -2350,22 +2350,52 @@ func TestIframeHoldUnknownSessionRefusesWithinBound(t *testing.T) {
 	}
 }
 
+const chromeMissingSessionMessage = "Session with given id not found."
+
 func missingSessionFromVerdict(t *testing.T, v pageVerdict) {
 	t.Helper()
 	if len(v.reply) == 0 {
-		t.Fatal("expected a missing-session reply")
+		t.Error("expected a missing-session reply")
+		return
 	}
 	var m message
 	if json.Unmarshal(v.reply, &m) != nil || m.Error == nil {
-		t.Fatalf("expected error reply: %s", v.reply)
+		t.Errorf("expected error reply: %s", v.reply)
+		return
 	}
 	var err struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
-	if json.Unmarshal(m.Error, &err) != nil || err.Code != -32001 || err.Message != missingSessionMessage {
-		t.Fatalf("missing-session shape wrong: %s", v.reply)
+	if json.Unmarshal(m.Error, &err) != nil || err.Code != -32001 || err.Message != chromeMissingSessionMessage {
+		t.Errorf("missing-session shape wrong (want code=-32001 message=%q): %s", chromeMissingSessionMessage, v.reply)
 	}
+}
+
+func detachEvents(page [][]byte) (ids []string, envelopes []string) {
+	for _, raw := range page {
+		var m message
+		if json.Unmarshal(raw, &m) != nil || m.Method != "Target.detachedFromTarget" {
+			continue
+		}
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(m.Params, &p)
+		ids = append(ids, p.SessionID)
+		envelopes = append(envelopes, m.SessionID)
+	}
+	return ids, envelopes
+}
+
+func countDetach(ids []string, want string) int {
+	n := 0
+	for _, id := range ids {
+		if id == want {
+			n++
+		}
+	}
+	return n
 }
 
 func TestIframeHoldParentDetachCascadesOrphanChild(t *testing.T) {
@@ -2386,67 +2416,47 @@ func TestIframeHoldParentDetachCascadesOrphanChild(t *testing.T) {
 	g.pending[callKey{"S-child", 90}] = kindPlain
 	detach := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-mid","targetId":"MID"}}`))
 	if g.sessions["S-child"] != nil || !g.gone["S-child"] {
-		t.Fatal("orphan child session record was kept after parent chrome-detach")
+		t.Errorf("orphan child session record was kept after parent chrome-detach")
 	}
 	if g.sessions["S-other"] == nil {
-		t.Fatal("sibling under a live parent was removed by orphan cascade")
+		t.Errorf("sibling under a live parent was removed by orphan cascade")
 	}
 	if g.sessions["S-page"] == nil {
-		t.Fatal("page session was removed by mid detach")
+		t.Errorf("page session was removed by mid detach")
 	}
-	var sawChildDetach, sawParentDetach, sawPending bool
+	ids, envelopes := detachEvents(detach.page)
+	childAt, parentAt := -1, -1
+	var sawPending bool
+	for i, id := range ids {
+		if id == "S-child" && childAt < 0 {
+			childAt = i
+			if envelopes[i] != "S-mid" {
+				t.Errorf("synthesized child detach envelope sessionId=%q, want parent S-mid", envelopes[i])
+			}
+		}
+		if id == "S-mid" && parentAt < 0 {
+			parentAt = i
+		}
+	}
 	for _, raw := range detach.page {
 		var m message
-		if json.Unmarshal(raw, &m) != nil {
+		if json.Unmarshal(raw, &m) != nil || m.ID == nil || *m.ID != 90 {
 			continue
 		}
-		if m.Method == "Target.detachedFromTarget" {
-			var p struct {
-				SessionID string `json:"sessionId"`
-			}
-			_ = json.Unmarshal(m.Params, &p)
-			switch p.SessionID {
-			case "S-child":
-				sawChildDetach = true
-			case "S-mid":
-				sawParentDetach = true
-			}
-		}
-		if m.ID != nil && *m.ID == 90 {
-			sawPending = true
-			missingSessionFromVerdict(t, pageVerdict{reply: raw})
-		}
+		sawPending = true
+		missingSessionFromVerdict(t, pageVerdict{reply: raw})
 	}
-	if !sawChildDetach {
-		t.Fatal("client was not told Target.detachedFromTarget for the orphan child")
+	if childAt < 0 {
+		t.Errorf("client was not told Target.detachedFromTarget for the orphan child")
 	}
-	if !sawParentDetach {
-		t.Fatal("client was not told Target.detachedFromTarget for the parent")
+	if parentAt < 0 {
+		t.Errorf("client was not told Target.detachedFromTarget for the parent")
+	}
+	if childAt >= 0 && parentAt >= 0 && childAt > parentAt {
+		t.Errorf("detach order want child before parent: childAt=%d parentAt=%d", childAt, parentAt)
 	}
 	if !sawPending {
-		t.Fatal("pending command on the orphan child was not answered")
-	}
-	if sawChildDetach && sawParentDetach {
-		childAt, parentAt := -1, -1
-		for i, raw := range detach.page {
-			var m message
-			if json.Unmarshal(raw, &m) != nil || m.Method != "Target.detachedFromTarget" {
-				continue
-			}
-			var p struct {
-				SessionID string `json:"sessionId"`
-			}
-			_ = json.Unmarshal(m.Params, &p)
-			if p.SessionID == "S-child" {
-				childAt = i
-			}
-			if p.SessionID == "S-mid" {
-				parentAt = i
-			}
-		}
-		if childAt < 0 || parentAt < 0 || childAt > parentAt {
-			t.Fatalf("detach order want child before parent: childAt=%d parentAt=%d", childAt, parentAt)
-		}
+		t.Errorf("pending command on the orphan child was not answered")
 	}
 	for _, raw := range []string{
 		`{"id":91,"sessionId":"S-child","method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":false,"flatten":true}}`,
@@ -2455,13 +2465,83 @@ func TestIframeHoldParentDetachCascadesOrphanChild(t *testing.T) {
 	} {
 		v := reviewCommand(g, raw)
 		if len(v.forward) > 0 {
-			t.Fatalf("command on orphan child reached Chrome: %s", v.forward)
+			t.Errorf("command on orphan child reached Chrome: %s", v.forward)
 		}
 		missingSessionFromVerdict(t, v)
 	}
 	live := reviewCommand(g, `{"id":94,"sessionId":"S-other","method":"Page.enable","params":{}}`)
 	if len(live.forward) == 0 || len(live.reply) > 0 {
-		t.Fatalf("live sibling was not forwarded: forward=%s reply=%s", live.forward, live.reply)
+		t.Errorf("live sibling was not forwarded: forward=%s reply=%s", live.forward, live.reply)
+	}
+}
+
+func TestIframeHoldParentDetachChildFirstNoDuplicate(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+		{TargetID: "CHILD", Type: "iframe", URL: "https://ordinary.test/inner", ParentFrameID: "MID"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page"}
+	g.sessions["S-child"] = &session{id: "S-child", target: "CHILD", typ: "iframe", parent: "S-mid"}
+	child := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-child","targetId":"CHILD"},"sessionId":"S-mid"}`))
+	parent := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-mid","targetId":"MID"}}`))
+	var page [][]byte
+	page = append(page, child.page...)
+	if len(child.forward) > 0 {
+		page = append(page, child.forward)
+	}
+	page = append(page, parent.page...)
+	if len(parent.forward) > 0 {
+		page = append(page, parent.forward)
+	}
+	ids, _ := detachEvents(page)
+	if n := countDetach(ids, "S-child"); n != 1 {
+		t.Errorf("client saw %d child detaches after chrome-child-then-parent, want exactly 1 (ids=%v)", n, ids)
+	}
+	if g.sessions["S-child"] != nil {
+		t.Errorf("child session record survived chrome-child-then-parent")
+	}
+}
+
+func TestIframeHoldParentDetachDropsLateChildEvent(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+		{TargetID: "CHILD", Type: "iframe", URL: "https://ordinary.test/inner", ParentFrameID: "MID"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page"}
+	g.sessions["S-child"] = &session{id: "S-child", target: "CHILD", typ: "iframe", parent: "S-mid"}
+	parent := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-mid","targetId":"MID"}}`))
+	late := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-child","targetId":"CHILD"},"sessionId":"S-mid"}`))
+	var page [][]byte
+	page = append(page, parent.page...)
+	if len(parent.forward) > 0 {
+		page = append(page, parent.forward)
+	}
+	page = append(page, late.page...)
+	if len(late.forward) > 0 {
+		page = append(page, late.forward)
+	}
+	ids, envelopes := detachEvents(page)
+	if n := countDetach(ids, "S-child"); n != 1 {
+		t.Errorf("client saw %d child detaches after parent-then-late-chrome-child, want exactly 1 (ids=%v)", n, ids)
+	}
+	for i, id := range ids {
+		if id == "S-child" && envelopes[i] != "S-mid" {
+			t.Errorf("child detach envelope sessionId=%q, want parent S-mid", envelopes[i])
+		}
+	}
+	latePage := append([][]byte{}, late.page...)
+	if len(late.forward) > 0 {
+		latePage = append(latePage, late.forward)
+	}
+	lateIDs, _ := detachEvents(latePage)
+	if countDetach(lateIDs, "S-child") > 0 {
+		t.Errorf("late chrome child detach was forwarded after cascade forgot the child: page=%s forward=%s", late.page, late.forward)
 	}
 }
 
@@ -2479,23 +2559,18 @@ func TestIframeHoldParentDetachCascadesGrandchild(t *testing.T) {
 	g.sessions["S-gc"] = &session{id: "S-gc", target: "GC", typ: "iframe", parent: "S-child"}
 	detach := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-mid","targetId":"MID"}}`))
 	if g.sessions["S-gc"] != nil || g.sessions["S-child"] != nil {
-		t.Fatal("grandchild or child survived parent chrome-detach")
+		t.Errorf("grandchild or child survived parent chrome-detach")
 	}
-	order := []string{}
-	for _, raw := range detach.page {
-		var m message
-		if json.Unmarshal(raw, &m) != nil || m.Method != "Target.detachedFromTarget" {
-			continue
-		}
-		var p struct {
-			SessionID string `json:"sessionId"`
-		}
-		_ = json.Unmarshal(m.Params, &p)
-		order = append(order, p.SessionID)
-	}
+	order, envelopes := detachEvents(detach.page)
 	want := []string{"S-gc", "S-child", "S-mid"}
 	if strings.Join(order, ",") != strings.Join(want, ",") {
-		t.Fatalf("detach order=%v want %v", order, want)
+		t.Errorf("detach order=%v want %v", order, want)
+	}
+	wantEnv := map[string]string{"S-gc": "S-child", "S-child": "S-mid", "S-mid": ""}
+	for i, id := range order {
+		if want, ok := wantEnv[id]; ok && envelopes[i] != want {
+			t.Errorf("detach %s envelope sessionId=%q, want %q", id, envelopes[i], want)
+		}
 	}
 	missingSessionFromVerdict(t, reviewCommand(g, `{"id":95,"sessionId":"S-gc","method":"Page.enable","params":{}}`))
 }
