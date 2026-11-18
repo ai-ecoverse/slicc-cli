@@ -637,6 +637,7 @@ func hostileBinaryPlantScript(_, allowed string) fakeScript {
 		{"hidp-binstatuslf", idpOrigin + "/ims"},
 		{"hidp-bincr", idpOrigin + "/ims"},
 		{"hidp-binfold", idpOrigin + "/ims"},
+		{"hidp-binfold2", idpOrigin + "/ims"},
 		{"hidp-binnum", idpOrigin + "/ims"},
 		{"hidp-binarr", idpOrigin + "/ims"},
 		{"hidp-binobj", idpOrigin + "/ims"},
@@ -660,7 +661,8 @@ func TestCDPRefusesHostileBinaryPlantFetchShapes(t *testing.T) {
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binlf", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-A: 1\nSet-Cookie: sid=PLANTED; Domain=.adobelogin.com")}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binstatuslf", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("HTTP/1.1 200 OK\nSet-Cookie: sid=PLANTED; Domain=.adobelogin.com")}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-bincr", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-A: 1\r")}, page},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binfold", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("Set-Cookie: sid=PLANTED", " Domain=.adobelogin.com")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binfold", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-A: 1", " X-Kept: 1")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binfold2", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-A: 1", " Domain=.adobelogin.com")}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binnum", "responseCode": 200, "binaryResponseHeaders": 7}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binarr", "responseCode": 200, "binaryResponseHeaders": []any{}}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binobj", "responseCode": 200, "binaryResponseHeaders": map[string]any{"x": 1}}, page},
@@ -670,7 +672,7 @@ func TestCDPRefusesHostileBinaryPlantFetchShapes(t *testing.T) {
 	}
 	out, b := outcomesOf(t, env, calls)
 	refusedIDs := map[string]bool{
-		"hidp-binlf": true, "hidp-binstatuslf": true, "hidp-bincr": true, "hidp-binfold": true,
+		"hidp-binlf": true, "hidp-binstatuslf": true, "hidp-bincr": true, "hidp-binfold": true, "hidp-binfold2": true,
 		"hidp-binnum": true, "hidp-binarr": true, "hidp-binobj": true,
 	}
 	for i, o := range out {
