@@ -141,6 +141,7 @@ func (g *guard) frameEventLocked(m *message) [][]byte {
 			delete(g.frames, id)
 		}
 	}
+	g.queueContextSettleLocked()
 	return send
 }
 

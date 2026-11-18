@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -61,9 +62,10 @@ type heldContext struct {
 	session string
 	context execContext
 	data    []byte
+	at      time.Time
 }
 
-const maxHeldContexts = 4096
+const maxHeldContexts = 256
 
 func (g *guard) frameContextAncestrySettledLocked(frame, page string) bool {
 	if frame == "" || frame == page {
@@ -91,7 +93,7 @@ func (g *guard) frameContextAncestrySettledLocked(frame, page string) bool {
 
 func (g *guard) frameContextStepSettledLocked(id string) (settled, cont bool) {
 	if t := g.targets[id]; t != nil && !t.gone {
-		if t.typ == "page" || t.typ == "tab" || t.protected || g.targetLoadedLocked(t) {
+		if t.typ == "page" || t.typ == "tab" || t.protected {
 			return true, false
 		}
 		if t.typ == "iframe" && (g.iframeAncestryUnknownLocked(t) || g.targetHeldLocked(t.id) || g.targetUnconfirmedLocked(t.id)) {
@@ -106,11 +108,14 @@ func (g *guard) frameContextStepSettledLocked(id string) (settled, cont bool) {
 	if !known || !ok {
 		return false, false
 	}
-	return g.creatorProtectedLocked(id), !g.creatorProtectedLocked(id)
+	if g.creatorProtectedLocked(id) {
+		return true, false
+	}
+	return false, true
 }
 
 func (g *guard) holdContextLocked(target, session string, c execContext, data []byte) {
-	if target == "" || c.ID == 0 {
+	if target == "" || c.ID == 0 || !c.AuxData.IsDefault || c.AuxData.FrameID == "" || c.AuxData.FrameID == target {
 		return
 	}
 	key := heldContextKey{target: target, id: c.ID}
@@ -121,10 +126,11 @@ func (g *guard) holdContextLocked(target, session string, c execContext, data []
 		return
 	}
 	if len(g.heldContexts) >= maxHeldContexts {
-		g.logf("cdp: too many execution contexts wait for frame ancestry; dropping one")
+		g.logf("cdp: too many execution contexts wait for frame ancestry; refusing one")
+		g.hideContextLocked(target, session, c)
 		return
 	}
-	g.heldContexts[key] = &heldContext{target: target, session: session, context: c, data: data}
+	g.heldContexts[key] = &heldContext{target: target, session: session, context: c, data: data, at: time.Now()}
 }
 
 func (g *guard) contextHeldLocked(target string, id int64) bool {
@@ -143,14 +149,30 @@ func (g *guard) forgetHeldContextsLocked(target, session string) {
 	}
 }
 
+func (g *guard) queueContextSettleLocked() {
+	g.contextSettlePage = append(g.contextSettlePage, g.settleHeldContextsLocked()...)
+}
+
+func (g *guard) takeContextSettlePageLocked() [][]byte {
+	out := g.contextSettlePage
+	g.contextSettlePage = nil
+	return out
+}
+
 func (g *guard) settleHeldContextsLocked() [][]byte {
+	if len(g.heldContexts) == 0 {
+		return nil
+	}
+	deadline := holdTimeout()
+	now := time.Now()
 	var page [][]byte
 	for key, h := range g.heldContexts {
-		if !g.frameContextAncestrySettledLocked(h.context.AuxData.FrameID, h.target) {
+		expired := now.Sub(h.at) >= deadline
+		if !expired && !g.frameContextAncestrySettledLocked(h.context.AuxData.FrameID, h.target) {
 			continue
 		}
 		delete(g.heldContexts, key)
-		if g.frameUnderProtectedLocked(h.context.AuxData.FrameID) {
+		if expired || g.frameUnderProtectedLocked(h.context.AuxData.FrameID) {
 			g.hideContextLocked(h.target, h.session, h.context)
 			continue
 		}
@@ -165,6 +187,9 @@ func (g *guard) settleHeldContextsLocked() [][]byte {
 }
 
 func (g *guard) noteFrameTreeResultLocked(raw json.RawMessage) {
+	if len(g.heldContexts) == 0 {
+		return
+	}
 	var result struct {
 		FrameTree *frameTreeNode `json:"frameTree"`
 	}
@@ -172,6 +197,7 @@ func (g *guard) noteFrameTreeResultLocked(raw json.RawMessage) {
 		return
 	}
 	g.walkFrameTreeLocked(result.FrameTree, "")
+	g.queueContextSettleLocked()
 }
 
 type frameTreeNode struct {
@@ -379,7 +405,7 @@ func (g *guard) frameUnderProtectedLocked(frame string) bool {
 		if g.creatorProtectedLocked(id) {
 			return true
 		}
-		if t := g.targets[id]; t != nil && !t.gone && (t.protected || g.targetLoadedLocked(t)) {
+		if t := g.targets[id]; t != nil && !t.gone && t.protected {
 			return true
 		}
 		id = g.frameParentOfLocked(id)

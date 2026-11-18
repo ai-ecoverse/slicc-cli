@@ -1850,11 +1850,11 @@ func TestIframeHoldContextCreatedBeforeAncestryHeldThenHidden(t *testing.T) {
 	answer, _ := json.Marshal(map[string]any{"id": 9, "sessionId": "S-page", "result": json.RawMessage(tree)})
 	v := g.fromBrowser(answer)
 	if len(v.forward) == 0 {
-		t.Fatal("getFrameTree with a protected mid was silenced instead of refused")
+		t.Fatal("getFrameTree on a page that lists a protected mid was silenced")
 	}
 	var m message
-	if json.Unmarshal(v.forward, &m) != nil || m.Error == nil {
-		t.Fatalf("getFrameTree with a protected mid was not refused: %s", v.forward)
+	if json.Unmarshal(v.forward, &m) != nil || m.Error != nil {
+		t.Fatalf("getFrameTree on a classified page must stay forwarded: %s", v.forward)
 	}
 	if g.contextHeldLocked("PAGE", 3) {
 		t.Fatal("grandchild context stayed held after the frame tree classified the protected mid")
@@ -1864,6 +1864,28 @@ func TestIframeHoldContextCreatedBeforeAncestryHeldThenHidden(t *testing.T) {
 	}
 	if reason := g.worldCheckLocked(&command{method: "Runtime.evaluate", session: "S-page", id: 2, params: map[string]any{"contextId": json.Number("3"), "expression": "1"}}); reason == "" {
 		t.Fatal("evaluate under a settled protected local mid was allowed")
+	}
+}
+
+func TestIframeHoldGetFrameTreeOnClassifiedOrdinaryPageForwards(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"}})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.noteFrameParentLocked("FRAME-A", "PAGE")
+	g.noteChildFrameLocked("FRAME-A", "https://ordinary.test/a")
+	tree, _ := json.Marshal(map[string]any{"frameTree": map[string]any{
+		"frame": map[string]any{"id": "PAGE", "url": "https://ordinary.test/", "securityOrigin": "https://ordinary.test"},
+		"childFrames": []any{map[string]any{
+			"frame": map[string]any{"id": "FRAME-A", "parentId": "PAGE", "url": "https://ordinary.test/a", "securityOrigin": "https://ordinary.test"},
+		}},
+	}})
+	g.pending[callKey{"S-page", 3}] = kindPlain
+	g.treeCalls[callKey{"S-page", 3}] = true
+	answer, _ := json.Marshal(map[string]any{"id": 3, "sessionId": "S-page", "result": json.RawMessage(tree)})
+	v := g.fromBrowser(answer)
+	var m message
+	if len(v.forward) == 0 || json.Unmarshal(v.forward, &m) != nil || m.Error != nil {
+		t.Fatalf("getFrameTree on a classified ordinary page was not forwarded: %s", v.forward)
 	}
 }
 

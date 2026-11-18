@@ -180,6 +180,7 @@ type guard struct {
 	goneOrder             []string
 	held                  map[string]*heldSession
 	heldContexts          map[heldContextKey]*heldContext
+	contextSettlePage     [][]byte
 	treeCalls             map[callKey]bool
 	childFrames           map[string]string
 	frameParents          map[string]string
