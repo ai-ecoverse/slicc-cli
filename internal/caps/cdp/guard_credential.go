@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -202,6 +203,59 @@ func credentialCookieLine(line string) bool {
 	return false
 }
 
+func plantHeaderTextOK(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+		if c < 0x20 && c != '\t' || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func plantHeaderNameOK(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+		if c <= ' ' || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func plantResponseCodeOK(c *command) bool {
+	raw, has := c.params["responseCode"]
+	if !has {
+		return true
+	}
+	switch v := raw.(type) {
+	case json.Number:
+		_, err := v.Int64()
+		return err == nil
+	case float64:
+		return v == float64(int64(v))
+	case int, int32, int64:
+		return true
+	default:
+		return false
+	}
+}
+
+func plantResponsePhraseRule(c *command) string {
+	raw, has := c.params["responsePhrase"]
+	if !has {
+		return ""
+	}
+	s, ok := raw.(string)
+	if !ok || !plantHeaderTextOK(s) {
+		return refusedCredential
+	}
+	if strings.Contains(s, ":") && credentialCookieLine(s) {
+		return refusedCredential
+	}
+	return ""
+}
+
 func plantResponseCookies(c *command) (lines []string, ok bool) {
 	if raw, has := c.params["binaryResponseHeaders"]; has {
 		s, _ := raw.(string)
@@ -220,15 +274,27 @@ func plantResponseCookies(c *command) (lines []string, ok bool) {
 			}
 		}
 	}
-	headers, _ := c.params["responseHeaders"].([]any)
-	for _, h := range headers {
-		header, _ := h.(map[string]any)
-		name, _ := header["name"].(string)
-		if !strings.EqualFold(name, "Set-Cookie") && !strings.EqualFold(name, "Set-Cookie2") {
-			continue
+	raw, has := c.params["responseHeaders"]
+	if !has {
+		return lines, true
+	}
+	list, isArr := raw.([]any)
+	if !isArr {
+		return nil, false
+	}
+	for _, h := range list {
+		header, isMap := h.(map[string]any)
+		if !isMap {
+			return nil, false
 		}
-		val, _ := header["value"].(string)
-		lines = append(lines, val)
+		name, nameOK := header["name"].(string)
+		val, valOK := header["value"].(string)
+		if !nameOK || !valOK || !plantHeaderNameOK(name) || !plantHeaderTextOK(val) {
+			return nil, false
+		}
+		if strings.EqualFold(name, "Set-Cookie") || strings.EqualFold(name, "Set-Cookie2") {
+			lines = append(lines, val)
+		}
 	}
 	return lines, true
 }
@@ -236,6 +302,12 @@ func plantResponseCookies(c *command) (lines []string, ok bool) {
 func (g *guard) plantCookieRuleLocked(c *command, id string) string {
 	if c.method != "Fetch.fulfillRequest" && c.method != "Fetch.continueResponse" {
 		return ""
+	}
+	if !plantResponseCodeOK(c) {
+		return refusedCredential
+	}
+	if reason := plantResponsePhraseRule(c); reason != "" {
+		return reason
 	}
 	lines, ok := plantResponseCookies(c)
 	if !ok {
