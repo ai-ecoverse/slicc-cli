@@ -233,3 +233,82 @@ func TestExtensionUnclassifiedHideReleasesWhenFrameOrdinaryThenLatchesWhenProtec
 		t.Fatalf("Page.getFrameTree after late protect must refuse, got forward=%v reply=%s", refused.forward != nil, refused.reply)
 	}
 }
+
+func TestExtensionOwnProbeEventBeforeReplyDoesNotLatch(t *testing.T) {
+	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001", "chrome-extension://sevenextid"}), t.Logf)
+	ordinaryNestPage(t, g)
+	const token = "slicc-ext-probe-pending-before-reply"
+	g.mu.Lock()
+	if g.extensionProbePending == nil {
+		g.extensionProbePending = map[extensionWorldKey]*extensionWorldPending{}
+	}
+	if g.extensionProbeWorlds == nil {
+		g.extensionProbeWorlds = map[string]bool{}
+	}
+	g.extensionProbeWorlds[token] = true
+	g.extensionProbePending[extensionWorldKey{"S", "HOST"}] = &extensionWorldPending{
+		name: token, session: "S", frame: "HOST", document: "doc", revision: 1,
+	}
+	_ = g.noteChildFrameLocked("HOST", "chrome-extension://sevenextid/panel.html")
+	g.mu.Unlock()
+	injectNamedWorld(g, "S", "http://localhost:7002", "HOST", token, "event-before-reply-unique", 41)
+	if locked, pf := pageLatch(g); locked {
+		t.Fatalf("own probe executionContextCreated before createIsolatedWorld reply latched: protectedFrame=%q", pf)
+	}
+	g.mu.Lock()
+	own := g.extensionProbeIDs[41] || g.extensionProbeUniques["event-before-reply-unique"]
+	g.mu.Unlock()
+	if !own {
+		t.Fatal("pending probe match must bind context id/uniqueId from the event before the reply")
+	}
+	v := g.fromCommand(&command{id: 2, method: "Page.getFrameTree", session: "S"}, 1, true)
+	if v.reply != nil || v.forward == nil {
+		t.Fatalf("Page.getFrameTree after event-before-reply probe: forward=%v reply=%s", v.forward != nil, v.reply)
+	}
+}
+
+func TestExtensionCopiedProbeTokenAfterRecordGoneIsNotOwn(t *testing.T) {
+	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001", "chrome-extension://sevenextid"}), t.Logf)
+	ordinaryNestPage(t, g)
+	const token = "slicc-ext-probe-used-token-abc"
+	g.mu.Lock()
+	g.storeExtensionProbeWorldLocked("S", "HOST", "http://localhost:7002/nest", 1, token, 50)
+	old := g.extensionProbeCache[extensionWorldKey{"S", "HOST"}]
+	g.forgetExtensionProbeWorldLocked(old)
+	if g.extensionProbePending != nil {
+		delete(g.extensionProbePending, extensionWorldKey{"S", "HOST"})
+	}
+	if g.extensionProbeWorlds == nil {
+		g.extensionProbeWorlds = map[string]bool{}
+	}
+	g.extensionProbeWorlds[token] = true
+	_ = g.noteChildFrameLocked("HOST", "chrome-extension://sevenextid/panel.html")
+	g.mu.Unlock()
+	injectNamedWorld(g, "S", "http://localhost:7002", "HOST", token, "copied-token-unique", 51)
+	g.mu.Lock()
+	own := g.extensionProbeIDs[51] || g.extensionProbeUniques["copied-token-unique"]
+	locked := g.framesProtectedLocked("PAGE")
+	g.mu.Unlock()
+	if own {
+		t.Fatal("a content-script world copying a used probe token must not match a gone pending/recorded probe")
+	}
+	if locked {
+		t.Fatalf("a forged probe-named world in a chrome-extension frame must not latch the page after the record is gone")
+	}
+}
+
+func TestExtensionFrameURLDoesNotLatchPage(t *testing.T) {
+	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001", "chrome-extension://sevenextid"}), t.Logf)
+	ordinaryNestPage(t, g)
+	g.mu.Lock()
+	_ = g.noteChildFrameLocked("HOST", "chrome-extension://sevenextid/panel.html")
+	g.mu.Unlock()
+	injectNamedWorld(g, "S", "http://localhost:7002", "HOST", "slicc-ext-probe-forged-ext-frame", "ext-frame-unique", 61)
+	if locked, pf := pageLatch(g); locked {
+		t.Fatalf("world in a chrome-extension:// frame latched the page: protectedFrame=%q", pf)
+	}
+	v := g.fromCommand(&command{id: 2, method: "Page.getFrameTree", session: "S"}, 1, true)
+	if v.reply != nil || v.forward == nil {
+		t.Fatalf("Page.getFrameTree with extension-frame child: forward=%v reply=%s", v.forward != nil, v.reply)
+	}
+}
