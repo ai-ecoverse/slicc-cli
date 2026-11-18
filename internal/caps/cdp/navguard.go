@@ -37,7 +37,27 @@ func guarded(typ string) bool {
 
 func (g *guard) startsUnheldLocked(c *command) bool {
 	s, ok := g.sessions[c.session]
-	return ok && c.method == "Runtime.runIfWaitingForDebugger" && unheldStart[s.typ]
+	if !ok || c.method != "Runtime.runIfWaitingForDebugger" {
+		return false
+	}
+	if unheldStart[s.typ] {
+		return true
+	}
+	return g.resumeBeforeDecideLocked(s)
+}
+
+func (g *guard) resumeBeforeDecideLocked(s *session) bool {
+	if s == nil || !s.waiting {
+		return false
+	}
+	if g.held[s.id] != nil {
+		return false
+	}
+	nt := g.navTargets[s.target]
+	if nt == nil {
+		return true
+	}
+	return !nt.done || (nt.confirm != nil && !nt.confirm.done)
 }
 
 func (g *guard) startsUnheld(c *command) bool {

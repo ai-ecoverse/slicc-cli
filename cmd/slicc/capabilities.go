@@ -60,6 +60,8 @@ var commandTable = map[string]commandInfo{
 	"wait":         {JSON: jsonEvents, Vocabulary: vocabularyAgent},
 	"abort":        {JSON: jsonNone},
 	"agents":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
+	"approvals":    {JSON: jsonEvents, Vocabulary: vocabularyEvents},
+	"decide":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"cdp":          {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"browsers":     {JSON: jsonDocument},
 	"launch":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
@@ -93,6 +95,7 @@ type capEvents struct {
 type capAgent struct {
 	Events []string `json:"events"`
 	Own    []string `json:"own"`
+	Ops    []string `json:"ops"`
 }
 
 type capControl struct {
@@ -111,7 +114,7 @@ func currentCapabilities() capabilities {
 		Contract: contractVersion,
 		Commands: commandTable,
 		Events:   capEvents{Schema: flow.Schema, Names: slices.Compact(names)},
-		Agent:    capAgent{Events: slices.Clone(agentctl.Events), Own: slices.Clone(agentOwn)},
+		Agent:    capAgent{Events: slices.Clone(agentctl.Events), Own: slices.Clone(agentOwn), Ops: slices.Clone(agentctl.Ops)},
 		Control:  capControl{V: ctl.V, Ops: slices.Clone(ctl.Ops)},
 	}
 }

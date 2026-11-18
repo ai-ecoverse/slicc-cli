@@ -59,6 +59,8 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		settled := g.settleHeldWorkersLocked()
 		verdict.send = append(verdict.send, settled.send...)
 		verdict.page = append(verdict.page, settled.page...)
+		verdict.page = append(verdict.page, g.takeContextSettlePageLocked()...)
+		verdict.send = append(verdict.send, g.takeContextSettleSendLocked()...)
 		verdict.send = append(verdict.send, frameSend...)
 	}()
 	g.progressLocked(&m)
@@ -147,6 +149,8 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	delete(g.extensionMarkCalls, k)
 	kind := g.pending[k]
 	delete(g.pending, k)
+	treeCall := g.treeCalls[k]
+	delete(g.treeCalls, k)
 	g.clientRequestAnsweredLocked(k, m.Error != nil)
 	g.continuedLocked(k, m.Error != nil)
 	attached := g.attachCalls[k]
@@ -164,7 +168,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget)}
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
-		return browserVerdict{send: g.closeStreamLocked(bc, m)}
+		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: g.closeStreamLocked(bc, m)}
 	}
 	if outlived {
 		g.logf("cdp: dropped an answer from before a protected error page committed")
@@ -179,20 +183,27 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	}
 	g.noteVersionReplyLocked(k, !versionCall || m.Error != nil)
 	g.noteExtensionMarkReplyLocked(k, markMethod, m.Error != nil)
+	var treePage, treeSend [][]byte
+	if treeCall && m.Error == nil {
+		g.noteFrameTreeResultLocked(m.Result)
+		treePage = g.takeContextSettlePageLocked()
+		treeSend = g.takeContextSettleSendLocked()
+	}
 	if m.Error != nil || kind == kindPlain {
-		return browserVerdict{forward: data}
+		return browserVerdict{forward: data, send: treeSend, page: treePage}
 	}
 	res, ok := decodeObject(m.Result)
 	if !ok {
-		return browserVerdict{forward: data}
+		return browserVerdict{forward: data, send: treeSend, page: treePage}
 	}
 	send, hide := g.applyResultKindLocked(kind, attached, m.SessionID, res)
+	send = append(treeSend, send...)
 	acceptedAttach = kind != kindAttach || !hide
 	if hide {
-		return browserVerdict{forward: missingTarget(*m.ID, m.SessionID), send: send}
+		return browserVerdict{forward: missingTarget(*m.ID, m.SessionID), send: send, page: treePage}
 	}
 	m.Result = encode(res)
-	return browserVerdict{forward: encode(m), send: send}
+	return browserVerdict{forward: encode(m), send: send, page: treePage}
 }
 
 func (g *guard) applyResultKindLocked(kind callKind, attached, session string, res map[string]any) ([][]byte, bool) {
@@ -593,21 +604,28 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.lost = true
 		return browserVerdict{lost: true}
 	}
+	if p.SessionID != "" && g.gone[p.SessionID] {
+		return browserVerdict{}
+	}
+	page := g.cascadeOrphansLocked(p.SessionID)
+	page = append(page, g.takePendingMissingLocked(p.SessionID)...)
+	g.navDetachedLocked(p.SessionID)
 	if h, ok := g.held[p.SessionID]; ok {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		delete(g.held, p.SessionID)
 		g.refuseHeldWaitLocked(h.target)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{page: g.takePendingPageLocked()}
+		return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)
 		delete(g.hiddenOwner, p.SessionID)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{page: g.takePendingPageLocked()}
+		return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
 	}
 	g.forgetSessionLocked(p.SessionID)
-	return browserVerdict{forward: data, page: g.takePendingPageLocked()}
+	page = append(page, data)
+	return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
 }
 
 func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {
@@ -640,6 +658,7 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 			raw = p.Frame.SecurityOrigin
 		}
 		decided = g.noteChildFrameLocked(p.Frame.ID, raw)
+		g.queueContextSettleLocked()
 	}
 	var cut [][]byte
 	if page := g.worldTargetLocked(m.SessionID); page != "" && p.Frame.ID != "" && p.Frame.ParentID != "" {
@@ -655,20 +674,22 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 		}
 	}
 	t := g.sessionTargetLocked(m.SessionID)
+	settle := g.takeContextSettlePageLocked()
+	settleSend := g.takeContextSettleSendLocked()
 	if t == nil || (p.Frame.ParentID != "" && t.typ != "iframe") || p.Frame.ID != t.id {
-		return browserVerdict{forward: data, send: append(decided, cut...)}
+		return browserVerdict{forward: data, send: append(append(decided, cut...), settleSend...), page: settle}
 	}
 	if g.o.Loaded(p.Frame.SecurityOrigin) {
-		return browserVerdict{send: append(decided, g.markLocked(t)...)}
+		return browserVerdict{send: append(append(decided, g.markLocked(t)...), settleSend...), page: settle}
 	}
-	send := append(decided, cut...)
+	send := append(append(decided, cut...), settleSend...)
 	if nt := g.navTargets[t.id]; nt != nil {
 		if (nt.confirm != nil && nt.confirm.done && nt.confirm.failed) || p.Type == "BackForwardCacheRestore" || p.Frame.UnreachableURL != "" || strings.HasPrefix(p.Frame.URL, "chrome-error:") || protect.Inheriting(p.Frame.URL) || protect.Unparseable(p.Frame.URL) {
 			g.beginConfirmLocked(nt)
 		}
 		send = append(send, g.navEventLocked(nt, m)...)
 	}
-	return browserVerdict{forward: data, send: send}
+	return browserVerdict{forward: data, send: send, page: settle}
 }
 
 func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
@@ -679,17 +700,26 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 	var decided [][]byte
 	if p.Context.AuxData.IsDefault {
 		decided = g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)
+		g.queueContextSettleLocked()
 	}
 	t := g.sessionTargetLocked(m.SessionID)
+	settle := g.takeContextSettlePageLocked()
+	settleSend := g.takeContextSettleSendLocked()
 	switch {
 	case t == nil:
-		return browserVerdict{forward: data, send: decided}
+		return browserVerdict{forward: data, send: append(decided, settleSend...), page: settle}
 	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.Loaded(p.Context.Origin):
-		return browserVerdict{send: append(decided, g.markLocked(t)...)}
+		return browserVerdict{send: append(append(decided, g.markLocked(t)...), settleSend...), page: settle}
+	case g.frameUnderProtectedLocked(p.Context.AuxData.FrameID):
+		g.hideContextLocked(t.id, m.SessionID, p.Context)
+		return browserVerdict{send: append(append(decided, g.cutCastsLocked(t.id)...), settleSend...), page: settle}
+	case p.Context.AuxData.FrameID != "" && p.Context.AuxData.FrameID != t.id && !g.frameContextAncestrySettledLocked(p.Context.AuxData.FrameID, t.id):
+		g.holdContextLocked(t.id, m.SessionID, p.Context, data)
+		return browserVerdict{send: append(decided, settleSend...), page: settle}
 	case g.worldContextLocked(t.id, m.SessionID, p.Context):
-		return browserVerdict{send: append(decided, g.cutCastsLocked(t.id)...)}
+		return browserVerdict{send: append(append(decided, g.cutCastsLocked(t.id)...), settleSend...), page: settle}
 	}
-	return browserVerdict{forward: data, send: decided}
+	return browserVerdict{forward: data, send: append(decided, settleSend...), page: settle}
 }
 
 func (g *guard) eventProtected(v any, depth int) bool {

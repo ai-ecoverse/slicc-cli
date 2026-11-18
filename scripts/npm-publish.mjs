@@ -18,13 +18,25 @@ const dryRun = values['dry-run'];
 const tag = values.tag;
 
 const guarded = {
-  sliccy: { tag: 'next', version: /^7\.0\.0-next\./ },
+  sliccy: { tag: 'next', version: /^7\.0\.0-next\./, skipLate: true },
 };
 const companions = new Set(['@ai-ecoverse/slicc-jerk']);
 
 function fail(message, code = 1) {
   process.stderr.write(`npm-publish: ${message}\n`);
   process.exit(code);
+}
+
+function warn(message) {
+  const line = `npm-publish: WARN ${message}\n`;
+  process.stdout.write(line);
+  process.stderr.write(line);
+}
+
+function annotate(title, message) {
+  if (!process.env.GITHUB_ACTIONS) return;
+  const data = message.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+  process.stdout.write(`::warning title=${title}::${data}\n`);
 }
 
 function npm(args, options = {}) {
@@ -69,7 +81,17 @@ function registry() {
   return (configured || 'https://registry.npmjs.org/').replace(/\/+$/, '');
 }
 
+function plain(text) {
+  const flat = String(text ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim().slice(0, 200);
+  return flat || 'no reason given';
+}
+
 async function onRegistry(base, name, version, timeoutMs) {
+  const why = await probe(base, name, version, timeoutMs);
+  return why === null ? '' : plain(why);
+}
+
+async function probe(base, name, version, timeoutMs) {
   try {
     const res = await fetch(`${base}/${name.replace('/', '%2f')}/${version}`, {
       headers: { accept: 'application/json', 'cache-control': 'no-cache' },
@@ -77,31 +99,38 @@ async function onRegistry(base, name, version, timeoutMs) {
     });
     if (!res.ok) return `HTTP ${res.status}`;
     const got = (await res.json()).version;
-    return got === version ? '' : `answers ${got ?? 'no version'}`;
+    return got === version ? null : `answers ${got ?? 'no version'}`;
   } catch (error) {
     return error.name === 'TimeoutError' ? `no answer in ${Math.round(timeoutMs / 1000)} s` : error.cause?.code ?? error.cause?.message ?? error.message;
   }
 }
 
+function seconds(name, fallback, least) {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) ? Math.max(least, value) : fallback;
+}
+
 async function requireDependencies(pkg) {
   const deps = Object.entries(pkg.optionalDependencies || {}).filter(([name]) => !companions.has(name));
-  if (!guarded[pkg.name]?.tag || !deps.length) return;
+  if (!guarded[pkg.name]?.tag || !deps.length) return '';
   const base = registry();
-  const waitMs = Number(process.env.SLICC_REGISTRY_WAIT_SECONDS ?? 900) * 1000;
+  const waitMs = seconds('SLICC_REGISTRY_WAIT_SECONDS', 1800, 0) * 1000;
+  const pollMs = seconds('SLICC_REGISTRY_POLL_SECONDS', 30, 1) * 1000;
   const deadline = Date.now() + waitMs;
   for (;;) {
-    const missing = [];
-    for (const [name, version] of deps) {
-      const timeoutMs = Math.min(30000, Math.max(5000, deadline - Date.now()));
-      const why = await onRegistry(base, name, version, timeoutMs);
-      if (why) missing.push(`${name}@${version} (${why})`);
-    }
+    const timeoutMs = Math.min(30000, Math.max(1000, deadline - Date.now()));
+    const answers = await Promise.all(deps.map(([name, version]) => onRegistry(base, name, version, timeoutMs)));
+    const missing = deps.flatMap(([name, version], i) => (answers[i] ? [`${name}@${version} (${answers[i]})`] : []));
     if (!missing.length) break;
-    if (Date.now() >= deadline) fail(`refusing to publish ${pkg.name}@${pkg.version}; not on the registry: ${missing.join(', ')}`, 3);
+    if (Date.now() >= deadline) {
+      if (!dryRun && guarded[pkg.name].skipLate) return missing.join(', ');
+      fail(`refusing to publish ${pkg.name}@${pkg.version}; not on the registry: ${missing.join(', ')}`, 3);
+    }
     process.stdout.write(`waiting for ${missing.join(', ')} to appear on the registry\n`);
-    await new Promise((resolve) => setTimeout(resolve, Math.min(30000, Math.max(1000, deadline - Date.now()))));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1000, deadline - Date.now()))));
   }
   process.stdout.write(`every optional dependency of ${pkg.name}@${pkg.version} is on the registry\n`);
+  return '';
 }
 
 function check(pkg) {
@@ -126,17 +155,28 @@ for (const { pkg } of packages) check(pkg);
 
 if (!dryRun) minimumNpm();
 let already = 0;
+const skipped = [];
 for (const { dir, pkg } of packages) {
   if (!dryRun && published(pkg.name, pkg.version)) {
     process.stdout.write(`${pkg.name}@${pkg.version} is already published\n`);
     already += 1;
     continue;
   }
-  if (!dryRun || values['require-registry']) await requireDependencies(pkg);
+  const late = !dryRun || values['require-registry'] ? await requireDependencies(pkg) : '';
+  if (late) {
+    const message = `${pkg.name}@${pkg.version} not published; not on the registry: ${late}`;
+    warn(`${tag}: ${message}`);
+    annotate(`${pkg.name}@${tag} not published`, `${message}. ${pkg.name}@${tag} stays on its previous version until the next release.`);
+    skipped.push(`${pkg.name}@${pkg.version}`);
+    continue;
+  }
   const args = ['publish', dir, '--access', 'public', '--tag', npmTag(pkg)];
   args.push(dryRun ? '--dry-run' : '--provenance');
   await publishPackage(pkg, args);
 }
-process.stdout.write(
-  `npm-publish: PASS ${tag}: ${dryRun ? `checked ${packages.length}` : `published ${packages.length - already}, ${already} already published`} of ${packages.length} packages\n`,
-);
+const counts = dryRun ? `checked ${packages.length}` : `published ${packages.length - already - skipped.length}, ${already} already published`;
+if (skipped.length) {
+  process.stdout.write(`npm-publish: PARTIAL ${tag}: ${counts}, skipped ${skipped.join(', ')} of ${packages.length} packages\n`);
+} else {
+  process.stdout.write(`npm-publish: PASS ${tag}: ${counts} of ${packages.length} packages\n`);
+}

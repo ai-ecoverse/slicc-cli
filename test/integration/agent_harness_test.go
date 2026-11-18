@@ -79,19 +79,29 @@ type agentOpen struct {
 	Length     int    `json:"length"`
 	TextLength int    `json:"textLength"`
 	Watch      bool   `json:"watch"`
+	ID         string `json:"id"`
+	Answer     string `json:"answer"`
+	Reason     string `json:"reason"`
+}
+
+type agentDecision struct {
+	ID     string `json:"id"`
+	Answer string `json:"answer"`
+	Reason string `json:"reason"`
 }
 
 type agentState struct {
-	Allow       bool        `json:"allow"`
-	Busy        bool        `json:"busy"`
-	Opens       []agentOpen `json:"opens"`
-	Prompts     []string    `json:"prompts"`
-	Aborts      int         `json:"aborts"`
-	Watches     int         `json:"watches"`
-	Held        bool        `json:"held"`
-	Scoops      int         `json:"scoops"`
-	Log         int         `json:"log"`
-	Inventories int         `json:"inventories"`
+	Allow       bool            `json:"allow"`
+	Busy        bool            `json:"busy"`
+	Opens       []agentOpen     `json:"opens"`
+	Prompts     []string        `json:"prompts"`
+	Aborts      int             `json:"aborts"`
+	Watches     int             `json:"watches"`
+	Held        bool            `json:"held"`
+	Scoops      int             `json:"scoops"`
+	Log         int             `json:"log"`
+	Inventories int             `json:"inventories"`
+	Decisions   []agentDecision `json:"decisions"`
 }
 
 func (p *page) agent() agentState {

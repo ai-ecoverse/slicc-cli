@@ -166,6 +166,12 @@ func TestAgentVerbsTakeTheJoinURLFromStdin(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "usage: slicc <join-url> watch") || strings.Contains(out+errOut, "5e5e5e5e") {
 		t.Fatalf("code %d, stdout %q, stderr %q", code, out, errOut)
 	}
+	for _, verb := range []string{"approvals", "decide"} {
+		out, errOut, code := sliccStdin(t, env, "https://www.sliccy.ai/join/trayx.5e5e5e5e5e5e5e5e\n", "-", verb, "--help")
+		if code != 0 || !strings.Contains(out, "usage: slicc <join-url> "+verb) || strings.Contains(out+errOut, "5e5e5e5e") {
+			t.Fatalf("%s: code %d, stdout %q, stderr %q", verb, code, out, errOut)
+		}
+	}
 	out, _, _ = sliccStdin(t, env, "https://www.sliccy.ai/join/trayx.5e5e5e5e5e5e5e5e\n", "-", "follow", "--help")
 	if !strings.Contains(out, "slicc - follow [flags]") {
 		t.Fatalf("follow --help: %q", out)

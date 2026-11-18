@@ -38,7 +38,9 @@ const (
 	EventBusy       = "busy"
 )
 
-var Events = []string{EventUser, EventText, EventThinking, EventTool, EventToolResult, EventRun, EventNotice, EventError, EventEnd, EventDelivered, EventBusy, EventInventory}
+var Events = []string{EventUser, EventText, EventThinking, EventTool, EventToolResult, EventRun, EventNotice, EventError, EventEnd, EventDelivered, EventBusy, EventInventory, EventApprovals}
+
+var Ops = []string{"prompt", "watch", "abort", "inventory", "approvals", "decide"}
 
 const (
 	EndStop    = "stop"

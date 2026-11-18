@@ -10,6 +10,10 @@
       "json": "events",
       "vocabulary": "events"
     },
+    "approvals": {
+      "json": "events",
+      "vocabulary": "events"
+    },
     "attach": {
       "json": "events",
       "vocabulary": "events"
@@ -21,6 +25,10 @@
       "json": "document"
     },
     "cdp": {
+      "json": "events",
+      "vocabulary": "events"
+    },
+    "decide": {
       "json": "events",
       "vocabulary": "events"
     },
@@ -78,6 +86,7 @@
   "events": {
     "schema": 1,
     "names": [
+      "approvals",
       "attached",
       "browser-back",
       "browser-gone",
@@ -86,6 +95,7 @@
       "closed",
       "connecting",
       "credential",
+      "decided",
       "detached",
       "discovered",
       "error",
@@ -116,12 +126,21 @@
       "end",
       "delivered",
       "busy",
-      "inventory"
+      "inventory",
+      "approvals"
     ],
     "own": [
       "settled",
       "opened",
       "reconnecting"
+    ],
+    "ops": [
+      "prompt",
+      "watch",
+      "abort",
+      "inventory",
+      "approvals",
+      "decide"
     ]
   },
   "screen": {

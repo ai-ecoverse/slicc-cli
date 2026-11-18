@@ -184,7 +184,7 @@ func TestSliccyNeedsItsPlatformPackagesOnTheRegistry(t *testing.T) {
 	staged := stageSliccy(t, node, "7.0.0-next.1.2.3-test")
 	dep := "@ai-ecoverse/slicc-" + target() + "@1.2.3-test"
 	r := publish(t, node, staged, registryEnv(t, newFakeRegistry(t)), "--tag", "next")
-	if r.code == 0 || !strings.Contains(r.stderr, "refusing to publish sliccy@7.0.0-next.1.2.3-test; not on the registry: "+dep) || strings.Contains(r.stdout+r.stderr, "Publishing to") {
+	if r.code != 0 || !strings.Contains(r.stderr, "npm-publish: WARN next: sliccy@7.0.0-next.1.2.3-test not published; not on the registry: "+dep) || !strings.Contains(r.stdout, "npm-publish: PARTIAL next: ") || strings.Contains(r.stdout+r.stderr, "Publishing to") {
 		t.Fatalf("missing dependency: %+v", r)
 	}
 	r = publish(t, node, staged, registryEnvWaiting(t, newFakeRegistry(t, dep), 120), "--tag", "next")
