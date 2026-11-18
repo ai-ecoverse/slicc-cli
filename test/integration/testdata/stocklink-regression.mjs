@@ -2,11 +2,12 @@ import { createServer } from 'node:http';
 import puppeteer from 'puppeteer-core';
 import { WebSocket, WebSocketServer } from 'ws';
 
-const [upstream, chrome, ordinary, cross, seven, mode] = process.argv.slice(2);
+const [upstream, chrome, ordinary, cross, seven, mode, extensionFrame] = process.argv.slice(2);
 const LIMIT = 64 * 1024 * 1024;
 const CONNECT_MS = 10000;
 const STEP_MS = 15000;
 const PROBE_KEEP = 2000;
+const HOLD_MS = 11000;
 const started = Date.now();
 const result = { steps: [] };
 const traces = {};
@@ -14,7 +15,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function scrub(url) {
   if (typeof url !== 'string') return url;
-  return url.split(seven).join('SEVEN').split(ordinary).join('ORD').split(cross).join('XORD');
+  return url.split(seven).join('SEVEN').split(ordinary).join('ORD').split(cross).join('XORD').split(extensionFrame).join('EXT');
 }
 
 function short(id) {
@@ -256,7 +257,7 @@ async function observerEval(sessionId, expression) {
 }
 
 function protectedURL(url) {
-  return typeof url === 'string' && url.startsWith(seven);
+  return typeof url === 'string' && (url.startsWith(seven) || url.startsWith('chrome-extension://'));
 }
 
 function pendingTabs(label) {
@@ -285,43 +286,63 @@ async function connect(label) {
   const at = Date.now();
   const connected = await step(`${label} connect`, () => puppeteer.connect({ browserURL: endpoint, protocolTimeout: STEP_MS }), CONNECT_MS);
   const trace = `puppeteer-${clientCount}`;
-  result[label] = { ok: connected.ok, ms: Date.now() - at, trace, ...pendingTabs(trace) };
+  result[label] = { ok: connected.ok, ms: Date.now() - at, trace, atConnect: pendingTabs(trace) };
   if (!connected.ok) result[label].error = scrub(connected.error);
   return connected.ok ? connected.value : null;
 }
 
 const n = Math.random().toString(36).slice(2, 8);
 const nestURL = `${ordinary}/nest?n=${n}`;
-const framedURL = `${ordinary}/framed-same?n=${n}`;
+const CHILDREN = { framed: ['framed'], nest: ['same', 'cross', 'nested'] };
 
-const browser = await connect('connect');
-if (browser) {
-  const pages = await step('pages()', async () => (await browser.pages()).map((p) => p.url()));
-  result.connect.pages = pages.ok ? pages.value.map(scrub) : null;
-  result.connect.pagesError = pages.ok ? null : scrub(pages.error);
-  result.connect.targets = browser.targets().map((t) => `${t.type()} ${scrub(t.url())}`);
-  result.connect.protectedVisible = [...(pages.ok ? pages.value : []), ...browser.targets().map((t) => t.url())].filter(protectedURL).map(scrub);
-  const pre = pages.ok && mode === 'connect' ? (await browser.pages()).find((p) => p.url().includes('/framed-same?pre')) : null;
-  result.preFramed = { found: Boolean(pre) };
-  if (pre) {
-    const frame = await step('pre-existing framed-same iframe frame', async () => {
-      for (;;) {
-        const f = pre.frames().find((x) => x.url().includes('/inner'));
-        if (f) return f;
-        await pause(100);
-      }
-    });
-    if (frame.ok) {
-      const read = await step('pre-existing framed-same iframe $eval', () => frame.value.$eval('#ibtn', (el) => el.textContent));
-      result.preFramed.read = read.ok ? read.value : null;
-      result.preFramed.error = read.ok ? null : scrub(read.error);
-    }
-  }
+function kindOf(url) {
+  if (url.includes('/framed-same')) return 'framed';
+  if (url.includes('/nest')) return 'nest';
+  return null;
 }
 
-async function sevenFrames(tag) {
-  const infos = await observerTargets();
-  return infos.filter((i) => i.type === 'iframe' && protectedURL(i.url) && i.url.includes(`k=${tag}`) && i.url.includes(`n=${n}`));
+function childFrame(page, k) {
+  return page.frames().find((f) => f.url().includes('/inner') && f.url().includes(`k=${k}`));
+}
+
+async function readPreexisting(label, browser) {
+  const out = {};
+  const pages = (await browser.pages()).filter((p) => p.url().includes('pre=1'));
+  for (const page of pages) {
+    const kind = kindOf(page.url());
+    if (!kind) continue;
+    const row = { url: scrub(page.url()), frames: {} };
+    out[kind] = row;
+    for (const k of CHILDREN[kind]) {
+      const found = await step(`${label} ${kind} frame ${k} reaches the client`, async () => {
+        for (;;) {
+          const f = childFrame(page, k);
+          if (f) return f;
+          await pause(100);
+        }
+      });
+      if (!found.ok) {
+        row.frames[k] = { found: false, frames: page.frames().map((f) => scrub(f.url())) };
+        continue;
+      }
+      const read = await step(`${label} ${kind} frame ${k} $eval`, () => found.value.$eval('#ibtn', (el) => el.textContent));
+      row.frames[k] = { found: true, read: read.ok ? read.value : null, error: read.ok ? null : scrub(read.error) };
+    }
+  }
+  return out;
+}
+
+async function connectAndRead(label) {
+  const browser = await connect(label);
+  if (!browser) return null;
+  const r = result[label];
+  const pages = await step(`${label} pages()`, async () => (await browser.pages()).map((p) => p.url()));
+  r.pages = pages.ok ? pages.value.map(scrub) : null;
+  r.pagesError = pages.ok ? null : scrub(pages.error);
+  r.targets = browser.targets().map((t) => `${t.type()} ${scrub(t.url())}`);
+  r.protectedVisible = [...(pages.ok ? pages.value : []), ...browser.targets().map((t) => t.url())].filter(protectedURL).map(scrub);
+  if (mode === 'connect' && pages.ok) r.preexisting = await readPreexisting(label, browser);
+  return browser;
 }
 
 async function installCounters(targetId) {
@@ -344,153 +365,152 @@ async function installCounters(targetId) {
   return s;
 }
 
-async function hitsIn(sessions) {
-  const total = { mouse: 0, touch: 0, key: 0, click: 0, text: 0, value: '' };
-  for (const s of sessions) {
-    const h = await observerEval(s, '({ ...window.__hits, value: document.getElementById("sin").value })');
-    for (const k of ['mouse', 'touch', 'key', 'click', 'text']) total[k] += h[k];
-    total.value += h.value;
-  }
-  return total;
+async function hitsIn(session) {
+  return observerEval(session, '({ ...window.__hits, value: document.getElementById("sin").value })');
 }
 
 const delivered = (h) => h.mouse + h.touch + h.key + h.click + h.text;
 
-if (browser && mode === 'nested') {
-  const nested = { inputs: {} };
+async function nestedFlow(browser) {
+  const nested = { inputs: {}, ordinary: {} };
   result.nested = nested;
   const opened = await step('newPage', () => browser.newPage());
-  const page = opened.ok ? opened.value : null;
-  if (page) {
-    const went = await step('goto nest', () => page.goto(nestURL, { waitUntil: 'load' }));
-    nested.goto = went.ok ? 'ok' : scrub(went.error);
-    const settled = await step('nest frames reach the client', async () => {
-      for (;;) {
-        const urls = page.frames().map((f) => f.url());
-        if (urls.some((u) => u.includes('k=nested') && u.startsWith(ordinary)) && urls.some((u) => u.includes('k=same')) && urls.some((u) => u.startsWith(cross))) return urls;
-        await pause(100);
-      }
+  if (!opened.ok) return;
+  const page = opened.value;
+  await step('bringToFront', () => page.bringToFront());
+  const went = await step('goto nest', () => page.goto(nestURL, { waitUntil: 'load' }));
+  nested.goto = went.ok ? 'ok' : scrub(went.error);
+  const settled = await step('ordinary frames reach the client', async () => {
+    for (;;) {
+      if (CHILDREN.nest.every((k) => childFrame(page, k))) return true;
+      await pause(100);
+    }
+  });
+  nested.framesSettled = settled.ok;
+  for (const k of CHILDREN.nest) {
+    const f = childFrame(page, k);
+    if (!f) {
+      nested.ordinary[k] = { found: false };
+      continue;
+    }
+    const clicked = await step(`ordinary ${k} frame.click`, () => f.click('#ibtn'));
+    const typed = await step(`ordinary ${k} frame.type`, () => f.type('#iin', 'ok'));
+    const read = await step(`ordinary ${k} read`, () => f.evaluate(() => ({ hits: window.hits, value: document.getElementById('iin').value })));
+    nested.ordinary[k] = {
+      found: true,
+      click: clicked.ok ? 'ok' : scrub(clicked.error),
+      type: typed.ok ? 'ok' : scrub(typed.error),
+      hits: read.ok ? read.value.hits : null,
+      value: read.ok ? read.value.value : null,
+      readError: read.ok ? null : scrub(read.error),
+    };
+  }
+  const pageInfo = (await observerTargets()).find((i) => i.type === 'page' && i.url === nestURL);
+  if (!pageInfo) {
+    nested.error = 'the observer does not list the nest page';
+    return;
+  }
+  const top = await observerSession(pageInfo.targetId);
+  await observer.call('Runtime.enable', {}, top);
+  const embedded = await step('observer embeds the extension frame in the about:blank frame', () =>
+    observerEval(
+      top,
+      `new Promise((resolve) => {
+        const doc = document.getElementById('host').contentDocument;
+        const f = doc.createElement('iframe');
+        f.id = 'ext';
+        f.style.cssText = 'position:absolute;border:0;left:0;top:130px;width:300px;height:150px';
+        f.addEventListener('load', () => resolve(true), { once: true });
+        setTimeout(() => resolve(false), 5000);
+        f.src = ${JSON.stringify(extensionFrame)};
+        doc.body.append(f);
+      })`
+    )
+  );
+  nested.embedded = embedded.ok ? embedded.value : scrub(embedded.error);
+  const ext = await step('observer sees the extension frame target', async () => {
+    for (;;) {
+      const found = (await observerTargets()).find((i) => i.type === 'iframe' && i.url.startsWith(extensionFrame));
+      if (found) return found;
+      await pause(100);
+    }
+  });
+  if (!ext.ok) return;
+  const extSession = await installCounters(ext.value.targetId);
+  await observer.call('Runtime.evaluate', { expression: 'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))', awaitPromise: true }, top);
+  await pause(500);
+  nested.clientFrames = page.frames().map((f) => scrub(f.url()));
+  nested.protectedFrames = page.frames().map((f) => f.url()).filter(protectedURL).map(scrub);
+  const box = await observerEval(
+    top,
+    `(() => {
+      const host = document.getElementById('host').getBoundingClientRect();
+      const b = document.getElementById('host').contentDocument.getElementById('ext').getBoundingClientRect();
+      return { x: host.x + b.x + b.width / 2, y: host.y + b.y + b.height / 2 };
+    })()`
+  );
+  nested.box = box;
+  const record = async (name, work) => {
+    const before = await hitsIn(extSession);
+    const done = await step(`protected ${name}`, work);
+    await pause(300);
+    const after = await hitsIn(extSession);
+    nested.inputs[name] = { ok: done.ok, error: done.ok ? null : scrub(done.error), delivered: delivered(after) - delivered(before), valueChanged: after.value !== before.value };
+  };
+  const cdp = await step('page CDP session', () => page.createCDPSession());
+  const raw = cdp.ok ? cdp.value : null;
+  await record('page.mouse.click', () => page.mouse.click(box.x, box.y));
+  await record('page.touchscreen.tap', () => page.touchscreen.tap(box.x, box.y));
+  if (raw) {
+    await record('Input.dispatchMouseEvent', async () => {
+      for (const type of ['mousePressed', 'mouseReleased']) await raw.send('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
     });
-    nested.frames = page.frames().map((f) => `${scrub(f.url())} parent ${scrub(f.parentFrame()?.url() ?? '-')}`);
-    nested.protectedFrames = page.frames().map((f) => f.url()).filter(protectedURL).map(scrub);
-    nested.framesSettled = settled.ok;
-    const sevenTargets = await step('observer sees both seven frames', async () => {
-      for (;;) {
-        const [a, b] = [await sevenFrames('nested'), await sevenFrames('direct')];
-        if (a.length && b.length) return { nestedFrame: a[0], direct: b[0] };
-        await pause(100);
-      }
+    await record('Input.dispatchTouchEvent', async () => {
+      await raw.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x, y: box.y }] });
+      await raw.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     });
-    if (sevenTargets.ok) {
-      const { nestedFrame, direct } = sevenTargets.value;
-      const nestedSession = await installCounters(nestedFrame.targetId);
-      const directSession = await installCounters(direct.targetId);
-      const pageInfo = (await observerTargets()).find((i) => i.type === 'page' && i.url === nestURL);
-      const top = await observerSession(pageInfo.targetId);
-      const boxes = await observerEval(
-        top,
-        `(() => {
-          const r = (el) => { const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
-          const host = document.getElementById('host');
-          const hb = host.getBoundingClientRect();
-          const inner = (id) => { const b = host.contentDocument.getElementById(id).getBoundingClientRect(); return { x: hb.x + b.x + b.width / 2, y: hb.y + b.y + b.height / 2 }; };
-          return { direct: r(document.getElementById('direct')), nestedSeven: inner('nseven'), nestedSame: inner('nsame'), viewport: { w: innerWidth, h: innerHeight } };
-        })()`
-      );
-      nested.boxes = boxes;
-      const both = [nestedSession, directSession];
-      const record = async (name, work) => {
-        const before = await hitsIn(both);
-        const done = await step(`protected ${name}`, work);
-        await pause(300);
-        const after = await hitsIn(both);
-        const delta = delivered(after) - delivered(before);
-        nested.inputs[name] = { ok: done.ok, error: done.ok ? null : scrub(done.error), delivered: delta, valueChanged: after.value !== before.value };
-      };
-      const cdp = await step('page CDP session', () => page.createCDPSession());
-      const raw = cdp.ok ? cdp.value : null;
-      await record('page.mouse.click nested seven', () => page.mouse.click(boxes.nestedSeven.x, boxes.nestedSeven.y));
-      await record('page.mouse.click direct seven', () => page.mouse.click(boxes.direct.x, boxes.direct.y));
-      await record('page.touchscreen.tap nested seven', () => page.touchscreen.tap(boxes.nestedSeven.x, boxes.nestedSeven.y));
-      if (raw) {
-        await record('Input.dispatchMouseEvent nested seven', async () => {
-          for (const type of ['mousePressed', 'mouseReleased']) await raw.send('Input.dispatchMouseEvent', { type, x: boxes.nestedSeven.x, y: boxes.nestedSeven.y, button: 'left', clickCount: 1 });
-        });
-        await record('Input.dispatchTouchEvent nested seven', async () => {
-          await raw.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: boxes.nestedSeven.x, y: boxes.nestedSeven.y }] });
-          await raw.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-        });
-      }
-      const focus = await step('observer focuses the nested seven input', async () => {
-        for (const type of ['mousePressed', 'mouseReleased']) await observer.call('Input.dispatchMouseEvent', { type, x: boxes.nestedSeven.x, y: boxes.nestedSeven.y, button: 'left', clickCount: 1 }, top);
-        return observerEval(nestedSession, 'document.activeElement?.id === "sin"');
+  }
+  const focus = await step('observer focuses the extension frame input', async () => {
+    for (const type of ['mousePressed', 'mouseReleased']) await observer.call('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 }, top);
+    await pause(200);
+    return observerEval(extSession, 'document.activeElement?.id === "sin"');
+  });
+  nested.extensionFocused = focus.ok ? focus.value : false;
+  await record('page.keyboard.type', () => page.keyboard.type('zq'));
+  await record('page.keyboard.press Tab', () => page.keyboard.press('Tab'));
+  if (raw) {
+    await record('Input.dispatchKeyEvent Tab', () => raw.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab' }));
+    await record('Input.insertText', () => raw.send('Input.insertText', { text: 'k' }));
+    const root = raw.connection();
+    const attach = await step('client attaches the extension frame', () => root.send('Target.attachToTarget', { targetId: ext.value.targetId, flatten: true }));
+    nested.inputs['Target.attachToTarget extension frame'] = { ok: attach.ok, error: attach.ok ? null : scrub(attach.error), delivered: 0 };
+    if (attach.ok) {
+      const s = root.session(attach.value.sessionId);
+      await record('Input.dispatchMouseEvent on the extension frame session', async () => {
+        for (const type of ['mousePressed', 'mouseReleased']) await s.send('Input.dispatchMouseEvent', { type, x: 5, y: 5, button: 'left', clickCount: 1 });
       });
-      nested.sevenFocused = focus.ok ? focus.value : false;
-      await record('page.keyboard.type into focused nested seven', () => page.keyboard.type('zq'));
-      if (raw) {
-        await record('Input.dispatchKeyEvent into focused nested seven', () => raw.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab' }));
-        await record('Input.insertText into focused nested seven', () => raw.send('Input.insertText', { text: 'k' }));
-      }
-      const root = raw ? raw.connection() : null;
-      if (root) {
-        for (const [name, info] of [['nested', nestedFrame], ['direct', direct]]) {
-          const attach = await step(`attach ${name} seven frame`, () => root.send('Target.attachToTarget', { targetId: info.targetId, flatten: true }));
-          nested.inputs[`attach ${name} seven frame`] = { ok: attach.ok, error: attach.ok ? null : scrub(attach.error), delivered: 0 };
-          if (attach.ok) {
-            const sid = attach.value.sessionId;
-            await record(`Input.dispatchMouseEvent on the ${name} seven frame session`, async () => {
-              const s = root.session(sid);
-              for (const type of ['mousePressed', 'mouseReleased']) await s.send('Input.dispatchMouseEvent', { type, x: 5, y: 5, button: 'left', clickCount: 1 });
-            });
-          }
-        }
-      }
-      for (const f of page.frames().filter((x) => protectedURL(x.url()))) {
-        await record(`frame.click visible seven frame ${scrub(f.url())}`, () => f.click('body'));
-      }
-      const ordinaryNested = page.frames().find((f) => f.url().startsWith(ordinary) && f.url().includes('k=nested'));
-      const ordinarySame = page.frames().find((f) => f.url().includes('k=same'));
-      const ordinaryCross = page.frames().find((f) => f.url().startsWith(cross));
-      nested.ordinary = {};
-      for (const [name, f] of [['nested same-origin', ordinaryNested], ['direct same-origin', ordinarySame], ['cross-site OOPIF', ordinaryCross]]) {
-        if (!f) {
-          nested.ordinary[name] = { found: false };
-          continue;
-        }
-        const clicked = await step(`ordinary ${name} frame.click`, () => f.click('#ibtn'));
-        const typed = await step(`ordinary ${name} frame.type`, () => f.type('#iin', 'ok'));
-        const read = await step(`ordinary ${name} read`, () => f.evaluate(() => ({ hits: window.hits, value: document.getElementById('iin').value })));
-        nested.ordinary[name] = {
-          found: true,
-          click: clicked.ok ? 'ok' : scrub(clicked.error),
-          type: typed.ok ? 'ok' : scrub(typed.error),
-          hits: read.ok ? read.value.hits : null,
-          value: read.ok ? read.value.value : null,
-          readError: read.ok ? null : scrub(read.error),
-        };
-      }
-      const control = await step('control: unguarded click and typing reach the nested seven frame', async () => {
-        const before = await hitsIn([nestedSession]);
-        for (const type of ['mousePressed', 'mouseReleased']) await observer.call('Input.dispatchMouseEvent', { type, x: boxes.nestedSeven.x, y: boxes.nestedSeven.y, button: 'left', clickCount: 1 }, top);
-        await observer.call('Input.insertText', { text: 'c' }, top);
-        await pause(300);
-        const after = await hitsIn([nestedSession]);
-        return { mouse: after.mouse - before.mouse, text: after.value !== before.value };
-      });
-      nested.control = control.ok ? control.value : { error: scrub(control.error) };
     }
   }
+  for (const f of page.frames().filter((x) => protectedURL(x.url()))) await record(`frame.click ${scrub(f.url())}`, () => f.click('body'));
+  const control = await step('control: unguarded click and typing reach the extension frame', async () => {
+    const before = await hitsIn(extSession);
+    for (const type of ['mousePressed', 'mouseReleased']) await observer.call('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 }, top);
+    await observer.call('Input.insertText', { text: 'c' }, top);
+    await pause(300);
+    const after = await hitsIn(extSession);
+    return { mouse: after.mouse - before.mouse, text: after.value !== before.value };
+  });
+  nested.control = control.ok ? control.value : { error: scrub(control.error) };
 }
 
 const probes = {};
 result.probes = probes;
-const probe = new Raw(null, 'probe', true);
-const probeReady = await step('probe client', () => probe.call('Target.getTargets'));
-if (probeReady.ok) {
+
+async function probePages() {
+  const probe = new Raw(null, 'probe', true);
+  const probeReady = await step('probe client', () => probe.call('Target.getTargets'));
+  if (!probeReady.ok) return probe;
   const listed = probeReady.value.targetInfos;
-  const pageIds = Object.fromEntries(
-    (mode === 'connect' ? [['framed-same pre', (u) => u.includes('/framed-same?pre')], ['nest pre', (u) => u.includes('/nest?pre')]] : [['nest live', (u) => u === nestURL]]).map(([name, test]) => [name, listed.find((i) => i.type === 'page' && test(i.url))?.targetId])
-  );
   probes.listed = listed.map((i) => `${i.type} ${scrub(i.url)}`);
   const framesOf = (tree) => {
     const out = [];
@@ -520,7 +540,9 @@ if (probeReady.ok) {
       history: show(history, (r) => `${r.currentIndex}/${r.entries?.length} ${scrub(r.entries?.[r.currentIndex]?.url)}`),
     };
   };
-  for (const [name, targetId] of Object.entries(pageIds)) {
+  const wanted = mode === 'connect' ? [['framed-same pre', (u) => u.includes('/framed-same') && u.includes('pre=1')], ['nest pre', (u) => u.includes('/nest') && u.includes('pre=1')]] : [['nest live', (u) => u === nestURL]];
+  for (const [name, test] of wanted) {
+    const targetId = listed.find((i) => i.type === 'page' && test(i.url))?.targetId;
     if (!targetId) {
       probes[name] = { listed: false };
       continue;
@@ -538,24 +560,44 @@ if (probeReady.ok) {
     });
     await pause(PROBE_KEEP);
     const contexts = probe.events.filter((e) => e.sessionId === sessionId && e.method === 'Runtime.executionContextCreated').map((e) => `${short(e.params.context.auxData?.frameId)} ${e.params.context.auxData?.isDefault ? 'main' : 'world'} ${scrub(e.params.context.origin)}`);
+    const world = await step(`probe createIsolatedWorld in every child frame of ${name}`, async () => {
+      const os = await observerSession(targetId);
+      const tree = (await observer.call('Page.getFrameTree', {}, os)).frameTree;
+      const ids = [];
+      const walk = (node) => {
+        for (const c of node.childFrames ?? []) {
+          ids.push(c.frame.id);
+          walk(c);
+        }
+      };
+      walk(tree);
+      const out = [];
+      for (const frameId of ids) {
+        const at = Date.now();
+        const m = await within(STEP_MS, () => probe.send('Page.createIsolatedWorld', { frameId, worldName: 'probe' }, sessionId), 'createIsolatedWorld').catch((e) => ({ error: { code: 'timeout', message: e.message } }));
+        out.push({ frame: short(frameId), ms: Date.now() - at, error: m.error ? `${m.error.code} ${scrub(m.error.message)}` : null });
+      }
+      return out;
+    });
     const second = await once(targetId, sessionId);
     const os = await observerSession(targetId);
     const truth = framesOf((await observer.call('Page.getFrameTree', {}, os)).frameTree);
-    probes[name] = { listed: true, first, enable: enable.ok ? 'ok' : scrub(enable.error), contexts, second, chrome: truth };
+    probes[name] = { listed: true, first, enable: enable.ok ? 'ok' : scrub(enable.error), contexts, worlds: world.ok ? world.value : scrub(world.error), second, chrome: truth };
   }
+  return probe;
 }
 
-if (browser) {
-  await step('disconnect', () => browser.disconnect());
-}
-const again = await connect('reconnect');
+const browser = await connectAndRead('connect');
+if (browser && mode === 'nested') await nestedFlow(browser);
+const probe = await probePages();
+if (browser) await step('disconnect', () => browser.disconnect());
+const again = await connectAndRead('reconnect');
 if (again) {
-  const pages = await step('reconnect pages()', async () => (await again.pages()).map((p) => p.url()));
-  result.reconnect.pages = pages.ok ? pages.value.map(scrub) : null;
-  result.reconnect.protectedVisible = (pages.ok ? pages.value : []).filter(protectedURL).map(scrub);
+  await pause(HOLD_MS);
   await step('reconnect disconnect', () => again.disconnect());
 }
 
+for (const label of ['connect', 'reconnect']) if (result[label]) Object.assign(result[label], pendingTabs(result[label].trace));
 for (const [label, { lines }] of Object.entries(traces)) {
   for (const line of lines) console.log(`SEQ ${label} ${line}`);
 }
