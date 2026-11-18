@@ -641,6 +641,12 @@ func hostileBinaryPlantScript(_, allowed string) fakeScript {
 		{"hidp-binnum", idpOrigin + "/ims"},
 		{"hidp-binarr", idpOrigin + "/ims"},
 		{"hidp-binobj", idpOrigin + "/ims"},
+		{"hidp-bintab", idpOrigin + "/ims"},
+		{"hidp-binctl", idpOrigin + "/ims"},
+		{"hidp-bindel", idpOrigin + "/ims"},
+		{"hidp-binhttp", idpOrigin + "/ims"},
+		{"hidp-binstatus2", idpOrigin + "/ims"},
+		{"hidp-binbad", idpOrigin + "/ims"},
 		{"hidp-binempty", idpOrigin + "/ims"},
 		{"hidp-binx", idpOrigin + "/ims"},
 		{"hplain-binset", allowed + "/x"},
@@ -666,6 +672,12 @@ func TestCDPRefusesHostileBinaryPlantFetchShapes(t *testing.T) {
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binnum", "responseCode": 200, "binaryResponseHeaders": 7}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binarr", "responseCode": 200, "binaryResponseHeaders": []any{}}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binobj", "responseCode": 200, "binaryResponseHeaders": map[string]any{"x": 1}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-bintab", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("\tX-Kept: 1")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binctl", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-\x01A: 1")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-bindel", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-\x7fA: 1")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binhttp", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("http/1.1 200 OK")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binstatus2", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-A: 1", "HTTP/1.1 200 OK")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binbad", "responseCode": 200, "binaryResponseHeaders": "@@@"}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binempty", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("", "")}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binx", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-Kept: 1")}, page},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-binset", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("Set-Cookie: a=CONTROL; Path=/")}, page},
@@ -674,6 +686,7 @@ func TestCDPRefusesHostileBinaryPlantFetchShapes(t *testing.T) {
 	refusedIDs := map[string]bool{
 		"hidp-binlf": true, "hidp-binstatuslf": true, "hidp-bincr": true, "hidp-binfold": true, "hidp-binfold2": true,
 		"hidp-binnum": true, "hidp-binarr": true, "hidp-binobj": true,
+		"hidp-bintab": true, "hidp-binctl": true, "hidp-bindel": true, "hidp-binhttp": true, "hidp-binstatus2": true, "hidp-binbad": true,
 	}
 	for i, o := range out {
 		id, _ := calls[i][1].(map[string]any)["requestId"].(string)
