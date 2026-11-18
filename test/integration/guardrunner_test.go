@@ -542,6 +542,8 @@ type guardRun struct {
 	inject         string
 	rowTimeout     time.Duration
 	errorPageVault bool
+	packageDir     string
+	diagChrome     bool
 }
 
 func runGuardVectors(t *testing.T, variant string) {
@@ -555,7 +557,10 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	if len(guardSkips) > 0 {
 		t.Logf("skipping %d C9 vectors: %s", len(guardSkips), guardC9MacReason)
 	}
-	pkg := guardPackage(t)
+	pkg := run.packageDir
+	if pkg == "" {
+		pkg = guardPackage(t)
+	}
 	ext := filepath.Join("..", "..", "node_modules", "@ai-ecoverse", "slicc-shared-web", "harness", "extension")
 	if _, err := os.Stat(filepath.Join(ext, "manifest.json")); err != nil {
 		t.Fatalf("slicc-shared-web's harness extension is missing; run npm ci: %v", err)
@@ -597,9 +602,17 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	}, ",")
 	secure := "--unsafely-treat-insecure-origin-as-secure=" + strings.Join([]string{targets["ordinary"], targets["seven"], targets["vault"], targets["sevenOopif"]}, ",")
 	spki := "--ignore-certificate-errors-spki-list=" + idp.spki
+	chromeExtras := []string{rules, "--remote-allow-origins=" + srv.URL, secure, spki, "--ignore-certificate-errors"}
+	if run.diagChrome {
+		t.Logf("diag chrome flags for every slot (n=%d): ignore-certificate-errors=true spki=%v host-resolver includes adobe.com=%v *.adobelogin.com=%v ims-na1=%v ims-na1-stg1=%v",
+			n, spki != "", strings.Contains(rules, "MAP adobe.com "), strings.Contains(rules, "MAP *.adobelogin.com "), strings.Contains(rules, "MAP ims-na1.adobelogin.com "), strings.Contains(rules, "MAP ims-na1-stg1.adobelogin.com "))
+	}
 	chromes := make([]*chromeProc, n)
 	for i := range chromes {
-		chromes[i] = launchExtensionBrowser(t, ext, rules, "--remote-allow-origins="+srv.URL, secure, spki, "--ignore-certificate-errors")
+		chromes[i] = launchExtensionBrowser(t, ext, chromeExtras...)
+		if run.diagChrome {
+			t.Logf("diag chromes[%d] launched with ignore-certificate-errors + host-resolver MAP (gate slot %d)", i, i)
+		}
 	}
 	gates := make([]*guardGate, n)
 	for i, b := range chromes {
