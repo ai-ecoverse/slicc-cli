@@ -309,16 +309,7 @@ func (g *guard) noteTreeCallLocked(k callKey, method string) {
 }
 
 func (g *guard) sessionRefusedLocked(id string) bool {
-	if id == "" {
-		return false
-	}
-	if id == g.relaySession || g.hidden[id] || g.refused[id] || g.held[id] != nil || g.navSessions[id] != nil {
-		return true
-	}
-	if s, ok := g.sessions[id]; ok {
-		return s.refused || g.targetProtectedLocked(s.target) || g.iframeFollowRefusedLocked(id)
-	}
-	return false
+	return g.sessionRefusedWhyLocked(id) != ""
 }
 
 const refusedLaterDocuments = "scripts and bindings for later documents could run in seven’s pages or the vault, so the guard doesn’t allow them; run a script in the page you see with Runtime.evaluate instead"
@@ -448,8 +439,13 @@ func (g *guard) checkLocked(c *command) string {
 	if reason := g.unknownCheckLocked(c.session); reason != "" {
 		return reason
 	}
-	if g.sessionRefusedLocked(c.session) {
-		return refusedTarget
+	if why := g.sessionRefusedWhyLocked(c.session); why != "" {
+		t := g.sessionTargetLocked(c.session)
+		target := ""
+		if t != nil {
+			target = t.id
+		}
+		return g.refuseWhyLocked(c, target, "", "sessionRefused:"+why)
 	}
 	if reason := g.navCheckLocked(c.session); reason != "" && !g.startsUnheldLocked(c) {
 		return reason

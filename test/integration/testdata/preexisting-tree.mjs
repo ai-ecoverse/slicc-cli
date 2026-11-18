@@ -203,28 +203,56 @@ async function isolatedWorld(c, sessionId, frameId) {
 const client = new Raw();
 await client.ready;
 await step('discover', () => client.call('Target.setDiscoverTargets', { discover: true }));
-
-const listed = await step('getTargets', () => client.call('Target.getTargets'));
-const tabs = listed.ok ? (listed.value.targetInfos || []).filter((i) => i.type === 'tab') : [];
-result.tabCount = tabs.length;
+await step('browser auto-attach', () =>
+  client.call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true })
+);
 
 const wanted = ['framed', 'nest', 'blank', 'protected'];
 const pending = new Map(wanted.map((name) => [name, true]));
+const tabs = new Map();
+const seenAttach = new Set();
+result.tabs = [];
 
-for (const tab of tabs) {
-  if (pending.size === 0) break;
-  const attached = await step(`attach tab ${tab.targetId.slice(0, 8)}`, () => client.call('Target.attachToTarget', { targetId: tab.targetId, flatten: true }));
-  if (!attached.ok) continue;
-  const tabSession = attached.value.sessionId;
-  await step(`tab auto-attach ${tab.targetId.slice(0, 8)}`, () =>
-    client.call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, tabSession)
-  );
-  client.fire('Runtime.runIfWaitingForDebugger', {}, tabSession);
-  for (const name of [...pending.keys()]) {
-    const page = await step(`wait page ${name} under tab`, () => client.waitPageUnderTab(name, tabSession, 3000), 4000);
-    if (!page.ok) continue;
+const ingest = async () => {
+  for (let i = 0; i < client.events.length; i++) {
+    const e = client.events[i];
+    if (e.method === 'Target.targetCreated' && e.params?.targetInfo?.type === 'tab') {
+      const info = e.params.targetInfo;
+      if (!tabs.has(info.targetId)) {
+        tabs.set(info.targetId, info);
+        result.tabs.push({ id: info.targetId.slice(0, 8), url: scrub(info.url || '') });
+      }
+    }
+    if (e.method !== 'Target.attachedToTarget' || seenAttach.has(i)) continue;
+    const info = e.params?.targetInfo;
+    if (!info) continue;
+    seenAttach.add(i);
+    if (info.type === 'tab' && !e.sessionId) {
+      const tabSession = e.params.sessionId;
+      tabs.set(info.targetId, info);
+      await step(`tab auto-attach ${info.targetId.slice(0, 8)}`, () =>
+        client.call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, tabSession)
+      );
+      client.fire('Runtime.runIfWaitingForDebugger', {}, tabSession);
+      continue;
+    }
+    if (info.type !== 'page' || !e.sessionId) continue;
+    let name = null;
+    for (const n of pending.keys()) {
+      if (matchPage(info, n)) {
+        name = n;
+        break;
+      }
+    }
+    if (!name) continue;
     pending.delete(name);
-    const hit = page.value;
+    const hit = {
+      sessionId: e.params.sessionId,
+      targetId: info.targetId,
+      url: info.url,
+      under: e.sessionId || '',
+      waiting: !!e.params.waitingForDebugger,
+    };
     const pipeline = await biosPipeline(client, hit.targetId, hit.sessionId);
     if (hit.waiting) {
       await step(`resume page ${name}`, () => client.call('Runtime.runIfWaitingForDebugger', {}, hit.sessionId));
@@ -244,7 +272,16 @@ for (const tab of tabs) {
       world,
     };
   }
+};
+
+const deadline = Date.now() + 20000;
+while (pending.size > 0 && Date.now() < deadline) {
+  await ingest();
+  if (pending.size === 0) break;
+  await new Promise((r) => setTimeout(r, 20));
 }
+await ingest();
+result.tabCount = tabs.size;
 
 for (const name of pending.keys()) {
   result.pages[name] = { attached: false, error: 'no tab delivered this page under a tab session' };

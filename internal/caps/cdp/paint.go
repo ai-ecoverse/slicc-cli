@@ -15,22 +15,7 @@ var framePaintMethods = map[string]bool{
 }
 
 func (g *guard) framesProtectedLocked(target string) bool {
-	if g.iframeProtectedLocked(target) {
-		return true
-	}
-	w := g.worlds[target]
-	if w == nil {
-		return false
-	}
-	if w.full {
-		return true
-	}
-	for _, context := range w.contexts {
-		if context.protectedFrame != "" && !g.extensionFrameIDLocked(context.protectedFrame) {
-			return true
-		}
-	}
-	return false
+	return g.framesProtectedWhyLocked(target) != ""
 }
 
 func (g *guard) noteCastLocked(c *command) {

@@ -544,6 +544,9 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	if protectedFrame != "" && (g.o.ExtensionFrame(c.Origin) || protect.Scheme(c.Origin) == "chrome-extension") {
 		protectedFrame = ""
 	}
+	if protectedFrame != "" {
+		g.logf("cdp: latch protectedFrame=%s target=%s session=%s origin=%s name=%s default=%v", protectedFrame, target, session, c.Origin, c.Name, c.AuxData.IsDefault)
+	}
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true
 		if c.AuxData.FrameID != "" {
@@ -733,14 +736,14 @@ func (g *guard) extensionFrameContentLocked(c *command, target string) string {
 		return reason
 	}
 	if name, _ := c.params["worldName"].(string); c.method == "Page.createIsolatedWorld" && g.extensionProbeWorldName(name) {
-		return refusedTarget
+		return g.refuseWhyLocked(c, target, "", "extensionProbeWorldName")
 	}
 	if frame := c.str("frameId"); frame != "" {
 		if t := g.targets[frame]; g.extensionFrameTargetLocked(t) || g.extensionFrameIDLocked(frame) {
 			if c.method == "DOM.getFrameOwner" && g.extensionFrameOnPageLocked(frame, target) {
 				return ""
 			}
-			return refusedTarget
+			return g.refuseWhyLocked(c, target, frame, "extensionFrameId")
 		}
 	}
 	return ""
@@ -750,31 +753,33 @@ func (g *guard) frameContentCheckLocked(c *command, target string) string {
 	if reason := g.extensionFrameContentLocked(c, target); reason != "" {
 		return reason
 	}
-	if !g.framesProtectedLocked(target) {
+	latch := g.framesProtectedWhyLocked(target)
+	if latch == "" {
 		return ""
 	}
+	frame := c.str("frameId")
 	if w := g.worlds[target]; w != nil {
 		for _, context := range w.contexts {
-			if c.str("frameId") != "" && c.str("frameId") == context.protectedFrame && !g.extensionFrameIDLocked(context.protectedFrame) {
-				return refusedTarget
+			if frame != "" && frame == context.protectedFrame && !g.extensionFrameIDLocked(context.protectedFrame) {
+				return g.refuseWhyLocked(c, target, frame, "framesProtected:"+latch+";named-protectedFrame")
 			}
 		}
 	}
-	if frame := c.str("frameId"); frame != "" {
+	if frame != "" {
 		if t := g.targets[frame]; t != nil && !t.gone && t.typ == "iframe" && (t.protected || g.targetLoadedLocked(t)) && !g.extensionFrameTargetLocked(t) {
-			return refusedTarget
+			return g.refuseWhyLocked(c, target, frame, "framesProtected:"+latch+";named-iframe-target")
 		}
 	}
 	domain, verb, _ := strings.Cut(c.method, ".")
 	if (domain == "DOM" || domain == "DOMSnapshot" || domain == "Accessibility" || domain == "Input") && verb != "enable" && verb != "disable" {
-		return refusedTarget
+		return g.refuseWhyLocked(c, target, frame, "framesProtected:"+latch+";domain")
 	}
 	switch c.method {
 	case "Page.getFrameTree", "Page.getResourceTree", "Page.getResourceContent", "Page.captureSnapshot", "Page.printToPDF":
-		return refusedTarget
+		return g.refuseWhyLocked(c, target, frame, "framesProtected:"+latch+";tree")
 	}
 	if framePaintMethods[c.method] {
-		return refusedTarget
+		return g.refuseWhyLocked(c, target, frame, "framesProtected:"+latch+";paint")
 	}
 	return ""
 }
