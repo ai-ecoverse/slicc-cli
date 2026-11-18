@@ -171,11 +171,16 @@ func TestCDPRefusesSignInCookieWrites(t *testing.T) {
 		{"Network.deleteCookies", map[string]any{"name": "plain", "url": env.allowed + "/"}},
 	}
 	out, b := outcomesOf(t, env, calls)
+	wipeRefusal := "slicc: refused: cookies on seven's origin"
 	for i, o := range out {
 		refuse := i < 11
+		want := credentialRefusal
+		if i == 9 || i == 10 {
+			want = wipeRefusal
+		}
 		switch {
-		case refuse && (o.OK || !refusedCredentialMessage(o.Error.Message)):
-			t.Errorf("call %d %s: want %q, got %s", i, o.Method, credentialRefusal, b)
+		case refuse && (o.OK || o.Error.Message != want):
+			t.Errorf("call %d %s: want %q, got %s", i, o.Method, want, b)
 		case refuse && strings.Contains(o.Error.Message, "adobelogin"):
 			t.Errorf("call %d %s: the refusal names the origin: %q", i, o.Method, o.Error.Message)
 		case !refuse && !o.OK:
