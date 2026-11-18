@@ -160,8 +160,6 @@ func idpTLSCertificate(t *testing.T) tls.Certificate {
 			"adobelogin.com",
 			"adobe.com",
 			"www.adobe.com",
-			"ordinary.guard.test",
-			"page.guard.test",
 			"localhost",
 		},
 		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
@@ -571,7 +569,6 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	sevenOopif := "http://seven.oopif.test:" + fp
 	idpOrigin := "https://ims-na1.adobelogin.com:" + idp.port
 	idpStgOrigin := "https://ims-na1-stg1.adobelogin.com:" + idp.port
-	ordinaryHTTPS := "https://ordinary.guard.test:" + idp.port
 	targets := map[string]string{
 		"seven":              seven,
 		"sevenOopif":         sevenOopif,
@@ -580,8 +577,8 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		"apex":               "http://sliccy.ai:" + fp,
 		"own":                srv.URL,
 		"client":             srv.URL,
-		"ordinary":           ordinaryHTTPS,
-		"ordinary-same-site": "https://page.guard.test:" + idp.port,
+		"ordinary":           "http://ordinary.guard.test:" + fp,
+		"ordinary-same-site": "http://page.guard.test:" + fp,
 		"cross":              "http://cross.test:" + fp,
 		"idp":                idpOrigin,
 		"idp-stg":            idpStgOrigin,
