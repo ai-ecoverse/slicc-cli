@@ -2262,21 +2262,25 @@ func TestIframeHoldOrdinaryChildPageEnableParksOnlyWhileNavOpen(t *testing.T) {
 	}
 }
 
-func TestIframeHoldFailedConfirmParentNotNavPending(t *testing.T) {
+func TestIframeHoldFailedConfirmStaysRefused(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.observeAll([]targetInfo{
 		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
 		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
 	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page"}
 	g.navTargets["PAGE"] = &navTarget{target: "PAGE", ready: make(chan struct{}), start: time.Now(), done: true}
 	g.beginConfirmLocked(g.navTargets["PAGE"])
 	g.navTargets["PAGE"].confirm.settle(true)
-	if g.targetUnconfirmedLocked("PAGE") {
-		t.Fatal("failed confirm left the page unconfirmed")
+	if !g.targetUnconfirmedLocked("PAGE") {
+		t.Fatal("failed confirm was treated as ordinary")
 	}
-	if g.iframeAncestorNavPendingLocked(g.targets["MID"]) {
-		t.Fatal("ordinary mid stayed nav-pending solely because the parent confirm failed")
+	if !g.iframeAncestorNavPendingLocked(g.targets["MID"]) {
+		t.Fatal("failed confirm parent did not keep the mid nav-pending")
 	}
+	refusalFromVerdict(t, reviewCommand(g, `{"id":54,"sessionId":"S-page","method":"Page.enable","params":{}}`))
+	refusalFromVerdict(t, reviewCommand(g, `{"id":55,"method":"Target.attachToTarget","params":{"targetId":"MID","flatten":true}}`))
 }
 
 func TestIframeHoldConfirmRevisionChurnSettlesWithinHold(t *testing.T) {
@@ -2315,4 +2319,51 @@ func TestIframeHoldProtectedContextEvaluateAnswersWithinBound(t *testing.T) {
 		t.Fatal("context under protected mid was shown")
 	}
 	refusalFromVerdict(t, reviewCommand(g, `{"id":53,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"1","contextId":6}}`))
+}
+
+func TestIframeHoldPausedChildResumeBypassesOpenConfirm(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page", waiting: true}
+	nt := &navTarget{target: "MID", session: "S-mid", ready: make(chan struct{}), start: time.Now(), iframe: true, done: true}
+	g.navTargets["MID"] = nt
+	g.beginConfirmLocked(nt)
+	resume, id, ok := parseCommand([]byte(`{"id":60,"sessionId":"S-mid","method":"Runtime.runIfWaitingForDebugger","params":{}}`))
+	if !ok || id != 60 {
+		t.Fatal("resume command did not parse")
+	}
+	if !g.startsUnheld(resume) {
+		t.Fatal("paused mid resume stayed held behind an open confirm")
+	}
+	if wait := g.commandWait(resume); wait != nil {
+		t.Fatal("paused mid resume was parked on the open confirm")
+	}
+	enable, _, _ := parseCommand([]byte(`{"id":61,"sessionId":"S-mid","method":"Page.enable","params":{}}`))
+	if wait := g.commandWait(enable); wait == nil {
+		t.Fatal("Page.enable was not parked while confirm was still open")
+	}
+	admit := reviewCommand(g, `{"id":60,"sessionId":"S-mid","method":"Runtime.runIfWaitingForDebugger","params":{}}`)
+	if len(admit.forward) == 0 || len(admit.reply) > 0 {
+		t.Fatalf("paused mid resume was not forwarded: forward=%s reply=%s", admit.forward, admit.reply)
+	}
+	nt.confirm.settle(false)
+	g.sessions["S-mid"].waiting = false
+	deadline := time.Now().Add(2 * time.Second)
+	for _, raw := range []string{
+		`{"id":61,"sessionId":"S-mid","method":"Page.enable","params":{}}`,
+		`{"id":62,"sessionId":"S-mid","method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}}`,
+		`{"id":63,"sessionId":"S-mid","method":"Runtime.evaluate","params":{"expression":"1"}}`,
+	} {
+		if time.Now().After(deadline) {
+			t.Fatal("ordinary paused mid commands were not answered within 2s after confirm settled")
+		}
+		v := reviewCommand(g, raw)
+		if len(v.forward) == 0 || len(v.reply) > 0 {
+			t.Fatalf("ordinary mid command after resume/confirm was not forwarded promptly: %s forward=%s reply=%s", raw, v.forward, v.reply)
+		}
+	}
 }

@@ -37,6 +37,9 @@ func (g *guard) browserScope(sessionID string) bool {
 }
 
 func (g *guard) commandWait(c *command) <-chan struct{} {
+	if g.startsUnheld(c) {
+		return nil
+	}
 	if !g.browserScope(c.session) {
 		return g.sessionWait(c.session)
 	}

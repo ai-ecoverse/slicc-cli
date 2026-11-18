@@ -789,5 +789,5 @@ func (g *guard) sessionUnconfirmedLocked(id string) bool {
 
 func (g *guard) targetUnconfirmedLocked(id string) bool {
 	nt := g.navTargets[id]
-	return nt != nil && nt.confirm != nil && !nt.confirm.done
+	return nt != nil && nt.confirm != nil && (!nt.confirm.done || nt.confirm.failed)
 }
