@@ -443,7 +443,7 @@ func (g *guard) checkLocked(c *command) string {
 		return refusedLost
 	}
 	if g.held[c.session] != nil {
-		return refusedSession
+		return missingSessionMessage
 	}
 	if reason := g.unknownCheckLocked(c.session); reason != "" {
 		return reason
