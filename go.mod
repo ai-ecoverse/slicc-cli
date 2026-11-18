@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.1.0
 	github.com/ai-ecoverse/go-optel v1.0.1
-	github.com/ai-ecoverse/slicc-browsers v1.26.4
+	github.com/ai-ecoverse/slicc-browsers v1.26.5
 	github.com/andybalholm/brotli v1.3.0
 	github.com/charmbracelet/x/conpty v0.2.0
 	github.com/coder/websocket v1.8.15
@@ -24,7 +24,7 @@ require (
 	github.com/pion/turn/v5 v5.1.3
 	github.com/pion/webrtc/v4 v4.2.26
 	github.com/pkg/sftp v1.13.12
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.48.0
