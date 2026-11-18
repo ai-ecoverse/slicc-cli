@@ -542,6 +542,7 @@ type guardRun struct {
 	inject         string
 	rowTimeout     time.Duration
 	errorPageVault bool
+	packageDir     string
 }
 
 func runGuardVectors(t *testing.T, variant string) {
@@ -555,7 +556,10 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	if len(guardSkips) > 0 {
 		t.Logf("skipping %d C9 vectors: %s", len(guardSkips), guardC9MacReason)
 	}
-	pkg := guardPackage(t)
+	pkg := run.packageDir
+	if pkg == "" {
+		pkg = guardPackage(t)
+	}
 	ext := filepath.Join("..", "..", "node_modules", "@ai-ecoverse", "slicc-shared-web", "harness", "extension")
 	if _, err := os.Stat(filepath.Join(ext, "manifest.json")); err != nil {
 		t.Fatalf("slicc-shared-web's harness extension is missing; run npm ci: %v", err)
