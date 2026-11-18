@@ -69,8 +69,13 @@ type frameWorldWait struct {
 	frame   string
 	page    string
 	ch      chan struct{}
-	timer   *time.Timer
 	at      time.Time
+	expired bool
+}
+
+type worldEpoch struct {
+	timer   *time.Timer
+	until   time.Time
 	expired bool
 }
 
@@ -89,50 +94,93 @@ func (g *guard) isolatedWorldReadyLocked(frame, page string) (ready, refuse bool
 	if w := g.frameWorldWaits[frame]; w != nil && w.expired {
 		return true, true
 	}
+	if e := g.worldEpochs[page]; e != nil && e.expired && time.Now().Before(e.until) {
+		return true, true
+	}
 	return false, false
 }
 
-func (g *guard) isolatedWorldWaitLocked(c *command) <-chan struct{} {
+func (g *guard) isolatedWorldWaitLocked(c *command) (<-chan struct{}, [][]byte) {
 	if c == nil || c.method != "Page.createIsolatedWorld" {
-		return nil
+		return nil, nil
 	}
 	t := g.sessionTargetLocked(c.session)
 	frame := c.str("frameId")
 	if t == nil || frame == "" || frame == t.id {
-		return nil
+		return nil, nil
 	}
 	ready, _ := g.isolatedWorldReadyLocked(frame, t.id)
 	if ready {
-		return nil
+		return nil, nil
 	}
 	w := g.frameWorldWaits[frame]
 	if w != nil {
 		if w.expired {
-			return nil
+			return nil, nil
 		}
-		return w.ch
+		return w.ch, nil
 	}
+	send := g.worldEpochLocked(t.id, c.session)
 	w = &frameWorldWait{frame: frame, page: t.id, ch: make(chan struct{}), at: time.Now()}
 	g.frameWorldWaits[frame] = w
-	w.timer = time.AfterFunc(holdTimeout(), func() {
+	g.logf("cdp: holding Page.createIsolatedWorld until frame ancestry settles frame=%s", frame)
+	return w.ch, send
+}
+
+func (g *guard) worldEpochLocked(page, session string) [][]byte {
+	now := time.Now()
+	for id, e := range g.worldEpochs {
+		if e.expired && !now.Before(e.until) {
+			delete(g.worldEpochs, id)
+		}
+	}
+	if e := g.worldEpochs[page]; e != nil {
+		return nil
+	}
+	hold := holdTimeout()
+	e := &worldEpoch{}
+	g.worldEpochs[page] = e
+	e.timer = time.AfterFunc(hold, func() {
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		if g.frameWorldWaits[frame] != w || w.expired {
+		if g.worldEpochs[page] != e || e.expired {
 			return
 		}
-		w.expired = true
-		g.closeFrameWorldWaitLocked(w)
+		e.expired = true
+		e.until = time.Now().Add(hold)
+		g.logf("cdp: frame ancestry did not settle in time; refusing isolated worlds for unclassified frames page=%s", page)
+		for _, w := range g.frameWorldWaits {
+			if w != nil && w.page == page && !w.expired {
+				w.expired = true
+				g.closeFrameWorldWaitLocked(w)
+			}
+		}
 	})
-	g.logf("cdp: holding Page.createIsolatedWorld until frame ancestry settles frame=%s", frame)
-	return w.ch
+	return [][]byte{g.callbackLocked(session, "Page.getFrameTree", nil, func(m message) [][]byte {
+		if m.Error == nil {
+			g.noteFrameTreeResultLocked(page, m.Result)
+		}
+		return nil
+	})}
+}
+
+func (g *guard) settleWorldEpochLocked(page string) {
+	e := g.worldEpochs[page]
+	if e == nil || e.expired {
+		return
+	}
+	for _, w := range g.frameWorldWaits {
+		if w != nil && w.page == page {
+			return
+		}
+	}
+	e.timer.Stop()
+	delete(g.worldEpochs, page)
 }
 
 func (g *guard) closeFrameWorldWaitLocked(w *frameWorldWait) {
 	if w == nil {
 		return
-	}
-	if w.timer != nil {
-		w.timer.Stop()
 	}
 	select {
 	case <-w.ch:
@@ -142,6 +190,7 @@ func (g *guard) closeFrameWorldWaitLocked(w *frameWorldWait) {
 }
 
 func (g *guard) resolveFrameWorldWaitsLocked() {
+	pages := map[string]bool{}
 	for frame, w := range g.frameWorldWaits {
 		if w == nil {
 			delete(g.frameWorldWaits, frame)
@@ -153,6 +202,10 @@ func (g *guard) resolveFrameWorldWaitsLocked() {
 		}
 		delete(g.frameWorldWaits, frame)
 		g.closeFrameWorldWaitLocked(w)
+		pages[w.page] = true
+	}
+	for page := range pages {
+		g.settleWorldEpochLocked(page)
 	}
 }
 
@@ -208,6 +261,9 @@ func (g *guard) frameContextStepSettledLocked(id string) (settled, cont bool) {
 			return false, false
 		}
 		return false, true
+	}
+	if g.ancestryDisputed[id] {
+		return false, false
 	}
 	ok, known := g.localFrameClassifiedLocked(id)
 	if !known || !ok {
@@ -351,19 +407,19 @@ func (g *guard) hideShownUnderProtectedLocked() [][]byte {
 	return page
 }
 
-func (g *guard) noteFrameTreeResultLocked(raw json.RawMessage) {
-	if len(g.heldContexts) == 0 {
-		return
-	}
+func (g *guard) noteFrameTreeResultLocked(target string, raw json.RawMessage) {
 	var result struct {
 		FrameTree *frameTreeNode `json:"frameTree"`
 	}
-	if json.Unmarshal(raw, &result) != nil || result.FrameTree == nil {
+	if target == "" || json.Unmarshal(raw, &result) != nil || result.FrameTree == nil || result.FrameTree.Frame.ID != target {
 		return
 	}
-	g.walkFrameTreeLocked(result.FrameTree, "")
+	budget := maxFrameTreeNodes
+	g.walkFrameTreeLocked(result.FrameTree, "", 0, &budget)
 	g.queueContextSettleLocked()
 }
+
+const maxFrameTreeNodes = 4096
 
 type frameTreeNode struct {
 	Frame struct {
@@ -371,28 +427,42 @@ type frameTreeNode struct {
 		ParentID       string `json:"parentId"`
 		URL            string `json:"url"`
 		SecurityOrigin string `json:"securityOrigin"`
+		UnreachableURL string `json:"unreachableUrl"`
 	} `json:"frame"`
 	ChildFrames []*frameTreeNode `json:"childFrames"`
 }
 
-func (g *guard) walkFrameTreeLocked(node *frameTreeNode, parent string) {
-	if node == nil || node.Frame.ID == "" {
+func (g *guard) walkFrameTreeLocked(node *frameTreeNode, parent string, depth int, budget *int) {
+	if node == nil || node.Frame.ID == "" || depth >= maxFrameAncestors || *budget <= 0 {
 		return
 	}
+	*budget--
+	id := node.Frame.ID
 	pid := node.Frame.ParentID
+	if parent != "" && pid != "" && pid != parent {
+		g.ancestryDisputed[id] = true
+		return
+	}
 	if pid == "" {
 		pid = parent
 	}
 	if pid != "" {
-		_, _ = g.noteFrameParentLocked(node.Frame.ID, pid)
+		if known := g.frameParentOfLocked(id); known != "" && known != pid {
+			g.ancestryDisputed[id] = true
+			return
+		}
+		send, _ := g.noteFrameParentLocked(id, pid)
+		g.contextSettleSend = append(g.contextSettleSend, send...)
 	}
 	raw := node.Frame.URL
-	if protect.Inheriting(raw) {
+	if node.Frame.UnreachableURL != "" {
+		raw = node.Frame.UnreachableURL
+	} else if protect.Inheriting(raw) {
 		raw = node.Frame.SecurityOrigin
 	}
-	_ = g.noteChildFrameLocked(node.Frame.ID, raw)
+	g.contextSettleSend = append(g.contextSettleSend, g.noteChildFrameLocked(id, raw)...)
 	for _, child := range node.ChildFrames {
-		g.walkFrameTreeLocked(child, node.Frame.ID)
+		g.walkFrameTreeLocked(child, id, depth+1, budget)
 	}
 }
 

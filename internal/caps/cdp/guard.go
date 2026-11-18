@@ -191,6 +191,7 @@ type guard struct {
 	contextSettlePage     [][]byte
 	contextSettleSend     [][]byte
 	frameWorldWaits       map[string]*frameWorldWait
+	worldEpochs           map[string]*worldEpoch
 	treeCalls             map[callKey]bool
 	childFrames           map[string]string
 	frameParents          map[string]string
@@ -305,6 +306,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		held:                  map[string]*heldSession{},
 		heldContexts:          map[heldContextKey]*heldContext{},
 		frameWorldWaits:       map[string]*frameWorldWait{},
+		worldEpochs:           map[string]*worldEpoch{},
 		treeCalls:             map[callKey]bool{},
 		childFrames:           map[string]string{},
 		frameParents:          map[string]string{},
