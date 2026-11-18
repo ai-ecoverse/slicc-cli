@@ -7,11 +7,45 @@ import (
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
+var credentialFloor = []string{
+	"https://ims-na1.adobelogin.com",
+	"https://ims-na1-stg1.adobelogin.com",
+}
+
+const credentialRefusalFallback = refusedPrefix + "this origin holds sign-in credentials"
+
 var (
 	credentialRules   = sliccbrowsers.Default().CredentialOrigins
-	credentialOrigins = credentialRules.Origins
+	credentialOrigins = unionCredentialOrigins(credentialFloor, credentialRules.Origins)
 	credentialHosts   = hostsOf(credentialOrigins)
+	credentialRefusal = credentialRefusalOrFallback(credentialRules.Refusal)
 )
+
+func unionCredentialOrigins(floor, catalog []string) []string {
+	out := slices.Clone(floor)
+	for _, o := range catalog {
+		o = strings.TrimSpace(o)
+		if o == "" || slices.Contains(out, o) {
+			continue
+		}
+		u := parse(o)
+		if u == nil || scheme(u) != "https" || hostOf(u) == "" {
+			continue
+		}
+		out = append(out, o)
+	}
+	if len(out) == 0 {
+		return slices.Clone(credentialFloor)
+	}
+	return out
+}
+
+func credentialRefusalOrFallback(refusal string) string {
+	if strings.HasPrefix(refusal, refusedPrefix) && len(refusal) > len(refusedPrefix) {
+		return refusal
+	}
+	return credentialRefusalFallback
+}
 
 func hostsOf(origins []string) []string {
 	var hosts []string
@@ -31,8 +65,20 @@ func CredentialOrigins() []string {
 	return slices.Clone(credentialOrigins)
 }
 
+func CredentialFloor() []string {
+	return slices.Clone(credentialFloor)
+}
+
+func MergeCredentialOrigins(catalog []string) []string {
+	return unionCredentialOrigins(credentialFloor, catalog)
+}
+
+func CredentialRefusalText(catalogRefusal string) string {
+	return credentialRefusalOrFallback(catalogRefusal)
+}
+
 func CredentialReason() string {
-	return strings.TrimPrefix(credentialRules.Refusal, refusedPrefix)
+	return strings.TrimPrefix(credentialRefusal, refusedPrefix)
 }
 
 func CredentialURL(raw string) bool {

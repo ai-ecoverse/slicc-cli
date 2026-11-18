@@ -13,21 +13,57 @@ import (
 
 var (
 	catalogCredential = sliccbrowsers.Default().CredentialOrigins
-	idpOrigin         = catalogCredential.Origins[0]
-	stgOrigin         = catalogCredential.Origins[1]
-	credentialRefusal = catalogCredential.Refusal
+	credentialFloor   = protect.CredentialFloor()
+	idpOrigin         = credentialFloor[0]
+	stgOrigin         = credentialFloor[1]
+	credentialRefusal = protect.CredentialRefusalText(catalogCredential.Refusal)
 	credentialReason  = strings.TrimPrefix(credentialRefusal, "slicc: refused: ")
 )
 
 func TestProtectCredentialOriginsFollowCatalog(t *testing.T) {
-	if len(catalogCredential.Origins) < 2 || credentialReason == "" || credentialRefusal != "slicc: refused: "+credentialReason {
-		t.Fatalf("catalog.credentialOrigins is unusable: %+v", catalogCredential)
+	want := protect.MergeCredentialOrigins(catalogCredential.Origins)
+	if len(want) < 2 || credentialReason == "" || credentialRefusal != "slicc: refused: "+credentialReason {
+		t.Fatalf("credential origins/refusal unusable: floor=%v catalog=%+v", credentialFloor, catalogCredential)
 	}
-	if got := protect.CredentialOrigins(); !slices.Equal(got, catalogCredential.Origins) {
-		t.Errorf("CredentialOrigins() = %v, want catalog %v", got, catalogCredential.Origins)
+	if got := protect.CredentialOrigins(); !slices.Equal(got, want) {
+		t.Errorf("CredentialOrigins() = %v, want floor∪catalog %v", got, want)
 	}
 	if got := protect.CredentialReason(); got != credentialReason {
-		t.Errorf("CredentialReason() = %q, want catalog %q", got, credentialReason)
+		t.Errorf("CredentialReason() = %q, want %q", got, credentialReason)
+	}
+}
+
+func TestCredentialFloorUnionsCatalog(t *testing.T) {
+	floor := protect.CredentialFloor()
+	if len(floor) != 2 {
+		t.Fatalf("floor = %v", floor)
+	}
+	onlyOne := protect.MergeCredentialOrigins([]string{floor[0]})
+	if !slices.Equal(onlyOne, floor) {
+		t.Errorf("(a) catalog missing a floor host: got %v, want floor %v", onlyOne, floor)
+	}
+	empty := protect.MergeCredentialOrigins(nil)
+	if !slices.Equal(empty, floor) {
+		t.Errorf("(b) empty catalog: got %v, want floor %v", empty, floor)
+	}
+	blank := protect.MergeCredentialOrigins([]string{"", "  "})
+	if !slices.Equal(blank, floor) {
+		t.Errorf("(b) blank catalog entries: got %v, want floor %v", blank, floor)
+	}
+	extra := "https://idp.example.test"
+	withExtra := protect.MergeCredentialOrigins([]string{floor[0], extra})
+	wantExtra := append(slices.Clone(floor), extra)
+	if !slices.Equal(withExtra, wantExtra) {
+		t.Errorf("(c) catalog host beyond floor: got %v, want %v", withExtra, wantExtra)
+	}
+	if got := protect.CredentialRefusalText(catalogCredential.Refusal); got != catalogCredential.Refusal {
+		t.Errorf("(d) catalog refusal: got %q, want %q", got, catalogCredential.Refusal)
+	}
+	if got := protect.CredentialRefusalText(""); got != "slicc: refused: this origin holds sign-in credentials" {
+		t.Errorf("(d) empty refusal fallback: got %q", got)
+	}
+	if got := protect.CredentialRefusalText("not a refusal"); got != "slicc: refused: this origin holds sign-in credentials" {
+		t.Errorf("(d) unprefixed refusal fallback: got %q", got)
 	}
 }
 
