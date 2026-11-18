@@ -532,6 +532,7 @@ func (g *guard) shownGoneLocked(target string, id int64, unique string) {
 
 func (g *guard) hideContextLocked(target, session string, c execContext) {
 	g.unshowLocked(target, c.ID)
+	g.noteExtensionProbeUniqueLocked(c.ID, c.UniqueID)
 	w := g.worldsLocked(target)
 	frame := ""
 	if c.AuxData.FrameID != target {
@@ -541,7 +542,14 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 		}
 	}
 	protectedFrame := frame
-	if protectedFrame != "" && (g.o.ExtensionFrame(c.Origin) || protect.Scheme(c.Origin) == "chrome-extension") {
+	switch {
+	case protectedFrame == "":
+	case g.ownExtensionProbeContextLocked(c):
+		protectedFrame = ""
+	case g.o.ExtensionFrame(c.Origin) || protect.Scheme(c.Origin) == "chrome-extension":
+		protectedFrame = ""
+	case g.frameUnderProtectedLocked(protectedFrame) || g.frameURLProtectedLocked(protectedFrame):
+	case g.frameContextAncestrySettledLocked(protectedFrame, target):
 		protectedFrame = ""
 	}
 	if protectedFrame != "" {
@@ -552,9 +560,13 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 		if c.AuxData.FrameID != "" {
 			wc.frame = c.AuxData.FrameID
 		}
-		if protectedFrame != "" {
-			wc.protectedFrame = protectedFrame
+		if c.UniqueID != "" {
+			wc.unique = c.UniqueID
 		}
+		if c.Name != "" {
+			wc.name = c.Name
+		}
+		wc.protectedFrame = protectedFrame
 		return
 	}
 	if len(w.contexts) >= g.maxWorlds {
@@ -567,6 +579,51 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	w.contexts[c.ID] = &worldCtx{frame: c.AuxData.FrameID, unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: protectedFrame}
 	if c.UniqueID != "" {
 		g.worldUniques[c.UniqueID] = target
+	}
+}
+
+func (g *guard) frameURLProtectedLocked(frame string) bool {
+	if frame == "" {
+		return false
+	}
+	raw := g.childFrames[frame]
+	return raw != "" && g.o.Loaded(raw)
+}
+
+func (g *guard) releaseFrameLatchLocked(frame string) {
+	if frame == "" {
+		return
+	}
+	for _, w := range g.worlds {
+		if w == nil {
+			continue
+		}
+		for _, c := range w.contexts {
+			if c.protectedFrame == frame {
+				c.protectedFrame = ""
+			}
+		}
+	}
+}
+
+func (g *guard) latchFrameWorldsLocked(frame string) {
+	if frame == "" {
+		return
+	}
+	for _, w := range g.worlds {
+		if w == nil {
+			continue
+		}
+		for id, c := range w.contexts {
+			if c.frame != frame {
+				continue
+			}
+			if g.extensionProbeIDs[id] || (c.unique != "" && g.extensionProbeUniques[c.unique]) {
+				continue
+			}
+			c.protectedFrame = frame
+			g.logf("cdp: latch protectedFrame=%s target-frame=%s ctx=%s name=%s late=true", frame, c.frame, itoa(id), c.name)
+		}
 	}
 }
 

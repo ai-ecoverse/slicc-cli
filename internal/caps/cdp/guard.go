@@ -243,6 +243,8 @@ type guard struct {
 	paintMethods          map[callKey]string
 	extensionShownCleared bool
 	extensionProbeWorlds  map[string]bool
+	extensionProbeIDs     map[int64]bool
+	extensionProbeUniques map[string]bool
 	extensionProbeCache   map[extensionWorldKey]*extensionProbeWorld
 	extensionProbePending map[extensionWorldKey]*extensionWorldPending
 	extensionFrameURLs    map[string]map[string]string
@@ -338,6 +340,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		debuggerLimit:         debuggerBudgetFromEnv(),
 		paintMethods:          map[callKey]string{},
 		heldExtensionPaints:   map[callKey]*heldExtensionPaint{},
+		extensionProbeIDs:     map[int64]bool{},
+		extensionProbeUniques: map[string]bool{},
 		extensionProbeCache:   map[extensionWorldKey]*extensionProbeWorld{},
 		extensionProbePending: map[extensionWorldKey]*extensionWorldPending{},
 		extensionCaptureDirty: map[callKey]bool{},
@@ -1234,8 +1238,12 @@ func (g *guard) noteChildFrameLocked(id, raw string) [][]byte {
 	}
 	prev := g.childFrames[id]
 	g.childFrames[id] = raw
-	if g.o.Loaded(raw) && !g.o.Loaded(prev) {
+	switch {
+	case g.o.Loaded(raw) && !g.o.Loaded(prev):
+		g.latchFrameWorldsLocked(id)
 		g.queueContextSettleLocked()
+	case !g.o.Loaded(raw):
+		g.releaseFrameLatchLocked(id)
 	}
 	return g.redecideWorkersLocked(id)
 }

@@ -359,11 +359,35 @@ func (g *guard) storeExtensionProbeWorldLocked(session, frame, document string, 
 	if g.extensionProbeCache == nil {
 		g.extensionProbeCache = map[extensionWorldKey]*extensionProbeWorld{}
 	}
+	if g.extensionProbeIDs == nil {
+		g.extensionProbeIDs = map[int64]bool{}
+	}
 	key := extensionWorldKey{session, frame}
 	if old := g.extensionProbeCache[key]; old != nil && old.name != "" && old.name != name {
 		delete(g.extensionProbeWorlds, old.name)
+		if old.context != 0 && old.context != context {
+			delete(g.extensionProbeIDs, old.context)
+		}
 	}
+	g.extensionProbeIDs[context] = true
 	g.extensionProbeCache[key] = &extensionProbeWorld{name: name, context: context, session: session, frame: frame, document: document, revision: revision}
+}
+
+func (g *guard) noteExtensionProbeUniqueLocked(id int64, unique string) {
+	if id == 0 || unique == "" || g.extensionProbeIDs == nil || !g.extensionProbeIDs[id] {
+		return
+	}
+	if g.extensionProbeUniques == nil {
+		g.extensionProbeUniques = map[string]bool{}
+	}
+	g.extensionProbeUniques[unique] = true
+}
+
+func (g *guard) ownExtensionProbeContextLocked(c execContext) bool {
+	if c.ID != 0 && g.extensionProbeIDs[c.ID] {
+		return true
+	}
+	return c.UniqueID != "" && g.extensionProbeUniques[c.UniqueID]
 }
 
 func (g *guard) forgetExtensionProbeWorldLocked(w *extensionProbeWorld) {
@@ -371,6 +395,9 @@ func (g *guard) forgetExtensionProbeWorldLocked(w *extensionProbeWorld) {
 		return
 	}
 	delete(g.extensionProbeWorlds, w.name)
+	if w.context != 0 {
+		delete(g.extensionProbeIDs, w.context)
+	}
 	if g.extensionProbeCache != nil {
 		delete(g.extensionProbeCache, extensionWorldKey{w.session, w.frame})
 	}
@@ -380,11 +407,14 @@ func (g *guard) forgetExtensionProbeWorldSessionLocked(session string) {
 	if session == "" {
 		return
 	}
-	for key, w := range g.extensionProbeCache {
-		if key.session == session || w.session == session {
-			delete(g.extensionProbeWorlds, w.name)
-			delete(g.extensionProbeCache, key)
+	var drop []*extensionProbeWorld
+	for _, w := range g.extensionProbeCache {
+		if w.session == session {
+			drop = append(drop, w)
 		}
+	}
+	for _, w := range drop {
+		g.forgetExtensionProbeWorldLocked(w)
 	}
 	for key, p := range g.extensionProbePending {
 		if key.session != session && p.session != session {
