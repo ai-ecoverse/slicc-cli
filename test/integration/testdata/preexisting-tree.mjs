@@ -1,10 +1,12 @@
 import { WebSocket } from 'ws';
+import puppeteer from 'puppeteer-core';
 
-const [upstream, ordinary, seven] = process.argv.slice(2);
+const [upstream, ordinary, seven, chrome] = process.argv.slice(2);
 const LIMIT = 64 * 1024 * 1024;
 const STEP_MS = 8000;
 const FIRST_MS = 300;
-const result = { steps: [], pages: {} };
+const CONNECT_MS = 5000;
+const result = { steps: [], pages: {}, puppeteer: null };
 
 function scrub(url) {
   if (typeof url !== 'string') return url;
@@ -56,7 +58,7 @@ function childrenOk(name, frames) {
     case 'framed':
       return frames.some((f) => f.url.includes('/inner'));
     case 'nest':
-      return frames.some((f) => f.url.includes('/inner') && f.url.includes('k=nested'));
+      return frames.some((f) => f.url.includes('/inner') && f.url.includes('k=nested')) && frames.some((f) => f.url === 'about:blank' || f.parentId);
     case 'blank':
       return frames.length >= 1;
     default:
@@ -73,6 +75,11 @@ function framesOf(tree) {
   };
   walk(tree);
   return out;
+}
+
+function innerFrameId(frames) {
+  const hit = (frames || []).find((f) => f.url.includes('/inner'));
+  return hit?.id || '';
 }
 
 class Raw {
@@ -92,16 +99,13 @@ class Raw {
     const id = this.next++;
     const message = { id, method, params };
     if (sessionId) message.sessionId = sessionId;
-    this.ws.send(JSON.stringify(message));
-  }
-  async send(method, params = {}, sessionId) {
-    await this.ready;
-    const id = this.next++;
-    const message = { id, method, params };
-    if (sessionId) message.sessionId = sessionId;
     const answer = new Promise((resolve) => this.waiters.set(id, resolve));
     this.ws.send(JSON.stringify(message));
     return answer;
+  }
+  async send(method, params = {}, sessionId) {
+    await this.ready;
+    return this.fire(method, params, sessionId);
   }
   async call(method, params, sessionId) {
     const m = await within(STEP_MS, () => this.send(method, params, sessionId), method);
@@ -153,10 +157,14 @@ class Raw {
   }
 }
 
-async function firstCommands(c, targetId, sessionId) {
-  const timed = async (method, params, s) => {
-    const at = Date.now();
-    const m = await within(FIRST_MS, () => c.send(method, params, s), method).catch((e) => ({ error: { code: 'timeout', message: e.message } }));
+async function biosPipeline(c, targetId, sessionId) {
+  const at = Date.now();
+  const info1P = c.fire('Target.getTargetInfo', { targetId }, sessionId);
+  const enableP = c.fire('Page.enable', {}, sessionId);
+  const treeP = c.fire('Page.getFrameTree', {}, sessionId);
+  const info2P = c.fire('Target.getTargetInfo', { targetId }, sessionId);
+  const timed = async (p, label) => {
+    const m = await within(FIRST_MS, () => p, label).catch((e) => ({ error: { code: 'timeout', message: e.message } }));
     return {
       ms: Date.now() - at,
       ok: !m.error,
@@ -164,36 +172,31 @@ async function firstCommands(c, targetId, sessionId) {
       result: m.error ? null : m.result,
     };
   };
-  const [info, tree, history, resource] = await Promise.all([
-    timed('Target.getTargetInfo', { targetId }, sessionId),
-    timed('Page.getFrameTree', {}, sessionId),
-    timed('Page.getNavigationHistory', {}, sessionId),
-    timed('Page.getResourceTree', {}, sessionId),
+  const [info1, enable, tree, info2] = await Promise.all([
+    timed(info1P, 'Target.getTargetInfo'),
+    timed(enableP, 'Page.enable'),
+    timed(treeP, 'Page.getFrameTree'),
+    timed(info2P, 'Target.getTargetInfo#2'),
   ]);
   return {
-    info: { ms: info.ms, ok: info.ok, error: info.error, value: info.result ? `${info.result.targetInfo?.type} ${scrub(info.result.targetInfo?.url)}` : null },
+    elapsed: Date.now() - at,
+    info: { ms: info1.ms, ok: info1.ok, error: info1.error, value: info1.result ? `${info1.result.targetInfo?.type} ${scrub(info1.result.targetInfo?.url)}` : null },
+    enable: { ms: enable.ms, ok: enable.ok, error: enable.error },
     tree: { ms: tree.ms, ok: tree.ok, error: tree.error, frames: tree.result ? framesOf(tree.result.frameTree) : null },
-    history: {
-      ms: history.ms,
-      ok: history.ok,
-      error: history.error,
-      value: history.result
-        ? `${history.result.currentIndex}/${history.result.entries?.length} ${scrub(history.result.entries?.[history.result.currentIndex]?.url)}`
-        : null,
-    },
-    resource: { ms: resource.ms, ok: resource.ok, error: resource.error, frames: resource.result ? framesOf(resource.result.frameTree) : null },
+    info2: { ms: info2.ms, ok: info2.ok, error: info2.error },
   };
 }
 
-function summarize(name, hit, first) {
+async function isolatedWorld(c, sessionId, frameId) {
+  const at = Date.now();
+  const m = await within(FIRST_MS, () => c.send('Page.createIsolatedWorld', { frameId, worldName: 'slicc-preexisting', grantUniveralAccess: true }, sessionId), 'Page.createIsolatedWorld').catch((e) => ({
+    error: { code: 'timeout', message: e.message },
+  }));
   return {
-    attached: true,
-    underTab: hit.under !== '',
-    waiting: hit.waiting,
-    url: scrub(hit.url),
-    first,
-    childrenOk: name === 'protected' ? null : childrenOk(name, first.tree.frames),
-    refused: !!(first.tree.error && String(first.tree.error).includes("seven's origin")),
+    ms: Date.now() - at,
+    ok: !m.error,
+    error: m.error ? `${m.error.code} ${scrub(m.error.message)}` : null,
+    value: m.result ? m.result.executionContextId : null,
   };
 }
 
@@ -222,23 +225,42 @@ for (const tab of tabs) {
     if (!page.ok) continue;
     pending.delete(name);
     const hit = page.value;
-    const atAttach = await firstCommands(client, hit.targetId, hit.sessionId);
+    const pipeline = await biosPipeline(client, hit.targetId, hit.sessionId);
     if (hit.waiting) {
       await step(`resume page ${name}`, () => client.call('Runtime.runIfWaitingForDebugger', {}, hit.sessionId));
     } else {
       client.fire('Runtime.runIfWaitingForDebugger', {}, hit.sessionId);
     }
-    const afterResume = await firstCommands(client, hit.targetId, hit.sessionId);
+    const worldFrame = innerFrameId(pipeline.tree.frames);
+    const world = worldFrame ? await isolatedWorld(client, hit.sessionId, worldFrame) : { ms: 0, ok: false, error: 'no /inner frame in tree', value: null };
     result.pages[name] = {
-      ...summarize(name, hit, atAttach),
-      afterResume: summarize(name, hit, afterResume).first,
-      afterResumeChildrenOk: name === 'protected' ? null : childrenOk(name, afterResume.tree.frames),
+      attached: true,
+      underTab: hit.under !== '',
+      waiting: hit.waiting,
+      url: scrub(hit.url),
+      pipeline,
+      childrenOk: name === 'protected' ? null : childrenOk(name, pipeline.tree.frames),
+      refused: !!(pipeline.tree.error && String(pipeline.tree.error).includes("seven's origin")),
+      world,
     };
   }
 }
 
 for (const name of pending.keys()) {
   result.pages[name] = { attached: false, error: 'no tab delivered this page under a tab session' };
+}
+
+if (chrome) {
+  const at = Date.now();
+  try {
+    const browser = await within(CONNECT_MS, () => puppeteer.connect({ browserWSEndpoint: upstream, defaultViewport: null, protocolTimeout: CONNECT_MS }), 'puppeteer.connect');
+    const pages = await within(CONNECT_MS, () => browser.pages(), 'browser.pages');
+    const urls = pages.map((p) => scrub(p.url()));
+    result.puppeteer = { ok: true, ms: Date.now() - at, pages: urls.length, urls, hasFramed: urls.some((u) => u.includes('/framed-same')), hasNest: urls.some((u) => u.includes('/nest')) };
+    await browser.disconnect();
+  } catch (error) {
+    result.puppeteer = { ok: false, ms: Date.now() - at, error: scrub(String(error?.message ?? error)) };
+  }
 }
 
 client.close();
