@@ -541,9 +541,6 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 		}
 	}
 	protectedFrame := frame
-	if protectedFrame != "" && (g.o.ExtensionFrame(c.Origin) || protect.Scheme(c.Origin) == "chrome-extension") {
-		protectedFrame = ""
-	}
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true
 		if c.AuxData.FrameID != "" {
