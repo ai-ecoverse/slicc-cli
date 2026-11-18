@@ -2350,6 +2350,18 @@ func TestIframeHoldUnknownSessionRefusesWithinBound(t *testing.T) {
 	}
 }
 
+func TestIframeHoldUnknownDoneEmptyReasonIsMissing(t *testing.T) {
+	g := iframeHoldGuard(t)
+	ready := make(chan struct{})
+	close(ready)
+	g.unknown["S-empty"] = &navTarget{ready: ready, start: time.Now(), done: true}
+	v := reviewCommand(g, `{"id":97,"sessionId":"S-empty","method":"Page.enable","params":{}}`)
+	if len(v.forward) > 0 {
+		t.Errorf("done+empty-reason unknown was forwarded: %s", v.forward)
+	}
+	missingSessionFromVerdict(t, v)
+}
+
 const chromeMissingSessionMessage = "Session with given id not found."
 
 func missingSessionFromVerdict(t *testing.T, v pageVerdict) {
@@ -2542,6 +2554,35 @@ func TestIframeHoldParentDetachDropsLateChildEvent(t *testing.T) {
 	lateIDs, _ := detachEvents(latePage)
 	if countDetach(lateIDs, "S-child") > 0 {
 		t.Errorf("late chrome child detach was forwarded after cascade forgot the child: page=%s forward=%s", late.page, late.forward)
+	}
+}
+
+func TestIframeHoldParentDetachDropsLateChromeReply(t *testing.T) {
+	g := iframeHoldGuard(t)
+	g.observeAll([]targetInfo{
+		{TargetID: "PAGE", Type: "page", URL: "https://ordinary.test/"},
+		{TargetID: "MID", Type: "iframe", URL: "https://cross.test/mid", ParentFrameID: "PAGE"},
+		{TargetID: "CHILD", Type: "iframe", URL: "https://ordinary.test/inner", ParentFrameID: "MID"},
+	})
+	g.sessions["S-page"] = &session{id: "S-page", target: "PAGE", typ: "page"}
+	g.sessions["S-mid"] = &session{id: "S-mid", target: "MID", typ: "iframe", parent: "S-page"}
+	g.sessions["S-child"] = &session{id: "S-child", target: "CHILD", typ: "iframe", parent: "S-mid"}
+	g.pending[callKey{"S-child", 90}] = kindPlain
+	detach := g.fromBrowser([]byte(`{"method":"Target.detachedFromTarget","params":{"sessionId":"S-mid","targetId":"MID"}}`))
+	var sawPending bool
+	for _, raw := range detach.page {
+		var m message
+		if json.Unmarshal(raw, &m) != nil || m.ID == nil || *m.ID != 90 || m.Error == nil {
+			continue
+		}
+		sawPending = true
+	}
+	if !sawPending {
+		t.Errorf("pending command on the orphan child was not answered at detach")
+	}
+	late := g.fromBrowser([]byte(`{"id":90,"sessionId":"S-child","result":{}}`))
+	if len(late.forward) > 0 || len(late.page) > 0 {
+		t.Errorf("late chrome reply after detach answer was forwarded: page=%s forward=%s", late.page, late.forward)
 	}
 }
 
