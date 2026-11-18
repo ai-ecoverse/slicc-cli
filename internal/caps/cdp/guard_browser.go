@@ -616,8 +616,6 @@ func (g *guard) attachAnsweredLocked(parent string, res map[string]any, t *targe
 	}
 }
 
-var orphanCascadeEnabled = false
-
 func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 	var p struct {
 		SessionID string `json:"sessionId"`
@@ -627,12 +625,9 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.lost = true
 		return browserVerdict{lost: true}
 	}
-	var page [][]byte
-	if orphanCascadeEnabled {
-		page = g.cascadeOrphansLocked(p.SessionID)
-		page = append(page, g.takePendingMissingLocked(p.SessionID)...)
-		g.navDetachedLocked(p.SessionID)
-	}
+	page := g.cascadeOrphansLocked(p.SessionID)
+	page = append(page, g.takePendingMissingLocked(p.SessionID)...)
+	g.navDetachedLocked(p.SessionID)
 	if h, ok := g.held[p.SessionID]; ok {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		g.cmdTraceStateLocked("detached", p.SessionID, h.target, "waiting="+strconv.FormatBool(h.waiting), "path=held", "detachToClient=false")
@@ -652,11 +647,8 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 	target := g.sessionTargetIDLocked(p.SessionID)
 	g.cmdTraceStateLocked("detached", p.SessionID, target, "path=forward", "detachToClient=true")
 	g.forgetSessionNotedLocked(p.SessionID, "chrome-detached", true)
-	if orphanCascadeEnabled {
-		page = append(page, data)
-		return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
-	}
-	return browserVerdict{forward: data, page: append(page, g.takePendingPageLocked()...)}
+	page = append(page, data)
+	return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
 }
 
 func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {
