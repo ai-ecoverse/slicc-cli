@@ -2919,5 +2919,30 @@ export function protectTest(getLink, describe) {
         const evalResult = await evalPromise;
         return { enable, eval: evalResult, ms: Date.now() - start };
       }),
+    worldPark: (browser) =>
+      run(browser, async (c) => {
+        c.callTimeout = 60000;
+        await c.send('Target.setDiscoverTargets', { discover: true });
+        await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+        await c.send('Browser.getHistogram', { name: 'arm-world-park' });
+        await sleep(300);
+        const start = Date.now();
+        const order = [];
+        const timed = (name, sent) =>
+          outcome(sent).then((out) => {
+            order.push(name);
+            return { ...out, ms: Date.now() - start };
+          });
+        const world = (frameId) => c.send('Page.createIsolatedWorld', { frameId, worldName: 'park' }, 'S-top');
+        const known = await timed('known', world('F-same'));
+        const under = await timed('under', world('F-under'));
+        const begin = Date.now() - start;
+        const unknownA = timed('unknownA', world('F-unknown-a'));
+        const unknownB = timed('unknownB', world('F-unknown-b'));
+        const later = timed('later', c.send('Runtime.evaluate', { expression: '1', returnByValue: true }, 'S-top'));
+        const other = timed('other', c.send('Emulation.setDeviceMetricsOverride', { width: 800, height: 600, deviceScaleFactor: 1, mobile: false }, 'S-two'));
+        const [a, b, l, o] = await Promise.all([unknownA, unknownB, later, other]);
+        return { known, under, begin, unknownA: a, unknownB: b, later: l, other: o, order };
+      }),
   };
 }
