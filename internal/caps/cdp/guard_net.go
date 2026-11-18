@@ -128,11 +128,8 @@ func stripCookieResponse(r map[string]any) bool {
 
 func setCookieCredential(value string) bool {
 	for _, line := range strings.Split(value, "\n") {
-		for _, attr := range strings.Split(line, ";")[1:] {
-			name, v, _ := strings.Cut(attr, "=")
-			if strings.EqualFold(strings.TrimSpace(name), "domain") && protect.CredentialCookieDomain(v) {
-				return true
-			}
+		if credentialCookieLine(line) {
+			return true
 		}
 	}
 	return false
@@ -309,11 +306,13 @@ func (g *guard) filterAssociated(p map[string]any, field string) (bool, bool) {
 	for _, item := range list {
 		e, _ := item.(map[string]any)
 		c, _ := e["cookie"].(map[string]any)
-		if g.sevenCookie(c) {
+		raw, hasLine := e["cookieLine"]
+		line, isString := raw.(string)
+		if g.sevenCookie(c) || isString && g.sevenCookieLine(line) {
 			seven = true
 			continue
 		}
-		if credentialCookie(c) {
+		if credentialCookie(c) || hasLine && (!isString || credentialCookieLine(line)) {
 			credential = true
 			continue
 		}

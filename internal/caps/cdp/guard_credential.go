@@ -151,9 +151,63 @@ func (g *guard) issueNamesLocked(session, key string, v any, depth int) bool {
 }
 
 func (g *guard) cookieLineNamesLocked(line string) bool {
+	return g.sevenCookieLine(line) || credentialCookieLine(line)
+}
+
+func cookieLineDomains(line string) ([]string, bool) {
+	for i := range len(line) {
+		if c := line[i]; c < 0x20 && c != '\t' || c == 0x7f {
+			return nil, false
+		}
+	}
+	var out []string
 	for _, attr := range strings.Split(line, ";")[1:] {
 		name, v, _ := strings.Cut(attr, "=")
-		if strings.EqualFold(strings.TrimSpace(name), "domain") && (g.o.CookieDomain(v) || protect.CredentialCookieDomain(v)) {
+		if !strings.EqualFold(strings.TrimSpace(name), "domain") {
+			continue
+		}
+		d := strings.Trim(strings.ToLower(strings.TrimSpace(strings.Trim(strings.TrimSpace(v), `"`))), ".")
+		if d == "" {
+			continue
+		}
+		if !cookieHost(d) {
+			return nil, false
+		}
+		out = append(out, d)
+	}
+	return out, true
+}
+
+func cookieHost(d string) bool {
+	for i := range len(d) {
+		c := d[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && !strings.ContainsRune("-._:[]", rune(c)) {
+			return false
+		}
+	}
+	return true
+}
+
+func credentialCookieLine(line string) bool {
+	domains, ok := cookieLineDomains(line)
+	if !ok {
+		return true
+	}
+	for _, d := range domains {
+		if protect.CredentialCookieDomain(d) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) sevenCookieLine(line string) bool {
+	domains, ok := cookieLineDomains(line)
+	if !ok {
+		return false
+	}
+	for _, d := range domains {
+		if g.o.CookieDomain(d) {
 			return true
 		}
 	}
