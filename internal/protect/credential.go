@@ -3,8 +3,6 @@ package protect
 import (
 	"slices"
 	"strings"
-
-	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 )
 
 var credentialFloor = []string{
@@ -12,39 +10,28 @@ var credentialFloor = []string{
 	"https://ims-na1-stg1.adobelogin.com",
 }
 
-const credentialRefusalFallback = refusedPrefix + "this origin holds sign-in credentials"
+var credentialOrigins = []string{}
 
-var (
-	credentialRules   = sliccbrowsers.Default().CredentialOrigins
-	credentialOrigins = unionCredentialOrigins(credentialFloor, credentialRules.Origins)
-	credentialHosts   = hostsOf(credentialOrigins)
-	credentialRefusal = credentialRefusalOrFallback(credentialRules.Refusal)
-)
+const credentialRefusal = refusedPrefix + "cookies and storage of a sign-in origin can't be read or changed through CDP"
+
+var credentialHosts = hostsOf(credentialOrigins)
 
 func unionCredentialOrigins(floor, catalog []string) []string {
-	out := slices.Clone(floor)
+	_ = floor
+	out := make([]string, 0, len(catalog))
 	for _, o := range catalog {
 		o = strings.TrimSpace(o)
 		if o == "" || slices.Contains(out, o) {
 			continue
 		}
-		u := parse(o)
-		if u == nil || scheme(u) != "https" || hostOf(u) == "" {
-			continue
-		}
 		out = append(out, o)
-	}
-	if len(out) == 0 {
-		return slices.Clone(credentialFloor)
 	}
 	return out
 }
 
 func credentialRefusalOrFallback(refusal string) string {
-	if strings.HasPrefix(refusal, refusedPrefix) && len(refusal) > len(refusedPrefix) {
-		return refusal
-	}
-	return credentialRefusalFallback
+	_ = refusal
+	return credentialRefusal
 }
 
 func hostsOf(origins []string) []string {
@@ -70,7 +57,7 @@ func CredentialFloor() []string {
 }
 
 func MergeCredentialOrigins(catalog []string) []string {
-	return unionCredentialOrigins(credentialFloor, catalog)
+	return unionCredentialOrigins(nil, catalog)
 }
 
 func CredentialRefusalText(catalogRefusal string) string {
