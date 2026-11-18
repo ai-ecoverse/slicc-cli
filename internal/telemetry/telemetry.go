@@ -30,20 +30,22 @@ var (
 )
 
 var commands = map[string]bool{
-	"abort":    true,
-	"attach":   true,
-	"browsers": true,
-	"cdp":      true,
-	"follow":   true,
-	"install":  true,
-	"launch":   true,
-	"open":     true,
-	"pair":     true,
-	"prompt":   true,
-	"unpair":   true,
-	"update":   true,
-	"wait":     true,
-	"watch":    true,
+	"abort":     true,
+	"approvals": true,
+	"attach":    true,
+	"browsers":  true,
+	"cdp":       true,
+	"decide":    true,
+	"follow":    true,
+	"install":   true,
+	"launch":    true,
+	"open":      true,
+	"pair":      true,
+	"prompt":    true,
+	"unpair":    true,
+	"update":    true,
+	"wait":      true,
+	"watch":     true,
 }
 
 var client atomic.Pointer[optel.Client]

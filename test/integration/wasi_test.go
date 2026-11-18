@@ -394,7 +394,7 @@ func TestWasiCommandsOutsideSeven(t *testing.T) {
 		{Name: "cdp", Argv: []string{"slicc", wasiJoin, "cdp", "--port", "9333"}, check: unavailable("cdp")},
 		{Name: "cdp without a join url", Argv: []string{"slicc", "cdp", "--cdp", "http://127.0.0.1:9333"}, check: unavailable("cdp")},
 		{Name: "no verb", Argv: []string{"slicc", wasiJoin}, check: func(t *testing.T, r wasiResult) {
-			wantExit(t, r, 2, "", "slicc: a join URL must be followed by a command: prompt, watch, wait or abort\n")
+			wantExit(t, r, 2, "", "slicc: a join URL must be followed by a command: prompt, watch, wait, abort or approvals\n")
 		}},
 		{Name: "not a join url", Argv: []string{"slicc", "https://tray.example.test/nope", "prompt", "hi"}, check: func(t *testing.T, r wasiResult) {
 			wantExit(t, r, 2, "", "slicc: not a tray join URL")

@@ -1,14 +1,11 @@
 package agentctl
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -55,103 +52,29 @@ type inventoryOpen struct {
 	Watch bool   `json:"watch,omitempty"`
 }
 
-type InventoryStream struct {
-	s     Pipe
-	r     *bufio.Reader
-	First Snapshot
-}
+type InventoryStream = SnapshotStream[Snapshot]
 
 func parseSnapshot(b []byte) (Snapshot, error) {
 	var s Snapshot
 	if err := json.Unmarshal(b, &s); err != nil {
 		return s, fmt.Errorf("seven sent an inventory that isn't JSON: %w", err)
 	}
-	if err := json.Unmarshal(b, &s.Raw); err != nil || s.Raw == nil {
-		return s, errors.New("seven sent an inventory that isn't a JSON object")
+	raw, err := rawObject(b, "an inventory")
+	if err != nil {
+		return s, err
 	}
-	delete(s.Raw, "t")
+	s.Raw = raw
 	return s, nil
 }
 
-func inventoryErr(err error) error {
-	code, msg, remote := remoteCode(err)
-	if m, ok := linkMessage(err); ok && msg == "" {
-		msg = m
-	}
-	switch {
-	case !remote:
-		return err
-	case code == "EINVAL":
-		return ErrNoInventory
-	case code == "EOPNOTSUPP" && (msg == "" || strings.Contains(msg, "no inventory")):
-		return ErrNoInventory
-	case code == "EOPNOTSUPP":
-		return &UnavailableError{Message: msg}
-	}
-	return mapErr(err)
-}
+func inventoryErr(err error) error { return snapshotErr(err, ErrNoInventory, "no inventory") }
 
 func Inventory(ctx context.Context, l Link, watch bool) (*InventoryStream, error) {
-	if !l.Allowed() {
-		return nil, ErrNotAllowed
-	}
-	s, err := l.Open(ctx, inventoryOpen{Kind: Kind, Op: "inventory", Watch: watch})
-	if err != nil {
-		return nil, inventoryErr(err)
-	}
-	first, err := parseSnapshot(s.Opened())
-	if err != nil {
-		_ = s.Reset("EPROTO")
-		return nil, err
-	}
-	_ = s.CloseWrite()
-	return &InventoryStream{s: s, r: bufio.NewReaderSize(s, 64*1024), First: first}, nil
+	return openSnapshots(ctx, l, inventoryOpen{Kind: Kind, Op: "inventory", Watch: watch}, EventInventory, parseSnapshot, inventoryErr)
 }
-
-func (st *InventoryStream) Next() (Snapshot, error) {
-	ev := &Stream{s: st.s, r: st.r}
-	for {
-		line, err := ev.readLine()
-		if err != nil {
-			return Snapshot{}, inventoryErr(err)
-		}
-		var head struct {
-			T string `json:"t"`
-		}
-		if json.Unmarshal(line, &head) != nil || head.T != EventInventory {
-			continue
-		}
-		if s, err := parseSnapshot(line); err == nil {
-			return s, nil
-		}
-	}
-}
-
-func (st *InventoryStream) Close() error { return st.s.Reset("ECANCELED") }
 
 func InventoryLine(s Snapshot, schema int, received time.Time) []byte {
-	keys := make([]string, 0, len(s.Raw))
-	for k := range s.Raw {
-		switch k {
-		case "schema", "event", "receivedAt":
-			continue
-		}
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var b strings.Builder
-	fmt.Fprintf(&b, `{"schema":%d,"event":%q`, schema, EventInventory)
-	for _, k := range keys {
-		var value bytes.Buffer
-		if json.Compact(&value, s.Raw[k]) != nil {
-			continue
-		}
-		name, _ := json.Marshal(k)
-		fmt.Fprintf(&b, ",%s:%s", name, value.Bytes())
-	}
-	stamp, _ := json.Marshal(received.UTC().Format(time.RFC3339))
-	fmt.Fprintf(&b, `,"receivedAt":%s}`, stamp)
-	return []byte(b.String())
+	return SnapshotLine(EventInventory, s.Raw, schema, received)
 }
 
 func shortID(id string) string {

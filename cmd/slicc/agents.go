@@ -73,16 +73,16 @@ var agentsLinks = func(ctx context.Context, f agentFlags, aio agentIO, status fu
 }
 
 func (p *inventoryPrinter) unavailable(err error) {
-	var ue *agentctl.UnavailableError
-	if !errors.As(err, &ue) {
+	msg, ok := unavailableMessage(err)
+	if !ok {
 		return
 	}
 	if !p.f.json {
-		p.status("%s; trying again", agentctl.OneLineFull(ue.Message))
+		p.status("%s; trying again", agentctl.OneLineFull(msg))
 		return
 	}
 	retryable := true
-	b, _ := flow.Event{Event: flow.Error, Message: ue.Message, Retryable: &retryable}.MarshalJSON()
+	b, _ := flow.Event{Event: flow.Error, Message: msg, Retryable: &retryable}.MarshalJSON()
 	_, _ = p.aio.stdout.Write(append(b, '\n'))
 }
 
@@ -94,10 +94,20 @@ func agentsCommand(ctx context.Context, f agentFlags, aio agentIO) int {
 		return agentFail(aio, "agents", err)
 	}
 	defer links.close()
-	if !f.watch {
-		return agentsOnce(ctx, links, p)
+	feed := &snapshotFeed{
+		verb: "agents", aio: aio, status: p.status,
+		open: func(ctx context.Context, l agentctl.Link, watch bool) (snapshotStream, error) {
+			st, err := agentctl.Inventory(ctx, l, watch)
+			return shown(st, err, p.print)
+		},
+		refused:      func(err error) (int, bool) { return agentsRefused(aio, err) },
+		unavailable:  p.unavailable,
+		reconnecting: p.reconnecting,
 	}
-	return agentsWatch(ctx, links, p)
+	if !f.watch {
+		return feed.once(ctx, links)
+	}
+	return feed.watch(ctx, links)
 }
 
 func agentsRefused(aio agentIO, err error) (int, bool) {
@@ -109,119 +119,4 @@ func agentsRefused(aio agentIO, err error) (int, bool) {
 		return exitNoControl, true
 	}
 	return 0, false
-}
-
-func agentsOnce(ctx context.Context, links agentLinks, p *inventoryPrinter) int {
-	sctx, cancel := context.WithTimeout(ctx, agentSetupTimeout)
-	defer cancel()
-	l, err := links.next(sctx)
-	if ctx.Err() != nil {
-		return exitInterrupted
-	}
-	if err != nil {
-		return setupFailed(ctx, p.aio, "agents", err)
-	}
-	st, err := agentctl.Inventory(sctx, l, false)
-	if ctx.Err() != nil {
-		return exitInterrupted
-	}
-	if code, done := agentsRefused(p.aio, err); done {
-		return code
-	}
-	if err != nil {
-		return setupFailed(ctx, p.aio, "agents", err)
-	}
-	_ = st.Close()
-	p.print(st.First)
-	return 0
-}
-
-type agentsWatcher struct {
-	p       *inventoryPrinter
-	backoff time.Duration
-	opened  bool
-	attempt int
-}
-
-func agentsWatch(ctx context.Context, links agentLinks, p *inventoryPrinter) int {
-	w := &agentsWatcher{p: p, backoff: followBackoffBase}
-	for {
-		l, err := links.next(ctx)
-		if ctx.Err() != nil {
-			return 0
-		}
-		if err != nil {
-			return agentFail(p.aio, "agents", err)
-		}
-		if !l.Allowed() {
-			fmt.Fprintf(p.aio.stderr, "slicc agents: %s\n", noControlMessage)
-			return exitNoControl
-		}
-		p.status("watching %s", l.Name())
-		if code, stop := w.onLink(ctx, l); stop {
-			return code
-		}
-		if !w.sleep(ctx) {
-			return 0
-		}
-	}
-}
-
-func (w *agentsWatcher) onLink(ctx context.Context, l agentctl.Link) (int, bool) {
-	for {
-		err := w.once(ctx, l)
-		if ctx.Err() != nil {
-			return 0, true
-		}
-		if code, done := agentsRefused(w.p.aio, err); done {
-			return code, true
-		}
-		w.p.unavailable(err)
-		select {
-		case <-l.Done():
-			w.p.status("lost the link to %s; reconnecting", l.Name())
-			return 0, false
-		default:
-		}
-		if !w.sleep(ctx) {
-			return 0, true
-		}
-	}
-}
-
-func (w *agentsWatcher) sleep(ctx context.Context) bool {
-	wait := jitter(w.backoff)
-	if !w.opened {
-		w.backoff = min(w.backoff*2, followBackoffMax)
-	}
-	w.opened = false
-	w.attempt++
-	w.p.reconnecting(w.attempt, wait)
-	select {
-	case <-ctx.Done():
-		return false
-	case <-time.After(wait):
-		return true
-	}
-}
-
-func (w *agentsWatcher) once(ctx context.Context, l agentctl.Link) error {
-	st, err := agentctl.Inventory(ctx, l, true)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = st.Close() }()
-	w.opened = true
-	w.backoff = followBackoffBase
-	w.attempt = 0
-	w.p.print(st.First)
-	stop := context.AfterFunc(ctx, func() { _ = st.Close() })
-	defer stop()
-	for {
-		s, err := st.Next()
-		if err != nil {
-			return err
-		}
-		w.p.print(s)
-	}
 }

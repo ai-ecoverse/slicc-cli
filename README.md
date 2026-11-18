@@ -2,7 +2,7 @@
 
 `slicc` is SLICC's command line for seven, the SLICC on `*.sliccy.ai`. It is one binary for macOS, Windows and Linux. It launches and links browsers, and shares a machine's network, compute and browsers with a running seven over a WebRTC link. `npx sliccy` and Sliccstart.app run this binary. It replaces slicc-node and slicc-swift (see [Coming from slicc-node](#coming-from-slicc-node)).
 
-**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, `slicc tray` (on a machine and inside seven), remote control with `prompt`, `watch`, `wait` and `abort` (also from inside seven's kernel, see [Inside seven](#inside-seven)), seven's browser as a CDP endpoint here with `slicc <join-url> cdp`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
+**Status:** being built. `slicc` (the default flow), `slicc attach` (with the `cdp` capability), `slicc open`, `slicc pair` and `slicc unpair` (seven in your everyday browser, without CDP), `slicc <join-url> follow`, `slicc tray` (on a machine and inside seven), remote control with `prompt`, `watch`, `wait` and `abort`, approvals with `approvals` and `decide` (also from inside seven's kernel, see [Inside seven](#inside-seven)), seven's browser as a CDP endpoint here with `slicc <join-url> cdp`, host folders with `--mount`, `slicc browsers`, `slicc launch`, `update`, `install`, `--version` and `--help` work so far, plus a hidden diagnostic, `slicc <join-url> follow --signal-only [--timeout 2m]`. It attaches through the tray hub, prints a summary of the leader's offer (its size, media sections, candidate count and DTLS fingerprint) and the ICE server URLs (credentials are never printed), and exits without answering. The link protocol is specified in [Link protocol](#link-protocol).
 
 ## Commands (planned)
 
@@ -18,7 +18,8 @@
 | `slicc <join-url> prompt <text>`, `watch`, `wait`, `abort` | send a prompt to seven's agent and stream its answer, follow the agent as it works, wait until it has nothing left to do, or abort its run; `--cdp <url>` instead of a join URL links locally (works now; see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)) |
 | `slicc <join-url> cdp [--port <n>] [--json]` | serve seven's browser as a CDP endpoint on this machine's loopback, for stock Playwright, Puppeteer and other CDP clients, through seven's guard; `--cdp <url>` instead of a join URL links locally (see [Driving seven's browser from another computer](#driving-sevens-browser-from-another-computer-slicc-join-url-cdp)) |
 | `slicc <join-url> agents [--watch] [--json]` | list seven's agents, the active cone and its live scoops, with their status, queue and model, once or as they change; `--cdp <url>` instead of a join URL links locally (see [Agent inventory](#agent-inventory-slicc-agents)) |
-| `slicc <join-url> prompt`, `watch`, `wait`, `abort` inside seven | the same commands from seven's kernel, as `@ai-ecoverse/wasi-slicc` (works now; see [Inside seven](#inside-seven)) |
+| `slicc <join-url> approvals [--watch] [--json]`, `decide <id> once\|always\|deny\|stop` | list what seven's approvals wait for a person to answer, and answer one, so a policy, a classifier or another app on this machine can answer them; `--cdp <url>` instead of a join URL links locally (see [Approvals](#approvals-slicc-approvals-and-slicc-decide)) |
+| `slicc <join-url> prompt`, `watch`, `wait`, `abort`, `approvals` inside seven | the same commands from seven's kernel, as `@ai-ecoverse/wasi-slicc` (works now; see [Inside seven](#inside-seven)) |
 | `slicc tray [url \| rotate \| unlink <device> \| retry]` inside seven | this seven's tray: its state and devices, the join URL on request, rotate it, drop a device, reconnect (see [Inside seven](#inside-seven)) |
 | `slicc browsers --json` | list running CDP endpoints and installed browsers, ranked |
 | `slicc update [--check]` | replace this binary with the latest release (works now; see [Updates](#updates)) |
@@ -327,7 +328,7 @@ Release builds outside npm and app bundles print a notice on stderr when a newer
 ## Telemetry
 
 Release builds (a plain `X.Y.Z` version, linked in or, for `go install`, from the module version) send operational telemetry through [go-optel](https://github.com/ai-ecoverse/go-optel) with the app id `slicc-cli`, sampled once per process (1 in 100 by default):
-- `enter`, with the subcommand as `source`, from a fixed list (`abort`, `attach`, `browsers`, `follow`, `install`, `launch`, `open`, `pair`, `prompt`, `unpair`, `update`, `wait`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
+- `enter`, with the subcommand as `source`, from a fixed list (`abort`, `approvals`, `attach`, `browsers`, `cdp`, `decide`, `follow`, `install`, `launch`, `open`, `pair`, `prompt`, `unpair`, `update`, `wait`, `watch`, `default` for no command (no arguments, or only flags), `join` for a bare join URL, otherwise `unknown`). No other argument is ever sent.
 - `error`, for operational failures, from a fixed set of sources (`update`, `signal`, `link`, `browser`, `ssh`, `cdp`). Messages pass through go-optel's sanitizer, which strips URLs and paths.
 
 `--version`, `capabilities`, and any command line with `--help`, `-h` or `-help` (such as `slicc update --help`), send nothing, and development builds never configure a client.
@@ -367,15 +368,15 @@ slicc capabilities [--json]
 `slicc capabilities --json` is the handshake of a program that drives `slicc`, such as a native app: one JSON document on stdout, from the binary's own tables, so it describes exactly the `slicc` it came from. It runs before anything else `slicc` does at start: it reads no files (not even slicc's data folder, which other commands look at for companion tools), asks no network, sends no telemetry and prints no update notice, so it works the same inside an app bundle, with no home directory at all. Without `--json` it prints the version, the contract and a table of the commands.
 
 ```
-{"schema":1,"version":"<slicc version>","contract":1,"commands":{"<name>":{"json":"document"|"events"|"none","vocabulary"?:"events"|"agent"}},"events":{"schema":1,"names":[…]},"agent":{"events":[…],"own":[…]},"control":{"v":1,"ops":["status",…]}}
+{"schema":1,"version":"<slicc version>","contract":1,"commands":{"<name>":{"json":"document"|"events"|"none","vocabulary"?:"events"|"agent"}},"events":{"schema":1,"names":[…]},"agent":{"events":[…],"own":[…],"ops":[…]},"control":{"v":1,"ops":["status",…]}}
 ```
 
 - **`schema`:** the shape of this document, 1.
 - **`version`:** the version `slicc --version` prints.
 - **`contract`:** 1. It goes up only for a breaking change to a contract this document describes: a field or event that changes meaning or goes away. New commands, fields, events and ops leave it alone.
-- **`commands`:** every command, keyed by name: `default` for `slicc` with no command, `follow`, `prompt`, `watch`, `wait`, `abort`, `agents` and `cdp` (also after a join URL), `attach`, `open`, `pair`, `unpair`, `tray`, `browsers`, `launch`, `update`, `install`, `capabilities`, `version` and `help`. `json` says what `--json` prints: `document` (one JSON value), `events` (NDJSON, one event a line) or `none` (no `--json`). An `events` command has `vocabulary`: `events` for lines with `schema` and `event` (see [The default](#the-default-slicc) and [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)), or `agent` for seven's agent events with `t` (see [`agent`](#agent-page-cap-agent-node--page)).
+- **`commands`:** every command, keyed by name: `default` for `slicc` with no command, `follow`, `prompt`, `watch`, `wait`, `abort`, `agents`, `approvals`, `decide` and `cdp` (also after a join URL), `attach`, `open`, `pair`, `unpair`, `tray`, `browsers`, `launch`, `update`, `install`, `capabilities`, `version` and `help`. `json` says what `--json` prints: `document` (one JSON value), `events` (NDJSON, one event a line) or `none` (no `--json`). An `events` command has `vocabulary`: `events` for lines with `schema` and `event` (see [The default](#the-default-slicc) and [`slicc launch`](#slicc-launch---browser-id---profile-name---url-url---headless---no-seven-flags---json)), or `agent` for seven's agent events with `t` (see [`agent`](#agent-page-cap-agent-node--page)).
 - **`events`:** `schema`, the `schema` every `event` line carries, and `names`, every `event` a `vocabulary: "events"` command can print, sorted.
-- **`agent`:** `events`, the `t` of every agent event slicc knows, and `own`, the lines slicc itself adds to that stream (`settled`, `opened` and `reconnecting`, see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)).
+- **`agent`:** `events`, the `t` of every agent event slicc knows, and `own`, the lines slicc itself adds to that stream (`settled`, `opened` and `reconnecting`, see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)), and `ops`, the [`agent`](#agent-page-cap-agent-node--page) ops this slicc speaks (`prompt`, `watch`, `abort`, `inventory`, `approvals` and `decide`). A program gates its approvals view on `approvals` and `decide` being there.
 - **`control`:** `v`, the version of the [control socket](#running-links-slicc-tray) protocol, and `ops`, the ops it answers.
 
 A program reads `contract` and the names it needs, and treats anything it doesn't know as absent: an older `slicc` lacks the newer commands, events and ops, and a newer one may have more. `TestCapabilitiesNameEveryCommandEventAndOp` fails when a command, an event or a control op is added to the code without appearing here, and keeps the document's fixture, [`test/integration/testdata/native/capabilities.json`](test/integration/testdata/native/capabilities.json), in step with the binary. The control socket's exchange, `status`'s `ops`, the answers to `stop` and `detach` and the `closed` that follows, is in [`control.ndjson`](test/integration/testdata/native/control.ndjson).
@@ -1267,7 +1268,7 @@ slicc @<file> follow [flags]
 
 `follow` links this machine to a seven on another machine through the tray hub (see [Tray hub signaling](#tray-hub-signaling-remote-setup)). It serves the link until interrupted (`SIGINT`, `SIGTERM`) and reconnects when the link drops. Status lines go to stderr, and `SLICC_DEBUG=1` adds diagnostics. The join URL is never printed.
 
-**The join URL off the command line.** On the command line, `ps` shows the join URL to every user of this machine. In its place, `-` reads it from stdin and `@<file>` from a file: the first non-empty line, trimmed. From stdin slicc reads only up to that line's end, so the rest of stdin is left for `prompt -`. The file must be a regular file, not a symlink. On macOS and Linux it must also belong to you and be readable by no one else (`chmod 600`). Exit 2 follows when there's no join URL, when the file can't be read, breaks those rules or is over 64 KiB, or when what's there isn't a join URL. The message names the file but never shows what it holds, inside seven too. `prompt`, `watch`, `wait` and `abort` take `-` and `@<file>` the same way, inside seven too. There is no environment variable for it, because `--runner`'s processes would inherit it.
+**The join URL off the command line.** On the command line, `ps` shows the join URL to every user of this machine. In its place, `-` reads it from stdin and `@<file>` from a file: the first non-empty line, trimmed. From stdin slicc reads only up to that line's end, so the rest of stdin is left for `prompt -`. The file must be a regular file, not a symlink. On macOS and Linux it must also belong to you and be readable by no one else (`chmod 600`). Exit 2 follows when there's no join URL, when the file can't be read, breaks those rules or is over 64 KiB, or when what's there isn't a join URL. The message names the file but never shows what it holds, inside seven too. `prompt`, `watch`, `wait`, `abort`, `agents`, `approvals` and `decide` take `-` and `@<file>` the same way, inside seven too. There is no environment variable for it, because `--runner`'s processes would inherit it.
 
 **Flags.**
 - `--exit`: offer this machine's network to seven, as `tcp` and `resolve` streams (cap `net`), `http` streams (cap `http`), `ws` streams (cap `ws`) and `udp` streams (cap `udp`) under the remote policy, so public addresses only by default. Without `--exit`, all five are refused with `EOPNOTSUPP`.
@@ -1306,7 +1307,7 @@ slicc abort --cdp <url> [--origin <origin>]...
 slicc prompt|watch|wait|abort --signal stdio [flags] …
 ```
 
-These commands talk to seven's agent over a link that offers nothing to seven (`caps: []`).
+These commands talk to seven's agent over a link that offers nothing to seven (`caps: []`). So do `agents` ([Agent inventory](#agent-inventory-slicc-agents)), `approvals` and `decide` ([Approvals](#approvals-slicc-approvals-and-slicc-decide)), with the same setup, permission and privacy rules.
 - **With a join URL:** slicc dials the tray as `follow` does (see [Remote setup](#remote-setup-slicc-join-url-follow)), with the same device certificate, so seven sees the same device. A `follow` already running on this machine keeps its link, because the two processes have different `node` ids. These commands never handle `join` or `unlink`. When seven has unlinked the device they say `seven unlinked this device` and exit 1, and they leave the join state and the certificate alone.
 - **With `--cdp`:** slicc links to the seven tab in that browser as `attach` does (see [Local setup](#local-setup-slicc-attach)), with `--origin` as there. A running `slicc` or `attach` on that browser keeps its link.
 - **With `--signal stdio`** (for a test harness that owns CDP itself): the local setup messages go as NDJSON on stdin and stdout, exactly as for `attach --signal stdio`, and `--cdp` isn't needed.
@@ -1381,6 +1382,42 @@ Otherwise, or with `--plain`, there are no escape codes:
 
 Summaries are one line of at most 200 characters. Escape sequences and control characters other than newline and tab are removed from everything seven sends before it's shown.
 
+## Approvals: `slicc approvals` and `slicc decide`
+
+```
+slicc <join-url> approvals [--watch] [--json] [--plain]
+slicc <join-url> decide <id> once|always|deny|stop [--reason <text>] [--json]
+slicc approvals --cdp <url> [--origin <origin>]... [--watch] [--json] [--plain]
+slicc decide --cdp <url> [--origin <origin>]... <id> once|always|deny|stop [--reason <text>] [--json]
+slicc approvals|decide --signal stdio …
+```
+
+seven files what its agents want a person to allow as approvals: a guest's message or tool call, `sudo`, and media capture. `slicc approvals` lists the ones that wait on the `user` tier, and `slicc decide` answers one, so a program on this machine can answer them: a policy, a classifier, Claude Code, or a person in another app such as Sliccy. `-` or `@<file>` in place of `<join-url>` reads it from stdin or a file.
+
+- **The link:** as for `watch` (see [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort)): a control-only link (`caps: []`) through the tray or over CDP, the same 1-minute wait for HELLO, and `--signal stdio` as there.
+- **Permission:** the `agent` cap, as for `prompt` and `abort` (*Allow remote control* in seven's Linked devices). Without it, slicc says `this seven doesn't allow remote control from this device; turn it on in seven's Linked devices`, or seven's own reason when it gives one, and exits 3.
+- **A seven that doesn't know them:** `approvals` says `this seven doesn't report its approvals; update it`, and `decide` says `this seven doesn't take answers to its approvals; update it`. Both exit 1.
+- **A tab without the agent:** slicc prints seven's reason, such as `the agent is not running`, and exits 1. `approvals --watch` keeps trying, as `agents --watch` does.
+
+**`approvals`** prints one line per pending item, oldest first: its id (the whole id, for `decide`), its kind, the agent (its name, the first 8 characters of its id, or the requester's name), the judge's verdict (`level 1` to `level 3`, `judging` while the judge works, `no verdict` when it failed, `-` without one), the time left (`2m left`, or `expired`), and a short detail: the command for `sudo`, `<tool>: <summary>` for a tool call, what is recorded for a capture, the text for a message. Everything seven sends is stripped of escape and control characters, and the detail is one line of at most 200 characters. With nothing pending, stdout stays empty and stderr says `slicc: nothing waits for an answer`.
+
+```
+apr-1f0c5a2e-7b9d-4c1e-8a3f-2d6b9e0c4a71  sudo        cone      level 2     2m left  apt-get install -y ripgrep
+apr-6b2d8e41-03c9-4f7a-9e15-c4a07d3b5f28  guest-tool  research  judging     2m left  bash: curl https://example.com
+```
+
+- **Without `--watch`:** one list, then exit 0.
+- **With `--watch`:** a new list each time seven's changes, until Ctrl-C or `SIGTERM`, then exit 0. On a terminal the list is redrawn in place, unless `--plain`. Otherwise each list is printed after a blank line. Status lines, reconnects and their waits are those of `agents --watch`, and every new stream starts with a whole list.
+- **`--json`:** one line per list, `{"schema":1,"event":"approvals","approvals":[…],"receivedAt"}`, with seven's items exactly as sent (see [`approvals`](#511-agent-page-cap-agent-node--page-remote-control)), fields seven adds later included, and `receivedAt`, when slicc got it (RFC 3339, UTC). With `--watch`, `{"schema":1,"event":"reconnecting","attempt","retryAt","wait"}` comes before each new try, and `{"schema":1,"event":"error","message","retryable":true}` when the tab has no agent. Fixture: [`approvals.ndjson`](test/integration/testdata/native/approvals.ndjson).
+- **Exit status:** `0` as above; `1` for a seven that doesn't report its approvals, for a link or stream that ends before the first list without `--watch`, and when the link can't be set up for good; `2` for bad usage; `3` without permission; `130` on Ctrl-C without `--watch`.
+
+**`decide <id> <answer>`** answers the item with that id: `once` allows it this time, `always` allows it from now on (only where the item's `always` is true), `deny` refuses it, and `stop` refuses it and stops the turn that asked (only where `stoppable` is true). `--reason <text>` tells seven why. Flags may come before or after `<id>` and `<answer>`.
+
+- **Answered:** stderr says `slicc: allowed it once` (or `allowed it always`, `denied it`, `denied it and stopped the turn`), and slicc exits 0. With `--json`, stdout has `{"schema":1,"event":"decided","id","answer"}` instead.
+- **Refused** (already answered, timed out, withdrawn, Always not offered, `Only a person can stop a turn.`, or no item with that id): stderr has seven's sentence alone on one line, with no `slicc decide:` before it, so an app can show it as it is, and slicc exits 1. With `--json`, stdout also has `{"schema":1,"event":"error","message","code","retryable":false}`, with `code` `EINVAL` or `ENOENT`.
+- **Exit status:** `0` once seven took the answer; `1` when seven refuses it, doesn't know `decide`, or the link can't be set up; `2` for bad usage (no id, an answer that isn't one of the four, extra arguments); `3` when seven refuses the permission (`EACCES`), with the same `--json` error line and `code` `EACCES`; `130` on Ctrl-C.
+- **Inside seven** `decide` isn't built (`slicc: decide isn't available inside seven`): an agent in seven must never answer its own approvals. `approvals` works there (see [Inside seven](#inside-seven)).
+
 ## Agent inventory: `slicc agents`
 
 ```
@@ -1436,6 +1473,10 @@ slicc agents --signal stdio [--watch] [--json]
 **`abort`:** `OPEN { "kind": "agent", "op": "abort" }`, answered OPENED `{ "aborted": true | false }` (`false` when nothing was running), then END.
 
 **`inventory`:** `OPEN { "kind": "agent", "op": "inventory", "watch"?: true }`, answered OPENED with a snapshot of the agents (§5.11). Without `watch` the page sends END next. With it, a `{"t":"inventory",…}` line with a whole new snapshot follows each change. A seven that doesn't know the op answers `EINVAL` (from before it) or `EOPNOTSUPP`, and the node treats both as unsupported.
+
+**`approvals`:** `OPEN { "kind": "agent", "op": "approvals", "watch"?: true }`, answered OPENED `{ "approvals": [Item, …] }`, the pending items on the `user` tier, oldest first (§5.11). Without `watch` the page sends END next. With it, a `{"t":"approvals","approvals":[…]}` line with a whole new list follows each change.
+
+**`decide`:** `OPEN { "kind": "agent", "op": "decide", "id", "answer": "once" | "always" | "deny" | "stop", "reason"? }`, answered OPENED `{ "ok": true }`, then END. A refusal is `RESET EINVAL: <sentence>`, and an unknown id is `ENOENT` (§5.11).
 
 **Events,** one JSON object per line:
 
@@ -1561,13 +1602,14 @@ PID   MODE    SEVEN           DEVICE     STATE                   OFFERS
 
 ## Inside seven
 
-`slicc` also runs inside seven's kernel, so that one seven's agent or user can prompt, watch and abort another seven's agent, and see and manage this seven's own tray. That build is `slicc.wasm`, slicc-cli's client commands compiled with `GOOS=wasip1 GOARCH=wasm` and `CGO_ENABLED=0`, and it ships as the npm package `@ai-ecoverse/wasi-slicc`, at slicc-cli's own version. seven's page holds the WebRTC link; slicc only reaches the page's link facade.
+`slicc` also runs inside seven's kernel, so that one seven's agent or user can prompt, watch and abort another seven's agent, list its approvals, and see and manage this seven's own tray. That build is `slicc.wasm`, slicc-cli's client commands compiled with `GOOS=wasip1 GOARCH=wasm` and `CGO_ENABLED=0`, and it ships as the npm package `@ai-ecoverse/wasi-slicc`, at slicc-cli's own version. seven's page holds the WebRTC link; slicc only reaches the page's link facade.
 
 ```
 slicc <join-url> prompt [--allsettled <quiet>] [--steer | --reject] [--thinking] [--json] [--plain] <text>|@file|-
 slicc <join-url> watch [--thinking] [--json] [--plain] [--since <entry-id>]
 slicc <join-url> wait [--allsettled <quiet>] [--timeout <limit>] [--json]
 slicc <join-url> abort
+slicc <join-url> approvals [--watch] [--json] [--plain]
 slicc tray [--json]
 slicc tray url
 slicc tray rotate
@@ -1577,7 +1619,7 @@ slicc --version
 slicc --help
 ```
 
-- **Commands:** `prompt`, `watch`, `wait` and `abort` with a join URL behave as in [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort): the same flags, output, styling, `--json` events, resuming and exit codes, from the same code. The differences:
+- **Commands:** `prompt`, `watch`, `wait` and `abort` with a join URL behave as in [Remote control](#remote-control-slicc-prompt-watch-wait-and-abort), and `approvals` as in [Approvals](#approvals-slicc-approvals-and-slicc-decide): the same flags, output, styling, `--json` events, resuming and exit codes, from the same code. The differences:
   - **Ctrl-C** ends slicc with 130 (the kernel's default for `SIGINT`), `watch` included, and a running prompt goes on in the other seven. `--abort-on-interrupt` isn't offered.
   - **Exit 3** covers the facade's own refusals too. When the facade gives a message (`unlock the vault to continue`, or the other seven's refusal), slicc prints it instead of the Linked devices hint.
   - **A terminal** is a standard stream that is a character device. Styling then follows `TERM`, `NO_COLOR` and `--plain` as usual.
@@ -1590,7 +1632,7 @@ slicc --help
   - **`slicc tray retry`** reconnects the tray's links, as the Reconnect button does.
   - **Not here:** choosing the exit (that's routing, not tray state), and SLICC six's `host join` and `host leave`: a seven follower runs no kernel or agent of its own, so following stays with `#follow=` and the UI's Leave.
   - **Exit status:** 0, 1 on failure (`ENOTCONN` when the tray isn't connected, a facade that doesn't answer within 1 minute, or 5 minutes for `rotate` and `unlink`, which seven may ask you to approve), 2 for bad usage, 3 when seven refuses (`EACCES`).
-- **Everything else** exits 2 with `slicc: <command> isn't available inside seven`: `follow`, `attach`, `open`, `browsers`, the default flow, `update`, `install`, and `prompt`, `watch`, `wait` or `abort` without a join URL. `--help` lists only what works there.
+- **Everything else** exits 2 with `slicc: <command> isn't available inside seven`: `follow`, `attach`, `open`, `browsers`, the default flow, `update`, `install`, `agents`, `decide` (so an agent in seven can never answer approvals), and `prompt`, `watch`, `wait`, `abort` or `approvals` without a join URL. `--help` lists only what works there.
 - **What the build leaves out** (build constraints): pion and the link, CDP, SSH, mounts, the kernel listener, the policy, browser discovery, telemetry and updates.
 
 **The link facade.** slicc reads its address from `SLICC_LINK_URL` only, as `tcp://127.0.0.1:<port>` on the kernel's loopback (any `127.x` address, or `localhost`). Without it, or with another shape, slicc exits 1. Each `agent` stream (see [`agent`](#agent-page-cap-agent-node--page)) is one connection, carrying records of a `u8` type, a `u32` big-endian length and the payload, both ways:
@@ -2146,6 +2188,23 @@ slicc-node's hostfs ([its README, *Host folders*](https://github.com/ai-ecoverse
   - **Only the tab that runs the agent answers.** Any other page, a follower tab included, answers `EOPNOTSUPP: the agent is not running`.
   - **Never sent,** in any field: agents' names, folders and titles (they come from chats), prompts, transcript text, tool names, arguments and output, error messages, role text, paths, URLs and base URLs, account names, endpoint registrations, anything from the vault, settings or MCP servers. The fields above are all there is, and new ones are added only under these rules.
   - **Older sevens:** a page from before this op answers `EINVAL` (an unknown op), and a page whose slicc-agent has no inventory answers `EOPNOTSUPP`. The node treats both as `this seven doesn't report its agents`.
+- **`approvals`:** `OPEN { "kind": "agent", "op": "approvals", "watch"?: true }` on its own channel, for `slicc approvals` and a native app that answers seven's approvals. The page serves it through slicc-agent's remote client (`approvals({ watch })`), shaped like `inventory`.
+  - **OPENED:** `{ "approvals": [Item, …] }`, a full snapshot of the **pending items on the `user` tier**, oldest first.
+  - **Without `watch`,** the page sends END next. **With `watch`,** a `{"t":"approvals","approvals":[…]}` line carries a whole new snapshot after each change, until either side resets. An item leaves the snapshot when it settles.
+  - **`Item`:** `{ id, kind, agentId?, agentName?, requester: { kind, name, where? }, detail, tier, always, stoppable, verdict?, judging?, verdictError?, createdAt, expiresAt }`.
+    - `detail` is the item's scrubbed detail, an object whose shape follows `kind`: `{ command, … }` for `sudo`, `{ tool, summary, … }` for `guest-tool`, `{ text, attachments }` for `guest-message`, `{ what, mode, seconds?, program, … }` for `capture`.
+    - `kind` is `guest-message`, `guest-tool`, `sudo`, `capture`, and later `owner-tool`.
+    - `always`: whether `always` may answer it. `stoppable`: whether `stop` may.
+    - `verdict`: the judge's, with `level` 1 to 3 and `reason`. `judging` is true while the judge works, and `verdictError` says why it gave none.
+    - `createdAt` and `expiresAt` are in ms since the epoch.
+    - `replay`, run output, seats and device ids are never sent. Fields added later are passed through by the node.
+- **`decide`:** `OPEN { "kind": "agent", "op": "decide", "id", "answer": "once" | "always" | "deny" | "stop", "reason"? }` on its own channel. The page serves it through slicc-agent's remote client (`decide({ id, answer, reason })`).
+  - **OPENED:** `{ "ok": true }`, then END.
+  - **A refusal** is `RESET EINVAL: <the agent's sentence>`: already answered, timed out, withdrawn, Always not offered, or `Only a person can stop a turn.`. An unknown id is `ENOENT`.
+  - **The record:** `decidedBy` is `follower`, and `device` is the link's node id.
+- **Who may, for `approvals` and `decide`:** the same Linked devices permission as `prompt` and `abort`. Without it they're `EACCES`, which is CLI exit 3.
+  - **Never self-approval:** `decide` is refused (`EACCES`) on a link that comes from seven's own kernel, such as wasi-slicc run by an agent inside seven. The wasi build of slicc doesn't offer `decide` at all.
+  - **Older sevens:** a seven that doesn't know the op answers `EINVAL` (with no sentence) or `EOPNOTSUPP` (such as `EOPNOTSUPP: this agent has no approvals`), and the node treats both as unsupported. `EOPNOTSUPP: the agent is not running` comes from a tab without the agent.
 - **Events:** one JSON object per line, mapped by slicc-agent from pi-durable's agent events (`watchEvents`) and handed to the page by `remoteControl(connection)` from `@ai-ecoverse/slicc-agent/page`.
   - `{"t":"user","id","text","delivered"}`;
   - `{"t":"text","id","delta"}`: assistant text as it streams;
@@ -2327,7 +2386,7 @@ From [slicc-bios#360](https://github.com/ai-ecoverse/slicc-bios/pull/360) and [s
 How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-leader), and this seven's own tray. This isn't a link stream. It's seven's page serving its own kernel. The page holds the WebRTC; the program never sees the hub, the join state or the peer connection.
 
 - **The program:** `@ai-ecoverse/wasi-slicc`, slicc-cli's client command layer built for `GOOS=wasip1` (published by slicc-cli, offered by bios's catalog).
-  - **Commands:** `slicc <join-url> prompt|watch|wait|abort`, with the CLI's own flags, output and `--json` events, and `slicc tray` (below).
+  - **Commands:** `slicc <join-url> prompt|watch|wait|abort|approvals`, with the CLI's own flags, output and `--json` events, and `slicc tray` (below).
   - **Anything else** exits 2 with `slicc: <command> isn't available inside seven`. A prompt without a join URL is refused the same way.
   - **How it reaches the facade:** through its host module, at `SLICC_LINK_URL` (below).
 - **Where it's served:** a page-served kernel facade with the caller's stamp on each connection, mirroring the CDP facade on `127.0.0.1:9222`. The mechanism is [slicc-kernel#526](https://github.com/ai-ecoverse/slicc-kernel/issues/526), shipped in [slicc-kernel 1.90.0](https://github.com/ai-ecoverse/slicc-kernel/tree/v1.90.0#page-facades) ([#556](https://github.com/ai-ecoverse/slicc-kernel/pull/556)):
@@ -2338,7 +2397,7 @@ How a kernel program in seven reaches [§1.4](#14-a-seven-as-follower-leader-to-
 - **The connection:** a raw byte stream on the kernel's loopback, reached at `SLICC_LINK_URL` (`tcp://127.0.0.1:<port>`). The kernel hands the connection and the connector's stamp to the page's hook, as `SO_PEERCRED` would. The program's host module connects with the imports-module API's `ctx.net.connect` (slicc-kernel 1.92.0 or later).
 - **Framing, one connection per [§5.11](#511-agent-page-cap-agent-node--page-remote-control) stream or `tray` request:** records of `u8 type`, a `u32` BE length, then the payload (as [§5.15](#515-ws-cap-ws-page--node-websockets-for-kernel-programs)), in both directions.
   - **`1` control (JSON):**
-    - the program's first record is `{ "v": 1, "join": "<join-url>", "open": { "kind": "agent", "op": "prompt" | "watch" | "abort", … } }`. `open` is exactly [§5.11](#511-agent-page-cap-agent-node--page-remote-control)'s OPEN, `length` for long prompts included;
+    - the program's first record is `{ "v": 1, "join": "<join-url>", "open": { "kind": "agent", "op": "prompt" | "watch" | "abort" | "approvals", … } }`. `open` is exactly [§5.11](#511-agent-page-cap-agent-node--page-remote-control)'s OPEN, `length` for long prompts included;
     - or, for this seven's own tray, `{ "v": 1, "open": { "kind": "tray", "op": "status" | "url" | "rotate" | "unlink" | "retry", "id"? } }`, without `join` (below);
     - the page answers with `{ "opened": { … } }` ([§5.11](#511-agent-page-cap-agent-node--page-remote-control)'s OPENED) or `{ "reset": "ERRNO: message" }`. After a `reset`, it closes the connection.
   - **`2` data:** the stream's DATA, prompt bytes up and NDJSON down.
@@ -2656,7 +2715,7 @@ PRs merge through the merge queue, which requires `ci / integration` and `ci / r
 1. `scripts/go-major.mjs <version>` (verify, see below).
 2. `scripts/release-build.sh <version>` (prepare): `scripts/package.sh <version>` builds `darwin`, `linux` and `windows` × `amd64`, `arm64` with `CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false` and `-X main.version=<version>`, and `slicc-wasip1-wasm.wasm` (`GOOS=wasip1 GOARCH=wasm`) the same way, with the Go toolchain `go.mod` names (see [Reproducing a release](#reproducing-a-release)). It signs the darwin binaries with [rcodesign](https://github.com/indygreg/apple-platform-rs) (pinned by version and SHA-256, downloaded unless `RCODESIGN` names one), identifier `ai.sliccy.slicc`, hardened runtime, Developer ID with a timestamp, notarizes both in one zip with Apple's Notary API, and writes `SHA256SUMS`. The windows and linux binaries are not signed. In the release (`SLICC_SIGN=required`) a missing secret fails the build; elsewhere (`SLICC_SIGN` unset) it warns and leaves the darwin binaries unsigned, and `SLICC_SIGN=0` skips signing. The script then runs the runner's own binary with `--version`, which must answer `slicc <version>`, and `scripts/npm-stage.mjs` stages `@ai-ecoverse/slicc` and the six platform packages into `dist/npm/`, with `--wasi` also `@ai-ecoverse/wasi-slicc` (from `slicc-wasip1-wasm.wasm` and `npm/wasi-slicc/host/slicc-host.mjs`, with README.md's [Inside seven](#inside-seven) section as its README), and the same launcher as `sliccy` (two bins, `sliccy` and `slicc`, and a short preview README) into `dist/npm-next/` as `7.0.0-next.<version>`, with exact `optionalDependencies` on this release's platform packages. `npx sliccy@next` runs the bin named after the package, and both bins run the same launcher. `--bin <name>` (repeatable) overrides the bins of any staged launcher.
 3. `@semantic-release/github` tags and creates the GitHub release with every binary, `install.sh` and `SHA256SUMS`.
-4. `scripts/npm-publish.mjs` (publish) publishes the platform packages, then the launcher and `wasi-slicc`, through npm trusted publishing from `ci.yml` (OIDC, with provenance), then `sliccy` with `--tag next`. Versions already on npm are skipped. After any real publish error, it checks `npm view <package>@<version> version` again and accepts an exact published version, including when a retry reports a package-version conflict. If the version is still absent and publishing reports `TLOG_CREATE_ENTRY_ERROR` or a transparency-log HTTP 409, it retries with provenance, up to three total attempts with 5- and 10-second backoffs, then fails. Other errors fail after the registry check; dry-run errors fail immediately. Before publishing `sliccy`, it checks that every exact-pinned `optionalDependencies` version is on the registry, waits up to `SLICC_REGISTRY_WAIT_SECONDS` (default 900) for freshly published ones, and fails otherwise (exit code 3), so a `sliccy` version never points at missing platform packages.
+4. `scripts/npm-publish.mjs` (publish) publishes the platform packages, then the launcher and `wasi-slicc`, through npm trusted publishing from `ci.yml` (OIDC, with provenance), then `sliccy` with `--tag next`. Versions already on npm are skipped. After any real publish error, it checks `npm view <package>@<version> version` again and accepts an exact published version, including when a retry reports a package-version conflict. If the version is still absent and publishing reports `TLOG_CREATE_ENTRY_ERROR` or a transparency-log HTTP 409, it retries with provenance, up to three total attempts with 5- and 10-second backoffs, then fails. Other errors fail after the registry check; dry-run errors fail immediately. Before publishing `sliccy`, it checks that every exact-pinned `optionalDependencies` version is on the registry, asks the registry for all of them at once every `SLICC_REGISTRY_POLL_SECONDS` (default 30), each request bounded by the time left, for up to `SLICC_REGISTRY_WAIT_SECONDS` (default 1800, sized to fit the 45-minute release job) for freshly published ones, so a `sliccy` version never points at missing platform packages. If they are still missing when the wait runs out, it skips only the `sliccy` publish: it prints `npm-publish: WARN next: sliccy@<version> not published; not on the registry: <list>` to stdout and stderr, writes a `::warning` annotation on GitHub Actions, ends with `npm-publish: PARTIAL` instead of `PASS` and exits 0, so the release and `after-release` still finish and `sliccy@next` stays on its previous version until the next release. With `--dry-run --require-registry`, missing dependencies still fail (exit code 3).
 
 After a release, the pipeline attests the build provenance of `artifacts/release/SHA256SUMS` (`attest` in `ci.yml`) and, from the pipeline release that ai-ecoverse/slicc-shared-web#470 lands in, attaches the attestation's bundle to the release as `SHA256SUMS.sigstore.json`, both of which `slicc update` checks (see [Attestations](#attestations)), and `after-release` runs `scripts/go-warm.sh <version>`: it asks `proxy.golang.org` for the module at `v<version>` (`go list -m` with a scratch module cache) and asks `pkg.go.dev` to fetch it. Both only warn.
 
@@ -2664,7 +2723,7 @@ After a release, the pipeline attests the build provenance of `artifacts/release
 - **Never move or delete a pushed tag.** The checksum database would then reject that version for every user. A bad version gets a `retract` directive in `go.mod`, and a new release.
 - **Major versions.** A module at v2 or above needs `/vN` at the end of its module path, or `go install …@latest` never sees it. `scripts/go-major.mjs <version>` fails the release when the version's major doesn't fit the module path in `go.mod` (no suffix allows v0 and v1, `/vN` allows only vN). A `BREAKING CHANGE` commit therefore needs a deliberate module-path change first.
 
-**Gate verdicts.** A gate's silence never reads as a pass. Each script that gates a release ends a pass with a `<name>: PASS …` line: `go-major: PASS 1.4.0 (major 1) fits module path …`, `release-build: PASS 1.4.0, slicc-linux-amd64 runs, 8 files in SHA256SUMS` and `npm-publish: PASS latest: published 8, 0 already published of 8 packages`. `.releaserc.json` runs each through `sh scripts/verdict.sh <name> <command…>`, which fails with the gate's exit code when it fails, and fails when it exits 0 without its `<name>: PASS` line. `npm-publish.mjs` also fails on a directory with no packages. The scripts find their main block with `realpath` on both `process.argv[1]` and the module's own path (`scripts/is-main.mjs`), so they also run through a symlinked checkout or script.
+**Gate verdicts.** A gate's silence never reads as a pass. Each script that gates a release ends a pass with a `<name>: PASS …` line: `go-major: PASS 1.4.0 (major 1) fits module path …`, `release-build: PASS 1.4.0, slicc-linux-amd64 runs, 8 files in SHA256SUMS` and `npm-publish: PASS latest: published 8, 0 already published of 8 packages`. `.releaserc.json` runs each through `sh scripts/verdict.sh <name> <command…>`, which fails with the gate's exit code when it fails, and fails when it exits 0 without its `<name>: PASS` or `<name>: PARTIAL` line (`PARTIAL` counts only for `npm-publish`, which prints it when it skips a late `sliccy@next`). `npm-publish.mjs` also fails on a directory with no packages. The scripts find their main block with `realpath` on both `process.argv[1]` and the module's own path (`scripts/is-main.mjs`), so they also run through a symlinked checkout or script.
 
 npm needs no token. `npm run trust` (fledgling) configures trusted publishing from `ci.yml` for the nine packages under `fledgling.include` in `package.json`, `@ai-ecoverse/wasi-slicc` and `sliccy` included.
 

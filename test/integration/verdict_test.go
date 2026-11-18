@@ -101,7 +101,7 @@ func TestAGateThatExitsSilentlyFailsItsStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	expr := regexp.MustCompile(`\$\{\{[^}]*\}\}`)
-	stubs := map[string]string{"silent": "", "fails": "echo \"%s: FAIL broken\"\nexit 3\n", "other": "echo \"other: PASS\"\n", "passes": "echo \"%s: PASS fine\"\n"}
+	stubs := map[string]string{"silent": "", "fails": "echo \"%s: FAIL broken\"\nexit 3\n", "other": "echo \"other: PASS\"\n", "passes": "echo \"%s: PASS fine\"\n", "partial": "echo \"%s: PARTIAL skipped one\"\n", "partialFails": "echo \"%s: PARTIAL skipped one\"\nexit 3\n"}
 	run := 0
 	for _, c := range gateCalls(t) {
 		at := strings.Index(c.line, "sh scripts/verdict.sh ")
@@ -135,8 +135,12 @@ func TestAGateThatExitsSilentlyFailsItsStep(t *testing.T) {
 			} else if err != nil {
 				t.Fatal(err)
 			}
-			want := map[string]int{"silent": 1, "fails": 3, "other": 1, "passes": 0}[kind]
-			if code != want || (kind == "silent" && !strings.Contains(string(out), "silence is not a pass")) {
+			want := map[string]int{"silent": 1, "fails": 3, "other": 1, "passes": 0, "partial": 1, "partialFails": 3}[kind]
+			if kind == "partial" && c.gate == "npm-publish" {
+				want = 0
+			}
+			quiet := kind == "silent" || (kind == "partial" && want != 0)
+			if code != want || (quiet && !strings.Contains(string(out), "silence is not a pass")) {
 				t.Errorf("%s, %s exits %s: step exit %d, want %d: %s\n%s", c.file, c.gate, kind, code, want, cmd, out)
 			}
 		}
