@@ -227,6 +227,15 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 		{"Storage.getSharedStorageEntries", map[string]any{"ownerOrigin": idpOrigin}},
 		{"Storage.getSharedStorageMetadata", map[string]any{"ownerOrigin": idpOrigin}},
 		{"Storage.getInterestGroupDetails", map[string]any{"ownerOrigin": idpOrigin, "name": "g"}},
+		{"Storage.overrideQuotaForOrigin", map[string]any{"origin": idpOrigin, "quotaSize": 1}},
+		{"Storage.trackIndexedDBForOrigin", map[string]any{"origin": idpOrigin}},
+		{"Storage.untrackIndexedDBForOrigin", map[string]any{"origin": stgOrigin}},
+		{"Storage.trackCacheStorageForOrigin", map[string]any{"origin": idpOrigin}},
+		{"Storage.trackCacheStorageForStorageKey", map[string]any{"storageKey": idpOrigin + "/"}},
+		{"IndexedDB.deleteDatabase", map[string]any{"securityOrigin": idpOrigin, "databaseName": "d"}, "page"},
+		{"CacheStorage.deleteCache", map[string]any{"cacheId": idpOrigin + "/|c1"}, "page"},
+		{"DOMStorage.removeDOMStorageItem", map[string]any{"storageId": map[string]any{"securityOrigin": idpOrigin, "isLocalStorage": true}, "key": "k"}, "page"},
+		{"DOMStorage.clearDOMStorageItems", map[string]any{"storageId": map[string]any{"storageKey": stgOrigin + "/", "isLocalStorage": false}}, "page"},
 	}
 	answered := [][]any{
 		{"Storage.getTrustTokens", map[string]any{}},
@@ -239,7 +248,19 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 		{"IndexedDB.requestDatabaseNames", map[string]any{"securityOrigin": "https://x.ims-na1.adobelogin.com"}, "page"},
 		{"IndexedDB.requestDatabaseNames", map[string]any{"storageKey": "https://cdn.example.test/^0https://adobe.com"}, "page"},
 	}
-	out, b := outcomesOf(t, env, append(append([][]any{}, refused...), answered...))
+	controls := [][]any{
+		{"Storage.overrideQuotaForOrigin", map[string]any{"origin": env.allowed, "quotaSize": 1}},
+		{"Storage.trackIndexedDBForOrigin", map[string]any{"origin": env.allowed}},
+		{"Storage.untrackIndexedDBForOrigin", map[string]any{"origin": env.allowed}},
+		{"Storage.trackCacheStorageForOrigin", map[string]any{"origin": env.allowed}},
+		{"Storage.trackCacheStorageForStorageKey", map[string]any{"storageKey": env.allowed + "/"}},
+		{"IndexedDB.deleteDatabase", map[string]any{"securityOrigin": env.allowed, "databaseName": "d"}, "page"},
+		{"CacheStorage.deleteCache", map[string]any{"cacheId": env.allowed + "/|c1"}, "page"},
+		{"DOMStorage.removeDOMStorageItem", map[string]any{"storageId": map[string]any{"securityOrigin": env.allowed, "isLocalStorage": true}, "key": "k"}, "page"},
+		{"DOMStorage.clearDOMStorageItems", map[string]any{"storageId": map[string]any{"storageKey": env.allowed + "/", "isLocalStorage": false}}, "page"},
+	}
+	calls := append(append(append([][]any{}, refused...), answered...), controls...)
+	out, b := outcomesOf(t, env, calls)
 	for i, o := range out {
 		switch {
 		case i < len(refused) && (o.OK || !strings.HasPrefix(o.Error.Message, "slicc: refused: ")):
@@ -260,7 +281,7 @@ func TestCDPRefusesSignInStorageCommands(t *testing.T) {
 	if sub := string(out[len(refused)+4].Result); !strings.Contains(sub, "kept-subcache") {
 		t.Errorf("a sub-host of a sign-in origin lost its caches: %s", sub)
 	}
-	for i := len(refused) + 5; i < len(out); i++ {
+	for i := len(refused) + 5; i < len(refused)+len(answered); i++ {
 		if !strings.Contains(string(out[i].Result), "kept-db") {
 			t.Errorf("call %d: a login-UI host or a sub-host lost its databases: %s", i, out[i].Result)
 		}
