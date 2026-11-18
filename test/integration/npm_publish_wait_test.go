@@ -200,6 +200,34 @@ func nextDir(t *testing.T, version string) string {
 	return writePackages(t, map[string]map[string]any{"slicc": {"name": "sliccy", "version": version, "optionalDependencies": platformDeps()}})
 }
 
+var allPlatforms = []string{
+	"@ai-ecoverse/slicc-darwin-amd64", "@ai-ecoverse/slicc-darwin-arm64",
+	"@ai-ecoverse/slicc-linux-amd64", "@ai-ecoverse/slicc-linux-arm64",
+	"@ai-ecoverse/slicc-windows-amd64", "@ai-ecoverse/slicc-windows-arm64",
+}
+
+func nextDirWith(t *testing.T, deps []string) string {
+	t.Helper()
+	pins := map[string]string{}
+	for _, d := range deps {
+		pins[d] = waitVersion
+	}
+	return writePackages(t, map[string]map[string]any{"slicc": {"name": "sliccy", "version": waitNext, "optionalDependencies": pins}})
+}
+
+func handlerRegistry(t *testing.T, h http.HandlerFunc) *waitRegistry {
+	t.Helper()
+	reg := &waitRegistry{misses: map[string]int{}, hits: map[string]int{}}
+	reg.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reg.mu.Lock()
+		reg.misses[strings.TrimPrefix(r.URL.Path, "/")]++
+		reg.mu.Unlock()
+		h(w, r)
+	}))
+	t.Cleanup(reg.Close)
+	return reg
+}
+
 func latestDir(t *testing.T) string {
 	t.Helper()
 	pkgs := map[string]map[string]any{"slicc": {"name": "@ai-ecoverse/slicc", "version": waitVersion, "optionalDependencies": platformDeps()}}
@@ -409,5 +437,69 @@ func TestNPMPublishDryRunIgnoresTheSliccySkip(t *testing.T) {
 	}
 	if got := f.publishes(t); len(got) != 0 {
 		t.Fatalf("dry run with --require-registry published %q", got)
+	}
+}
+
+func TestSliccyNextWaitEndsNearItsDeadlineWhenTheRegistryHangs(t *testing.T) {
+	node := requirePosixNPM(t)
+	f := newFakeNPM(t, node)
+	done := make(chan struct{})
+	reg := handlerRegistry(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	})
+	t.Cleanup(func() { close(done) })
+	start := time.Now()
+	r := publish(t, node, nextDirWith(t, allPlatforms), waitEnv(t, f, reg, "SLICC_REGISTRY_WAIT_SECONDS=2"), "--tag", "next")
+	elapsed := time.Since(start)
+	if elapsed > 12*time.Second {
+		t.Fatalf("a registry that never answers kept the script %v past a 2 s wait, want at most 10 s past the deadline: %+v", elapsed, r)
+	}
+	if r.code != 0 || !strings.Contains(r.stderr, "npm-publish: WARN next: sliccy@"+waitNext+" not published; not on the registry: ") || !strings.HasPrefix(lastLine(r.stdout), "npm-publish: PARTIAL next: ") {
+		t.Fatalf("a registry that never answers: %+v", r)
+	}
+	for _, d := range allPlatforms {
+		if !strings.Contains(r.stderr, d+"@"+waitVersion+" (no answer in ") {
+			t.Fatalf("missing the timeout reason for %s: %+v", d, r)
+		}
+		if reg.missed(d) == 0 {
+			t.Fatalf("never asked the registry for %s", d)
+		}
+	}
+	if got := f.publishes(t); len(got) != 0 {
+		t.Fatalf("published %q", got)
+	}
+}
+
+func TestNPMPublishPrintsNoWorkflowCommandsFromTheRegistry(t *testing.T) {
+	node := requirePosixNPM(t)
+	f := newFakeNPM(t, node)
+	reg := handlerRegistry(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"version": "9.9.9\n::error::boom\r\n::add-mask::x"})
+	})
+	r := publish(t, node, nextDir(t, waitNext), waitEnv(t, f, reg, "GITHUB_ACTIONS=true"), "--tag", "next")
+	if r.code != 0 || !strings.HasPrefix(lastLine(r.stdout), "npm-publish: PARTIAL next: ") {
+		t.Fatalf("a registry answering the wrong version: %+v", r)
+	}
+	annotations := 0
+	for name, out := range map[string]string{"stdout": r.stdout, "stderr": r.stderr} {
+		for _, line := range strings.FieldsFunc(out, func(c rune) bool { return c == '\n' || c == '\r' }) {
+			if !strings.HasPrefix(strings.TrimSpace(line), "::") {
+				continue
+			}
+			if name == "stdout" && strings.HasPrefix(line, "::warning title=sliccy@next not published::") {
+				annotations++
+				continue
+			}
+			t.Fatalf("%s carries a workflow command from the registry: %q\n%+v", name, line, r)
+		}
+	}
+	if annotations != 1 {
+		t.Fatalf("%d sliccy@next annotations, want 1: %+v", annotations, r)
+	}
+	if got := f.publishes(t); len(got) != 0 {
+		t.Fatalf("published %q", got)
 	}
 }
