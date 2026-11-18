@@ -106,6 +106,7 @@ type navTarget struct {
 	documentsAsked    bool
 	framesGate        chan struct{}
 	framesReads       int
+	wake              *time.Timer
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -116,6 +117,9 @@ func (nt *navTarget) settle(failed bool) {
 			}
 			nt.confirm.settle(true)
 		}
+	}
+	if nt.wake != nil {
+		nt.wake.Stop()
 	}
 	if nt.done {
 		return
