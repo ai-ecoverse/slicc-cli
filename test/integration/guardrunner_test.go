@@ -629,7 +629,6 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 	if sum.ObserverSkipped != 0 {
 		t.Errorf("%d rows skipped for want of an unguarded observer", sum.ObserverSkipped)
 	}
-	unsupported := map[string]int{}
 	for _, r := range sum.Results {
 		name := r.ID + " " + r.Target + " " + r.Variant
 		if skip, ok := guardSkips[r.ID]; ok {
@@ -658,20 +657,11 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 				t.Errorf("%s: a text row ran: %+v", name, r)
 			}
 		case r.Control == "skip":
-			if !documentedGuardSkip(r) {
+			if guardSkipClass(r) == guardSkipUnexplained {
 				t.Errorf("%s: inconsistent or unexplained skip: %+v", name, r)
 				continue
 			}
-			switch {
-			case r.Reason == "not-supported:siteIsolationOff",
-				r.Reason == "not-supported:syntheticAutoAttach":
-				unsupported[r.ID]++
-				t.Logf("%s: skip %s", name, r.Reason)
-			case strings.HasPrefix(r.Reason, "not-applicable"):
-				t.Logf("%s: skip %s", name, r.Reason)
-			default:
-				t.Errorf("%s: skipped with %q", name, r.Reason)
-			}
+			t.Logf("%s: skip %s", name, r.Reason)
 		case r.Control != "pass" || r.Guarded != "pass" || r.Live != "pass":
 			if reason, ok := waivedGuardRow(r); ok {
 				t.Logf("%s: WAIVED (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, reason, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
@@ -681,18 +671,8 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 		}
 	}
 	t.Logf("counts %s; not run %v", sum.Counts, sum.NotRun)
-	passed := map[string]int{}
-	waivedFail := map[string]bool{}
-	for _, r := range sum.Results {
-		if r.Control == "pass" && r.Guarded == "pass" && r.Live == "pass" {
-			passed[r.ID]++
-			continue
-		}
-		if _, ok := waivedGuardRow(r); ok {
-			waivedFail[r.ID] = true
-		}
-	}
-	if len(passed) == 0 && len(waivedFail) == 0 && len(unsupported) == 0 {
+	tally := tallyGuardRows(sum.Results)
+	if !tally.any() {
 		t.Error("no applicable guard vector passed; an all-skip run is not evidence")
 	}
 	var set struct {
@@ -714,11 +694,11 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 		if !ranIDs[v.ID] {
 			continue
 		}
-		if passed[v.ID] == 0 && unsupported[v.ID] == 0 && !waivedFail[v.ID] {
+		if !tally.proven(v.ID) {
 			t.Errorf("%s: no row of the vector passed", v.ID)
 			continue
 		}
-		ran = append(ran, fmt.Sprintf("%s=%d", v.ID, passed[v.ID]))
+		ran = append(ran, fmt.Sprintf("%s=%d", v.ID, tally.passed[v.ID]))
 	}
 	t.Logf("passed rows per vector: %s", strings.Join(ran, " "))
 	if !sum.Pass {
