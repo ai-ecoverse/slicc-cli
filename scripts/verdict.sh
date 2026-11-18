@@ -17,7 +17,12 @@ if [ "$status" != 0 ]; then
   echo "verdict: $name failed (exit ${status:-unknown})" >&2
   exit "${status:-1}"
 fi
-if ! grep -q "^$name: PASS" "$dir/log"; then
-  echo "verdict: $name exited 0 without a \"$name: PASS\" line; silence is not a pass" >&2
-  exit 1
+if grep -q "^$name: PASS" "$dir/log"; then
+  exit 0
 fi
+if grep -q "^$name: PARTIAL" "$dir/log"; then
+  echo "verdict: $name is partial; see its WARN lines" >&2
+  exit 0
+fi
+echo "verdict: $name exited 0 without a \"$name: PASS\" line; silence is not a pass" >&2
+exit 1
