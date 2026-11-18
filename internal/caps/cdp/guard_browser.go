@@ -561,12 +561,12 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	g.attachParent = ""
 	g.noteWorkerShownLocked(info)
-	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
+	g.noteSessionInsertLocked(&session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}, "attachedToTarget")
 	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
 	}
 	send = append(send, g.touchLocked(info.TargetID, info.Type)...)
-	g.cmdTraceStateLocked("attached-forward", p.SessionID, info.TargetID, "waiting="+strconv.FormatBool(p.WaitingForDebugger), "typ="+info.Type, "path=immediate")
+	g.cmdTraceStateLocked("attached-forward", p.SessionID, info.TargetID, "waiting="+strconv.FormatBool(p.WaitingForDebugger), "typ="+info.Type, "path=immediate", "detachToClient=true")
 	if params := decodeParams(m.Params); params != nil {
 		if obj, _ := params["targetInfo"].(map[string]any); g.redactInfoLocked(obj, info) {
 			m.Params = encode(params)
@@ -595,7 +595,7 @@ func (g *guard) attachAnsweredLocked(parent string, res map[string]any, t *targe
 	if sid == "" || sid == g.relaySession || g.sessions[sid] != nil || g.held[sid] != nil || g.hidden[sid] {
 		return
 	}
-	g.sessions[sid] = &session{id: sid, target: t.id, parent: parent, typ: t.typ}
+	g.noteSessionInsertLocked(&session{id: sid, target: t.id, parent: parent, typ: t.typ}, "attachToTarget-answer")
 	if t.typ == "browser" {
 		g.browserSessions[sid] = true
 	}
@@ -612,18 +612,23 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 	}
 	if h, ok := g.held[p.SessionID]; ok {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
+		g.cmdTraceStateLocked("detached", p.SessionID, h.target, "waiting="+strconv.FormatBool(h.waiting), "path=held", "detachToClient=false")
 		delete(g.held, p.SessionID)
 		g.refuseHeldWaitLocked(h.target)
-		g.forgetSessionLocked(p.SessionID)
+		g.forgetSessionNotedLocked(p.SessionID, "chrome-detached-held", false)
 		return browserVerdict{page: g.takePendingPageLocked()}
 	}
 	if g.hidden[p.SessionID] {
+		target := g.hiddenOwner[p.SessionID]
+		g.cmdTraceStateLocked("detached", p.SessionID, target, "path=hidden", "detachToClient=false")
 		delete(g.hidden, p.SessionID)
 		delete(g.hiddenOwner, p.SessionID)
-		g.forgetSessionLocked(p.SessionID)
+		g.forgetSessionNotedLocked(p.SessionID, "chrome-detached-hidden", false)
 		return browserVerdict{page: g.takePendingPageLocked()}
 	}
-	g.forgetSessionLocked(p.SessionID)
+	target := g.sessionTargetIDLocked(p.SessionID)
+	g.cmdTraceStateLocked("detached", p.SessionID, target, "path=forward", "detachToClient=true")
+	g.forgetSessionNotedLocked(p.SessionID, "chrome-detached", true)
 	return browserVerdict{forward: data, page: g.takePendingPageLocked()}
 }
 

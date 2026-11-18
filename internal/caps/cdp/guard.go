@@ -254,6 +254,7 @@ type guard struct {
 	versionReplies        map[callKey]int
 	scripts               map[string]bool
 	cmdArrivals           map[callKey]time.Time
+	cmdTraceT0            time.Time
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -411,6 +412,7 @@ func (g *guard) newCallLocked(sessionID, method string, params any, wait bool) (
 		if sessionID != "" {
 			m["sessionId"] = sessionID
 		}
+		g.cmdTraceGuardCallLocked(sessionID, method, g.nextID, params)
 		return encode(m), c
 	}
 }
@@ -1542,6 +1544,7 @@ func (g *guard) protectLocked(t *target) [][]byte {
 		s.refused = true
 		g.addRefusedLocked(s.id)
 		g.logf("cdp: detaching a session on a protected origin target=%s session=%s parent=%s waiting=%t reason=%s", t.id, s.id, s.parent, s.waiting, reason)
+		g.cmdTraceStateLocked("session-remove", s.id, t.id, "reason=protect-detach", "detachToClient=true", "waiting="+strconv.FormatBool(s.waiting))
 		if s.waiting {
 			out = append(out, g.resumeLocked(s.id, t.id))
 		}
@@ -1592,7 +1595,12 @@ func (g *guard) destroyedLocked(id string) {
 	}
 }
 
-func (g *guard) forgetSessionLocked(id string) {
+func (g *guard) forgetSessionNotedLocked(id, reason string, detachToClient bool) {
+	if id == "" {
+		return
+	}
+	target := g.sessionTargetIDLocked(id)
+	g.cmdTraceStateLocked("session-remove", id, target, "reason="+reason, "detachToClient="+strconv.FormatBool(detachToClient))
 	g.goneLocked(id)
 	g.forgetWorldSessionLocked(id)
 	g.forgetCastLocked(id)
@@ -1622,6 +1630,14 @@ func (g *guard) forgetSessionLocked(id string) {
 			delete(g.pendingTouch, k)
 		}
 	}
+}
+
+func (g *guard) noteSessionInsertLocked(s *session, reason string) {
+	if s == nil || s.id == "" {
+		return
+	}
+	g.sessions[s.id] = s
+	g.cmdTraceStateLocked("session-insert", s.id, s.target, "reason="+reason, "typ="+s.typ, "waiting="+strconv.FormatBool(s.waiting), "parent="+s.parent)
 }
 
 func (g *guard) attachDoneLocked(k callKey) {

@@ -184,7 +184,7 @@ func TestCloseProtectedPendingTouchClearedOnSessionDetach(t *testing.T) {
 		t.Fatal("expected a pending touch reservation")
 	}
 	reserved := g.touchSeq
-	g.forgetSessionLocked("S-page")
+	g.forgetSessionNotedLocked("S-page", "test", false)
 	if len(g.pendingTouch) != 0 {
 		t.Fatalf("pendingTouch survived session detach: %+v", g.pendingTouch)
 	}

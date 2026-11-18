@@ -2321,6 +2321,38 @@ func TestIframeHoldProtectedContextEvaluateAnswersWithinBound(t *testing.T) {
 	refusalFromVerdict(t, reviewCommand(g, `{"id":53,"sessionId":"S-page","method":"Runtime.evaluate","params":{"expression":"1","contextId":6}}`))
 }
 
+func TestIframeHoldUnknownSessionRefusesWithinBound(t *testing.T) {
+	g := iframeHoldGuard(t)
+	c, id, ok := parseCommand([]byte(`{"id":80,"sessionId":"S-unknown","method":"Runtime.evaluate","params":{"expression":"1"}}`))
+	if !ok || id != 80 {
+		t.Fatal("evaluate command did not parse")
+	}
+	if wait := g.commandWait(c); wait == nil {
+		t.Fatal("unknown session evaluate was not parked")
+	}
+	u := g.unknown["S-unknown"]
+	if u == nil || u.done {
+		t.Fatal("unknown session wait was not recorded")
+	}
+	u.start = time.Now().Add(-unknownSessionIdle - time.Second)
+	u.awayAt = 0
+	g.navWatch(time.Now())
+	if !u.done || u.reason == "" {
+		t.Fatalf("unknown session did not settle within the bound: done=%v reason=%q", u.done, u.reason)
+	}
+	if g.commandWait(c) != nil {
+		t.Fatal("unknown session stayed parked after the bound")
+	}
+	v := reviewCommand(g, `{"id":80,"sessionId":"S-unknown","method":"Runtime.evaluate","params":{"expression":"1"}}`)
+	refusalFromVerdict(t, v)
+	if !strings.Contains(string(v.reply), refusedSession) {
+		t.Fatalf("unknown session refusal missing: %s", v.reply)
+	}
+	if len(v.forward) > 0 {
+		t.Fatalf("unknown session evaluate was forwarded: %s", v.forward)
+	}
+}
+
 func TestIframeHoldWaitingWithoutNavTargetResumes(t *testing.T) {
 	g := iframeHoldGuard(t)
 	g.observeAll([]targetInfo{

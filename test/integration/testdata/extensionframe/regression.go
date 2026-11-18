@@ -169,7 +169,7 @@ func TestExtensionPaintReleasedOnSessionDetach(t *testing.T) {
 	}
 	start := time.Now()
 	g.mu.Lock()
-	g.forgetSessionLocked("S")
+	g.forgetSessionNotedLocked("S", "test", false)
 	page := g.takePendingPageLocked()
 	_ = g.takeReleasesLocked()
 	g.mu.Unlock()

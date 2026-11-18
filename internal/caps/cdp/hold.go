@@ -91,7 +91,7 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	if t := g.targets[h.target]; t != nil && (workerTypes[t.typ] || t.typ == "iframe") {
 		t.shown = true
 	}
-	g.sessions[h.id] = &session{id: h.id, target: h.target, parent: h.parent, typ: h.typ, waiting: waiting}
+	g.noteSessionInsertLocked(&session{id: h.id, target: h.target, parent: h.parent, typ: h.typ, waiting: waiting}, "held-deliver")
 	v.send = append(v.send, g.touchLocked(h.target, h.typ)...)
 	if h.params == nil {
 		h.params = map[string]any{}
@@ -117,7 +117,7 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	if h.parent != "" {
 		ev["sessionId"] = h.parent
 	}
-	g.cmdTraceStateLocked("attached-forward", h.id, h.target, "waiting="+strconv.FormatBool(waiting), "typ="+h.typ)
+	g.cmdTraceStateLocked("attached-forward", h.id, h.target, "waiting="+strconv.FormatBool(waiting), "typ="+h.typ, "path=held-deliver", "detachToClient=true")
 	v.page = append(v.page, encode(ev))
 	return v
 }
@@ -191,6 +191,7 @@ func (g *guard) hideLocked(h *heldSession) [][]byte {
 	g.refuseHeldWaitLocked(h.target)
 	g.noteHiddenLocked(h.id, h.target)
 	g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
+	g.cmdTraceStateLocked("session-remove", h.id, h.target, "reason=hide-protected", "detachToClient=false", "waiting="+strconv.FormatBool(h.waiting))
 	var send [][]byte
 	if h.waiting {
 		send = append(send, g.resumeLocked(h.id, h.target))

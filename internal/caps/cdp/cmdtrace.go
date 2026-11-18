@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+func (g *guard) cmdTraceEpochLocked() int64 {
+	if g.cmdTraceT0.IsZero() {
+		g.cmdTraceT0 = time.Now()
+	}
+	return time.Since(g.cmdTraceT0).Milliseconds()
+}
+
 func (g *guard) cmdArrivalLocked(c *command) time.Time {
 	if c == nil {
 		return time.Time{}
@@ -19,6 +26,7 @@ func (g *guard) cmdArrivalLocked(c *command) time.Time {
 	}
 	at := time.Now()
 	g.cmdArrivals[k] = at
+	_ = g.cmdTraceEpochLocked()
 	return at
 }
 
@@ -114,6 +122,7 @@ func (g *guard) cmdTraceLocked(c *command, action string, extra ...string) {
 		" method=" + c.method +
 		" id=" + strconv.FormatInt(c.id, 10) +
 		" session=" + c.session +
+		" who=client" +
 		" role=" + g.cmdRoleLocked(c.session) +
 		" " + g.cmdNavStateLocked(c.session)
 	if len(extra) > 0 {
@@ -122,11 +131,60 @@ func (g *guard) cmdTraceLocked(c *command, action string, extra ...string) {
 	g.logf("%s", msg)
 }
 
+func (g *guard) cmdTraceSendLocked(session, method string, id int64, who string, target string, extra ...string) {
+	if g.logf == nil {
+		return
+	}
+	msg := "cdp: cmdtrace action=send" +
+		" elapsedMs=" + strconv.FormatInt(g.cmdTraceEpochLocked(), 10) +
+		" method=" + method +
+		" id=" + strconv.FormatInt(id, 10) +
+		" session=" + session +
+		" who=" + who +
+		" target=" + target +
+		" role=" + g.cmdRoleLocked(session) +
+		" " + g.cmdNavStateLocked(session)
+	if len(extra) > 0 {
+		msg += " " + strings.Join(extra, " ")
+	}
+	g.logf("%s", msg)
+}
+
+func (g *guard) cmdTraceGuardCallLocked(sessionID, method string, id int64, params any) {
+	extra := []string{}
+	target := g.sessionTargetIDLocked(sessionID)
+	p, _ := params.(map[string]any)
+	switch method {
+	case "Target.attachToTarget":
+		if tid, _ := p["targetId"].(string); tid != "" {
+			target = tid
+		}
+		if flat, ok := p["flatten"].(bool); ok {
+			extra = append(extra, "flatten="+strconv.FormatBool(flat))
+		}
+	case "Target.setAutoAttach":
+		if v, ok := p["autoAttach"].(bool); ok {
+			extra = append(extra, "autoAttach="+strconv.FormatBool(v))
+		}
+		if v, ok := p["waitForDebuggerOnStart"].(bool); ok {
+			extra = append(extra, "waitForDebuggerOnStart="+strconv.FormatBool(v))
+		}
+		if v, ok := p["flatten"].(bool); ok {
+			extra = append(extra, "flatten="+strconv.FormatBool(v))
+		}
+	case "Runtime.runIfWaitingForDebugger":
+		extra = append(extra, "resume=true")
+	}
+	g.cmdTraceSendLocked(sessionID, method, id, "guard", target, extra...)
+}
+
 func (g *guard) cmdTraceStateLocked(kind, session, target string, extra ...string) {
 	if g.logf == nil {
 		return
 	}
-	msg := "cdp: cmdtrace action=state kind=" + kind + " session=" + session + " target=" + target
+	msg := "cdp: cmdtrace action=state kind=" + kind +
+		" elapsedMs=" + strconv.FormatInt(g.cmdTraceEpochLocked(), 10) +
+		" session=" + session + " target=" + target
 	if len(extra) > 0 {
 		msg += " " + strings.Join(extra, " ")
 	}
@@ -134,4 +192,17 @@ func (g *guard) cmdTraceStateLocked(kind, session, target string, extra ...strin
 		msg += " role=" + g.cmdRoleLocked(session) + " " + g.cmdNavStateLocked(session)
 	}
 	g.logf("%s", msg)
+}
+
+func (g *guard) sessionTargetIDLocked(session string) string {
+	if s := g.sessions[session]; s != nil {
+		return s.target
+	}
+	if h := g.held[session]; h != nil {
+		return h.target
+	}
+	if t := g.hiddenOwner[session]; t != "" {
+		return t
+	}
+	return ""
 }
