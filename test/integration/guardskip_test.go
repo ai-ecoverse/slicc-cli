@@ -19,6 +19,12 @@ func guardSkipClass(r guardRow) string {
 	if r.Control != "skip" || r.Guarded != "skip" || r.Live != "skip" {
 		return guardSkipUnexplained
 	}
+	if slices.Contains(signInHoldRowIDs, r.ID) {
+		if r.Reason == "not-supported:signInHold" {
+			return guardSkipUnsupported
+		}
+		return guardSkipUnexplained
+	}
 	if r.Reason == "not-applicable" || strings.HasPrefix(r.Reason, "not-applicable: ") {
 		return guardSkipNotApplicable
 	}
