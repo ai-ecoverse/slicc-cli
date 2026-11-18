@@ -460,6 +460,7 @@ func TestCDPRefusesPlantingSignInCookiesThroughFetch(t *testing.T) {
 	env, fake := setupFakeProtect(t, plantDoorScript)
 	plantDom := "sid=PLANTED; Domain=.adobelogin.com; HttpOnly"
 	plantHost := "sid=PLANTED; Path=/; HttpOnly"
+	controlHost := "sid=CONTROL; Path=/; HttpOnly"
 	plantAdobe := "sid=kept; Domain=.adobe.com; Path=/"
 	plantBin := base64.StdEncoding.EncodeToString([]byte("Set-Cookie: sid=PLANTED; Domain=.adobelogin.com"))
 	calls := [][]any{
@@ -473,7 +474,7 @@ func TestCDPRefusesPlantingSignInCookiesThroughFetch(t *testing.T) {
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain-bin", "responseCode": 200, "binaryResponseHeaders": plantBin}},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain-badbin", "responseCode": 200, "binaryResponseHeaders": "@@@"}},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "fsub-dom", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantDom)}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "fsub-host", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantHost)}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "fsub-host", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", controlHost)}},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain-ok", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", "a=kept; Path=/")}},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "fplain-adobe", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", plantAdobe)}},
 		{"Fetch.fulfillRequest", map[string]any{"requestId": "fwww", "responseCode": 200, "responseHeaders": setCookieHeaders("Set-Cookie", "a=kept; Path=/")}},
