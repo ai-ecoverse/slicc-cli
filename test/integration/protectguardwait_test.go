@@ -160,6 +160,64 @@ func TestCDPRefusesCommandsOnASessionThatNeverRegisters(t *testing.T) {
 	}
 }
 
+func missingSessionWithin(r lateSessionResult, from, to int) bool {
+	return !r.Enable.OK && r.Enable.Error.Code == -32001 && r.Enable.Error.Message == "Session with given id not found." && r.Enable.MS >= from && r.Enable.MS <= to
+}
+
+func TestCDPRefusesASessionThatNeverRegistersAtThreeSecondsWithDefaultBounds(t *testing.T) {
+	env, fake := setupFakeProtect(t, func(string, string) fakeScript { return guardWaitScript("{}") })
+	fake.every(`{"method":"Target.targetInfoChanged","sessionId":"RELAY","params":{"targetInfo":{"targetId":"T1","type":"page","url":"about:blank","title":"","attached":false}}}`)
+	var r lateSessionResult
+	env.evalJSON(t, "linkTest.protect.lateSession('chrome-2', 'NOSUCH', null)", &r)
+	if !missingSessionWithin(r, 3000, 3500) {
+		t.Errorf("Page.enable on a session nobody attached, default bounds: %+v, want Chrome missing-session (-32001, trailing period) in [3s, 3.5s]", r.Enable)
+	}
+	if at := pageCommandsOn(fake, "NOSUCH"); len(at) > 0 {
+		t.Errorf("the browser got %d commands on the unknown session", len(at))
+	}
+}
+
+func TestCDPForwardsAHeldSessionThatRegistersBeforeItsDeadline(t *testing.T) {
+	env, fake := setupFakeProtect(t, func(_, allowed string) fakeScript { return lateAttachScript(allowed) })
+	fake.delay("Target.attachToTarget", 1500*time.Millisecond)
+	var r lateSessionResult
+	env.evalJSON(t, "linkTest.protect.lateSession('chrome-2', 'LATE', 'T9')", &r)
+	at := pageCommandsOn(fake, "LATE")
+	attach := -1
+	for i, raw := range fake.received() {
+		if strings.Contains(raw, `"Target.attachToTarget"`) && strings.Contains(raw, `"T9"`) {
+			attach = i
+			break
+		}
+	}
+	if !r.Enable.OK || len(at) != 1 || attach < 0 || at[0] < attach {
+		t.Errorf("Page.enable on a session that registers at 1.5s: %+v, sent at %v, the attach at %d; want it held, forwarded once the session registered, and answered", r.Enable, at, attach)
+	}
+}
+
+func nudgeScript(sessionID string) fakeScript {
+	base := guardWaitScript("{}")
+	return func(method string, params json.RawMessage) (string, []string) {
+		if method == "Target.attachToTarget" && strings.Contains(string(params), `"NUDGE"`) {
+			return "!No target with given id found", []string{`{"method":"Network.dataReceived","sessionId":"` + sessionID + `","params":{"requestId":"r1","timestamp":1,"dataLength":1,"encodedDataLength":1}}`}
+		}
+		return base(method, params)
+	}
+}
+
+func TestCDPRestartsAnUnknownSessionsDeadlineOnItsEvents(t *testing.T) {
+	env, fake := setupFakeProtect(t, func(string, string) fakeScript { return nudgeScript("NOSUCH") })
+	fake.delay("Target.attachToTarget", 2*time.Second)
+	var r lateSessionResult
+	env.evalJSON(t, "linkTest.protect.lateSession('chrome-2', 'NOSUCH', 'NUDGE')", &r)
+	if !missingSessionWithin(r, 4500, 5500) {
+		t.Errorf("Page.enable on an unknown session with an event on it at 2s: %+v, want Chrome missing-session (-32001, trailing period) about 3s after that event, in [4.5s, 5.5s]", r.Enable)
+	}
+	if at := pageCommandsOn(fake, "NOSUCH"); len(at) > 0 {
+		t.Errorf("the browser got %d commands on the unknown session", len(at))
+	}
+}
+
 func lateAttachScript(url string) fakeScript {
 	var attaches atomic.Int32
 	return func(method string, _ json.RawMessage) (string, []string) {
