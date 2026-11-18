@@ -166,6 +166,9 @@ func (g *guard) settleHeldWorkersLocked() browserVerdict {
 func (g *guard) resumeLocked(sessionID, targetID string) []byte {
 	g.cmdTraceStateLocked("guard-resume", sessionID, targetID, "path=callback")
 	return g.callbackLocked(sessionID, "Runtime.runIfWaitingForDebugger", nil, func(m message) [][]byte {
+		if r, ok := g.cmdResumes[sessionID]; ok {
+			g.noteResumeReplyLocked(sessionID, r.id, m.Error == nil)
+		}
 		if m.Error != nil {
 			g.logf("cdp: could not resume an auto-attached session target=%s session=%s", targetID, sessionID)
 			g.cmdTraceStateLocked("guard-resume-result", sessionID, targetID, "ok=false")

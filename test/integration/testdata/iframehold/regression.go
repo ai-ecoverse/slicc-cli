@@ -2340,6 +2340,9 @@ func TestIframeHoldUnknownSessionRefusesWithinBound(t *testing.T) {
 	if !u.done || u.reason == "" {
 		t.Fatalf("unknown session did not settle within the bound: done=%v reason=%q", u.done, u.reason)
 	}
+	if !strings.Contains(u.reason, unknownSessionIdle.String()) || strings.Contains(u.reason, GuardIdle.String()) {
+		t.Fatalf("unknown session refusal text did not match the 3s bound: %q", u.reason)
+	}
 	if g.commandWait(c) != nil {
 		t.Fatal("unknown session stayed parked after the bound")
 	}

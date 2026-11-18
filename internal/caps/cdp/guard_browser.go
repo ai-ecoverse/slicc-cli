@@ -143,6 +143,10 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		return browserVerdict{}
 	}
 	c := &command{id: *m.ID, session: m.SessionID, method: "(chrome-reply)"}
+	if r, have := g.cmdResumes[m.SessionID]; have && r.id == *m.ID {
+		g.noteResumeReplyLocked(m.SessionID, *m.ID, m.Error == nil)
+		c.method = "Runtime.runIfWaitingForDebugger"
+	}
 	g.cmdTraceLocked(c, "chrome-reply", "error="+strconv.FormatBool(m.Error != nil))
 	ownerFrame, ownerCall := g.extensionOwnerCalls[k]
 	delete(g.extensionOwnerCalls, k)
@@ -548,6 +552,12 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if t, ok := g.targets[info.TargetID]; ok && info.URL == "" && t.url != "" {
 		info.URL = t.url
 	}
+	g.cmdTraceStateLocked("attached-seen", p.SessionID, info.TargetID,
+		"waitingForDebugger="+strconv.FormatBool(p.WaitingForDebugger),
+		"typ="+info.Type,
+		"parentSession="+m.SessionID,
+		"parentRole="+g.cmdRoleLocked(m.SessionID),
+		"parentKnown="+strconv.FormatBool(g.sessionKnownLocked(m.SessionID)))
 	g.noteStreamOpenedLocked(info)
 	g.attachParent = m.SessionID
 	var send [][]byte
@@ -557,6 +567,11 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	send = append(send, g.observeLocked(info)...)
 	if v, handled := g.attachedHideOrHoldLocked(m, p.SessionID, p.WaitingForDebugger, info, send); handled {
 		g.attachParent = ""
+		g.cmdTraceStateLocked("attached-swallowed", p.SessionID, info.TargetID,
+			"waitingForDebugger="+strconv.FormatBool(p.WaitingForDebugger),
+			"typ="+info.Type,
+			"parentSession="+m.SessionID,
+			"detachToClient=false")
 		return v
 	}
 	g.attachParent = ""

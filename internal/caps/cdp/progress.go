@@ -131,9 +131,9 @@ func (g *guard) navWatch(now time.Time) {
 			continue
 		}
 		b := guardBounds{idle: unknownIdle, limit: g.bounds.limit}
-		if reason := b.expired(u, now, away); reason != "" {
-			g.logf("cdp: a session slicc doesn't know never registered: %s; refusing its commands", reason)
-			u.reason = reason
+		if b.expired(u, now, away) != "" {
+			u.reason = "its unknown-session guard made no progress in " + unknownIdle.String()
+			g.logf("cdp: a session slicc doesn't know never registered: %s; refusing its commands", u.reason)
 			u.settle(true)
 		}
 	}

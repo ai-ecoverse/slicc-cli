@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+type cmdResume struct {
+	who     string
+	id      int64
+	at      time.Time
+	replied bool
+	ok      bool
+}
+
 func (g *guard) cmdTraceEpochLocked() int64 {
 	if g.cmdTraceT0.IsZero() {
 		g.cmdTraceT0 = time.Now()
@@ -174,8 +182,66 @@ func (g *guard) cmdTraceGuardCallLocked(sessionID, method string, id int64, para
 		}
 	case "Runtime.runIfWaitingForDebugger":
 		extra = append(extra, "resume=true")
+		g.noteResumeLocked(sessionID, "guard", id)
 	}
 	g.cmdTraceSendLocked(sessionID, method, id, "guard", target, extra...)
+}
+
+func (g *guard) noteResumeLocked(session, who string, id int64) {
+	if session == "" {
+		return
+	}
+	if g.cmdResumes == nil {
+		g.cmdResumes = map[string]cmdResume{}
+	}
+	g.cmdResumes[session] = cmdResume{who: who, id: id, at: time.Now()}
+}
+
+func (g *guard) noteResumeReplyLocked(session string, id int64, ok bool) {
+	r, have := g.cmdResumes[session]
+	if !have || r.id != id {
+		return
+	}
+	r.replied = true
+	r.ok = ok
+	g.cmdResumes[session] = r
+}
+
+func (g *guard) cmdTraceForwardLocked(c *command) {
+	extra := []string{"startsUnheld=" + strconv.FormatBool(g.startsUnheldLocked(c))}
+	switch c.method {
+	case "Runtime.runIfWaitingForDebugger":
+		g.noteResumeLocked(c.session, "client", c.id)
+		extra = append(extra, "resume=true")
+		extra = append(extra, g.resumeStateLocked(c.session)...)
+	case "Target.setAutoAttach", "Page.enable":
+		extra = append(extra, g.resumeStateLocked(c.session)...)
+	}
+	g.cmdTraceLocked(c, "forward", extra...)
+}
+
+func (g *guard) resumeStateLocked(session string) []string {
+	s := g.sessions[session]
+	waiting := s != nil && s.waiting
+	h := g.held[session]
+	guardOwns := waiting || (h != nil && h.waiting && !h.resumed)
+	out := []string{
+		"sessionWaiting=" + strconv.FormatBool(waiting),
+		"guardOwnsResume=" + strconv.FormatBool(guardOwns),
+	}
+	r, have := g.cmdResumes[session]
+	if !have {
+		return append(out, "priorResume=none")
+	}
+	age := time.Since(r.at).Milliseconds()
+	out = append(out,
+		"priorResume="+r.who,
+		"priorResumeId="+strconv.FormatInt(r.id, 10),
+		"priorResumeAgeMs="+strconv.FormatInt(age, 10),
+		"priorResumeReplied="+strconv.FormatBool(r.replied),
+		"priorResumeOk="+strconv.FormatBool(r.ok),
+	)
+	return out
 }
 
 func (g *guard) cmdTraceStateLocked(kind, session, target string, extra ...string) {

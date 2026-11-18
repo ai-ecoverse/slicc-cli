@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -202,7 +201,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 		g.noteWireTouchLocked(k, t)
 	}
 	v := pageVerdict{forward: c.bytes(), cmd: c}
-	g.cmdTraceLocked(c, "forward", "startsUnheld="+strconv.FormatBool(g.startsUnheldLocked(c)))
+	g.cmdTraceForwardLocked(c)
 	v.send = append(v.send, g.releaseOnAutoAttachStopLocked(c)...)
 	if c.method == "DOM.getFrameOwner" {
 		if frame := c.str("frameId"); frame != "" {

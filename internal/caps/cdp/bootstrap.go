@@ -216,7 +216,9 @@ func (rl *relay) park(data []byte) bool {
 	if rl.g.startsUnheld(c) {
 		rl.g.mu.Lock()
 		rl.g.cmdArrivalLocked(c)
-		rl.g.cmdTraceLocked(c, "unheld-resume")
+		rl.g.noteResumeLocked(c.session, "client", c.id)
+		extra := append([]string{"resume=true"}, rl.g.resumeStateLocked(c.session)...)
+		rl.g.cmdTraceLocked(c, "unheld-resume", extra...)
 		rl.g.mu.Unlock()
 		return false
 	}

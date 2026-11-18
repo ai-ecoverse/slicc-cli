@@ -255,6 +255,7 @@ type guard struct {
 	scripts               map[string]bool
 	cmdArrivals           map[callKey]time.Time
 	cmdTraceT0            time.Time
+	cmdResumes            map[string]cmdResume
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -292,6 +293,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		heldWaits:             map[string]*heldWait{},
 		parkedAnswers:         map[callKey]bool{},
 		cmdArrivals:           map[callKey]time.Time{},
+		cmdResumes:            map[string]cmdResume{},
 		keptURLLatch:          map[string]bool{},
 		gone:                  map[string]bool{},
 		held:                  map[string]*heldSession{},
@@ -1610,6 +1612,7 @@ func (g *guard) forgetSessionNotedLocked(id, reason string, detachToClient bool)
 	g.releaseExtensionPaintsForSessionLocked(id)
 	delete(g.sessions, id)
 	delete(g.browserSessions, id)
+	delete(g.cmdResumes, id)
 	g.markedCount -= len(g.marked[id])
 	delete(g.marked, id)
 	delete(g.saturated, id)
