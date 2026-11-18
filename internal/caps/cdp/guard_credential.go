@@ -256,23 +256,97 @@ func plantResponsePhraseRule(c *command) string {
 	return ""
 }
 
-func plantResponseCookies(c *command) (lines []string, ok bool) {
-	if raw, has := c.params["binaryResponseHeaders"]; has {
-		s, _ := raw.(string)
-		decoded, err := base64.StdEncoding.DecodeString(s)
-		if err != nil {
+func plantHTTPStatusLine(s string) bool {
+	if !strings.HasPrefix(s, "HTTP/") {
+		return false
+	}
+	rest := s[len("HTTP/"):]
+	i := 0
+	if i >= len(rest) || rest[i] < '0' || rest[i] > '9' {
+		return false
+	}
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i >= len(rest) || rest[i] != '.' {
+		return false
+	}
+	i++
+	if i >= len(rest) || rest[i] < '0' || rest[i] > '9' {
+		return false
+	}
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i >= len(rest) || rest[i] != ' ' {
+		return false
+	}
+	i++
+	if i+3 > len(rest) {
+		return false
+	}
+	for j := range 3 {
+		if rest[i+j] < '0' || rest[i+j] > '9' {
+			return false
+		}
+	}
+	i += 3
+	if i == len(rest) {
+		return true
+	}
+	return rest[i] == ' '
+}
+
+func plantBinaryCookies(raw any) (lines []string, ok bool) {
+	s, isStr := raw.(string)
+	if !isStr {
+		return nil, false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return nil, false
+	}
+	first := true
+	for _, part := range strings.Split(string(decoded), "\x00") {
+		if part == "" {
+			continue
+		}
+		if part[0] == ' ' || part[0] == '\t' {
 			return nil, false
 		}
-		for _, part := range strings.Split(string(decoded), "\x00") {
-			name, val, found := strings.Cut(part, ":")
-			if !found {
+		if !plantHeaderTextOK(part) {
+			return nil, false
+		}
+		if first {
+			first = false
+			if plantHTTPStatusLine(part) {
 				continue
 			}
-			n := strings.TrimSpace(name)
-			if strings.EqualFold(n, "set-cookie") || strings.EqualFold(n, "set-cookie2") {
-				lines = append(lines, strings.TrimSpace(val))
+			if !strings.Contains(part, ":") {
+				return nil, false
 			}
+		} else if !strings.Contains(part, ":") {
+			return nil, false
 		}
+		name, val, found := strings.Cut(part, ":")
+		if !found {
+			return nil, false
+		}
+		n := strings.TrimSpace(name)
+		if strings.EqualFold(n, "set-cookie") || strings.EqualFold(n, "set-cookie2") {
+			lines = append(lines, strings.TrimSpace(val))
+		}
+	}
+	return lines, true
+}
+
+func plantResponseCookies(c *command) (lines []string, ok bool) {
+	if raw, has := c.params["binaryResponseHeaders"]; has {
+		bin, binOK := plantBinaryCookies(raw)
+		if !binOK {
+			return nil, false
+		}
+		lines = append(lines, bin...)
 	}
 	raw, has := c.params["responseHeaders"]
 	if !has {
