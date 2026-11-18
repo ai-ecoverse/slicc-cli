@@ -201,6 +201,7 @@ type guard struct {
 	handed                map[requestKey]int
 	handedOrder           []handedPause
 	pauses                int
+	pauseURLs             map[requestKey]string
 	pauseLinks            map[requestKey]requestKey
 	clientRequests        map[requestKey]*clientRequestState
 	clientCalls           map[callKey]clientMark
@@ -305,6 +306,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		heldExtras:            map[requestKey][]heldExtra{},
 		seen:                  map[requestKey]reqLevel{},
 		handed:                map[requestKey]int{},
+		pauseURLs:             map[requestKey]string{},
 		pauseLinks:            map[requestKey]requestKey{},
 		clientRequests:        map[requestKey]*clientRequestState{},
 		clientCalls:           map[callKey]clientMark{},

@@ -152,7 +152,7 @@ func (g *guard) forgetExtrasLocked(session string) {
 	}
 	for k := range g.handed {
 		if k.session == session {
-			delete(g.handed, k)
+			g.dropHandedLocked(k)
 		}
 	}
 	for k := range g.continues {

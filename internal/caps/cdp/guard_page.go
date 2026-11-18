@@ -773,8 +773,13 @@ func (g *guard) requestRule(id string, c *command) string {
 	switch {
 	case continueOK[c.method] && g.handed[requestKey{c.session, id}] == 0:
 		return refusedPaused
-	case continueOK[c.method] && clientMutation(c):
-		return g.clientRequestRuleLocked(c, id)
+	case continueOK[c.method]:
+		if reason := g.plantCookieRuleLocked(c, id); reason != "" {
+			return reason
+		}
+		if clientMutation(c) {
+			return g.clientRequestRuleLocked(c, id)
+		}
 	case !continueOK[c.method] && g.requestMarkedLocked(c.session, id):
 		return refusedBody
 	}

@@ -381,12 +381,12 @@ func (g *guard) pausedEvent(m *message, data []byte) browserVerdict {
 			return false, false, [][]byte{msg}
 		}
 		if g.o.Loaded(u) {
-			delete(g.handed, requestKey{m.SessionID, id})
+			g.dropHandedLocked(requestKey{m.SessionID, id})
 			g.markRequestLocked(m.SessionID, id)
 			g.markRequestLocked(m.SessionID, other)
 			return false, false, g.settlePausedLocked(m, p, id)
 		}
-		g.handOutLocked(requestKey{m.SessionID, id})
+		g.handOutLocked(requestKey{m.SessionID, id}, u)
 		if g.requestMarkedLocked(m.SessionID, other) || g.namesProtectedLocked(p["responseHeaders"]) {
 			g.markRequestLocked(m.SessionID, id)
 			g.markRequestLocked(m.SessionID, other)
@@ -430,7 +430,7 @@ func (g *guard) continuedLocked(k callKey, failed bool) {
 	}
 	delete(g.continues, k)
 	if !failed && g.handed[h.req] == h.pause {
-		delete(g.handed, h.req)
+		g.dropHandedLocked(h.req)
 	}
 }
 
@@ -483,16 +483,22 @@ type handedPause struct {
 	pause int
 }
 
-func (g *guard) handOutLocked(k requestKey) {
+func (g *guard) dropHandedLocked(k requestKey) {
+	delete(g.handed, k)
+	delete(g.pauseURLs, k)
+}
+
+func (g *guard) handOutLocked(k requestKey, url string) {
 	if k.request == "" {
 		return
 	}
 	g.pauses++
 	g.handed[k] = g.pauses
+	g.pauseURLs[k] = url
 	g.handedOrder = append(g.handedOrder, handedPause{k, g.pauses})
 	for len(g.handedOrder) > maxSettled {
 		if old := g.handedOrder[0]; g.handed[old.req] == old.pause {
-			delete(g.handed, old.req)
+			g.dropHandedLocked(old.req)
 		}
 		g.handedOrder = g.handedOrder[1:]
 	}

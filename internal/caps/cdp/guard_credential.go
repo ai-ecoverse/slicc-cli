@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"encoding/base64"
 	"strings"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -199,6 +200,63 @@ func credentialCookieLine(line string) bool {
 		}
 	}
 	return false
+}
+
+func plantResponseCookies(c *command) (lines []string, ok bool) {
+	if raw, has := c.params["binaryResponseHeaders"]; has {
+		s, _ := raw.(string)
+		decoded, err := base64.StdEncoding.DecodeString(s)
+		if err != nil {
+			return nil, false
+		}
+		for _, part := range strings.Split(string(decoded), "\x00") {
+			name, val, found := strings.Cut(part, ":")
+			if !found {
+				continue
+			}
+			n := strings.TrimSpace(name)
+			if strings.EqualFold(n, "set-cookie") || strings.EqualFold(n, "set-cookie2") {
+				lines = append(lines, strings.TrimSpace(val))
+			}
+		}
+	}
+	headers, _ := c.params["responseHeaders"].([]any)
+	for _, h := range headers {
+		header, _ := h.(map[string]any)
+		name, _ := header["name"].(string)
+		if !strings.EqualFold(name, "Set-Cookie") && !strings.EqualFold(name, "Set-Cookie2") {
+			continue
+		}
+		val, _ := header["value"].(string)
+		lines = append(lines, val)
+	}
+	return lines, true
+}
+
+func (g *guard) plantCookieRuleLocked(c *command, id string) string {
+	if c.method != "Fetch.fulfillRequest" && c.method != "Fetch.continueResponse" {
+		return ""
+	}
+	lines, ok := plantResponseCookies(c)
+	if !ok {
+		return refusedCredential
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	url, known := g.pauseURLs[requestKey{c.session, id}]
+	if !known || url == "" {
+		return refusedCredential
+	}
+	if protect.CredentialURL(url) {
+		return refusedCredential
+	}
+	for _, line := range lines {
+		if credentialCookieLine(line) {
+			return refusedCredential
+		}
+	}
+	return ""
 }
 
 func (g *guard) sevenCookieLine(line string) bool {
