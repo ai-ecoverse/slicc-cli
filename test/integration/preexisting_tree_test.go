@@ -73,7 +73,12 @@ type preexistingPage struct {
 }
 
 type preexistingResult struct {
-	TabCount  int `json:"tabCount"`
+	TabCount int `json:"tabCount"`
+	Events   *struct {
+		Methods  map[string]int `json:"methods"`
+		Attached []any          `json:"attached"`
+		Created  []any          `json:"created"`
+	} `json:"events"`
 	Puppeteer *struct {
 		OK        bool     `json:"ok"`
 		MS        int      `json:"ms"`
@@ -151,7 +156,7 @@ func TestRawCDPFirstCommandsOnPreexistingFramedPages(t *testing.T) {
 		t.Fatalf("the raw CDP preexisting-tree script did not finish: %v\n%s", err, out)
 	}
 	if res.TabCount < 1 {
-		t.Errorf("bios path needs Chrome tab targets (Target.getTargets type=tab); got tabCount=%d", res.TabCount)
+		t.Errorf("bios path needs Target.targetCreated/attachedToTarget tab events after discover+auto-attach with filter [{}]; got tabCount=%d events=%+v", res.TabCount, res.Events)
 	}
 
 	checkBiosPipelineOK(t, "framed-same (extension content-script worlds)", res.Pages["framed"], true, true)

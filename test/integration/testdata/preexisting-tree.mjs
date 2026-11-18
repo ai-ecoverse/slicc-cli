@@ -6,7 +6,14 @@ const LIMIT = 64 * 1024 * 1024;
 const STEP_MS = 8000;
 const FIRST_MS = 300;
 const CONNECT_MS = 5000;
-const ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+const ALL = [{}];
+const BROWSER_ATTACH = {
+  autoAttach: true,
+  waitForDebuggerOnStart: true,
+  flatten: true,
+  filter: [{ type: 'page', exclude: true }, ...ALL],
+};
+const TAB_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: ALL };
 const result = { steps: [], pages: {}, puppeteer: null, events: { methods: {}, attached: [], created: [] } };
 
 function scrub(url) {
@@ -195,8 +202,8 @@ async function isolatedWorld(c, sessionId, frameId) {
 const client = new Raw();
 await client.ready;
 await step('getBrowserContexts', () => client.call('Target.getBrowserContexts', {}));
-await step('discover', () => client.call('Target.setDiscoverTargets', { discover: true }));
-await step('browser auto-attach', () => client.call('Target.setAutoAttach', ATTACH));
+await step('discover', () => client.call('Target.setDiscoverTargets', { discover: true, filter: ALL }));
+await step('browser auto-attach', () => client.call('Target.setAutoAttach', BROWSER_ATTACH));
 
 const wanted = ['framed', 'nest', 'blank', 'protected'];
 const pending = new Map(wanted.map((name) => [name, true]));
@@ -240,7 +247,7 @@ const ingest = async () => {
       tabs.set(info.targetId, info);
       if (!tabSessions.has(tabSession)) {
         tabSessions.add(tabSession);
-        await step(`tab auto-attach ${info.targetId.slice(0, 8)}`, () => client.call('Target.setAutoAttach', ATTACH, tabSession));
+        await step(`tab auto-attach ${info.targetId.slice(0, 8)}`, () => client.call('Target.setAutoAttach', TAB_ATTACH, tabSession));
         client.fire('Runtime.runIfWaitingForDebugger', {}, tabSession);
       }
       continue;
