@@ -81,7 +81,17 @@ function registry() {
   return (configured || 'https://registry.npmjs.org/').replace(/\/+$/, '');
 }
 
+function plain(text) {
+  const flat = String(text ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim().slice(0, 200);
+  return flat || 'no reason given';
+}
+
 async function onRegistry(base, name, version, timeoutMs) {
+  const why = await probe(base, name, version, timeoutMs);
+  return why === null ? '' : plain(why);
+}
+
+async function probe(base, name, version, timeoutMs) {
   try {
     const res = await fetch(`${base}/${name.replace('/', '%2f')}/${version}`, {
       headers: { accept: 'application/json', 'cache-control': 'no-cache' },
@@ -89,7 +99,7 @@ async function onRegistry(base, name, version, timeoutMs) {
     });
     if (!res.ok) return `HTTP ${res.status}`;
     const got = (await res.json()).version;
-    return got === version ? '' : `answers ${got ?? 'no version'}`;
+    return got === version ? null : `answers ${got ?? 'no version'}`;
   } catch (error) {
     return error.name === 'TimeoutError' ? `no answer in ${Math.round(timeoutMs / 1000)} s` : error.cause?.code ?? error.cause?.message ?? error.message;
   }
@@ -108,12 +118,9 @@ async function requireDependencies(pkg) {
   const pollMs = seconds('SLICC_REGISTRY_POLL_SECONDS', 30, 1) * 1000;
   const deadline = Date.now() + waitMs;
   for (;;) {
-    const missing = [];
-    for (const [name, version] of deps) {
-      const timeoutMs = Math.min(30000, Math.max(5000, deadline - Date.now()));
-      const why = await onRegistry(base, name, version, timeoutMs);
-      if (why) missing.push(`${name}@${version} (${why})`);
-    }
+    const timeoutMs = Math.min(30000, Math.max(1000, deadline - Date.now()));
+    const answers = await Promise.all(deps.map(([name, version]) => onRegistry(base, name, version, timeoutMs)));
+    const missing = deps.flatMap(([name, version], i) => (answers[i] ? [`${name}@${version} (${answers[i]})`] : []));
     if (!missing.length) break;
     if (Date.now() >= deadline) {
       if (!dryRun && guarded[pkg.name].skipLate) return missing.join(', ');

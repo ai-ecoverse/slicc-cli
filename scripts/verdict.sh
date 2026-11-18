@@ -20,7 +20,7 @@ fi
 if grep -q "^$name: PASS" "$dir/log"; then
   exit 0
 fi
-if grep -q "^$name: PARTIAL" "$dir/log"; then
+if [ "$name" = npm-publish ] && grep -q "^$name: PARTIAL" "$dir/log"; then
   echo "verdict: $name is partial; see its WARN lines" >&2
   exit 0
 fi
