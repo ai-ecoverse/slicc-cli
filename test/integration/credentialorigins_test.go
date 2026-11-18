@@ -525,3 +525,85 @@ func TestCDPRefusesPlantingSignInCookiesThroughFetch(t *testing.T) {
 	}
 	credentialLogClean(t, env)
 }
+
+func hostilePlantScript(_, allowed string) fakeScript {
+	events := []string{
+		plantDoorPaused("hidp-map", idpOrigin+"/ims"),
+		plantDoorPaused("hidp-space", idpOrigin+"/ims"),
+		plantDoorPaused("hidp-ctlname", idpOrigin+"/ims"),
+		plantDoorPaused("hidp-ctlval", idpOrigin+"/ims"),
+		plantDoorPaused("hidp-nonstr", idpOrigin+"/ims"),
+		plantDoorPaused("hidp-phrasebad", idpOrigin+"/ims"),
+		plantDoorPaused("hidp-phrasectl", idpOrigin+"/ims"),
+		plantDoorPaused("hidp-phrasecookie", idpOrigin+"/ims"),
+		plantDoorPaused("hidp-code", idpOrigin+"/ims"),
+		plantDoorPaused("hplain-map", allowed+"/x"),
+		plantDoorPaused("hplain-ok", allowed+"/x"),
+		plantDoorPaused("hplain-nf", allowed+"/x"),
+		plantDoorPaused("hplain-404", allowed+"/x"),
+		plantDoorPaused("hplain-empty", allowed+"/x"),
+		plantDoorPaused("hplain-colon", allowed+"/x"),
+		plantDoorPaused("hplain-long", allowed+"/x"),
+		plantDoorPaused("hplain-set", allowed+"/x"),
+		plantDoorPaused("hplain-cont", allowed+"/x"),
+	}
+	return afterEnable(events)
+}
+
+func TestCDPRefusesHostilePlantFetchShapes(t *testing.T) {
+	env, fake := setupFakeProtect(t, hostilePlantScript)
+	longPhrase := strings.Repeat("a", 4500)
+	calls := [][]any{
+		{"Network.enable", map[string]any{}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-map", "responseCode": 200, "responseHeaders": map[string]any{"Set-Cookie": "sid=PLANTED; Path=/"}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-space", "responseCode": 200, "responseHeaders": []map[string]any{{"name": " Set-Cookie", "value": "sid=PLANTED; Path=/"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-ctlname", "responseCode": 200, "responseHeaders": []map[string]any{{"name": "Set-Cookie\x01", "value": "sid=PLANTED; Path=/"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-ctlval", "responseCode": 200, "responseHeaders": []map[string]any{{"name": "Set-Cookie", "value": "sid=PLANTED\r\nX: 1"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-nonstr", "responseCode": 200, "responseHeaders": []map[string]any{{"name": "Set-Cookie", "value": 7}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-phrasebad", "responseCode": 200, "responsePhrase": 7}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-phrasectl", "responseCode": 200, "responsePhrase": "OK\nSet-Cookie: sid=PLANTED"}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-phrasecookie", "responseCode": 200, "responsePhrase": "OK: sid=PLANTED; Domain=.adobelogin.com"}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-code", "responseCode": "200", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-map", "responseCode": 200, "responseHeaders": map[string]any{"X-Kept": "1"}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-ok", "responseCode": 200, "responsePhrase": "OK", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-nf", "responseCode": 200, "responsePhrase": "Not Found", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-404", "responseCode": 200, "responsePhrase": "404", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-empty", "responseCode": 200, "responsePhrase": "", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-colon", "responseCode": 200, "responsePhrase": "Moved: see Location", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-long", "responseCode": 200, "responsePhrase": longPhrase, "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-set", "responseCode": 200, "responseHeaders": []map[string]string{{"name": "Set-Cookie", "value": "a=CONTROL; Path=/"}}}},
+		{"Fetch.continueResponse", map[string]any{"requestId": "hplain-cont", "responseCode": 200, "responsePhrase": "OK", "responseHeaders": []map[string]string{{"name": "Set-Cookie", "value": "a=CONTROL; Path=/"}}}},
+	}
+	var r struct {
+		Out []callOutcome `json:"out"`
+	}
+	env.evalJSON(t, "linkTest.protect.calls("+jsArgs("chrome-2", calls)+")", &r)
+	b, _ := json.Marshal(r)
+	if len(r.Out) != len(calls) {
+		t.Fatalf("calls: %s", b)
+	}
+	for i, o := range r.Out {
+		refuse := i >= 1 && i <= 10
+		switch {
+		case i == 0 && !o.OK:
+			t.Errorf("Network.enable refused: %s", b)
+		case refuse && (o.OK || !strings.HasPrefix(o.Error.Message, "slicc: refused: ") || !strings.Contains(o.Error.Message, "sign-in origin")):
+			t.Errorf("call %d %s: want hostile shape refused, got %+v (%s)", i, o.Method, o, b)
+		case refuse && strings.Contains(o.Error.Message, "adobelogin"):
+			t.Errorf("call %d %s: the refusal names the origin: %q", i, o.Method, o.Error.Message)
+		case !refuse && i > 0 && !o.OK:
+			t.Errorf("call %d %s: the control was refused: %s", i, o.Method, b)
+		}
+	}
+	for _, m := range fake.received() {
+		if strings.Contains(m, "PLANTED") {
+			t.Errorf("the browser got a planted cookie: %s", m)
+		}
+		for _, id := range []string{"hidp-map", "hidp-space", "hidp-ctlname", "hidp-ctlval", "hidp-nonstr", "hidp-phrasebad", "hidp-phrasectl", "hidp-phrasecookie", "hidp-code", "hplain-map"} {
+			if strings.Contains(m, `"requestId":"`+id+`"`) && (strings.Contains(m, `"Fetch.fulfillRequest"`) || strings.Contains(m, `"Fetch.continueResponse"`)) {
+				t.Errorf("a refused hostile shape reached the browser: %s", m)
+			}
+		}
+	}
+	credentialLogClean(t, env)
+}
