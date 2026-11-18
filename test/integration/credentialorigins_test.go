@@ -428,6 +428,10 @@ func plantDoorPaused(id, url string) string {
 	return `{"method":"Fetch.requestPaused","params":{"requestId":"` + id + `","request":{"url":"` + url + `","headers":{}},"resourceType":"XHR","responseStatusCode":200}}`
 }
 
+func plantDoorPausedLinked(id, url string) string {
+	return `{"sessionId":"$SESSION","method":"Fetch.requestPaused","params":{"requestId":"` + id + `","networkId":"` + id + `","request":{"url":"` + url + `","headers":{}},"resourceType":"XHR","responseStatusCode":200}}`
+}
+
 func plantDoorScript(seven, allowed string) fakeScript {
 	sub := "https://x.ims-na1.adobelogin.com/x"
 	events := []string{
@@ -532,87 +536,83 @@ func plantBinaryParts(parts ...string) string {
 
 func hostilePlantScript(_, allowed string) fakeScript {
 	events := []string{
-		plantDoorPaused("hidp-map", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-space", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-ctlname", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-ctlval", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-nonstr", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-phrasebad", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-phrasectl", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-phrasecookie", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-code", idpOrigin+"/ims"),
-		plantDoorPaused("hplain-map", allowed+"/x"),
-		plantDoorPaused("hidp-binlf", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-binstatuslf", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-bincr", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-binfold", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-binnum", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-binarr", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-binobj", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-binempty", idpOrigin+"/ims"),
-		plantDoorPaused("hidp-binx", idpOrigin+"/ims"),
-		plantDoorPaused("hplain-ok", allowed+"/x"),
-		plantDoorPaused("hplain-nf", allowed+"/x"),
-		plantDoorPaused("hplain-404", allowed+"/x"),
-		plantDoorPaused("hplain-empty", allowed+"/x"),
-		plantDoorPaused("hplain-colon", allowed+"/x"),
-		plantDoorPaused("hplain-long", allowed+"/x"),
-		plantDoorPaused("hplain-set", allowed+"/x"),
-		plantDoorPaused("hplain-cont", allowed+"/x"),
-		plantDoorPaused("hplain-binset", allowed+"/x"),
+		plantDoorPausedLinked("hidp-map", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-space", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-ctlname", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-ctlval", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-nonstr", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-phrasebad", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-phrasectl", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-phrasecookie", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-code", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hplain-map", allowed+"/x"),
+		plantDoorPausedLinked("hidp-binlf", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-binstatuslf", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-bincr", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-binfold", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-binnum", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-binarr", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-binobj", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-binempty", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hidp-binx", idpOrigin+"/ims"),
+		plantDoorPausedLinked("hplain-ok", allowed+"/x"),
+		plantDoorPausedLinked("hplain-nf", allowed+"/x"),
+		plantDoorPausedLinked("hplain-404", allowed+"/x"),
+		plantDoorPausedLinked("hplain-empty", allowed+"/x"),
+		plantDoorPausedLinked("hplain-colon", allowed+"/x"),
+		plantDoorPausedLinked("hplain-long", allowed+"/x"),
+		plantDoorPausedLinked("hplain-set", allowed+"/x"),
+		plantDoorPausedLinked("hplain-cont", allowed+"/x"),
+		plantDoorPausedLinked("hplain-binset", allowed+"/x"),
 	}
 	return afterEnable(events)
 }
 
 func TestCDPRefusesHostilePlantFetchShapes(t *testing.T) {
-	env, fake := setupFakeProtect(t, hostilePlantScript)
+	env, fake := setupFakeProtect(t, func(seven, allowed string) fakeScript {
+		return withPage(hostilePlantScript(seven, allowed))
+	})
 	longPhrase := strings.Repeat("a", 4500)
+	page := "page"
 	calls := [][]any{
-		{"Network.enable", map[string]any{}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-map", "responseCode": 200, "responseHeaders": map[string]any{"Set-Cookie": "sid=PLANTED; Path=/"}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-space", "responseCode": 200, "responseHeaders": []map[string]any{{"name": " Set-Cookie", "value": "sid=PLANTED; Path=/"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-ctlname", "responseCode": 200, "responseHeaders": []map[string]any{{"name": "Set-Cookie\x01", "value": "sid=PLANTED; Path=/"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-ctlval", "responseCode": 200, "responseHeaders": []map[string]any{{"name": "Set-Cookie", "value": "sid=PLANTED\r\nX: 1"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-nonstr", "responseCode": 200, "responseHeaders": []map[string]any{{"name": "Set-Cookie", "value": 7}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-phrasebad", "responseCode": 200, "responsePhrase": 7}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-phrasectl", "responseCode": 200, "responsePhrase": "OK\nSet-Cookie: sid=PLANTED"}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-phrasecookie", "responseCode": 200, "responsePhrase": "OK: sid=PLANTED; Domain=.adobelogin.com"}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-code", "responseCode": "200", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-map", "responseCode": 200, "responseHeaders": map[string]any{"X-Kept": "1"}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binlf", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-A: 1\nSet-Cookie: sid=PLANTED; Domain=.adobelogin.com")}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binstatuslf", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("HTTP/1.1 200 OK\nSet-Cookie: sid=PLANTED; Domain=.adobelogin.com")}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-bincr", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-A: 1\r")}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binfold", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("Set-Cookie: sid=PLANTED", " Domain=.adobelogin.com")}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binnum", "responseCode": 200, "binaryResponseHeaders": 7}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binarr", "responseCode": 200, "binaryResponseHeaders": []any{}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binobj", "responseCode": 200, "binaryResponseHeaders": map[string]any{"x": 1}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binempty", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("", "")}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binx", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-Kept: 1")}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-ok", "responseCode": 200, "responsePhrase": "OK", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-nf", "responseCode": 200, "responsePhrase": "Not Found", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-404", "responseCode": 200, "responsePhrase": "404", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-empty", "responseCode": 200, "responsePhrase": "", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-colon", "responseCode": 200, "responsePhrase": "Moved: see Location", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-long", "responseCode": 200, "responsePhrase": longPhrase, "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-set", "responseCode": 200, "responseHeaders": []map[string]string{{"name": "Set-Cookie", "value": "a=CONTROL; Path=/"}}}},
-		{"Fetch.continueResponse", map[string]any{"requestId": "hplain-cont", "responseCode": 200, "responsePhrase": "OK", "responseHeaders": []map[string]string{{"name": "Set-Cookie", "value": "a=CONTROL; Path=/"}}}},
-		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-binset", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("Set-Cookie: a=CONTROL; Path=/")}},
+		{"Network.enable", map[string]any{}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-map", "responseCode": 200, "responseHeaders": map[string]any{"Set-Cookie": "sid=PLANTED; Path=/"}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-space", "responseCode": 200, "responseHeaders": []map[string]any{{"name": " Set-Cookie", "value": "sid=PLANTED; Path=/"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-ctlname", "responseCode": 200, "responseHeaders": []map[string]any{{"name": "Set-Cookie\x01", "value": "sid=PLANTED; Path=/"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-ctlval", "responseCode": 200, "responseHeaders": []map[string]any{{"name": "Set-Cookie", "value": "sid=PLANTED\r\nX: 1"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-nonstr", "responseCode": 200, "responseHeaders": []map[string]any{{"name": "Set-Cookie", "value": 7}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-phrasebad", "responseCode": 200, "responsePhrase": 7}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-phrasectl", "responseCode": 200, "responsePhrase": "OK\nSet-Cookie: sid=PLANTED"}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-phrasecookie", "responseCode": 200, "responsePhrase": "OK: sid=PLANTED; Domain=.adobelogin.com"}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-code", "responseCode": "200", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-map", "responseCode": 200, "responseHeaders": map[string]any{"X-Kept": "1"}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binlf", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-A: 1\nSet-Cookie: sid=PLANTED; Domain=.adobelogin.com")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binstatuslf", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("HTTP/1.1 200 OK\nSet-Cookie: sid=PLANTED; Domain=.adobelogin.com")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-bincr", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-A: 1\r")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binfold", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("Set-Cookie: sid=PLANTED", " Domain=.adobelogin.com")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binnum", "responseCode": 200, "binaryResponseHeaders": 7}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binarr", "responseCode": 200, "binaryResponseHeaders": []any{}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binobj", "responseCode": 200, "binaryResponseHeaders": map[string]any{"x": 1}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binempty", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("", "")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hidp-binx", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("X-Kept: 1")}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-ok", "responseCode": 200, "responsePhrase": "OK", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-nf", "responseCode": 200, "responsePhrase": "Not Found", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-404", "responseCode": 200, "responsePhrase": "404", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-empty", "responseCode": 200, "responsePhrase": "", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-colon", "responseCode": 200, "responsePhrase": "Moved: see Location", "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-long", "responseCode": 200, "responsePhrase": longPhrase, "responseHeaders": []map[string]string{{"name": "X-Kept", "value": "1"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-set", "responseCode": 200, "responseHeaders": []map[string]string{{"name": "Set-Cookie", "value": "a=CONTROL; Path=/"}}}, page},
+		{"Fetch.continueResponse", map[string]any{"requestId": "hplain-cont", "responseCode": 200, "responsePhrase": "OK", "responseHeaders": []map[string]string{{"name": "Set-Cookie", "value": "a=CONTROL; Path=/"}}}, page},
+		{"Fetch.fulfillRequest", map[string]any{"requestId": "hplain-binset", "responseCode": 200, "binaryResponseHeaders": plantBinaryParts("Set-Cookie: a=CONTROL; Path=/")}, page},
 	}
-	var r struct {
-		Out []callOutcome `json:"out"`
-	}
-	env.evalJSON(t, "linkTest.protect.calls("+jsArgs("chrome-2", calls)+")", &r)
-	b, _ := json.Marshal(r)
-	if len(r.Out) != len(calls) {
-		t.Fatalf("calls: %s", b)
-	}
+	out, b := outcomesOf(t, env, calls)
 	refusedIDs := map[string]bool{
 		"hidp-map": true, "hidp-space": true, "hidp-ctlname": true, "hidp-ctlval": true, "hidp-nonstr": true,
 		"hidp-phrasebad": true, "hidp-phrasectl": true, "hidp-phrasecookie": true, "hidp-code": true, "hplain-map": true,
 		"hidp-binlf": true, "hidp-binstatuslf": true, "hidp-bincr": true, "hidp-binfold": true,
 		"hidp-binnum": true, "hidp-binarr": true, "hidp-binobj": true,
 	}
-	for i, o := range r.Out {
+	for i, o := range out {
 		id, _ := calls[i][1].(map[string]any)["requestId"].(string)
 		refuse := refusedIDs[id]
 		switch {

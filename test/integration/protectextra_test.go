@@ -115,6 +115,17 @@ func takeAhead(result string) ([]string, string) {
 	return ahead, body[bar+1:]
 }
 
+func replaceSessionToken(events []string, session string) []string {
+	if session == "" || len(events) == 0 {
+		return events
+	}
+	out := make([]string, len(events))
+	for i, e := range events {
+		out[i] = strings.ReplaceAll(e, "$SESSION", session)
+	}
+	return out
+}
+
 func writeCall(ctx context.Context, c *websocket.Conn, ahead []string, reply string, after []string) bool {
 	for _, e := range ahead {
 		if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
@@ -270,6 +281,8 @@ func (f *fakeCDPBrowser) serve(w http.ResponseWriter, r *http.Request) {
 				result = fmt.Sprintf(`{"targetInfo":{"targetId":%q,"type":"page","url":"about:blank"}}`, params.TargetID)
 			}
 		}
+		ahead = replaceSessionToken(ahead, m.SessionID)
+		after = replaceSessionToken(after, m.SessionID)
 		if flushTag != "" {
 			if !writeParked(ctx, c, f.takeParked(flushTag, "")) {
 				return
