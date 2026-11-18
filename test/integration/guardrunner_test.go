@@ -609,7 +609,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	for _, g := range gates[1:] {
 		args = append(args, "--cdp-extra", g.srv.URL)
 	}
-	args = append(args, "--origin", srv.URL, "--origin", seven, "--origin", sevenOopif, "--origin", idpOrigin, "--origin", idpStgOrigin, "--name", "it-node")
+	args = append(args, "--origin", srv.URL, "--origin", seven, "--origin", sevenOopif, "--name", "it-node")
 	env := &linkEnv{t: t, b: chromes[0], origin: srv.URL}
 	env.a = startAttach(t, args...)
 	env.p = chromes[0].openPage(t, srv.URL+"/index.html")
