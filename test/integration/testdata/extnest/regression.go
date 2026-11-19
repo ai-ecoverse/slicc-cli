@@ -439,3 +439,61 @@ func TestExtensionSevenInheritedChildUnclassifiedDefaultLatchesOnExpiry(t *testi
 	}
 	frameContentRefused(t, g, "unclassified child whose default context timed out")
 }
+
+func guardSessionNest(t *testing.T, host, hostOrigin string) *guard {
+	t.Helper()
+	g := newGuard(protect.MustNew([]string{sevenOrigin}), t.Logf)
+	guardedNestPage(t, g, true)
+	g.fromBrowser(encode(map[string]any{"method": "Page.frameAttached", "sessionId": "N", "params": map[string]any{"frameId": "HOST", "parentFrameId": "PAGE"}}))
+	g.fromBrowser(encode(map[string]any{"method": "Page.frameAttached", "sessionId": "N", "params": map[string]any{"frameId": "INNER", "parentFrameId": "HOST"}}))
+	nestContext(g, "N", 120, "http://localhost:7002", "PAGE", "", "gs-page", true)
+	nestContext(g, "N", 121, host, "HOST", "", "gs-host", true)
+	nestContext(g, "N", 122, "http://localhost:7002", "INNER", "", "gs-inner", true)
+	nestContext(g, "N", 123, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", "HOST", "slicc harness content script", "gs-host-ext", false)
+	nestContext(g, "N", 124, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", "INNER", "slicc harness content script", "gs-inner-ext", false)
+	v := nestCommand(g, "S", "Page.getFrameTree", nil)
+	if v.forward == nil {
+		if host == sevenOrigin {
+			return g
+		}
+		t.Fatalf("Page.getFrameTree on the ordinary nest page: reply=%s", v.reply)
+	}
+	g.fromBrowser(encode(map[string]any{"id": nestCalls, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
+		"frame": map[string]any{"id": "PAGE", "url": "http://localhost:7002/nest", "securityOrigin": "http://localhost:7002"},
+		"childFrames": []any{map[string]any{"frame": map[string]any{"id": "HOST", "parentId": "PAGE", "url": "about:blank", "securityOrigin": hostOrigin}, "childFrames": []any{
+			map[string]any{"frame": map[string]any{"id": "INNER", "parentId": "HOST", "url": "http://localhost:7002/inner", "securityOrigin": "http://localhost:7002"}},
+		}}},
+	}}}))
+	return g
+}
+
+func TestExtensionGuardSessionDefaultClassifiesBlankHost(t *testing.T) {
+	for _, hostOrigin := range []string{"://", ""} {
+		t.Run("tree origin "+hostOrigin, func(t *testing.T) {
+			g := guardSessionNest(t, "http://localhost:7002", hostOrigin)
+			w := nestCommand(g, "S", "Page.createIsolatedWorld", map[string]any{"frameId": "INNER", "worldName": "client-world"})
+			if w.wait != nil || w.reply != nil || w.forward == nil {
+				t.Fatalf("Page.createIsolatedWorld on /inner under an ordinary about:blank host: wait=%v forward=%v reply=%s", w.wait != nil, w.forward != nil, w.reply)
+			}
+			if latchedOn(g, "PAGE") {
+				t.Fatal("the ordinary nest page is locked")
+			}
+		})
+	}
+}
+
+func TestExtensionGuardSessionSevenDefaultRefusesBlankHost(t *testing.T) {
+	for _, hostOrigin := range []string{"://", "", sevenOrigin} {
+		t.Run("tree origin "+hostOrigin, func(t *testing.T) {
+			g := guardSessionNest(t, sevenOrigin, hostOrigin)
+			w := nestCommand(g, "S", "Page.createIsolatedWorld", map[string]any{"frameId": "INNER", "worldName": "client-world"})
+			if w.forward != nil || w.reply == nil {
+				t.Fatalf("Page.createIsolatedWorld under seven's about:blank child: wait=%v forward=%v reply=%s", w.wait != nil, w.forward != nil, w.reply)
+			}
+			if !latchedOn(g, "PAGE") {
+				t.Fatal("seven's about:blank child did not lock the page")
+			}
+			frameContentRefused(t, g, "seven's about:blank child seen on the guard session")
+		})
+	}
+}

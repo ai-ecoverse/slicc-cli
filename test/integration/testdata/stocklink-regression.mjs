@@ -412,6 +412,29 @@ async function nestedFlow(browser) {
   }
   const top = await observerSession(pageInfo.targetId);
   await observer.call('Runtime.enable', {}, top);
+  const frameWindows = {
+    same: "document.getElementById('ord')",
+    nested: "document.getElementById('host').contentDocument.getElementById('nsame')",
+  };
+  nested.ordinaryControl = {};
+  for (const [k, el] of Object.entries(frameWindows)) {
+    const control = await step(`control: unguarded input into the ordinary ${k} frame`, async () => {
+      const read = () => observerEval(top, `(() => { const w = ${el}.contentWindow; return { hits: w.hits, value: w.document.getElementById('iin').value }; })()`);
+      const at = await observerEval(top, `(() => {
+        let x = 0, y = 0;
+        for (let f = ${el}; f; f = f.ownerDocument.defaultView.frameElement) { const r = f.getBoundingClientRect(); x += r.x; y += r.y; }
+        return { x: x + 75, y: y + 25, ix: x + 20, iy: y + 70 };
+      })()`);
+      const before = await read();
+      for (const type of ['mousePressed', 'mouseReleased']) await observer.call('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 }, top);
+      for (const type of ['mousePressed', 'mouseReleased']) await observer.call('Input.dispatchMouseEvent', { type, x: at.ix, y: at.iy, button: 'left', clickCount: 1 }, top);
+      await observer.call('Input.insertText', { text: 'c' }, top);
+      await pause(200);
+      const after = await read();
+      return { hits: after.hits - before.hits, typed: after.value !== before.value };
+    });
+    nested.ordinaryControl[k] = control.ok ? control.value : { error: scrub(control.error) };
+  }
   const embedded = await step('observer embeds the extension frame in the about:blank frame', () =>
     observerEval(
       top,

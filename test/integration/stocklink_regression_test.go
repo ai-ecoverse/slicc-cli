@@ -209,7 +209,12 @@ type stockLinkResult struct {
 		ExtensionFocused bool                         `json:"extensionFocused"`
 		Inputs           map[string]stockLinkInput    `json:"inputs"`
 		Ordinary         map[string]stockLinkOrdinary `json:"ordinary"`
-		Control          struct {
+		OrdinaryControl  map[string]struct {
+			Hits  int    `json:"hits"`
+			Typed bool   `json:"typed"`
+			Error string `json:"error"`
+		} `json:"ordinaryControl"`
+		Control struct {
 			Mouse int    `json:"mouse"`
 			Text  bool   `json:"text"`
 			Error string `json:"error"`
@@ -355,8 +360,17 @@ func TestStockPuppeteerInputThroughLinkStaysOutOfNestedExtensionFrame(t *testing
 	}
 	for _, k := range []string{"same", "cross", "nested"} {
 		o := n.Ordinary[k]
+		hits := "missing"
+		if o.Hits != nil {
+			hits = fmt.Sprint(*o.Hits)
+		}
 		if !o.Found || o.Click != "ok" || o.Type != "ok" || o.Hits == nil || *o.Hits != 1 || o.Value != "ok" {
-			t.Errorf("input into the ordinary %s frame: %s", k, fmt.Sprintf("%+v", o))
+			t.Errorf("guarded Puppeteer input into the ordinary %s frame did not land: want found, click ok, type ok, 1 click hit and value \"ok\"; got found=%v click=%q type=%q hits=%s value=%q readError=%q (unguarded control: %+v)", k, o.Found, o.Click, o.Type, hits, o.Value, o.ReadError, n.OrdinaryControl[k])
+		}
+	}
+	for _, k := range []string{"same", "nested"} {
+		if c, ok := n.OrdinaryControl[k]; !ok || c.Error != "" || c.Hits != 1 || !c.Typed {
+			t.Errorf("control: unguarded input into the ordinary %s frame did not land, so the guarded row proves nothing: %+v", k, c)
 		}
 	}
 	if n.Control.Error != "" || n.Control.Mouse < 1 || !n.Control.Text {
