@@ -242,6 +242,9 @@ type guard struct {
 	maxWorlds             int
 	casting               map[string]bool
 	castCut               map[string]bool
+	domEnabled            map[string]bool
+	axEnabled             map[string]bool
+	softLatched           map[string]bool
 	debuggers             map[string]*debuggerState
 	debuggerReplies       map[callKey]debuggerReply
 	debuggerBytes         int
@@ -344,6 +347,9 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		commitMarks:           map[callKey]commitMark{},
 		casting:               map[string]bool{},
 		castCut:               map[string]bool{},
+		domEnabled:            map[string]bool{},
+		axEnabled:             map[string]bool{},
+		softLatched:           map[string]bool{},
 		debuggers:             map[string]*debuggerState{},
 		debuggerReplies:       map[callKey]debuggerReply{},
 		debuggerLimit:         debuggerBudgetFromEnv(),
@@ -1616,6 +1622,8 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.goneLocked(id)
 	g.forgetWorldSessionLocked(id)
 	g.forgetCastLocked(id)
+	delete(g.domEnabled, id)
+	delete(g.axEnabled, id)
 	g.forgetExtensionProbeWorldSessionLocked(id)
 	g.forgetExtensionOwnerCallsLocked(id)
 	g.forgetVersionCallsLocked(id)
