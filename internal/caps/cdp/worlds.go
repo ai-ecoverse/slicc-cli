@@ -88,6 +88,9 @@ func (g *guard) isolatedWorldReadyLocked(frame, page string) (ready, refuse bool
 	if g.frameUnderProtectedLocked(frame) {
 		return true, true
 	}
+	if g.ancestryDisputedFull || g.ancestryDisputedOverflow[page] || g.ancestryDisputed[frame] {
+		return true, true
+	}
 	if g.frameContextAncestrySettledLocked(frame, page) {
 		return true, false
 	}
@@ -228,6 +231,9 @@ func (g *guard) createIsolatedWorldRule(c *command) string {
 func (g *guard) frameContextAncestrySettledLocked(frame, page string) bool {
 	if frame == "" || frame == page {
 		return true
+	}
+	if g.ancestryDisputedFull || g.ancestryDisputedOverflow[page] || g.ancestryDisputed[frame] {
+		return false
 	}
 	seen := map[string]bool{}
 	id := frame
@@ -423,7 +429,7 @@ func (g *guard) noteFrameTreeResultLocked(target string, raw json.RawMessage) {
 		return
 	}
 	budget := maxFrameTreeNodes
-	g.walkFrameTreeLocked(result.FrameTree, "", 0, &budget)
+	g.walkFrameTreeLocked(result.FrameTree, target, "", 0, &budget)
 	g.queueContextSettleLocked()
 	g.trackSoftLatchPageLocked(target)
 }
@@ -441,7 +447,7 @@ type frameTreeNode struct {
 	ChildFrames []*frameTreeNode `json:"childFrames"`
 }
 
-func (g *guard) walkFrameTreeLocked(node *frameTreeNode, parent string, depth int, budget *int) {
+func (g *guard) walkFrameTreeLocked(node *frameTreeNode, root, parent string, depth int, budget *int) {
 	if node == nil || node.Frame.ID == "" || depth >= maxFrameAncestors || *budget <= 0 {
 		return
 	}
@@ -449,7 +455,7 @@ func (g *guard) walkFrameTreeLocked(node *frameTreeNode, parent string, depth in
 	id := node.Frame.ID
 	pid := node.Frame.ParentID
 	if parent != "" && pid != "" && pid != parent {
-		g.ancestryDisputed[id] = true
+		g.markAncestryDisputedLocked(id, root)
 		return
 	}
 	if pid == "" {
@@ -457,7 +463,7 @@ func (g *guard) walkFrameTreeLocked(node *frameTreeNode, parent string, depth in
 	}
 	if pid != "" {
 		if known := g.frameParentOfLocked(id); known != "" && known != pid {
-			g.ancestryDisputed[id] = true
+			g.markAncestryDisputedLocked(id, root)
 			return
 		}
 		send, _ := g.noteFrameParentLocked(id, pid)
@@ -471,7 +477,7 @@ func (g *guard) walkFrameTreeLocked(node *frameTreeNode, parent string, depth in
 	}
 	g.contextSettleSend = append(g.contextSettleSend, g.noteChildFrameLocked(id, raw)...)
 	for _, child := range node.ChildFrames {
-		g.walkFrameTreeLocked(child, id, depth+1, budget)
+		g.walkFrameTreeLocked(child, root, id, depth+1, budget)
 	}
 }
 
