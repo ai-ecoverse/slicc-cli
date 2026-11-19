@@ -25,6 +25,7 @@ jobs:
     secrets: inherit
     with:
       node-version: '26'
+      chrome: '158'
       lint: |
         # renovate: datasource=github-releases depName=golangci/golangci-lint
         GOLANGCI_LINT=v2.15.0
