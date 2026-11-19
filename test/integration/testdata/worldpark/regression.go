@@ -245,23 +245,144 @@ func TestAncestryDisputedClearedWhenFrameNavigated(t *testing.T) {
 	}
 }
 
-func TestAncestryDisputedCapFailsClosed(t *testing.T) {
-	g := worldGuard(t)
-	const wantCap = 4096
+func fillAncestryDisputedCap(t *testing.T, g *guard, page string, session string, startID int64) {
+	t.Helper()
 	for round := 0; round < 3; round++ {
 		kids := make([]any, 0, 2000)
 		for i := 0; i < 2000; i++ {
 			kids = append(kids, fr("R"+itoa(int64(round))+"F"+itoa(int64(i)), "WRONG", "http://localhost:7002/inner", "http://localhost:7002"))
 		}
-		tree := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002", kids...)
-		g.fromCommand(&command{id: int64(10 + round), method: "Page.getFrameTree", session: "S"}, int64(10+round), true)
-		g.fromBrowser(treeReply(int64(10+round), tree))
+		tree := fr(page, "", "http://localhost:7002/nest", "http://localhost:7002", kids...)
+		id := startID + int64(round)
+		g.fromCommand(&command{id: id, method: "Page.getFrameTree", session: session}, id, true)
+		g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{"frameTree": tree}}))
 	}
+}
+
+func TestAncestryDisputedCapFailsClosed(t *testing.T) {
+	g := worldGuard(t)
+	const wantCap = 4096
+	good := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "P", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 1, method: "Page.getFrameTree", session: "S"}, 1, true)
+	g.fromBrowser(treeReply(1, good))
+	if !forwarded(g.fromCommand(worldCmd(2, "F"), 2, true)) {
+		t.Fatal("classified frame F must forward before the map is full")
+	}
+	fillAncestryDisputedCap(t, g, "P", "S", 10)
 	g.mu.Lock()
 	n := len(g.ancestryDisputed)
 	g.mu.Unlock()
 	if n > wantCap {
 		t.Fatalf("ancestryDisputed grew to %d, over the bound of %d", n, wantCap)
+	}
+	bad := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "WRONG", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 20, method: "Page.getFrameTree", session: "S"}, 20, true)
+	g.fromBrowser(treeReply(20, bad))
+	v := g.fromCommand(worldCmd(21, "F"), 21, true)
+	g.mu.Lock()
+	disputed := g.ancestryDisputed["F"]
+	n = len(g.ancestryDisputed)
+	g.mu.Unlock()
+	if forwarded(v) {
+		t.Fatalf("after the map is full a mismatched formerly-classified frame must not forward: wait=%v reply=%s disputed=%v map=%d", v.wait != nil, v.reply, disputed, n)
+	}
+}
+
+func attachWorldPage(t *testing.T, g *guard, id, session, url string) {
+	t.Helper()
+	page := map[string]any{"targetId": id, "type": "page", "url": url, "attached": true}
+	g.fromBrowser(encode(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": page}}))
+	g.fromBrowser(encode(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": session, "waitingForDebugger": false, "targetInfo": page}}))
+	g.mu.Lock()
+	ready := make(chan struct{})
+	close(ready)
+	g.navTargets[id] = &navTarget{target: id, session: session, ready: ready, done: true}
+	g.mu.Unlock()
+}
+
+func TestAncestryDisputedOverflowClearedWhenPageNavigated(t *testing.T) {
+	g := worldGuard(t)
+	good := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "P", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 1, method: "Page.getFrameTree", session: "S"}, 1, true)
+	g.fromBrowser(treeReply(1, good))
+	if !forwarded(g.fromCommand(worldCmd(2, "F"), 2, true)) {
+		t.Fatal("classified frame F must forward before overflow")
+	}
+	fillAncestryDisputedCap(t, g, "P", "S", 10)
+	bad := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "WRONG", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 20, method: "Page.getFrameTree", session: "S"}, 20, true)
+	g.fromBrowser(treeReply(20, bad))
+	if forwarded(g.fromCommand(worldCmd(21, "F"), 21, true)) {
+		t.Fatal("overflow must refuse the mismatched frame before navigation clears it")
+	}
+	g.fromBrowser(encode(map[string]any{
+		"method": "Page.frameNavigated", "sessionId": "S",
+		"params": map[string]any{"frame": map[string]any{
+			"id": "P", "loaderId": "L-P-2", "url": "http://localhost:7002/nest2", "securityOrigin": "http://localhost:7002",
+		}},
+	}))
+	g.fromCommand(&command{id: 30, method: "Page.getFrameTree", session: "S"}, 30, true)
+	g.fromBrowser(treeReply(30, good))
+	if !forwarded(g.fromCommand(worldCmd(31, "F"), 31, true)) {
+		t.Fatal("after navigation clears overflow a correctly parented frame must classify")
+	}
+}
+
+func TestAncestryDisputedOverflowClearedWhenPageDestroyed(t *testing.T) {
+	g := worldGuard(t)
+	good := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "P", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 1, method: "Page.getFrameTree", session: "S"}, 1, true)
+	g.fromBrowser(treeReply(1, good))
+	if !forwarded(g.fromCommand(worldCmd(2, "F"), 2, true)) {
+		t.Fatal("classified frame F must forward before overflow")
+	}
+	fillAncestryDisputedCap(t, g, "P", "S", 10)
+	bad := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "WRONG", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 20, method: "Page.getFrameTree", session: "S"}, 20, true)
+	g.fromBrowser(treeReply(20, bad))
+	if forwarded(g.fromCommand(worldCmd(21, "F"), 21, true)) {
+		t.Fatal("overflow must refuse the mismatched frame before destroy clears it")
+	}
+	g.fromBrowser(encode(map[string]any{"method": "Target.targetDestroyed", "params": map[string]any{"targetId": "P"}}))
+	reattachWorldPage(t, g)
+	g.fromCommand(&command{id: 30, method: "Page.getFrameTree", session: "S"}, 30, true)
+	g.fromBrowser(treeReply(30, good))
+	if !forwarded(g.fromCommand(worldCmd(31, "F"), 31, true)) {
+		t.Fatal("after destroy clears overflow a correctly parented frame must classify")
+	}
+}
+
+func TestAncestryDisputedOverflowLeavesOtherPagesUntouched(t *testing.T) {
+	g := worldGuard(t)
+	attachWorldPage(t, g, "Q", "SQ", "http://localhost:7002/other")
+	goodP := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "P", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 1, method: "Page.getFrameTree", session: "S"}, 1, true)
+	g.fromBrowser(treeReply(1, goodP))
+	if !forwarded(g.fromCommand(worldCmd(2, "F"), 2, true)) {
+		t.Fatal("classified frame F on P must forward before overflow")
+	}
+	fillAncestryDisputedCap(t, g, "P", "S", 10)
+	badP := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "WRONG", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 20, method: "Page.getFrameTree", session: "S"}, 20, true)
+	g.fromBrowser(treeReply(20, badP))
+	if forwarded(g.fromCommand(worldCmd(21, "F"), 21, true)) {
+		t.Fatal("overflow on P must refuse F")
+	}
+	goodQ := fr("Q", "", "http://localhost:7002/other", "http://localhost:7002",
+		fr("G", "Q", "http://localhost:7002/g", "http://localhost:7002"))
+	g.fromCommand(&command{id: 30, method: "Page.getFrameTree", session: "SQ"}, 30, true)
+	g.fromBrowser(encode(map[string]any{"id": 30, "sessionId": "SQ", "result": map[string]any{"frameTree": goodQ}}))
+	vq := g.fromCommand(&command{id: 31, method: "Page.createIsolatedWorld", session: "SQ", params: map[string]any{"frameId": "G", "worldName": "w"}}, 31, true)
+	if !forwarded(vq) {
+		t.Fatalf("ordinary page with fewer disputes must stay untouched: wait=%v reply=%s", vq.wait != nil, vq.reply)
 	}
 }
 
