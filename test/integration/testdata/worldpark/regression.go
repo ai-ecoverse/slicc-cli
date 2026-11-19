@@ -436,6 +436,35 @@ func TestAncestryDisputedAttachOverflowFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAncestryDisputedGuardWideLatchSurvivesUnrelatedForget(t *testing.T) {
+	g := worldGuard(t)
+	fillAncestryDisputedCap(t, g, "P", "S", 10)
+	g.mu.Lock()
+	g.targets["IF"] = &target{id: "IF", typ: "iframe", url: "http://127.0.0.1:7001/x"}
+	g.frameParents["IF"] = "OTHER"
+	g.attachParent = "S"
+	_ = g.noteIframeAttachParentLocked(targetInfo{TargetID: "IF", Type: "iframe", URL: "http://127.0.0.1:7001/x", ParentFrameID: "MISSING"})
+	if !g.ancestryDisputedFull {
+		g.mu.Unlock()
+		t.Fatal("expected the guard-wide overflow latch after an unresolvable attach dispute at the cap")
+	}
+	before := g.iframeProtectedAncestorReasonLocked(g.targets["IF"])
+	if before == "" && !g.ancestryDisputed["IF"] {
+		g.mu.Unlock()
+		t.Fatal("dropped-dispute iframe must be refused while the guard-wide latch is set")
+	}
+	g.forgetAncestryDisputedLocked("R0F0")
+	if !g.ancestryDisputedFull {
+		g.mu.Unlock()
+		t.Fatal("guard-wide overflow latch must survive forgetting an unrelated dispute")
+	}
+	after := g.iframeProtectedAncestorReasonLocked(g.targets["IF"])
+	g.mu.Unlock()
+	if after == "" {
+		t.Fatal("after an unrelated forget the earlier dropped-dispute iframe must still be refused")
+	}
+}
+
 func TestClassifiedDuringEpochRefusalHoldForwards(t *testing.T) {
 	t.Setenv(HoldTimeoutEnv, "100ms")
 	g := worldGuard(t)
