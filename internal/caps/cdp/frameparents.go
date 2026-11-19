@@ -130,6 +130,7 @@ func (g *guard) frameEventLocked(m *message) [][]byte {
 		}
 	case "Page.frameNavigated":
 		g.clearBlockedChildrenLocked(p.Frame.ID)
+		g.forgetAncestryDisputedLocked(p.Frame.ID)
 		if p.Frame.ParentID != "" {
 			part, _ := g.noteFrameParentLocked(p.Frame.ID, p.Frame.ParentID)
 			send = append(send, part...)

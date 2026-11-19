@@ -27,6 +27,7 @@ const (
 	maxOpenedSeen       = 4096
 	OpenedSeenBoundEnv  = "SLICC_CDP_OPENED_SEEN"
 	maxRefused          = 4096
+	maxAncestryDisputed = 4096
 	maxMarked           = 65536
 	relayIDBase         = 1879048192
 	maxRetiredCalls     = 4096
@@ -197,6 +198,7 @@ type guard struct {
 	frameParents          map[string]string
 	frameParentsFull      bool
 	ancestryDisputed      map[string]bool
+	ancestryDisputedUnder map[string]string
 	blockedChildren       map[string]string
 	explicit              map[string]int
 	attachCalls           map[callKey]string
@@ -314,6 +316,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		childFrames:           map[string]string{},
 		frameParents:          map[string]string{},
 		ancestryDisputed:      map[string]bool{},
+		ancestryDisputedUnder: map[string]string{},
 		blockedChildren:       map[string]string{},
 		explicit:              map[string]int{},
 		attachCalls:           map[callKey]string{},
@@ -600,12 +603,39 @@ func (g *guard) redecideAfterFrameParentLocked(frame string) [][]byte {
 	return append(send, g.redecideWorkersLocked(frame)...)
 }
 
+func (g *guard) markAncestryDisputedLocked(id, under string) {
+	if id == "" || g.ancestryDisputed[id] {
+		return
+	}
+	if len(g.ancestryDisputed) >= maxAncestryDisputed {
+		return
+	}
+	g.ancestryDisputed[id] = true
+	if under != "" {
+		g.ancestryDisputedUnder[id] = under
+	}
+}
+
+func (g *guard) forgetAncestryDisputedLocked(id string) {
+	if id == "" {
+		return
+	}
+	delete(g.ancestryDisputed, id)
+	delete(g.ancestryDisputedUnder, id)
+	for frame, under := range g.ancestryDisputedUnder {
+		if under == id {
+			delete(g.ancestryDisputed, frame)
+			delete(g.ancestryDisputedUnder, frame)
+		}
+	}
+}
+
 func (g *guard) forgetFrameParentLocked(id string) {
 	if id == "" {
 		return
 	}
 	delete(g.frameParents, id)
-	delete(g.ancestryDisputed, id)
+	g.forgetAncestryDisputedLocked(id)
 	if g.frameParentsFull && len(g.frameParents) < 4096 {
 		g.frameParentsFull = false
 	}
@@ -719,12 +749,12 @@ func (g *guard) noteIframeAttachParentLocked(info targetInfo) [][]byte {
 	if pf != "" && disputeOwner != "" && pf != disputeOwner {
 		if _, ok := g.frameParents[pf]; ok {
 			if !skipDispute && !g.attachOwnerReachesParentFrameLocked(pf, owner, disputeOwner) {
-				g.ancestryDisputed[info.TargetID] = true
+				g.markAncestryDisputedLocked(info.TargetID, "")
 				g.logf("cdp: iframe ancestry disputed target=%s owner=%s ownerType=%s disputeOwner=%s parentFrame=%s chainMissesOwner=true", info.TargetID, owner.id, owner.typ, disputeOwner, pf)
 			}
 		} else if part, ok := g.noteFrameParentLocked(pf, disputeOwner); !ok {
 			if !skipDispute {
-				g.ancestryDisputed[info.TargetID] = true
+				g.markAncestryDisputedLocked(info.TargetID, "")
 				g.logf("cdp: iframe ancestry disputed target=%s owner=%s ownerType=%s disputeOwner=%s parentFrame=%s noteParentFailed=true", info.TargetID, owner.id, owner.typ, disputeOwner, pf)
 			}
 		} else {
@@ -740,7 +770,7 @@ func (g *guard) noteIframeAttachParentLocked(info targetInfo) [][]byte {
 	}
 	if part, ok := g.noteFrameParentLocked(info.TargetID, parent); !ok && g.frameParents[info.TargetID] != parent {
 		if !skipDispute {
-			g.ancestryDisputed[info.TargetID] = true
+			g.markAncestryDisputedLocked(info.TargetID, "")
 			g.logf("cdp: iframe ancestry disputed target=%s owner=%s ownerType=%s disputeOwner=%s recordedParent=%s attachParent=%s", info.TargetID, owner.id, owner.typ, disputeOwner, g.frameParents[info.TargetID], parent)
 		}
 	} else {
@@ -1596,6 +1626,7 @@ func (g *guard) destroyedLocked(id string) {
 	delete(g.frames, id)
 	g.forgetChildFrameLocked(id)
 	g.pruneFrameParentsLocked(id)
+	g.forgetAncestryDisputedLocked(id)
 	g.forgetExtensionFrameURLLocked("", id)
 	g.forgetExtensionProbeWorldsForTargetLocked(id)
 	g.navForgetLocked(id)
