@@ -78,6 +78,11 @@ func ExtensionPresentMethod(method string) bool {
 	return slices.Contains(rules.ExtensionFrames.WhilePresent, method)
 }
 
+func ExtensionScheme(raw string) bool {
+	u := parse(raw)
+	return u != nil && slices.Contains(rules.ExtensionFrames.Schemes, scheme(u))
+}
+
 func (o *Origins) ExtensionFrame(raw string) bool {
 	u := parse(raw)
 	if u == nil || !slices.Contains(rules.ExtensionFrames.Schemes, scheme(u)) {

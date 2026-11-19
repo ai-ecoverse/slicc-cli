@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -23,7 +24,7 @@ func stockLinkFixture(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte("<!doctype html>" + body))
 	}
 	mux.HandleFunc("/inner", func(w http.ResponseWriter, r *http.Request) {
-		html(w, `<title>inner</title><style>body{margin:0}</style><button id="ibtn" style="position:fixed;left:0;top:0;width:150px;height:50px" onclick="window.hits+=1">Inner</button><input id="iin" style="position:fixed;left:0;top:60px"><script>window.hits=0</script>`)
+		html(w, `<title>inner</title><style>body{margin:0}</style><button id="ibtn" style="position:fixed;left:0;top:0;width:150px;height:50px" onclick="window.hits+=1">Inner</button><input id="iin" style="position:fixed;left:0;top:60px"><script>window.hits=0;window.loadedAt=performance.timeOrigin+performance.now();window.events=[];for(const t of ["mousemove","mousedown","mouseup","click","keydown","beforeinput"])addEventListener(t,(e)=>{if(window.events.length<200)window.events.push(t+" "+(e.clientX|0)+","+(e.clientY|0)+" "+(e.target.id||e.target.nodeName))},true)</script>`)
 	})
 	mux.HandleFunc("/framed-same", func(w http.ResponseWriter, r *http.Request) {
 		html(w, `<title>framed</title><iframe id="frame" src="/inner?k=framed&n=`+r.URL.Query().Get("n")+`"></iframe>`)
@@ -182,11 +183,64 @@ type stockLinkConnect struct {
 	Preexisting        map[string]stockLinkPage `json:"preexisting"`
 }
 
-type stockLinkResult struct {
-	Connect   stockLinkConnect           `json:"connect"`
-	Reconnect stockLinkConnect           `json:"reconnect"`
-	Probes    map[string]json.RawMessage `json:"probes"`
+type stockLinkInput struct {
+	OK           bool   `json:"ok"`
+	Error        string `json:"error"`
+	Delivered    int    `json:"delivered"`
+	ValueChanged bool   `json:"valueChanged"`
 }
+
+type stockLinkOrdinary struct {
+	Found    bool            `json:"found"`
+	Click    string          `json:"click"`
+	Type     string          `json:"type"`
+	Hits     *int            `json:"hits"`
+	Value    string          `json:"value"`
+	Events   []string        `json:"events"`
+	Reloaded bool            `json:"reloaded"`
+	Point    json.RawMessage `json:"point"`
+	PointHit json.RawMessage `json:"pointHit"`
+	Frame    json.RawMessage `json:"frame"`
+}
+
+type stockLinkControl struct {
+	Hits     int             `json:"hits"`
+	Typed    bool            `json:"typed"`
+	Events   []string        `json:"events"`
+	Reloaded bool            `json:"reloaded"`
+	Point    json.RawMessage `json:"point"`
+	PointHit json.RawMessage `json:"pointHit"`
+	Error    string          `json:"error"`
+}
+type stockLinkResult struct {
+	Connect   stockLinkConnect `json:"connect"`
+	Reconnect stockLinkConnect `json:"reconnect"`
+	Nested    *struct {
+		Goto             string                       `json:"goto"`
+		FramesSettled    bool                         `json:"framesSettled"`
+		Embedded         any                          `json:"embedded"`
+		ProtectedFrames  []string                     `json:"protectedFrames"`
+		ExtensionFocused bool                         `json:"extensionFocused"`
+		Inputs           map[string]stockLinkInput    `json:"inputs"`
+		Ordinary         map[string]stockLinkOrdinary `json:"ordinary"`
+		OrdinaryControl  map[string]stockLinkControl  `json:"ordinaryControl"`
+		Warmup           struct {
+			Tries  int      `json:"tries"`
+			Landed bool     `json:"landed"`
+			Events []string `json:"events"`
+		} `json:"warmup"`
+		Chrome  string `json:"chrome"`
+		Error   string `json:"error"`
+		Control struct {
+			Mouse int    `json:"mouse"`
+			Text  bool   `json:"text"`
+			Error string `json:"error"`
+		} `json:"control"`
+	} `json:"nested"`
+	Probes map[string]json.RawMessage `json:"probes"`
+}
+
+const stockShownRefusal = "slicc: refused: a browser extension's frame (chrome-extension://) is showing or focused in this tab, such as a password manager's autofill list; close it or reload the tab"
 
 func checkStockConnect(t *testing.T, name string, c stockLinkConnect) {
 	t.Helper()
@@ -305,6 +359,66 @@ func TestStockPuppeteerConnectsThroughLinkBesideHeldTabs(t *testing.T) {
 	for name, c := range map[string]stockLinkConnect{"connect": res.Connect, "reconnect": res.Reconnect} {
 		checkStockConnect(t, name, c)
 		checkStockPreexisting(t, name, c)
+	}
+	checkStockProbes(t, res.Probes)
+}
+
+func TestStockPuppeteerInputThroughLinkStaysOutOfNestedExtensionFrame(t *testing.T) {
+	env := setupExtensionFrameProtect(t)
+	res := runStockLink(t, env, "nested", func(string) {})
+	checkStockConnect(t, "connect", res.Connect)
+	checkStockConnect(t, "reconnect", res.Reconnect)
+	n := res.Nested
+	if n == nil {
+		t.Fatal("the nested-frame flow did not run")
+	}
+	t.Logf("nested-frame row ran on %s; warm-up landed=%v after %d tries: %q", n.Chrome, n.Warmup.Landed, n.Warmup.Tries, n.Warmup.Events)
+	if n.Error != "" {
+		t.Fatalf("the nested-frame flow stopped: %s (chrome %s; warm-up tries=%d events=%q)", n.Error, n.Chrome, n.Warmup.Tries, n.Warmup.Events)
+	}
+	if n.Goto != "ok" || !n.FramesSettled || n.Embedded != true {
+		t.Fatalf("the nested-frame page: goto=%s, ordinary frames reached the client=%v, extension frame embedded=%v", n.Goto, n.FramesSettled, n.Embedded)
+	}
+	for _, k := range []string{"same", "cross", "nested", "again"} {
+		o := n.Ordinary[k]
+		c, ran := n.OrdinaryControl[k]
+		if !ran || c.Error != "" || c.Hits != 1 || !c.Typed || c.Reloaded {
+			t.Errorf("control: unguarded click and typing into the ordinary %s frame did not land, so the guarded row proves nothing: hits=%d typed=%v reloaded=%v error=%q point=%s hit=%s events=%q (chrome %s; warm-up landed=%v after %d tries: %q)", k, c.Hits, c.Typed, c.Reloaded, c.Error, c.Point, c.PointHit, c.Events, n.Chrome, n.Warmup.Landed, n.Warmup.Tries, n.Warmup.Events)
+			continue
+		}
+		hits := "missing"
+		if o.Hits != nil {
+			hits = fmt.Sprint(*o.Hits)
+		}
+		if !o.Found || o.Click != "ok" || o.Type != "ok" || o.Hits == nil || *o.Hits != 1 || o.Value != "ok" || o.Reloaded {
+			t.Errorf("guarded Puppeteer input into the ordinary %s frame did not land where the unguarded control did: want click ok, type ok, 1 click hit and value \"ok\"; got found=%v click=%q type=%q hits=%s value=%q reloaded=%v; guarded point=%s hit=%s frame=%s events=%q; control point=%s hit=%s events=%q", k, o.Found, o.Click, o.Type, hits, o.Value, o.Reloaded, o.Point, o.PointHit, o.Frame, o.Events, c.Point, c.PointHit, c.Events)
+		}
+	}
+	if n.Control.Error != "" || n.Control.Mouse < 1 || !n.Control.Text {
+		t.Fatalf("control: unguarded input did not reach the nested extension frame, so a zero count proves nothing: %+v", n.Control)
+	}
+	if !n.ExtensionFocused {
+		t.Errorf("the observer could not focus the nested extension frame for the keyboard rows")
+	}
+	if len(n.ProtectedFrames) != 0 {
+		t.Errorf("the extension frame is visible to the client: %v", n.ProtectedFrames)
+	}
+	if len(n.Inputs) < 8 {
+		t.Errorf("only %d protected input rows ran", len(n.Inputs))
+	}
+	for name, in := range n.Inputs {
+		if in.Delivered != 0 || in.ValueChanged {
+			t.Errorf("%s reached the extension frame: delivered %d events, value changed %v (answer ok=%v %s)", name, in.Delivered, in.ValueChanged, in.OK, in.Error)
+		}
+		if strings.HasPrefix(name, "Target.attachToTarget") {
+			if in.OK {
+				t.Errorf("%s: the client attached to the extension frame", name)
+			}
+			continue
+		}
+		if in.OK || !strings.Contains(in.Error, stockShownRefusal) {
+			t.Errorf("%s: want the shown-or-focused refusal, got ok=%v %q", name, in.OK, in.Error)
+		}
 	}
 	checkStockProbes(t, res.Probes)
 }

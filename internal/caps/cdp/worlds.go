@@ -394,6 +394,7 @@ func (g *guard) hideShownUnderProtectedLocked() [][]byte {
 	}
 	var page [][]byte
 	cut := map[string]bool{}
+	g.latchHiddenUnderProtectedLocked(cut)
 	for _, h := range hits {
 		g.hideContextLocked(h.target, h.session, h.context)
 		page = append(page, g.destroyShownContextLocked(h.target, h.session, h.context)...)
@@ -535,9 +536,11 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	w := g.worldsLocked(target)
 	frame := ""
 	if c.AuxData.FrameID != target {
-		frame = c.AuxData.FrameID
-		if frame == "" {
+		if c.AuxData.FrameID == "" {
 			w.full = true
+		} else if g.contextLatchesLocked(c) {
+			frame = c.AuxData.FrameID
+			g.logf("cdp: a hidden execution context locks its page's frame content target=%s frame=%s default=%v", target, frame, c.AuxData.IsDefault)
 		}
 	}
 	if wc := w.contexts[c.ID]; wc != nil {
@@ -560,6 +563,29 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	w.contexts[c.ID] = &worldCtx{frame: c.AuxData.FrameID, unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: frame}
 	if c.UniqueID != "" {
 		g.worldUniques[c.UniqueID] = target
+	}
+}
+
+func (g *guard) contextLatchesLocked(c execContext) bool {
+	if c.AuxData.IsDefault || g.frameUnderProtectedLocked(c.AuxData.FrameID) {
+		return true
+	}
+	return g.o.Loaded(c.Origin) && !protect.ExtensionScheme(c.Origin)
+}
+
+func (g *guard) latchHiddenUnderProtectedLocked(cut map[string]bool) {
+	for target, w := range g.worlds {
+		if w == nil {
+			continue
+		}
+		for _, wc := range w.contexts {
+			if wc == nil || wc.protectedFrame != "" || wc.frame == "" || wc.frame == target || !g.frameUnderProtectedLocked(wc.frame) {
+				continue
+			}
+			wc.protectedFrame = wc.frame
+			cut[target] = true
+			g.logf("cdp: a hidden execution context locks its page's frame content once its frame is protected target=%s frame=%s", target, wc.frame)
+		}
 	}
 }
 
@@ -909,10 +935,16 @@ func (g *guard) navWorldLocked(nt *navTarget, m *message) [][]byte {
 		var p struct {
 			Context execContext `json:"context"`
 		}
-		if json.Unmarshal(m.Params, &p) == nil {
-			g.worldContextLocked(nt.target, m.SessionID, p.Context)
+		if json.Unmarshal(m.Params, &p) != nil {
+			return g.cutCastsLocked(nt.target)
 		}
-		return g.cutCastsLocked(nt.target)
+		var send [][]byte
+		if p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID != nt.target {
+			send = g.noteChildFrameLocked(p.Context.AuxData.FrameID, p.Context.Origin)
+			g.queueContextSettleLocked()
+		}
+		g.worldContextLocked(nt.target, m.SessionID, p.Context)
+		return append(send, g.cutCastsLocked(nt.target)...)
 	case "Runtime.executionContextDestroyed":
 		var p struct {
 			ID       int64  `json:"executionContextId"`
