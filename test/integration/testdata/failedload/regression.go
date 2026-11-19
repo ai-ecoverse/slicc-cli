@@ -316,3 +316,123 @@ func TestFailedLoadConfirmReplyBeforeAttachEvent(t *testing.T) {
 	}
 	assertNoFailedHost(t, "confirm-before-attach", ps)
 }
+
+func reattachChromeError(title string, waiting bool) []byte {
+	return encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId": "S-POPUP-2",
+			"targetInfo": map[string]any{
+				"targetId": "POPUP", "type": "page", "url": chromeErrorURL, "title": title, "openerId": "OPENER",
+			},
+			"waitingForDebugger": waiting,
+		},
+	})
+}
+
+func frameNavigatedChromeError(unreachable string) []byte {
+	return encode(map[string]any{
+		"sessionId": "GUARD",
+		"method":    "Page.frameNavigated",
+		"params": map[string]any{
+			"frame": map[string]any{
+				"id": "POPUP", "url": chromeErrorURL, "securityOrigin": "://", "unreachableUrl": unreachable,
+			},
+		},
+	})
+}
+
+func TestFailedLoadOrdinaryThenProtectedBlanks(t *testing.T) {
+	g := failedLoadGuard(t)
+	_ = g.fromBrowser(chromeErrorAttached("ordinary.test", "OPENER", true))
+	_ = proveFailedLoad(t, g, failedOrdinary)
+	_ = g.takePendingPageLocked()
+	v := g.fromBrowser(chromeErrorChanged(failedHostTitle, "OPENER"))
+	assertNoFailedHost(t, "ordinary-then-protected-listing", clientPayloads(v))
+	_ = g.fromBrowser(reattachChromeError(failedHostTitle, true))
+	if g.sessions["S-POPUP-2"] != nil {
+		t.Fatal("second failed load admitted a client session before proof")
+	}
+	ps := clientPayloads(g.fromBrowser(nil))
+	assertNoFailedHost(t, "ordinary-then-protected-hold", ps)
+	_ = proveFailedLoad(t, g, failedProtected)
+	page := pageStrings(g.takePendingPageLocked())
+	assertNoFailedHost(t, "ordinary-then-protected-proof", page)
+	v = g.fromBrowser(chromeErrorChanged(failedHostTitle, "OPENER"))
+	assertNoFailedHost(t, "ordinary-then-protected-after", clientPayloads(v))
+}
+
+func TestFailedLoadProtectedThenOrdinaryReleases(t *testing.T) {
+	g := failedLoadGuard(t)
+	_ = g.fromBrowser(chromeErrorAttached(failedHostTitle, "OPENER", true))
+	_ = proveFailedLoad(t, g, failedProtected)
+	_ = g.takePendingPageLocked()
+	v := g.fromBrowser(chromeErrorChanged("ordinary.test", "OPENER"))
+	ps := clientPayloads(v)
+	if payloadsContain(ps, failedHostTitle) {
+		t.Fatalf("protected-then-ordinary listing kept prior title: %v", ps)
+	}
+	_ = g.fromBrowser(reattachChromeError("ordinary.test", true))
+	_ = proveFailedLoad(t, g, failedOrdinary)
+	page := pageStrings(g.takePendingPageLocked())
+	if !payloadsContain(page, "attachedToTarget") {
+		t.Fatalf("second ordinary proof did not announce attach: %v", page)
+	}
+	if !payloadsContain(page, `"title":"ordinary.test"`) && !payloadsContain(page, `"title": "ordinary.test"`) {
+		t.Fatalf("second ordinary proof lost the real title: %v", page)
+	}
+	assertNoFailedHost(t, "protected-then-ordinary", page)
+}
+
+func TestFailedLoadTwoFailedLoadsBackToBack(t *testing.T) {
+	g := failedLoadGuard(t)
+	_ = g.fromBrowser(chromeErrorAttached("ordinary.test", "OPENER", true))
+	_ = proveFailedLoad(t, g, failedOrdinary)
+	_ = g.takePendingPageLocked()
+	v := g.fromBrowser(chromeErrorChanged(failedHostTitle, "OPENER"))
+	assertNoFailedHost(t, "back-to-back-first-listing", clientPayloads(v))
+	_ = g.fromBrowser(reattachChromeError(failedHostTitle, true))
+	_ = proveFailedLoad(t, g, failedProtected)
+	assertNoFailedHost(t, "back-to-back-protected", pageStrings(g.takePendingPageLocked()))
+	v = g.fromBrowser(chromeErrorChanged("ordinary2.test", "OPENER"))
+	if payloadsContain(clientPayloads(v), failedHostTitle) {
+		t.Fatalf("back-to-back third listing kept prior title: %v", clientPayloads(v))
+	}
+	_ = g.fromBrowser(reattachChromeError("ordinary2.test", true))
+	_ = proveFailedLoad(t, g, "https://ordinary2.test/missing")
+	page := pageStrings(g.takePendingPageLocked())
+	if !payloadsContain(page, `"title":"ordinary2.test"`) && !payloadsContain(page, `"title": "ordinary2.test"`) {
+		t.Fatalf("third failed load lost its title: %v", page)
+	}
+	assertNoFailedHost(t, "back-to-back-third", page)
+}
+
+func TestFailedLoadStaleProofDoesNotReleaseNewDocument(t *testing.T) {
+	g := failedLoadGuard(t)
+	_ = g.fromBrowser(chromeErrorAttached("ordinary.test", "OPENER", true))
+	nt := g.navTargets["POPUP"]
+	if nt == nil {
+		nt = &navTarget{target: "POPUP", session: "GUARD", ready: make(chan struct{})}
+		g.navTargets["POPUP"] = nt
+	}
+	nt.session = "GUARD"
+	g.beginConfirmLocked(nt)
+	stale := nt.confirm
+	staleRev := nt.revision
+	_ = g.fromBrowser(chromeErrorChanged(failedHostTitle, "OPENER"))
+	_ = g.fromBrowser(frameNavigatedChromeError(failedProtected))
+	assertNoFailedHost(t, "stale-after-nav-listing", clientPayloads(g.fromBrowser(chromeErrorChanged(failedHostTitle, "OPENER"))))
+	frame := map[string]any{
+		"id": "POPUP", "url": chromeErrorURL, "securityOrigin": "://", "unreachableUrl": failedOrdinary,
+	}
+	raw, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": frame}})
+	_ = g.confirmedTargetLocked(nt, stale, staleRev, message{Result: raw})
+	page := pageStrings(g.takePendingPageLocked())
+	if payloadsContain(page, "ordinary.test") {
+		t.Fatalf("stale ordinary proof released the new document: %v", page)
+	}
+	assertNoFailedHost(t, "stale-proof", page)
+	if g.sessions["S-POPUP"] != nil && payloadsContain(page, "attachedToTarget") {
+		t.Fatalf("stale proof admitted attach for the new document: %v", page)
+	}
+}

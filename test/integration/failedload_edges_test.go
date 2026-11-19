@@ -29,7 +29,7 @@ func TestCDPFailedLoadAnnounceEdges(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestFailedLoad(CreatedBlanksUntilProof|AttachedHoldsUntilProof|EmptyThenRelayChangedHoldsTitle|EmptyThenNonRelayChangedBlanks|ProtectedProofHidesWithoutClientAttach|OrdinaryProofReleasesRealTitle|UnreadableProofStaysHeld|DetachWhilePendingLeavesNoClientAttach|GetTargetsBlanksPending|AttachEventBeforeConfirmReply|ConfirmReplyBeforeAttachEvent)$", "./internal/caps/cdp")
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestFailedLoad(CreatedBlanksUntilProof|AttachedHoldsUntilProof|EmptyThenRelayChangedHoldsTitle|EmptyThenNonRelayChangedBlanks|ProtectedProofHidesWithoutClientAttach|OrdinaryProofReleasesRealTitle|UnreadableProofStaysHeld|DetachWhilePendingLeavesNoClientAttach|GetTargetsBlanksPending|AttachEventBeforeConfirmReply|ConfirmReplyBeforeAttachEvent|OrdinaryThenProtectedBlanks|ProtectedThenOrdinaryReleases|TwoFailedLoadsBackToBack|StaleProofDoesNotReleaseNewDocument)$", "./internal/caps/cdp")
 	command.Dir = root
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("failed-load announce edges: %v\n%s", err, output)
