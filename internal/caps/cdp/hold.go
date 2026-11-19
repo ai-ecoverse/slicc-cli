@@ -60,10 +60,6 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 		if h.typ == "iframe" && g.iframePendingLocked(g.targets[targetID]) {
 			continue
 		}
-		if g.keepHeldForFailedLoadLocked(h, info) {
-			v.send = append(v.send, g.armFailedLoadProofLocked(g.targets[targetID])...)
-			continue
-		}
 		part := g.deliverHeldLocked(h)
 		v.send = append(v.send, part.send...)
 		v.page = append(v.page, part.page...)

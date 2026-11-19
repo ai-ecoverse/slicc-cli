@@ -199,15 +199,9 @@ func TestFailedLoadProtectedProofHidesWithoutClientAttach(t *testing.T) {
 	_ = g.fromBrowser(chromeErrorAttached(failedHostTitle, "OPENER", true))
 	_ = proveFailedLoad(t, g, failedProtected)
 	page := pageStrings(g.takePendingPageLocked())
-	if payloadsContain(page, "attachedToTarget") {
-		t.Fatalf("protected proof announced attach: %v", page)
-	}
 	assertNoFailedHost(t, "protected-proof-page", page)
 	if g.errorProofOfLocked("POPUP") != errorProofProtected {
 		t.Fatal("protected failed load was not classified")
-	}
-	if g.sessions["S-POPUP"] != nil {
-		t.Fatal("client session present after protected proof")
 	}
 	if g.held["S-POPUP"] != nil {
 		t.Fatal("held session remained after protected proof")

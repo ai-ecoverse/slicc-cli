@@ -185,8 +185,6 @@ type guard struct {
 	heldWaits                map[string]*heldWait
 	parkedAnswers            map[callKey]bool
 	keptURLLatch             map[string]bool
-	errorProof               map[string]errorProofState
-	errorTitles              map[string]string
 	gone                     map[string]bool
 	goneOrder                []string
 	held                     map[string]*heldSession
@@ -311,8 +309,6 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		heldWaits:                map[string]*heldWait{},
 		parkedAnswers:            map[callKey]bool{},
 		keptURLLatch:             map[string]bool{},
-		errorProof:               map[string]errorProofState{},
-		errorTitles:              map[string]string{},
 		gone:                     map[string]bool{},
 		held:                     map[string]*heldSession{},
 		heldContexts:             map[heldContextKey]*heldContext{},
@@ -1574,9 +1570,6 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	t.protected = g.decide(t, prev)
 	if t.protected && !prev {
 		send = append(send, g.protectLocked(t)...)
-	}
-	if chromeErrorDocument(t.url) && (t.typ == "page" || t.typ == "tab") {
-		send = append(send, g.armFailedLoadProofLocked(t)...)
 	}
 	send = append(send, g.redecideWorkersLocked(t.id)...)
 	if g.extensionFrameTargetLocked(t) {
