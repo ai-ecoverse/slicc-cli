@@ -394,6 +394,7 @@ func (g *guard) hideShownUnderProtectedLocked() [][]byte {
 	}
 	var page [][]byte
 	cut := map[string]bool{}
+	g.latchHiddenUnderProtectedLocked(cut)
 	for _, h := range hits {
 		g.hideContextLocked(h.target, h.session, h.context)
 		page = append(page, g.destroyShownContextLocked(h.target, h.session, h.context)...)
@@ -535,9 +536,10 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	w := g.worldsLocked(target)
 	frame := ""
 	if c.AuxData.FrameID != target {
-		frame = c.AuxData.FrameID
-		if frame == "" {
+		if c.AuxData.FrameID == "" {
 			w.full = true
+		} else if g.contextLatchesLocked(c) {
+			frame = c.AuxData.FrameID
 		}
 	}
 	if wc := w.contexts[c.ID]; wc != nil {
@@ -560,6 +562,28 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	w.contexts[c.ID] = &worldCtx{frame: c.AuxData.FrameID, unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: frame}
 	if c.UniqueID != "" {
 		g.worldUniques[c.UniqueID] = target
+	}
+}
+
+func (g *guard) contextLatchesLocked(c execContext) bool {
+	if c.AuxData.IsDefault || g.frameUnderProtectedLocked(c.AuxData.FrameID) {
+		return true
+	}
+	return g.o.Loaded(c.Origin) && !protect.ExtensionScheme(c.Origin)
+}
+
+func (g *guard) latchHiddenUnderProtectedLocked(cut map[string]bool) {
+	for target, w := range g.worlds {
+		if w == nil {
+			continue
+		}
+		for _, wc := range w.contexts {
+			if wc == nil || wc.protectedFrame != "" || wc.frame == "" || wc.frame == target || !g.frameUnderProtectedLocked(wc.frame) {
+				continue
+			}
+			wc.protectedFrame = wc.frame
+			cut[target] = true
+		}
 	}
 }
 

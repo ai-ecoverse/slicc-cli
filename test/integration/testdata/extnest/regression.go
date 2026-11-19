@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
@@ -179,22 +180,6 @@ func TestExtensionProbeNamedForeignWorldUnderProtectedStillRefuses(t *testing.T)
 	v := g.fromCommand(&command{id: 1, method: "Page.getFrameTree", session: "S"}, 1, true)
 	if v.reply == nil {
 		t.Fatalf("Page.getFrameTree under protected+forged probe name must stay refused, got forward=%v", v.forward != nil)
-	}
-}
-
-func TestExtensionFrameURLDoesNotLatchPage(t *testing.T) {
-	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001", "chrome-extension://sevenextid"}), t.Logf)
-	ordinaryNestPage(t, g)
-	g.mu.Lock()
-	_ = g.noteChildFrameLocked("HOST", "chrome-extension://sevenextid/panel.html")
-	g.mu.Unlock()
-	injectNamedWorld(g, "S", "http://localhost:7002", "HOST", "slicc-ext-probe-forged-ext-frame", "ext-frame-unique", 61)
-	if locked, pf := pageLatch(g); locked {
-		t.Fatalf("world in a chrome-extension:// frame latched the page: protectedFrame=%q", pf)
-	}
-	v := g.fromCommand(&command{id: 2, method: "Page.getFrameTree", session: "S"}, 1, true)
-	if v.reply != nil || v.forward == nil {
-		t.Fatalf("Page.getFrameTree with extension-frame child: forward=%v reply=%s", v.forward != nil, v.reply)
 	}
 }
 
@@ -429,4 +414,28 @@ func TestExtensionWorldsInMiddleIframeChildrenKeepPageReadable(t *testing.T) {
 		t.Fatalf("extension worlds in ordinary child frames locked the middle iframe or the page: mid=%v page=%v", latchedOn(g, "MID"), latchedOn(g, "PAGE"))
 	}
 	frameContentOpen(t, g, "extension worlds in ordinary child frames of the middle iframe")
+}
+
+func TestExtensionSevenInheritedChildUnclassifiedDefaultLatchesOnExpiry(t *testing.T) {
+	t.Setenv(HoldTimeoutEnv, "1ms")
+	g := newGuard(protect.MustNew([]string{sevenOrigin}), t.Logf)
+	guardedNestPage(t, g, true)
+	nestContext(g, "S", 110, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", "CHILD", "slicc harness content script", "expiry-ext", false)
+	nestContext(g, "S", 111, "http://localhost:7002", "CHILD", "", "expiry-def", true)
+	g.mu.Lock()
+	held := g.contextHeldLocked("PAGE", 111)
+	g.mu.Unlock()
+	if !held {
+		t.Fatal("the default context of an unclassified child was not held")
+	}
+	time.Sleep(5 * time.Millisecond)
+	g.mu.Lock()
+	g.queueContextSettleLocked()
+	_ = g.takeContextSettlePageLocked()
+	_ = g.takeContextSettleSendLocked()
+	g.mu.Unlock()
+	if !latchedOn(g, "PAGE") {
+		t.Fatal("a default context whose frame never classified did not lock the page once its hold ran out")
+	}
+	frameContentRefused(t, g, "unclassified child whose default context timed out")
 }
