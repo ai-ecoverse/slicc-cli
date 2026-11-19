@@ -18,6 +18,9 @@ func (g *guard) framesProtectedLocked(target string) bool {
 	if g.iframeProtectedLocked(target) {
 		return true
 	}
+	if g.unknownNonDefaultWorldProtectsLocked(target) {
+		return true
+	}
 	w := g.worlds[target]
 	if w == nil {
 		return false
