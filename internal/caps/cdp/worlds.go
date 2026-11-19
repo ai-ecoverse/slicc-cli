@@ -88,7 +88,7 @@ func (g *guard) isolatedWorldReadyLocked(frame, page string) (ready, refuse bool
 	if g.frameUnderProtectedLocked(frame) {
 		return true, true
 	}
-	if g.ancestryDisputedOverflow[page] || g.ancestryDisputed[frame] {
+	if g.ancestryDisputedFull || g.ancestryDisputedOverflow[page] || g.ancestryDisputed[frame] {
 		return true, true
 	}
 	if g.frameContextAncestrySettledLocked(frame, page) {
@@ -231,6 +231,9 @@ func (g *guard) createIsolatedWorldRule(c *command) string {
 func (g *guard) frameContextAncestrySettledLocked(frame, page string) bool {
 	if frame == "" || frame == page {
 		return true
+	}
+	if g.ancestryDisputedFull || g.ancestryDisputedOverflow[page] || g.ancestryDisputed[frame] {
+		return false
 	}
 	seen := map[string]bool{}
 	id := frame

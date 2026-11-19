@@ -200,6 +200,7 @@ type guard struct {
 	ancestryDisputed         map[string]bool
 	ancestryDisputedUnder    map[string]string
 	ancestryDisputedOverflow map[string]bool
+	ancestryDisputedFull     bool
 	blockedChildren          map[string]string
 	explicit                 map[string]int
 	attachCalls              map[callKey]string
@@ -614,9 +615,14 @@ func (g *guard) markAncestryDisputedLocked(id, under string) {
 		if page == "" {
 			page = g.framePageOfLocked(id)
 		}
-		if page != "" && !g.ancestryDisputedOverflow[page] {
-			g.ancestryDisputedOverflow[page] = true
-			g.logf("cdp: ancestryDisputed at cap; latching page overflow page=%s frame=%s", page, id)
+		if page != "" {
+			if !g.ancestryDisputedOverflow[page] {
+				g.ancestryDisputedOverflow[page] = true
+				g.logf("cdp: ancestryDisputed at cap; latching page overflow page=%s frame=%s", page, id)
+			}
+		} else if !g.ancestryDisputedFull {
+			g.ancestryDisputedFull = true
+			g.logf("cdp: ancestryDisputed at cap; latching guard-wide overflow frame=%s", id)
 		}
 		return
 	}
@@ -660,6 +666,9 @@ func (g *guard) forgetAncestryDisputedLocked(id string) {
 			delete(g.ancestryDisputed, frame)
 			delete(g.ancestryDisputedUnder, frame)
 		}
+	}
+	if g.ancestryDisputedFull && len(g.ancestryDisputed) < maxAncestryDisputed {
+		g.ancestryDisputedFull = false
 	}
 }
 
@@ -1021,7 +1030,10 @@ func (g *guard) iframeProtectedAncestorReasonLocked(t *target) string {
 	if t == nil || t.typ != "iframe" {
 		return ""
 	}
-	if g.ancestryDisputed[t.id] {
+	if g.ancestryDisputed[t.id] || g.ancestryDisputedFull {
+		return "ancestry-disputed"
+	}
+	if page := g.framePageOfLocked(t.id); page != "" && g.ancestryDisputedOverflow[page] {
 		return "ancestry-disputed"
 	}
 	if parent := g.iframeParentTargetLocked(t); parent != nil && parent.protected {
