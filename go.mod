@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.1.0
 	github.com/ai-ecoverse/go-optel v1.0.1
-	github.com/ai-ecoverse/slicc-browsers v1.28.1
+	github.com/ai-ecoverse/slicc-browsers v1.28.3
 	github.com/andybalholm/brotli v1.3.0
 	github.com/charmbracelet/x/conpty v0.2.0
 	github.com/coder/websocket v1.8.15
@@ -62,3 +62,5 @@ require (
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 )
+
+replace github.com/ai-ecoverse/slicc-browsers v1.28.3 => github.com/ai-ecoverse/slicc-browsers v1.28.3-0.20261119231313-5762ecada53e
