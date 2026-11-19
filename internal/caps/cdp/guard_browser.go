@@ -312,12 +312,21 @@ func (g *guard) infoLocked(v any) [][]byte {
 		return nil
 	}
 	send := g.observeLocked(info)
+	if g.blankFailedLoadInfoLocked(obj, info) {
+		return send
+	}
 	g.redactInfoLocked(obj, info)
 	return send
 }
 
 func (g *guard) redactInfoLocked(obj map[string]any, info targetInfo) bool {
-	if obj == nil || !g.targetProtectedLocked(info.TargetID) && !g.infoVerdictLocked(info).protected {
+	if obj == nil {
+		return false
+	}
+	if g.blankFailedLoadInfoLocked(obj, info) {
+		return true
+	}
+	if !g.targetProtectedLocked(info.TargetID) && !g.infoVerdictLocked(info).protected {
 		return false
 	}
 	redacted := redactURL(info.URL)
@@ -429,7 +438,10 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 		if keep {
 			g.noteWorkerShownLocked(info)
 		}
-		return keep, obj != nil && (g.targetProtectedLocked(info.TargetID) || g.infoVerdictLocked(info).protected), send
+		st := g.errorProofOfLocked(info.TargetID)
+		blanked := obj != nil && (st == errorProofPending || st == errorProofFailed || st == errorProofProtected || g.failedLoadNeedsProofLocked(g.targets[info.TargetID]))
+		changed := obj != nil && (g.targetProtectedLocked(info.TargetID) || g.infoVerdictLocked(info).protected || blanked)
+		return keep, changed, send
 	})
 }
 
@@ -538,6 +550,9 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 	}
 	if g.attachedShouldHideLocked(info, m.SessionID) {
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)}, true
+	}
+	if v, handled := g.holdFailedLoadAttachLocked(m, pSession, waiting, info, send); handled {
+		return v, true
 	}
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
