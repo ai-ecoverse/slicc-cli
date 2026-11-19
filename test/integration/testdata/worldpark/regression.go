@@ -386,6 +386,56 @@ func TestAncestryDisputedOverflowLeavesOtherPagesUntouched(t *testing.T) {
 	}
 }
 
+func TestAncestryDisputedOverflowHoldsContextAndRefusesEvaluate(t *testing.T) {
+	g := worldGuard(t)
+	good := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "P", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 1, method: "Page.getFrameTree", session: "S"}, 1, true)
+	g.fromBrowser(treeReply(1, good))
+	if !forwarded(g.fromCommand(worldCmd(2, "F"), 2, true)) {
+		t.Fatal("classified frame F must forward before overflow")
+	}
+	fillAncestryDisputedCap(t, g, "P", "S", 10)
+	bad := fr("P", "", "http://localhost:7002/nest", "http://localhost:7002",
+		fr("F", "WRONG", "http://localhost:7002/inner", "http://localhost:7002"))
+	g.fromCommand(&command{id: 20, method: "Page.getFrameTree", session: "S"}, 20, true)
+	g.fromBrowser(treeReply(20, bad))
+	ctx := encode(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S",
+		"params": map[string]any{"context": map[string]any{
+			"id": 7, "origin": "http://localhost:7002", "uniqueId": "ctx-F-7",
+			"auxData": map[string]any{"isDefault": true, "frameId": "F"},
+		}},
+	})
+	v := g.fromBrowser(ctx)
+	g.mu.Lock()
+	held := g.contextHeldLocked("P", 7)
+	g.mu.Unlock()
+	if v.forward != nil || !held {
+		t.Fatalf("overflow must hold the context event: forward=%v held=%v", v.forward != nil, held)
+	}
+	ev := g.fromCommand(&command{id: 21, method: "Runtime.evaluate", session: "S", params: map[string]any{"contextId": json.Number("7"), "expression": "1"}}, 21, true)
+	if forwarded(ev) || !strings.HasPrefix(refusedWith(ev), "slicc: refused: ") {
+		t.Fatalf("evaluate in a held overflow context must be refused: wait=%v reply=%s", ev.wait != nil, ev.reply)
+	}
+}
+
+func TestAncestryDisputedAttachOverflowFailsClosed(t *testing.T) {
+	g := worldGuard(t)
+	fillAncestryDisputedCap(t, g, "P", "S", 10)
+	g.mu.Lock()
+	g.targets["IF"] = &target{id: "IF", typ: "iframe", url: "http://127.0.0.1:7001/x"}
+	g.frameParents["IF"] = "OTHER"
+	g.attachParent = "S"
+	_ = g.noteIframeAttachParentLocked(targetInfo{TargetID: "IF", Type: "iframe", URL: "http://127.0.0.1:7001/x", ParentFrameID: "MISSING"})
+	reason := g.iframeProtectedAncestorReasonLocked(g.targets["IF"])
+	disputed := g.ancestryDisputed["IF"]
+	g.mu.Unlock()
+	if reason == "" && !disputed {
+		t.Fatal("iframe attach dispute at the ancestryDisputed cap must fail closed")
+	}
+}
+
 func TestClassifiedDuringEpochRefusalHoldForwards(t *testing.T) {
 	t.Setenv(HoldTimeoutEnv, "100ms")
 	g := worldGuard(t)
