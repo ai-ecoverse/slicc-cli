@@ -540,6 +540,7 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 			w.full = true
 		} else if g.contextLatchesLocked(c) {
 			frame = c.AuxData.FrameID
+			g.logf("cdp: a hidden execution context locks its page's frame content target=%s frame=%s default=%v", target, frame, c.AuxData.IsDefault)
 		}
 	}
 	if wc := w.contexts[c.ID]; wc != nil {
@@ -583,6 +584,7 @@ func (g *guard) latchHiddenUnderProtectedLocked(cut map[string]bool) {
 			}
 			wc.protectedFrame = wc.frame
 			cut[target] = true
+			g.logf("cdp: a hidden execution context locks its page's frame content once its frame is protected target=%s frame=%s", target, wc.frame)
 		}
 	}
 }
