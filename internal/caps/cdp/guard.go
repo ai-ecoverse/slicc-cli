@@ -622,7 +622,7 @@ func (g *guard) markAncestryDisputedLocked(id, under string) {
 			}
 		} else if !g.ancestryDisputedFull {
 			g.ancestryDisputedFull = true
-			g.logf("cdp: ancestryDisputed at cap; latching guard-wide overflow frame=%s", id)
+			g.logf("cdp: ancestryDisputed at cap and the frame cannot be tied to a page; refusing unclassified and mismatched frames connection-wide until the link reconnects frame=%s", id)
 		}
 		return
 	}
