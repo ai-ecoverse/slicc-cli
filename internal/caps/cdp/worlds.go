@@ -349,6 +349,13 @@ func (g *guard) settleHeldContextsLocked() [][]byte {
 	}
 	page = append(page, g.hideShownUnderProtectedLocked()...)
 	g.resolveFrameWorldWaitsLocked()
+	var soft []string
+	for target := range g.softLatched {
+		soft = append(soft, target)
+	}
+	for _, target := range soft {
+		g.trackSoftLatchPageLocked(target)
+	}
 	return page
 }
 
@@ -418,6 +425,7 @@ func (g *guard) noteFrameTreeResultLocked(target string, raw json.RawMessage) {
 	budget := maxFrameTreeNodes
 	g.walkFrameTreeLocked(result.FrameTree, "", 0, &budget)
 	g.queueContextSettleLocked()
+	g.trackSoftLatchPageLocked(target)
 }
 
 const maxFrameTreeNodes = 4096
@@ -1025,6 +1033,7 @@ func (g *guard) navWorldLocked(nt *navTarget, m *message) [][]byte {
 			g.queueContextSettleLocked()
 		}
 		g.worldContextLocked(nt.target, m.SessionID, p.Context)
+		g.trackSoftLatchPageLocked(nt.target)
 		return append(send, g.cutCastsLocked(nt.target)...)
 	case "Runtime.executionContextDestroyed":
 		var p struct {

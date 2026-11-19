@@ -36,6 +36,98 @@ func (g *guard) framesProtectedLocked(target string) bool {
 	return false
 }
 
+var frameContentEventMethods = map[string]bool{
+	"DOM.setChildNodes":          true,
+	"DOM.characterDataModified":  true,
+	"DOM.childNodeInserted":      true,
+	"DOM.documentUpdated":        true,
+	"Accessibility.nodesUpdated": true,
+	"Accessibility.loadComplete": true,
+}
+
+func (g *guard) frameContentEventsBlockedLocked(session string) bool {
+	target := g.worldTargetLocked(session)
+	if target == "" {
+		return false
+	}
+	if g.framesProtectedLocked(target) {
+		return true
+	}
+	t := g.targets[target]
+	if t == nil || t.gone {
+		return g.frameUnderProtectedLocked(target)
+	}
+	if g.extensionFrameTargetLocked(t) {
+		return false
+	}
+	if t.protected || g.targetLoadedLocked(t) || g.frameUnderProtectedLocked(target) {
+		return true
+	}
+	return false
+}
+
+func (g *guard) frameContentEventDropped(m *message) bool {
+	if m == nil || !frameContentEventMethods[m.Method] {
+		return false
+	}
+	return g.frameContentEventsBlockedLocked(m.SessionID)
+}
+
+func (g *guard) noteDomainEnableLocked(c *command) {
+	if c == nil || c.session == "" {
+		return
+	}
+	switch c.method {
+	case "DOM.enable":
+		g.domEnabled[c.session] = true
+	case "DOM.disable":
+		delete(g.domEnabled, c.session)
+	case "Accessibility.enable":
+		g.axEnabled[c.session] = true
+	case "Accessibility.disable":
+		delete(g.axEnabled, c.session)
+	}
+}
+
+func (g *guard) frameContentRebuildEventsLocked(target string) [][]byte {
+	if target == "" {
+		return nil
+	}
+	var page [][]byte
+	for sid, s := range g.sessions {
+		if s == nil || s.target != target {
+			continue
+		}
+		if g.domEnabled[sid] {
+			page = append(page, encode(map[string]any{"method": "DOM.documentUpdated", "sessionId": sid, "params": map[string]any{}}))
+		}
+		if g.axEnabled[sid] {
+			page = append(page, encode(map[string]any{"method": "Accessibility.loadComplete", "sessionId": sid, "params": map[string]any{"root": map[string]any{"nodeId": "0"}}}))
+		}
+	}
+	return page
+}
+
+func (g *guard) trackSoftLatchPageLocked(target string) {
+	if target == "" {
+		return
+	}
+	soft := g.unknownNonDefaultWorldProtectsLocked(target)
+	was := g.softLatched[target]
+	if soft {
+		g.softLatched[target] = true
+		return
+	}
+	if !was {
+		return
+	}
+	delete(g.softLatched, target)
+	if g.framesProtectedLocked(target) {
+		return
+	}
+	g.contextSettlePage = append(g.contextSettlePage, g.frameContentRebuildEventsLocked(target)...)
+}
+
 func (g *guard) noteCastLocked(c *command) {
 	switch c.method {
 	case "Page.startScreencast":
