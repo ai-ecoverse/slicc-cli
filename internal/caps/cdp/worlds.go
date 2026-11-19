@@ -156,12 +156,34 @@ func (g *guard) worldEpochLocked(page, session string) [][]byte {
 			}
 		}
 	})
+	g.logf("cdp: private Page.getFrameTree start target=%s session=%s", page, session)
 	return [][]byte{g.callbackLocked(session, "Page.getFrameTree", nil, func(m message) [][]byte {
-		if m.Error == nil {
-			g.noteFrameTreeResultLocked(page, m.Result)
+		if m.Error != nil {
+			g.logf("cdp: private Page.getFrameTree error target=%s err=%v", page, m.Error)
+			return nil
+		}
+		g.logf("cdp: private Page.getFrameTree ok target=%s", page)
+		g.noteFrameTreeResultLocked(page, m.Result)
+		g.logFrameLatchClassesLocked(page)
+		if t := g.targets[page]; t != nil && t.typ == "iframe" {
+			g.releaseOrdinaryIframeTargetLatchesLocked(t)
 		}
 		return nil
 	})}
+}
+
+func (g *guard) logFrameLatchClassesLocked(page string) {
+	w := g.worlds[page]
+	if w == nil {
+		g.logf("cdp: private Page.getFrameTree class target=%s worlds=none", page)
+		return
+	}
+	for id, c := range w.contexts {
+		if c == nil || c.protectedFrame == "" {
+			continue
+		}
+		g.logf("cdp: private Page.getFrameTree class target=%s ctx=%s frame=%s protectedFrame=%s class=%s", page, itoa(id), c.frame, c.protectedFrame, g.frameLatchClassLocked(c.protectedFrame, page))
+	}
 }
 
 func (g *guard) settleWorldEpochLocked(page string) {
@@ -606,8 +628,53 @@ func (g *guard) frameURLProtectedLocked(frame string) bool {
 	return g.o.Loaded(raw)
 }
 
+func (g *guard) iframeTargetClassifiedOrdinaryLocked(t *target) bool {
+	if t == nil || t.gone || t.typ != "iframe" {
+		return false
+	}
+	if t.protected || g.targetLoadedLocked(t) || g.extensionFrameTargetLocked(t) {
+		return false
+	}
+	if g.iframeAncestryUnknownLocked(t) || g.targetHeldLocked(t.id) || g.targetUnconfirmedLocked(t.id) {
+		return false
+	}
+	if g.iframeFromProtectedAncestorLocked(t) {
+		return false
+	}
+	page := g.iframePageLocked(t)
+	return page != nil && !page.gone && (page.typ == "page" || page.typ == "tab") && !page.protected && !g.targetLoadedLocked(page)
+}
+
+func (g *guard) releaseOrdinaryIframeTargetLatchesLocked(t *target) {
+	if !g.iframeTargetClassifiedOrdinaryLocked(t) {
+		return
+	}
+	w := g.worlds[t.id]
+	if w == nil {
+		return
+	}
+	released := false
+	for _, c := range w.contexts {
+		if c == nil || c.protectedFrame == "" {
+			continue
+		}
+		if g.frameUnderProtectedLocked(c.protectedFrame) || g.frameURLProtectedLocked(c.protectedFrame) {
+			continue
+		}
+		g.logf("cdp: release protectedFrame=%s target=%s class=ordinary reason=iframe-target-parent-chain", c.protectedFrame, t.id)
+		c.protectedFrame = ""
+		released = true
+	}
+	if released {
+		g.queueContextSettleLocked()
+	}
+}
+
 func (g *guard) frameLatchClassLocked(frame, page string) string {
 	if frame == "" || frame == page {
+		if t := g.targets[page]; t != nil && t.typ == "iframe" && !g.iframeTargetClassifiedOrdinaryLocked(t) && !t.protected && !g.targetLoadedLocked(t) && !g.iframeFromProtectedAncestorLocked(t) {
+			return "unclassified"
+		}
 		return "ordinary"
 	}
 	if g.extensionFrameIDLocked(frame) {
@@ -618,6 +685,15 @@ func (g *guard) frameLatchClassLocked(frame, page string) string {
 	}
 	if g.frameUnderProtectedLocked(frame) || g.frameURLProtectedLocked(frame) {
 		return "protected"
+	}
+	if t := g.targets[page]; t != nil && t.typ == "iframe" {
+		if g.iframeTargetClassifiedOrdinaryLocked(t) {
+			return "ordinary"
+		}
+		if t.protected || g.targetLoadedLocked(t) || g.iframeFromProtectedAncestorLocked(t) {
+			return "protected"
+		}
+		return "unclassified"
 	}
 	if g.frameContextAncestrySettledLocked(frame, page) {
 		return "ordinary"

@@ -267,6 +267,90 @@ func TestExtensionOwnProbeEventBeforeReplyDoesNotLatch(t *testing.T) {
 	}
 }
 
+func TestExtensionOwnProbeEventOnChildSessionMatchesPending(t *testing.T) {
+	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001", "chrome-extension://sevenextid"}), t.Logf)
+	ordinaryNestPage(t, g)
+	const token = "slicc-ext-probe-oopif-child-session"
+	g.mu.Lock()
+	if g.extensionProbePending == nil {
+		g.extensionProbePending = map[extensionWorldKey]*extensionWorldPending{}
+	}
+	if g.extensionProbeWorlds == nil {
+		g.extensionProbeWorlds = map[string]bool{}
+	}
+	g.extensionProbeWorlds[token] = true
+	g.extensionProbePending[extensionWorldKey{"S", "HOST"}] = &extensionWorldPending{
+		name: token, session: "S", frame: "HOST", document: "doc", revision: 1,
+	}
+	g.sessions["S-child"] = &session{id: "S-child", target: "PAGE"}
+	g.mu.Unlock()
+	injectNamedWorld(g, "S-child", "http://localhost:7002", "HOST", token, "oopif-child-unique", 42)
+	if locked, pf := pageLatch(g); locked {
+		t.Fatalf("own probe on child session must match pending token+frame: protectedFrame=%q", pf)
+	}
+	g.mu.Lock()
+	own := g.extensionProbeIDs[42] || g.extensionProbeUniques["oopif-child-unique"]
+	g.mu.Unlock()
+	if !own {
+		t.Fatal("pending probe must bind from child-session event when token+frame match")
+	}
+}
+
+func TestExtensionOrdinaryIframeTargetReleasesUnclassifiedLatch(t *testing.T) {
+	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001"}), t.Logf)
+	page := map[string]any{"targetId": "PAGE", "type": "page", "url": "http://page.outer.test/", "attached": true}
+	mid := map[string]any{"targetId": "MID", "type": "iframe", "url": "http://other.guard.test/middle", "attached": true, "parentFrameId": "PAGE"}
+	g.fromBrowser(encode(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": page}}))
+	g.fromBrowser(encode(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "S-page", "waitingForDebugger": false, "targetInfo": page}}))
+	g.fromBrowser(encode(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": mid}}))
+	g.fromBrowser(encode(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "S-mid", "waitingForDebugger": false, "targetInfo": mid}}))
+	g.mu.Lock()
+	ready := make(chan struct{})
+	close(ready)
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", session: "S-page", ready: ready, done: true}
+	if tmid := g.targets["MID"]; tmid != nil {
+		tmid.parentFrame = ""
+		g.frameParents = map[string]string{}
+	}
+	g.mu.Unlock()
+	created, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S-mid",
+		"params": map[string]any{"context": map[string]any{
+			"id": 3, "origin": "http://other.guard.test", "name": "", "uniqueId": "blank-under-mid",
+			"auxData": map[string]any{"isDefault": true, "type": "default", "frameId": "CHILD"},
+		}},
+	})
+	_ = g.fromBrowser(created)
+	g.mu.Lock()
+	locked := g.framesProtectedLocked("MID")
+	ordinary := false
+	if tmid := g.targets["MID"]; tmid != nil {
+		ordinary = g.iframeTargetClassifiedOrdinaryLocked(tmid)
+	}
+	g.mu.Unlock()
+	if !locked {
+		t.Fatal("unclassified child of an ancestry-unknown iframe target must latch")
+	}
+	if ordinary {
+		t.Fatal("iframe target must still be ancestry-unknown before parent is noted")
+	}
+	g.mu.Lock()
+	_, _ = g.noteFrameParentLocked("MID", "PAGE")
+	g.releaseOrdinaryIframeTargetLatchesLocked(g.targets["MID"])
+	locked = g.framesProtectedLocked("MID")
+	class := ""
+	if tmid := g.targets["MID"]; tmid != nil {
+		class = g.frameLatchClassLocked("CHILD", "MID")
+	}
+	g.mu.Unlock()
+	if locked {
+		t.Fatal("ordinary iframe target parent-chain must release the unclassified latch")
+	}
+	if class != "ordinary" {
+		t.Fatalf("child under ordinary iframe target must classify ordinary, got %q", class)
+	}
+}
+
 func TestExtensionCopiedProbeTokenAfterRecordGoneIsNotOwn(t *testing.T) {
 	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001", "chrome-extension://sevenextid"}), t.Logf)
 	ordinaryNestPage(t, g)

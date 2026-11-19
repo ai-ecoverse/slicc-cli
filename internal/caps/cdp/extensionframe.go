@@ -384,21 +384,61 @@ func (g *guard) noteExtensionProbeUniqueLocked(id int64, unique string) {
 	g.extensionProbeUniques[unique] = true
 }
 
+func (g *guard) pendingExtensionProbeExpiredLocked(key extensionWorldKey, p *extensionWorldPending) bool {
+	if p == nil || p.at.IsZero() || time.Since(p.at) < holdTimeout() {
+		return false
+	}
+	delete(g.extensionProbeWorlds, p.name)
+	delete(g.extensionProbePending, key)
+	return true
+}
+
+func (g *guard) logUnmatchedExtensionProbeLocked(session string, c execContext) {
+	if !strings.HasPrefix(c.Name, extensionWorldPrefix) {
+		return
+	}
+	pending := "none"
+	for key, p := range g.extensionProbePending {
+		if p == nil {
+			continue
+		}
+		pending = "session=" + key.session + " frame=" + key.frame + " name=" + p.name + " pendingSession=" + p.session + " pendingFrame=" + p.frame
+		break
+	}
+	if n := len(g.extensionProbePending); n > 1 {
+		pending += " more=" + itoa(int64(n-1))
+	}
+	g.logf("cdp: unmatched slicc-ext-probe event session=%s frame=%s name=%s pending=%s", session, c.AuxData.FrameID, c.Name, pending)
+}
+
 func (g *guard) pendingExtensionProbeMatchLocked(session string, c execContext) *extensionWorldPending {
-	if session == "" || c.Name == "" || c.AuxData.IsDefault || c.AuxData.FrameID == "" || g.extensionProbePending == nil {
+	if c.Name == "" || c.AuxData.IsDefault || c.AuxData.FrameID == "" || g.extensionProbePending == nil {
 		return nil
 	}
-	key := extensionWorldKey{session, c.AuxData.FrameID}
-	p := g.extensionProbePending[key]
-	if p == nil || p.name != c.Name || p.session != session || p.frame != c.AuxData.FrameID {
+	if session != "" {
+		key := extensionWorldKey{session, c.AuxData.FrameID}
+		if p := g.extensionProbePending[key]; p != nil && p.name == c.Name && p.frame == c.AuxData.FrameID {
+			if g.pendingExtensionProbeExpiredLocked(key, p) {
+				return nil
+			}
+			return p
+		}
+	}
+	if !g.extensionProbeWorlds[c.Name] {
+		g.logUnmatchedExtensionProbeLocked(session, c)
 		return nil
 	}
-	if !p.at.IsZero() && time.Since(p.at) >= holdTimeout() {
-		delete(g.extensionProbeWorlds, p.name)
-		delete(g.extensionProbePending, key)
-		return nil
+	for key, p := range g.extensionProbePending {
+		if p == nil || p.name != c.Name || p.frame != c.AuxData.FrameID {
+			continue
+		}
+		if g.pendingExtensionProbeExpiredLocked(key, p) {
+			return nil
+		}
+		return p
 	}
-	return p
+	g.logUnmatchedExtensionProbeLocked(session, c)
+	return nil
 }
 
 func (g *guard) bindExtensionProbeFromEventLocked(session string, c execContext) bool {

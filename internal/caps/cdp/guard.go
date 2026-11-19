@@ -594,6 +594,15 @@ func (g *guard) redecideAfterFrameParentLocked(frame string) [][]byte {
 		if t.protected && !prev {
 			send = append(send, g.protectLocked(t)...)
 		}
+		g.releaseOrdinaryIframeTargetLatchesLocked(t)
+	}
+	for _, t := range g.targets {
+		if t == nil || t.gone || t.typ != "iframe" {
+			continue
+		}
+		if t.parentFrame == frame || g.frameParents[t.id] == frame {
+			g.releaseOrdinaryIframeTargetLatchesLocked(t)
+		}
 	}
 	return append(send, g.redecideWorkersLocked(frame)...)
 }
@@ -1503,6 +1512,9 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	t.protected = g.decide(t, prev)
 	if t.protected && !prev {
 		send = append(send, g.protectLocked(t)...)
+	}
+	if t.typ == "iframe" && !t.protected {
+		g.releaseOrdinaryIframeTargetLatchesLocked(t)
 	}
 	send = append(send, g.redecideWorkersLocked(t.id)...)
 	if g.extensionFrameTargetLocked(t) {
