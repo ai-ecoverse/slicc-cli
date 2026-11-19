@@ -530,6 +530,21 @@ func (g *guard) attachedHoldParams(m *message, pSession string, waiting bool, in
 	return map[string]any{"sessionId": pSession, "waitingForDebugger": waiting, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID, "parentFrameId": info.ParentFrameID, "parentId": info.ParentID}}
 }
 
+func attachURLKind(raw string) string {
+	switch {
+	case raw == "":
+		return "empty"
+	case strings.HasPrefix(raw, "about:"):
+		return "about"
+	case strings.HasPrefix(raw, "chrome-error:"):
+		return "chrome-error"
+	case strings.HasPrefix(raw, "http:") || strings.HasPrefix(raw, "https:"):
+		return "http"
+	default:
+		return "other"
+	}
+}
+
 func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
 	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		if t := g.targets[info.TargetID]; t != nil {
@@ -537,12 +552,15 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 		}
 	}
 	if g.attachedShouldHideLocked(info, m.SessionID) {
+		g.logf("cdp: SEQ attach-decision hide type=%s url=%s waiting=%t target=%s session=%s parent=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID)
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)}, true
 	}
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
+		g.logf("cdp: SEQ attach-decision hold-unresolved type=%s url=%s waiting=%t target=%s session=%s parent=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID)
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
 	}
 	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
+		g.logf("cdp: SEQ attach-decision hold-empty-url type=%s url=%s waiting=%t target=%s session=%s parent=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID)
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, waiting)...), hold: []string{pSession}}, true
 	}
 	return browserVerdict{}, false
@@ -562,6 +580,7 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if t, ok := g.targets[info.TargetID]; ok && info.URL == "" && t.url != "" {
 		info.URL = t.url
 	}
+	g.logf("cdp: SEQ attach type=%s url=%s waiting=%t target=%s session=%s parent=%s", info.Type, attachURLKind(info.URL), p.WaitingForDebugger, info.TargetID, p.SessionID, m.SessionID)
 	g.noteStreamOpenedLocked(info)
 	g.attachParent = m.SessionID
 	var send [][]byte
@@ -574,6 +593,7 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		return v
 	}
 	g.attachParent = ""
+	g.logf("cdp: SEQ attach-decision forward type=%s url=%s waiting=%t target=%s session=%s parent=%s", info.Type, attachURLKind(info.URL), p.WaitingForDebugger, info.TargetID, p.SessionID, m.SessionID)
 	g.noteWorkerShownLocked(info)
 	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
 	if info.Type == "browser" {

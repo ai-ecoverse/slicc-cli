@@ -70,6 +70,11 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	var v browserVerdict
 	delete(g.held, h.id)
+	urlKind := "missing"
+	if t := g.targets[h.target]; t != nil {
+		urlKind = attachURLKind(t.url)
+	}
+	g.logf("cdp: SEQ hold-deliver type=%s url=%s waiting=%t target=%s session=%s parent=%s protected=%t", h.typ, urlKind, h.waiting, h.target, h.id, h.parent, g.targetProtectedLocked(h.target))
 	if g.targetProtectedLocked(h.target) {
 		v.send = append(v.send, g.hideLocked(h)...)
 		return v

@@ -666,6 +666,7 @@ type guardRun struct {
 	inject         string
 	rowTimeout     time.Duration
 	errorPageVault bool
+	dumpAttach     bool
 }
 
 func runGuardVectors(t *testing.T, variant string) {
@@ -738,6 +739,19 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	args = append(args, "--origin", srv.URL, "--origin", seven, "--origin", sevenOopif, "--name", "it-node")
 	env := &linkEnv{t: t, b: chromes[0], origin: srv.URL}
 	env.a = startAttach(t, args...)
+	if run.dumpAttach {
+		t.Cleanup(func() {
+			raw := env.a.stderr.String()
+			var seq []string
+			for _, line := range strings.Split(raw, "\n") {
+				if strings.Contains(line, "cdp: SEQ ") || strings.Contains(line, "holding an auto-attached") || strings.Contains(line, "released an auto-attached") || strings.Contains(line, "detached an auto-attached") || strings.Contains(line, "never got a URL") || strings.Contains(line, "resumed an auto-attached") || strings.Contains(line, "could not resume") {
+					seq = append(seq, line)
+				}
+			}
+			t.Logf("DIAGNOSTIC attach SEQ (%d lines):\n%s", len(seq), strings.Join(seq, "\n"))
+			t.Logf("DIAGNOSTIC attach stderr (%d bytes):\n%s", len(raw), raw)
+		})
+	}
 	env.p = chromes[0].openPage(t, srv.URL+"/index.html")
 	env.waitUp("")
 	var hello struct {
@@ -834,6 +848,43 @@ func TestCDPProtectVectorsIgnoreChromeUITargets(t *testing.T) {
 	}
 }
 
+func TestCDPTabAttachSettleTrace(t *testing.T) {
+	const id = "C3.tab-attach"
+	for _, variant := range []string{"prompt", "lagging"} {
+		t.Run(variant, func(t *testing.T) {
+			sum := runGuard(t, guardRun{variant: variant, slots: 2, only: id, rowTimeout: 45 * time.Second, dumpAttach: true})
+			if len(sum.Results) == 0 {
+				t.Fatalf("no rows for %s", id)
+			}
+			for _, r := range sum.Results {
+				t.Logf("DIAGNOSTIC %s %s %s: control=%s guarded=%s live=%s why=%s errors=%v observed=%s notes=%v", r.ID, r.Target, r.Variant, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed, r.Notes)
+			}
+		})
+	}
+}
+
+func logSettleDiag(t testing.TB, r guardRow) {
+	t.Helper()
+	var skipped []string
+	for _, n := range r.Notes {
+		if strings.Contains(n, "settle:skipped-refused") {
+			skipped = append(skipped, n)
+		}
+	}
+	if len(skipped) > 0 {
+		t.Logf("SETTLEDIAG %s %s %s %s/%s/%s notes=%v", r.ID, r.Target, r.Variant, r.Control, r.Guarded, r.Live, skipped)
+	}
+	why := string(r.Why)
+	if strings.Contains(strings.ToLower(why), "settle") {
+		t.Logf("SETTLEDIAG %s %s %s why=%s", r.ID, r.Target, r.Variant, why)
+	}
+	for _, err := range r.Errors {
+		if strings.Contains(strings.ToLower(err), "settle") {
+			t.Logf("SETTLEDIAG %s %s %s error=%s", r.ID, r.Target, r.Variant, err)
+		}
+	}
+}
+
 func checkGuardSummary(t testing.TB, sum *guardSummary) {
 	t.Helper()
 	if want := guardNPMPackage + "@" + guardSetVersion(t); sum.Set != want {
@@ -846,6 +897,7 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 		t.Errorf("%d rows skipped for want of an unguarded observer", sum.ObserverSkipped)
 	}
 	for _, r := range sum.Results {
+		logSettleDiag(t, r)
 		name := r.ID + " " + r.Target + " " + r.Variant
 		if skip, ok := guardSkips[r.ID]; ok {
 			if r.Control != "skip" || r.Guarded != "skip" || r.Live != "skip" || r.Reason != skip.Reason || r.Target != skip.Target {
