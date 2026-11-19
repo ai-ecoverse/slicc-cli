@@ -1,7 +1,7 @@
 import { WebSocket } from 'ws';
 import puppeteer from 'puppeteer-core';
 
-const [upstream, ordinary, seven, chrome] = process.argv.slice(2);
+const [upstream, ordinary, seven, chrome, mode = 'all'] = process.argv.slice(2);
 const LIMIT = 64 * 1024 * 1024;
 const STEP_MS = 8000;
 const FIRST_MS = 300;
@@ -205,8 +205,9 @@ await step('getBrowserContexts', () => client.call('Target.getBrowserContexts', 
 await step('discover', () => client.call('Target.setDiscoverTargets', { discover: true, filter: ALL }));
 await step('browser auto-attach', () => client.call('Target.setAutoAttach', BROWSER_ATTACH));
 
-const wanted = ['framed', 'nest', 'blank', 'protected'];
+const wanted = mode === 'protected' ? ['protected'] : mode === 'ordinary' ? ['framed', 'nest', 'blank'] : ['framed', 'nest', 'blank', 'protected'];
 const pending = new Map(wanted.map((name) => [name, true]));
+const runPuppeteer = !!chrome && mode !== 'protected';
 const tabs = new Map();
 const tabSessions = new Set();
 const seenAttach = new Set();
@@ -304,7 +305,7 @@ for (const name of pending.keys()) {
   result.pages[name] = { attached: false, error: 'no tab delivered this page under a tab session' };
 }
 
-if (chrome) {
+if (runPuppeteer) {
   const at = Date.now();
   try {
     const browser = await within(CONNECT_MS, () => puppeteer.connect({ browserWSEndpoint: upstream, defaultViewport: null, protocolTimeout: CONNECT_MS }), 'puppeteer.connect');

@@ -193,20 +193,19 @@ func TestExtensionUnclassifiedHideReleasesWhenFrameOrdinaryThenLatchesWhenProtec
 	close(ready)
 	g.navTargets["PAGE"] = &navTarget{target: "PAGE", session: "S", ready: ready, done: true}
 	g.mu.Unlock()
-	injectNamedWorld(g, "S", "http://localhost:7002", "MID", "slicc-ext-probe-forged-unclassified", "unclass-unique", 31)
-	g.mu.Lock()
-	held := g.contextHeldLocked("PAGE", 31)
-	g.mu.Unlock()
-	if !held {
-		if locked, _ := pageLatch(g); !locked {
-			t.Fatal("unclassified MID world was neither held nor latched")
-		}
+	created, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S",
+		"params": map[string]any{"context": map[string]any{
+			"id": 31, "origin": "http://localhost:7002", "name": "slicc-ext-probe-forged-unclassified", "uniqueId": "unclass-unique",
+			"auxData": map[string]any{"isDefault": false, "type": "isolated", "frameId": "MID"},
+		}},
+	})
+	createdVerdict := g.fromBrowser(created)
+	if locked, _ := pageLatch(g); !locked {
+		t.Fatal("unclassified MID world must latch at once")
 	}
-	v := g.fromCommand(&command{id: 50, method: "Page.getFrameTree", session: "S"}, 1, true)
-	if v.forward == nil {
-		t.Fatalf("getFrameTree to classify MID not forwarded: reply=%s", v.reply)
-	}
-	g.fromBrowser(encode(map[string]any{"id": 50, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
+	id := privateTreeID(t, createdVerdict.send)
+	g.fromBrowser(encode(map[string]any{"id": id, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
 		"frame": map[string]any{"id": "PAGE", "url": "http://localhost:7002/nest", "securityOrigin": "http://localhost:7002"},
 		"childFrames": []any{
 			map[string]any{"frame": map[string]any{"id": "MID", "parentId": "PAGE", "url": "http://localhost:7002/inner", "securityOrigin": "http://localhost:7002"}},

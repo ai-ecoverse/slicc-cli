@@ -530,7 +530,7 @@ func (g *guard) shownGoneLocked(target string, id int64, unique string) {
 	g.unshowLocked(target, id)
 }
 
-func (g *guard) contextLatchFrameLocked(target, session string, c execContext, frame string, forceUnclassified, probeMatched bool) string {
+func (g *guard) contextLatchFrameLocked(target, session string, c execContext, frame string, probeMatched bool) string {
 	if frame == "" {
 		return ""
 	}
@@ -543,15 +543,12 @@ func (g *guard) contextLatchFrameLocked(target, session string, c execContext, f
 		return frame
 	case own || extFrame || class == "ordinary" || class == "extension":
 		return ""
-	case class == "unclassified" && !forceUnclassified:
-		return ""
 	default:
 		return frame
 	}
 }
 
-func (g *guard) hideContextLocked(target, session string, c execContext, latchUnclassified ...bool) {
-	forceUnclassified := len(latchUnclassified) > 0 && latchUnclassified[0]
+func (g *guard) hideContextLocked(target, session string, c execContext, _ ...bool) {
 	g.unshowLocked(target, c.ID)
 	probeMatched := g.bindExtensionProbeFromEventLocked(session, c)
 	g.noteExtensionProbeUniqueLocked(c.ID, c.UniqueID)
@@ -563,9 +560,13 @@ func (g *guard) hideContextLocked(target, session string, c execContext, latchUn
 			w.full = true
 		}
 	}
-	protectedFrame := g.contextLatchFrameLocked(target, session, c, frame, forceUnclassified, probeMatched)
+	protectedFrame := g.contextLatchFrameLocked(target, session, c, frame, probeMatched)
+	class := g.frameLatchClassLocked(frame, target)
 	if protectedFrame != "" {
-		g.logf("cdp: latch protectedFrame=%s target=%s session=%s origin=%s name=%s default=%v class=%s probe=%v", protectedFrame, target, session, c.Origin, c.Name, c.AuxData.IsDefault, g.frameLatchClassLocked(frame, target), probeMatched || g.ownExtensionProbeContextLocked(session, c))
+		g.logf("cdp: latch protectedFrame=%s target=%s session=%s origin=%s name=%s default=%v class=%s probe=%v", protectedFrame, target, session, c.Origin, c.Name, c.AuxData.IsDefault, class, probeMatched || g.ownExtensionProbeContextLocked(session, c))
+		if class == "unclassified" {
+			g.contextSettleSend = append(g.contextSettleSend, g.worldEpochLocked(target, session)...)
+		}
 	}
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true

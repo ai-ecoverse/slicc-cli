@@ -125,20 +125,9 @@ func checkBiosPipelineOK(t *testing.T, name string, p preexistingPage, wantChild
 	}
 }
 
-func TestRawCDPFirstCommandsOnPreexistingFramedPages(t *testing.T) {
-	env := setupProtectExtension(t)
-	fixture := preexistingTreeFixture(t)
-	ordinary := strings.Replace(fixture.URL, "127.0.0.1", "localhost", 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-	upstream := stockLinkBridge(t, ctx, env)
-
-	openLoaded(t, env.b, ordinary+"/framed-same?pre=1", `document.readyState === 'complete' && document.getElementById('frame').contentDocument?.getElementById('ibtn') !== null`)
-	openLoaded(t, env.b, ordinary+"/nest?pre=1", `document.readyState === 'complete' && document.getElementById('host').contentDocument.getElementById('nsame').contentDocument?.getElementById('ibtn') !== null`)
-	openLoaded(t, env.b, ordinary+"/framed-seven?pre=1&seven="+env.seven, `document.readyState === 'complete' && document.getElementById('frame') !== null`)
-	_ = env.b.openTarget(t, "about:blank")
-
-	cmd := exec.CommandContext(ctx, requireNode(t), "testdata/preexisting-tree.mjs", upstream, ordinary, env.seven, env.b.endpoint)
+func runPreexistingTreeScript(t *testing.T, ctx context.Context, upstream, ordinary, seven, chrome, mode string) preexistingResult {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, requireNode(t), "testdata/preexisting-tree.mjs", upstream, ordinary, seven, chrome, mode)
 	out, err := cmd.CombinedOutput()
 	var res preexistingResult
 	found := false
@@ -153,8 +142,24 @@ func TestRawCDPFirstCommandsOnPreexistingFramedPages(t *testing.T) {
 		}
 	}
 	if err != nil || !found {
-		t.Fatalf("the raw CDP preexisting-tree script did not finish: %v\n%s", err, out)
+		t.Fatalf("the raw CDP preexisting-tree script (%s) did not finish: %v\n%s", mode, err, out)
 	}
+	return res
+}
+
+func TestRawCDPFirstCommandsOnPreexistingFramedPages(t *testing.T) {
+	env := setupProtectExtension(t)
+	fixture := preexistingTreeFixture(t)
+	ordinary := strings.Replace(fixture.URL, "127.0.0.1", "localhost", 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	upstream := stockLinkBridge(t, ctx, env)
+
+	openLoaded(t, env.b, ordinary+"/framed-same?pre=1", `document.readyState === 'complete' && document.getElementById('frame').contentDocument?.getElementById('ibtn') !== null`)
+	openLoaded(t, env.b, ordinary+"/nest?pre=1", `document.readyState === 'complete' && document.getElementById('host').contentDocument.getElementById('nsame').contentDocument?.getElementById('ibtn') !== null`)
+	_ = env.b.openTarget(t, "about:blank")
+
+	res := runPreexistingTreeScript(t, ctx, upstream, ordinary, env.seven, env.b.endpoint, "ordinary")
 	if res.TabCount < 1 {
 		t.Errorf("bios path needs Target.targetCreated/attachedToTarget tab events after discover+auto-attach with filter [{}]; got tabCount=%d events=%+v", res.TabCount, res.Events)
 	}
@@ -163,7 +168,19 @@ func TestRawCDPFirstCommandsOnPreexistingFramedPages(t *testing.T) {
 	checkBiosPipelineOK(t, "nest about:blank→same-origin (extension content-script worlds)", res.Pages["nest"], true, true)
 	checkBiosPipelineOK(t, "unrelated about:blank", res.Pages["blank"], false, false)
 
-	p := res.Pages["protected"]
+	if res.Puppeteer == nil {
+		t.Fatal("stock Puppeteer connect beside the ordinary preexisting pages did not run")
+	}
+	if !res.Puppeteer.OK || res.Puppeteer.MS > 5000 {
+		t.Errorf("stock Puppeteer connect+pages beside ordinary+extension-world pages: ok=%v after %d ms (%s)", res.Puppeteer.OK, res.Puppeteer.MS, res.Puppeteer.Error)
+	}
+	if res.Puppeteer.OK && (!res.Puppeteer.HasFramed || !res.Puppeteer.HasNest) {
+		t.Errorf("stock Puppeteer pages() missed the preexisting framed pages: %+v", res.Puppeteer.URLs)
+	}
+
+	openLoaded(t, env.b, ordinary+"/framed-seven?pre=1&seven="+env.seven, `document.readyState === 'complete' && document.getElementById('frame') !== null`)
+	prot := runPreexistingTreeScript(t, ctx, upstream, ordinary, env.seven, "", "protected")
+	p := prot.Pages["protected"]
 	if !p.Attached {
 		t.Errorf("protected: page with a seven frame open before connect never attached: %s", p.Error)
 	} else {
@@ -177,16 +194,6 @@ func TestRawCDPFirstCommandsOnPreexistingFramedPages(t *testing.T) {
 		if !tree.OK && !strings.Contains(tree.Error, "seven's origin") && !strings.Contains(tree.Error, "refused") {
 			t.Errorf("protected: unexpected getFrameTree failure: %s", tree.Error)
 		}
-	}
-
-	if res.Puppeteer == nil {
-		t.Fatal("stock Puppeteer connect beside the preexisting pages did not run")
-	}
-	if !res.Puppeteer.OK || res.Puppeteer.MS > 5000 {
-		t.Errorf("stock Puppeteer connect+pages beside the extension-browser fixture: ok=%v after %d ms (%s)", res.Puppeteer.OK, res.Puppeteer.MS, res.Puppeteer.Error)
-	}
-	if res.Puppeteer.OK && (!res.Puppeteer.HasFramed || !res.Puppeteer.HasNest) {
-		t.Errorf("stock Puppeteer pages() missed the preexisting framed pages: %+v", res.Puppeteer.URLs)
 	}
 }
 

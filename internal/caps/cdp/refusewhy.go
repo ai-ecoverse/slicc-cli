@@ -5,13 +5,24 @@ func (g *guard) refuseWhyLocked(c *command, target, frame, why string) string {
 		why = "unspecified"
 	}
 	class := ""
-	probe := ""
+	probe := false
 	if frame != "" {
 		class = g.frameLatchClassLocked(frame, target)
+		if w := g.worlds[target]; w != nil {
+			for id, ctx := range w.contexts {
+				if ctx == nil || ctx.frame != frame {
+					continue
+				}
+				if g.extensionProbeIDs[id] || (ctx.unique != "" && g.extensionProbeUniques[ctx.unique]) {
+					probe = true
+					break
+				}
+			}
+		}
 	} else if target != "" {
 		class = g.framesProtectedWhyLocked(target)
 	}
-	g.logf("cdp: refused %s session=%s target=%s frame=%s why=%s class=%s%s", c.method, c.session, target, frame, why, class, probe)
+	g.logf("cdp: refused %s session=%s target=%s frame=%s why=%s class=%s probe=%v", c.method, c.session, target, frame, why, class, probe)
 	return refusedTarget
 }
 
