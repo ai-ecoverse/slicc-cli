@@ -24,7 +24,7 @@ func stockLinkFixture(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte("<!doctype html>" + body))
 	}
 	mux.HandleFunc("/inner", func(w http.ResponseWriter, r *http.Request) {
-		html(w, `<title>inner</title><style>body{margin:0}</style><button id="ibtn" style="position:fixed;left:0;top:0;width:150px;height:50px" onclick="window.hits+=1">Inner</button><input id="iin" style="position:fixed;left:0;top:60px"><script>window.hits=0</script>`)
+		html(w, `<title>inner</title><style>body{margin:0}</style><button id="ibtn" style="position:fixed;left:0;top:0;width:150px;height:50px" onclick="window.hits+=1">Inner</button><input id="iin" style="position:fixed;left:0;top:60px"><script>window.hits=0;window.loadedAt=performance.timeOrigin+performance.now();window.events=[];for(const t of ["mousemove","mousedown","mouseup","click","keydown","beforeinput"])addEventListener(t,(e)=>{if(window.events.length<200)window.events.push(t+" "+(e.clientX|0)+","+(e.clientY|0)+" "+(e.target.id||e.target.nodeName))},true)</script>`)
 	})
 	mux.HandleFunc("/framed-same", func(w http.ResponseWriter, r *http.Request) {
 		html(w, `<title>framed</title><iframe id="frame" src="/inner?k=framed&n=`+r.URL.Query().Get("n")+`"></iframe>`)
@@ -191,12 +191,26 @@ type stockLinkInput struct {
 }
 
 type stockLinkOrdinary struct {
-	Found     bool   `json:"found"`
-	Click     string `json:"click"`
-	Type      string `json:"type"`
-	Hits      *int   `json:"hits"`
-	Value     string `json:"value"`
-	ReadError string `json:"readError"`
+	Found    bool            `json:"found"`
+	Click    string          `json:"click"`
+	Type     string          `json:"type"`
+	Hits     *int            `json:"hits"`
+	Value    string          `json:"value"`
+	Events   []string        `json:"events"`
+	Reloaded bool            `json:"reloaded"`
+	Point    json.RawMessage `json:"point"`
+	PointHit json.RawMessage `json:"pointHit"`
+	Frame    json.RawMessage `json:"frame"`
+}
+
+type stockLinkControl struct {
+	Hits     int             `json:"hits"`
+	Typed    bool            `json:"typed"`
+	Events   []string        `json:"events"`
+	Reloaded bool            `json:"reloaded"`
+	Point    json.RawMessage `json:"point"`
+	PointHit json.RawMessage `json:"pointHit"`
+	Error    string          `json:"error"`
 }
 type stockLinkResult struct {
 	Connect   stockLinkConnect `json:"connect"`
@@ -209,12 +223,8 @@ type stockLinkResult struct {
 		ExtensionFocused bool                         `json:"extensionFocused"`
 		Inputs           map[string]stockLinkInput    `json:"inputs"`
 		Ordinary         map[string]stockLinkOrdinary `json:"ordinary"`
-		OrdinaryControl  map[string]struct {
-			Hits  int    `json:"hits"`
-			Typed bool   `json:"typed"`
-			Error string `json:"error"`
-		} `json:"ordinaryControl"`
-		Control struct {
+		OrdinaryControl  map[string]stockLinkControl  `json:"ordinaryControl"`
+		Control          struct {
 			Mouse int    `json:"mouse"`
 			Text  bool   `json:"text"`
 			Error string `json:"error"`
@@ -360,17 +370,17 @@ func TestStockPuppeteerInputThroughLinkStaysOutOfNestedExtensionFrame(t *testing
 	}
 	for _, k := range []string{"same", "cross", "nested"} {
 		o := n.Ordinary[k]
+		c, ran := n.OrdinaryControl[k]
+		if !ran || c.Error != "" || c.Hits != 1 || !c.Typed || c.Reloaded {
+			t.Errorf("control: unguarded click and typing into the ordinary %s frame did not land, so the guarded row proves nothing: hits=%d typed=%v reloaded=%v error=%q point=%s hit=%s events=%q", k, c.Hits, c.Typed, c.Reloaded, c.Error, c.Point, c.PointHit, c.Events)
+			continue
+		}
 		hits := "missing"
 		if o.Hits != nil {
 			hits = fmt.Sprint(*o.Hits)
 		}
-		if !o.Found || o.Click != "ok" || o.Type != "ok" || o.Hits == nil || *o.Hits != 1 || o.Value != "ok" {
-			t.Errorf("guarded Puppeteer input into the ordinary %s frame did not land: want found, click ok, type ok, 1 click hit and value \"ok\"; got found=%v click=%q type=%q hits=%s value=%q readError=%q (unguarded control: %+v)", k, o.Found, o.Click, o.Type, hits, o.Value, o.ReadError, n.OrdinaryControl[k])
-		}
-	}
-	for _, k := range []string{"same", "nested"} {
-		if c, ok := n.OrdinaryControl[k]; !ok || c.Error != "" || c.Hits != 1 || !c.Typed {
-			t.Errorf("control: unguarded input into the ordinary %s frame did not land, so the guarded row proves nothing: %+v", k, c)
+		if !o.Found || o.Click != "ok" || o.Type != "ok" || o.Hits == nil || *o.Hits != 1 || o.Value != "ok" || o.Reloaded {
+			t.Errorf("guarded Puppeteer input into the ordinary %s frame did not land where the unguarded control did: want click ok, type ok, 1 click hit and value \"ok\"; got found=%v click=%q type=%q hits=%s value=%q reloaded=%v; guarded point=%s hit=%s frame=%s events=%q; control point=%s hit=%s events=%q", k, o.Found, o.Click, o.Type, hits, o.Value, o.Reloaded, o.Point, o.PointHit, o.Frame, o.Events, c.Point, c.PointHit, c.Events)
 		}
 	}
 	if n.Control.Error != "" || n.Control.Mouse < 1 || !n.Control.Text {
