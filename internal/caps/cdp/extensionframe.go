@@ -388,7 +388,6 @@ func (g *guard) pendingExtensionProbeExpiredLocked(key extensionWorldKey, p *ext
 	if p == nil || p.at.IsZero() || time.Since(p.at) < holdTimeout() {
 		return false
 	}
-	delete(g.extensionProbeWorlds, p.name)
 	delete(g.extensionProbePending, key)
 	return true
 }
@@ -442,7 +441,8 @@ func (g *guard) pendingExtensionProbeMatchLocked(session string, c execContext) 
 }
 
 func (g *guard) bindExtensionProbeFromEventLocked(session string, c execContext) bool {
-	if g.pendingExtensionProbeMatchLocked(session, c) == nil {
+	own := g.pendingExtensionProbeMatchLocked(session, c) != nil || (c.Name != "" && !c.AuxData.IsDefault && g.extensionProbeWorlds[c.Name])
+	if !own {
 		return false
 	}
 	if g.extensionProbeIDs == nil {
@@ -467,14 +467,16 @@ func (g *guard) ownExtensionProbeContextLocked(session string, c execContext) bo
 	if c.UniqueID != "" && g.extensionProbeUniques[c.UniqueID] {
 		return true
 	}
-	return g.pendingExtensionProbeMatchLocked(session, c) != nil
+	if g.pendingExtensionProbeMatchLocked(session, c) != nil {
+		return true
+	}
+	return c.Name != "" && !c.AuxData.IsDefault && g.extensionProbeWorlds[c.Name]
 }
 
 func (g *guard) forgetExtensionProbeWorldLocked(w *extensionProbeWorld) {
 	if w == nil {
 		return
 	}
-	delete(g.extensionProbeWorlds, w.name)
 	if w.context != 0 {
 		delete(g.extensionProbeIDs, w.context)
 	}
@@ -500,7 +502,6 @@ func (g *guard) forgetExtensionProbeWorldSessionLocked(session string) {
 		if key.session != session && p.session != session {
 			continue
 		}
-		delete(g.extensionProbeWorlds, p.name)
 		waiters := p.waiters
 		delete(g.extensionProbePending, key)
 		for _, w := range waiters {

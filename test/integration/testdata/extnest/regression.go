@@ -196,21 +196,40 @@ func TestExtensionUnclassifiedHideReleasesWhenFrameOrdinaryThenLatchesWhenProtec
 	created, _ := json.Marshal(map[string]any{
 		"method": "Runtime.executionContextCreated", "sessionId": "S",
 		"params": map[string]any{"context": map[string]any{
-			"id": 31, "origin": "http://localhost:7002", "name": "slicc-ext-probe-forged-unclassified", "uniqueId": "unclass-unique",
-			"auxData": map[string]any{"isDefault": false, "type": "isolated", "frameId": "MID"},
+			"id": 31, "origin": "http://localhost:7002", "name": "", "uniqueId": "unclass-default",
+			"auxData": map[string]any{"isDefault": true, "type": "default", "frameId": "MID"},
 		}},
 	})
 	createdVerdict := g.fromBrowser(created)
 	if locked, _ := pageLatch(g); !locked {
-		t.Fatal("unclassified MID world must latch at once")
+		g.mu.Lock()
+		held := g.contextHeldLocked("PAGE", 31)
+		g.mu.Unlock()
+		if !held {
+			t.Fatal("unclassified MID default world must be held or latched")
+		}
 	}
-	id := privateTreeID(t, createdVerdict.send)
-	g.fromBrowser(encode(map[string]any{"id": id, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
-		"frame": map[string]any{"id": "PAGE", "url": "http://localhost:7002/nest", "securityOrigin": "http://localhost:7002"},
-		"childFrames": []any{
-			map[string]any{"frame": map[string]any{"id": "MID", "parentId": "PAGE", "url": "http://localhost:7002/inner", "securityOrigin": "http://localhost:7002"}},
-		},
-	}}}))
+	if locked, _ := pageLatch(g); locked {
+		id := privateTreeID(t, createdVerdict.send)
+		g.fromBrowser(encode(map[string]any{"id": id, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
+			"frame": map[string]any{"id": "PAGE", "url": "http://localhost:7002/nest", "securityOrigin": "http://localhost:7002"},
+			"childFrames": []any{
+				map[string]any{"frame": map[string]any{"id": "MID", "parentId": "PAGE", "url": "http://localhost:7002/inner", "securityOrigin": "http://localhost:7002"}},
+			},
+		}}}))
+	} else {
+		g.fromBrowser(encode(map[string]any{"id": 50, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
+			"frame": map[string]any{"id": "PAGE", "url": "http://localhost:7002/nest", "securityOrigin": "http://localhost:7002"},
+			"childFrames": []any{
+				map[string]any{"frame": map[string]any{"id": "MID", "parentId": "PAGE", "url": "http://localhost:7002/inner", "securityOrigin": "http://localhost:7002"}},
+			},
+		}}}))
+		g.mu.Lock()
+		g.queueContextSettleLocked()
+		_ = g.takeContextSettlePageLocked()
+		_ = g.takeContextSettleSendLocked()
+		g.mu.Unlock()
+	}
 	if locked, pf := pageLatch(g); locked {
 		t.Fatalf("latch stayed after MID classified ordinary: protectedFrame=%q", pf)
 	}
@@ -296,7 +315,7 @@ func TestExtensionOwnProbeEventOnChildSessionMatchesPending(t *testing.T) {
 	}
 }
 
-func TestExtensionOrdinaryIframeTargetReleasesUnclassifiedLatch(t *testing.T) {
+func TestExtensionOrdinaryIframeTargetDoesNotPageLockWhileHeld(t *testing.T) {
 	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001"}), t.Logf)
 	page := map[string]any{"targetId": "PAGE", "type": "page", "url": "http://page.outer.test/", "attached": true}
 	mid := map[string]any{"targetId": "MID", "type": "iframe", "url": "http://other.guard.test/middle", "attached": true, "parentFrameId": "PAGE"}
@@ -323,28 +342,24 @@ func TestExtensionOrdinaryIframeTargetReleasesUnclassifiedLatch(t *testing.T) {
 	_ = g.fromBrowser(created)
 	g.mu.Lock()
 	locked := g.framesProtectedLocked("MID")
-	ordinary := false
-	if tmid := g.targets["MID"]; tmid != nil {
-		ordinary = g.iframeTargetClassifiedOrdinaryLocked(tmid)
-	}
+	held := g.contextHeldLocked("MID", 3)
 	g.mu.Unlock()
-	if !locked {
-		t.Fatal("unclassified child of an ancestry-unknown iframe target must latch")
+	if locked {
+		t.Fatal("held default on ancestry-unknown ordinary OOPIF must not page-lock via protectedFrame")
 	}
-	if ordinary {
-		t.Fatal("iframe target must still be ancestry-unknown before parent is noted")
+	if !held {
+		t.Fatal("default on ancestry-unknown child frame must be held until parent chain settles")
 	}
 	g.mu.Lock()
 	_, _ = g.noteFrameParentLocked("MID", "PAGE")
-	g.releaseOrdinaryIframeTargetLatchesLocked(g.targets["MID"])
+	g.queueContextSettleLocked()
+	_ = g.takeContextSettlePageLocked()
+	_ = g.takeContextSettleSendLocked()
 	locked = g.framesProtectedLocked("MID")
-	class := ""
-	if tmid := g.targets["MID"]; tmid != nil {
-		class = g.frameLatchClassLocked("CHILD", "MID")
-	}
+	class := g.frameLatchClassLocked("CHILD", "MID")
 	g.mu.Unlock()
 	if locked {
-		t.Fatal("ordinary iframe target parent-chain must release the unclassified latch")
+		t.Fatal("ordinary iframe target must stay unlocked after parent chain settles")
 	}
 	if class != "ordinary" {
 		t.Fatalf("child under ordinary iframe target must classify ordinary, got %q", class)
@@ -362,10 +377,7 @@ func TestExtensionCopiedProbeTokenAfterRecordGoneIsNotOwn(t *testing.T) {
 	if g.extensionProbePending != nil {
 		delete(g.extensionProbePending, extensionWorldKey{"S", "HOST"})
 	}
-	if g.extensionProbeWorlds == nil {
-		g.extensionProbeWorlds = map[string]bool{}
-	}
-	g.extensionProbeWorlds[token] = true
+	delete(g.extensionProbeWorlds, token)
 	_ = g.noteChildFrameLocked("HOST", "chrome-extension://sevenextid/panel.html")
 	g.mu.Unlock()
 	injectNamedWorld(g, "S", "http://localhost:7002", "HOST", token, "copied-token-unique", 51)
@@ -374,7 +386,7 @@ func TestExtensionCopiedProbeTokenAfterRecordGoneIsNotOwn(t *testing.T) {
 	locked := g.framesProtectedLocked("PAGE")
 	g.mu.Unlock()
 	if own {
-		t.Fatal("a content-script world copying a used probe token must not match a gone pending/recorded probe")
+		t.Fatal("a content-script world copying a revoked probe token must not match as own")
 	}
 	if locked {
 		t.Fatalf("a forged probe-named world in a chrome-extension frame must not latch the page after the record is gone")
@@ -439,7 +451,7 @@ func privateTreeID(t *testing.T, send [][]byte) int64 {
 	return 0
 }
 
-func TestExtensionForeignWorldOnUnclassifiedReleasesAfterPrivateTree(t *testing.T) {
+func TestExtensionForeignWorldOnUnclassifiedDoesNotLatchPage(t *testing.T) {
 	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001"}), t.Logf)
 	page := map[string]any{"targetId": "PAGE", "type": "page", "url": "http://localhost:7002/nest", "attached": true}
 	g.fromBrowser(encode(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": page}}))
@@ -449,48 +461,39 @@ func TestExtensionForeignWorldOnUnclassifiedReleasesAfterPrivateTree(t *testing.
 	close(ready)
 	g.navTargets["PAGE"] = &navTarget{target: "PAGE", session: "S", ready: ready, done: true}
 	g.mu.Unlock()
-	created, _ := json.Marshal(map[string]any{
-		"method": "Runtime.executionContextCreated", "sessionId": "S",
-		"params": map[string]any{"context": map[string]any{
-			"id": 71, "origin": "http://localhost:7002", "name": "slicc-ext-probe-forged-foreign-unclass", "uniqueId": "foreign-unclass",
-			"auxData": map[string]any{"isDefault": false, "type": "isolated", "frameId": "MID"},
-		}},
-	})
-	createdVerdict := g.fromBrowser(created)
-	if locked, pf := pageLatch(g); !locked {
-		t.Fatalf("foreign world on an unclassified ordinary child must latch at once: protectedFrame=%q held=%v send=%q", pf, func() bool {
-			g.mu.Lock()
-			defer g.mu.Unlock()
-			return g.contextHeldLocked("PAGE", 71)
-		}(), createdVerdict.send)
-	}
-	id := privateTreeID(t, createdVerdict.send)
-	clientMsgs := append([][]byte{}, createdVerdict.page...)
-	if len(createdVerdict.forward) > 0 {
-		clientMsgs = append(clientMsgs, createdVerdict.forward)
-	}
-	for _, raw := range clientMsgs {
-		var m struct {
-			ID     *int64 `json:"id"`
-			Method string `json:"method"`
-			Result any    `json:"result"`
-		}
-		if json.Unmarshal(raw, &m) == nil && m.ID != nil && *m.ID == id {
-			t.Fatalf("private Page.getFrameTree must not reach the client: %s", raw)
-		}
-	}
-	g.fromBrowser(encode(map[string]any{"id": id, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
-		"frame": map[string]any{"id": "PAGE", "url": "http://localhost:7002/nest", "securityOrigin": "http://localhost:7002"},
-		"childFrames": []any{
-			map[string]any{"frame": map[string]any{"id": "MID", "parentId": "PAGE", "url": "http://localhost:7002/inner", "securityOrigin": "http://localhost:7002"}},
-		},
-	}}}))
+	injectNamedWorld(g, "S", "http://localhost:7002", "MID", "slicc-ext-probe-forged-foreign-unclass", "foreign-unclass", 71)
 	if locked, pf := pageLatch(g); locked {
-		t.Fatalf("private tree classifying MID ordinary must release the latch: protectedFrame=%q", pf)
+		t.Fatalf("non-default foreign world on unclassified must not page-lock: protectedFrame=%q", pf)
 	}
 	ok := g.fromCommand(&command{id: 2, method: "Page.getFrameTree", session: "S"}, 1, true)
 	if ok.reply != nil || ok.forward == nil {
-		t.Fatalf("Page.getFrameTree after private-tree release: forward=%v reply=%s", ok.forward != nil, ok.reply)
+		t.Fatalf("Page.getFrameTree after foreign non-default on unclassified: forward=%v reply=%s", ok.forward != nil, ok.reply)
+	}
+}
+
+func TestExtensionOwnProbeTokenSurvivesPendingGone(t *testing.T) {
+	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001", "chrome-extension://sevenextid"}), t.Logf)
+	ordinaryNestPage(t, g)
+	const token = "slicc-ext-probe-reconnect-token"
+	g.mu.Lock()
+	if g.extensionProbeWorlds == nil {
+		g.extensionProbeWorlds = map[string]bool{}
+	}
+	g.extensionProbeWorlds[token] = true
+	if g.extensionProbePending != nil {
+		delete(g.extensionProbePending, extensionWorldKey{"S", "HOST"})
+	}
+	g.sessions["S-reconnect"] = &session{id: "S-reconnect", target: "PAGE"}
+	g.mu.Unlock()
+	injectNamedWorld(g, "S-reconnect", "http://localhost:7002", "HOST", token, "reconnect-unique", 77)
+	if locked, pf := pageLatch(g); locked {
+		t.Fatalf("own unguessable probe token must match after pending is gone: protectedFrame=%q", pf)
+	}
+	g.mu.Lock()
+	own := g.extensionProbeIDs[77] || g.extensionProbeUniques["reconnect-unique"]
+	g.mu.Unlock()
+	if !own {
+		t.Fatal("durable probe token must bind as own after reconnect with pending=none")
 	}
 }
 

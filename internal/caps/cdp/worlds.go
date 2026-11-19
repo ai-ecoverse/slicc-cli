@@ -438,7 +438,26 @@ func (g *guard) noteFrameTreeResultLocked(target string, raw json.RawMessage) {
 	}
 	budget := maxFrameTreeNodes
 	g.walkFrameTreeLocked(result.FrameTree, "", 0, &budget)
+	g.releaseSettledFrameLatchesLocked(target)
 	g.queueContextSettleLocked()
+}
+
+func (g *guard) releaseSettledFrameLatchesLocked(page string) {
+	w := g.worlds[page]
+	if w == nil {
+		return
+	}
+	for _, c := range w.contexts {
+		if c == nil || c.protectedFrame == "" {
+			continue
+		}
+		class := g.frameLatchClassLocked(c.protectedFrame, page)
+		if class != "ordinary" && class != "extension" {
+			continue
+		}
+		g.logf("cdp: release protectedFrame=%s target=%s class=%s reason=tree-settle", c.protectedFrame, page, class)
+		c.protectedFrame = ""
+	}
 }
 
 const maxFrameTreeNodes = 4096
@@ -565,8 +584,12 @@ func (g *guard) contextLatchFrameLocked(target, session string, c execContext, f
 		return frame
 	case own || extFrame || class == "ordinary" || class == "extension":
 		return ""
-	default:
+	case !c.AuxData.IsDefault && class == "unclassified":
+		return ""
+	case c.AuxData.IsDefault || underProtected || (g.o.Loaded(c.Origin) && !extFrame):
 		return frame
+	default:
+		return ""
 	}
 }
 

@@ -748,9 +748,7 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) browserVerdict {
 		return browserVerdict{send: append(append(decided, g.cutCastsLocked(t.id)...), settleSend...), page: settle}
 	case p.Context.AuxData.FrameID != "" && p.Context.AuxData.FrameID != t.id && !g.frameContextAncestrySettledLocked(p.Context.AuxData.FrameID, t.id):
 		g.holdContextLocked(t.id, m.SessionID, p.Context, data)
-		g.hideContextLocked(t.id, m.SessionID, p.Context)
-		takeSettle()
-		return browserVerdict{send: append(append(decided, g.cutCastsLocked(t.id)...), settleSend...), page: settle}
+		return browserVerdict{send: append(decided, settleSend...), page: settle}
 	case g.worldContextLocked(t.id, m.SessionID, p.Context):
 		takeSettle()
 		return browserVerdict{send: append(append(decided, g.cutCastsLocked(t.id)...), settleSend...), page: settle}
