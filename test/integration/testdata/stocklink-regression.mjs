@@ -406,6 +406,11 @@ async function nestedFlow(browser) {
     if (k === 'cross') return observerEval(crossSession, `({ hits: window.hits, value: document.getElementById('iin').value, events: window.events.slice(), loadedAt: window.loadedAt })`);
     return observerEval(top, `(() => { const w = ${frameElements[k]}.contentWindow; return { hits: w.hits, value: w.document.getElementById('iin').value, events: w.events.slice(), loadedAt: w.loadedAt }; })()`);
   };
+  const clearFrame = (k) => {
+    if (k === 'cross' && !crossSession) return Promise.reject(new Error('the observer does not list the cross frame'));
+    if (k === 'cross') return observerEval(crossSession, `(() => { document.getElementById('iin').value = ''; document.activeElement?.blur(); return true; })()`);
+    return observerEval(top, `(() => { const d = ${frameElements[k]}.contentDocument; d.getElementById('iin').value = ''; d.activeElement?.blur(); return true; })()`);
+  };
   const frameOrigin = (k) =>
     observerEval(
       top,
@@ -437,20 +442,36 @@ async function nestedFlow(browser) {
     );
   const delta = (before, after) => ({ hits: after.hits - before.hits, typed: after.value !== before.value, value: after.value, events: after.events.slice(before.events.length), reloaded: after.loadedAt !== before.loadedAt });
   nested.ordinaryControl = {};
-  for (const k of CHILDREN.nest) {
-    const f = childFrame(page, k);
+  const press = async (x, y) => {
+    await observer.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 }, top);
+    await observer.call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 }, top);
+    await observer.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 }, top);
+  };
+  await observer.call('Page.bringToFront', {}, top);
+  await observerEval(top, `(() => { window.topEvents = []; for (const t of ['mousedown', 'mouseup', 'click']) addEventListener(t, (e) => window.topEvents.push(t + ' ' + (e.clientX | 0) + ',' + (e.clientY | 0) + ' ' + (e.target.id || e.target.nodeName)), true); return true; })()`);
+  await press(700, 20);
+  await pause(100);
+  nested.warmup = await observerEval(top, 'window.topEvents.slice()');
+  for (const [k, frameKey] of [
+    ['same', 'same'],
+    ['cross', 'cross'],
+    ['nested', 'nested'],
+    ['again', 'same'],
+  ]) {
+    const f = childFrame(page, frameKey);
     if (!f) {
       nested.ordinary[k] = { found: false };
       continue;
     }
     try {
-      const origin = await frameOrigin(k);
+      const origin = await frameOrigin(frameKey);
       const button = await step(`ordinary ${k} clickable point`, async () => (await f.$('#ibtn')).clickablePoint());
-      const before = await readFrame(k);
+      await clearFrame(frameKey);
+      const before = await readFrame(frameKey);
       const clicked = await step(`ordinary ${k} frame.click`, () => f.click('#ibtn'));
       const typed = await step(`ordinary ${k} frame.type`, () => f.type('#iin', 'ok'));
       await pause(200);
-      const after = await readFrame(k);
+      const after = await readFrame(frameKey);
       const d = delta(before, after);
       nested.ordinary[k] = {
         found: true,
@@ -466,17 +487,12 @@ async function nestedFlow(browser) {
       };
       const control = await step(`control: unguarded input into the ordinary ${k} frame`, async () => {
         const at = { x: origin.x + 75, y: origin.y + 25, ix: origin.x + 20, iy: origin.y + 70 };
-        const cb = await readFrame(k);
-        for (const [x, y] of [
-          [at.x, at.y],
-          [at.ix, at.iy],
-        ]) {
-          await observer.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }, top);
-          for (const type of ['mousePressed', 'mouseReleased']) await observer.call('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, top);
-        }
+        const cb = await readFrame(frameKey);
+        await press(at.x, at.y);
+        await press(at.ix, at.iy);
         await observer.call('Input.insertText', { text: 'c' }, top);
         await pause(200);
-        const ca = await readFrame(k);
+        const ca = await readFrame(frameKey);
         return { ...delta(cb, ca), point: at, pointHit: await hitTest(at.x, at.y) };
       });
       nested.ordinaryControl[k] = control.ok ? control.value : { error: scrub(control.error) };

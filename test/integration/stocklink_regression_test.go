@@ -224,6 +224,7 @@ type stockLinkResult struct {
 		Inputs           map[string]stockLinkInput    `json:"inputs"`
 		Ordinary         map[string]stockLinkOrdinary `json:"ordinary"`
 		OrdinaryControl  map[string]stockLinkControl  `json:"ordinaryControl"`
+		Warmup           []string                     `json:"warmup"`
 		Control          struct {
 			Mouse int    `json:"mouse"`
 			Text  bool   `json:"text"`
@@ -368,11 +369,11 @@ func TestStockPuppeteerInputThroughLinkStaysOutOfNestedExtensionFrame(t *testing
 	if n.Goto != "ok" || !n.FramesSettled || n.Embedded != true {
 		t.Fatalf("the nested-frame page: goto=%s, ordinary frames reached the client=%v, extension frame embedded=%v", n.Goto, n.FramesSettled, n.Embedded)
 	}
-	for _, k := range []string{"same", "cross", "nested"} {
+	for _, k := range []string{"same", "cross", "nested", "again"} {
 		o := n.Ordinary[k]
 		c, ran := n.OrdinaryControl[k]
 		if !ran || c.Error != "" || c.Hits != 1 || !c.Typed || c.Reloaded {
-			t.Errorf("control: unguarded click and typing into the ordinary %s frame did not land, so the guarded row proves nothing: hits=%d typed=%v reloaded=%v error=%q point=%s hit=%s events=%q", k, c.Hits, c.Typed, c.Reloaded, c.Error, c.Point, c.PointHit, c.Events)
+			t.Errorf("control: unguarded click and typing into the ordinary %s frame did not land, so the guarded row proves nothing: hits=%d typed=%v reloaded=%v error=%q point=%s hit=%s events=%q (warm-up click on the top page saw %q)", k, c.Hits, c.Typed, c.Reloaded, c.Error, c.Point, c.PointHit, c.Events, n.Warmup)
 			continue
 		}
 		hits := "missing"
