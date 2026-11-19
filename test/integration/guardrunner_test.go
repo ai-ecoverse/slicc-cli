@@ -670,8 +670,25 @@ type guardRun struct {
 
 func runGuardVectors(t *testing.T, variant string) {
 	sum := runGuard(t, guardRun{variant: variant, slots: guardSlots(), rowTimeout: guardRowTimeout})
+	if path, err := writeGuardReport(filepath.Join("..", "..", "artifacts", "guard"), variant, sum); err != nil {
+		t.Logf("the guard report wasn't written: %v", err)
+	} else {
+		t.Logf("guard report: %s", path)
+	}
 	checkGuardSummary(t, sum)
 	t.Logf("%s %s: counts=%s", sum.Set, variant, sum.Counts)
+}
+
+func writeGuardReport(dir, variant string, sum *guardSummary) (string, error) {
+	b, err := json.MarshalIndent(sum, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "guard-report-"+variant+".json")
+	return path, os.WriteFile(path, append(b, '\n'), 0o644)
 }
 
 func runGuard(t *testing.T, run guardRun) *guardSummary {
