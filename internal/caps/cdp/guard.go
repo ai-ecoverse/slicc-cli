@@ -667,9 +667,6 @@ func (g *guard) forgetAncestryDisputedLocked(id string) {
 			delete(g.ancestryDisputedUnder, frame)
 		}
 	}
-	if g.ancestryDisputedFull && len(g.ancestryDisputed) < maxAncestryDisputed {
-		g.ancestryDisputedFull = false
-	}
 }
 
 func (g *guard) forgetFrameParentLocked(id string) {
