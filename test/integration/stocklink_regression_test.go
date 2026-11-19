@@ -224,8 +224,14 @@ type stockLinkResult struct {
 		Inputs           map[string]stockLinkInput    `json:"inputs"`
 		Ordinary         map[string]stockLinkOrdinary `json:"ordinary"`
 		OrdinaryControl  map[string]stockLinkControl  `json:"ordinaryControl"`
-		Warmup           []string                     `json:"warmup"`
-		Control          struct {
+		Warmup           struct {
+			Tries  int      `json:"tries"`
+			Landed bool     `json:"landed"`
+			Events []string `json:"events"`
+		} `json:"warmup"`
+		Chrome  string `json:"chrome"`
+		Error   string `json:"error"`
+		Control struct {
 			Mouse int    `json:"mouse"`
 			Text  bool   `json:"text"`
 			Error string `json:"error"`
@@ -366,6 +372,10 @@ func TestStockPuppeteerInputThroughLinkStaysOutOfNestedExtensionFrame(t *testing
 	if n == nil {
 		t.Fatal("the nested-frame flow did not run")
 	}
+	t.Logf("nested-frame row ran on %s; warm-up landed=%v after %d tries: %q", n.Chrome, n.Warmup.Landed, n.Warmup.Tries, n.Warmup.Events)
+	if n.Error != "" {
+		t.Fatalf("the nested-frame flow stopped: %s (chrome %s; warm-up tries=%d events=%q)", n.Error, n.Chrome, n.Warmup.Tries, n.Warmup.Events)
+	}
 	if n.Goto != "ok" || !n.FramesSettled || n.Embedded != true {
 		t.Fatalf("the nested-frame page: goto=%s, ordinary frames reached the client=%v, extension frame embedded=%v", n.Goto, n.FramesSettled, n.Embedded)
 	}
@@ -373,7 +383,7 @@ func TestStockPuppeteerInputThroughLinkStaysOutOfNestedExtensionFrame(t *testing
 		o := n.Ordinary[k]
 		c, ran := n.OrdinaryControl[k]
 		if !ran || c.Error != "" || c.Hits != 1 || !c.Typed || c.Reloaded {
-			t.Errorf("control: unguarded click and typing into the ordinary %s frame did not land, so the guarded row proves nothing: hits=%d typed=%v reloaded=%v error=%q point=%s hit=%s events=%q (warm-up click on the top page saw %q)", k, c.Hits, c.Typed, c.Reloaded, c.Error, c.Point, c.PointHit, c.Events, n.Warmup)
+			t.Errorf("control: unguarded click and typing into the ordinary %s frame did not land, so the guarded row proves nothing: hits=%d typed=%v reloaded=%v error=%q point=%s hit=%s events=%q (chrome %s; warm-up landed=%v after %d tries: %q)", k, c.Hits, c.Typed, c.Reloaded, c.Error, c.Point, c.PointHit, c.Events, n.Chrome, n.Warmup.Landed, n.Warmup.Tries, n.Warmup.Events)
 			continue
 		}
 		hits := "missing"

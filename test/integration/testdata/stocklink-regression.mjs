@@ -447,11 +447,24 @@ async function nestedFlow(browser) {
     await observer.call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 }, top);
     await observer.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 }, top);
   };
+  nested.chrome = version.Browser;
   await observer.call('Page.bringToFront', {}, top);
-  await observerEval(top, `(() => { window.topEvents = []; for (const t of ['mousedown', 'mouseup', 'click']) addEventListener(t, (e) => window.topEvents.push(t + ' ' + (e.clientX | 0) + ',' + (e.clientY | 0) + ' ' + (e.target.id || e.target.nodeName)), true); return true; })()`);
-  await press(700, 20);
-  await pause(100);
-  nested.warmup = await observerEval(top, 'window.topEvents.slice()');
+  await observerEval(top, 'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))');
+  await observerEval(top, `(() => { window.topEvents = []; for (const t of ['mousemove', 'mousedown', 'mouseup', 'click']) addEventListener(t, (e) => window.topEvents.push(t + ' ' + (e.clientX | 0) + ',' + (e.clientY | 0) + ' ' + (e.target.id || e.target.nodeName)), true); return true; })()`);
+  const warmup = { tries: 0, landed: false, events: [] };
+  nested.warmup = warmup;
+  while (warmup.tries < 15 && !warmup.landed) {
+    warmup.tries++;
+    await press(700, 20);
+    await pause(150);
+    warmup.events = await observerEval(top, 'window.topEvents.slice()');
+    warmup.landed = warmup.events.some((e) => e.startsWith('mousedown ')) && warmup.events.some((e) => e.startsWith('mouseup '));
+  }
+  await observerEval(top, '(() => { window.topEvents.length = 0; return true; })()');
+  if (!warmup.landed) {
+    nested.error = 'the warm-up press on the nest page never produced mousedown and mouseup';
+    return;
+  }
   for (const [k, frameKey] of [
     ['same', 'same'],
     ['cross', 'cross'],
