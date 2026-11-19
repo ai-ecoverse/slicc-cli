@@ -557,23 +557,196 @@ func TestExtensionDelayedDefaultProtectedChildCommandsRefused(t *testing.T) {
 	}
 }
 
+func frameContentEvents(text string) []map[string]any {
+	return []map[string]any{
+		{"method": "DOM.setChildNodes", "sessionId": "S", "params": map[string]any{"parentId": 3, "nodes": []any{map[string]any{"nodeId": 5, "backendNodeId": 5, "nodeType": 3, "nodeName": "#text", "nodeValue": text}}}},
+		{"method": "DOM.characterDataModified", "sessionId": "S", "params": map[string]any{"nodeId": 4, "characterData": text}},
+		{"method": "DOM.childNodeInserted", "sessionId": "S", "params": map[string]any{"parentNodeId": 3, "previousNodeId": 0, "node": map[string]any{"nodeId": 6, "backendNodeId": 6, "nodeType": 3, "nodeName": "#text", "nodeValue": text}}},
+		{"method": "DOM.documentUpdated", "sessionId": "S", "params": map[string]any{}},
+		{"method": "Accessibility.nodesUpdated", "sessionId": "S", "params": map[string]any{"nodes": []any{map[string]any{"nodeId": "1", "name": map[string]any{"value": text}, "value": map[string]any{"value": text}}}}},
+		{"method": "Accessibility.loadComplete", "sessionId": "S", "params": map[string]any{"root": map[string]any{"nodeId": "1", "name": map[string]any{"value": text}, "value": map[string]any{"value": text}}}},
+	}
+}
+
+func assertFrameContentEventsHidden(t *testing.T, g *guard, text, why string) {
+	t.Helper()
+	for _, ev := range frameContentEvents(text) {
+		v := g.fromBrowser(encode(ev))
+		method, _ := ev["method"].(string)
+		if method == "DOM.documentUpdated" {
+			if v.forward != nil {
+				t.Errorf("%s: %s must be dropped while a latch holds", why, method)
+			}
+			continue
+		}
+		if clientSees(v, text) {
+			t.Errorf("%s: %s reached the client", why, method)
+		}
+		if v.forward != nil {
+			t.Errorf("%s: %s must be dropped, not sanitized: forward=%s", why, method, v.forward)
+		}
+	}
+}
+
+func assertFrameContentEventsFlow(t *testing.T, g *guard, text, why string) {
+	t.Helper()
+	for _, ev := range frameContentEvents(text) {
+		v := g.fromBrowser(encode(ev))
+		method, _ := ev["method"].(string)
+		if method == "DOM.documentUpdated" {
+			if v.forward == nil {
+				t.Errorf("%s: %s must reach the client on an ordinary page", why, method)
+			}
+			continue
+		}
+		if !clientSees(v, text) {
+			t.Errorf("%s: %s must reach the client on an ordinary page", why, method)
+		}
+	}
+}
+
+func pageHasMethod(pages [][]byte, method string) bool {
+	for _, p := range pages {
+		if strings.Contains(string(p), `"method":"`+method+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
+func enableClientDOM(t *testing.T, g *guard) {
+	t.Helper()
+	v := nestCommand(g, "S", "DOM.enable", nil)
+	if v.reply != nil || v.forward == nil {
+		t.Fatalf("DOM.enable on the client session: forward=%v reply=%s", v.forward != nil, v.reply)
+	}
+}
+
+func enableClientAX(t *testing.T, g *guard) {
+	t.Helper()
+	v := nestCommand(g, "S", "Accessibility.enable", nil)
+	if v.reply != nil || v.forward == nil {
+		t.Fatalf("Accessibility.enable on the client session: forward=%v reply=%s", v.forward != nil, v.reply)
+	}
+}
+
 func TestExtensionDelayedDefaultProtectedChildDOMEvents(t *testing.T) {
 	for _, kind := range []string{"blank", "srcdoc"} {
 		for _, session := range []string{"N", "S"} {
 			t.Run(kind+"/"+session, func(t *testing.T) {
 				g := newGuard(protect.MustNew([]string{sevenOrigin}), t.Logf)
 				guardedNestPage(t, g, true)
+				enableClientDOM(t, g)
+				enableClientAX(t, g)
 				frame := "CHILD-" + kind
 				nestContext(g, session, 140, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", frame, "slicc harness content script", "delayed-dom-ext-"+kind, false)
-				for _, ev := range []map[string]any{
-					{"method": "DOM.setChildNodes", "sessionId": "S", "params": map[string]any{"parentId": 3, "nodes": []any{map[string]any{"nodeId": 5, "backendNodeId": 5, "nodeType": 3, "nodeName": "#text", "nodeValue": delayedChildText}}}},
-					{"method": "DOM.characterDataModified", "sessionId": "S", "params": map[string]any{"nodeId": 4, "characterData": delayedChildText}},
-					{"method": "DOM.childNodeInserted", "sessionId": "S", "params": map[string]any{"parentNodeId": 3, "previousNodeId": 0, "node": map[string]any{"nodeId": 6, "backendNodeId": 6, "nodeType": 3, "nodeName": "#text", "nodeValue": delayedChildText}}},
-				} {
-					leaked := clientSees(g.fromBrowser(encode(ev)), delayedChildText)
-					t.Logf("%s/%s %s leaked=%v", kind, session, ev["method"], leaked)
+				if !latchedOn(g, "PAGE") {
+					t.Fatal("a non-default world in a frame with no known parent, origin or default context did not lock the page")
+				}
+				assertFrameContentEventsHidden(t, g, delayedChildText, "before the child's default context arrived")
+				v := nestContext(g, session, 141, sevenOrigin, frame, "", "delayed-dom-def-"+kind, true)
+				if !latchedOn(g, "PAGE") {
+					t.Fatal("the delayed default context with seven's origin did not lock the page")
+				}
+				if pageHasMethod(v.page, "DOM.documentUpdated") || pageHasMethod(v.page, "Accessibility.loadComplete") {
+					t.Fatal("a protected classification emitted a DOM/AX rebuild event")
+				}
+				assertFrameContentEventsHidden(t, g, delayedChildText, "after the delayed default context arrived")
+			})
+		}
+	}
+}
+
+func TestExtensionSoftLatchOrdinaryDefaultRebuildsDOM(t *testing.T) {
+	for _, kind := range []string{"blank", "srcdoc"} {
+		for _, session := range []string{"N", "S"} {
+			t.Run(kind+"/"+session, func(t *testing.T) {
+				g := newGuard(protect.MustNew([]string{sevenOrigin}), t.Logf)
+				guardedNestPage(t, g, true)
+				enableClientDOM(t, g)
+				enableClientAX(t, g)
+				frame := "CHILD-ORD-" + kind
+				nestContext(g, session, 170, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", frame, "slicc harness content script", "ord-ext-"+kind, false)
+				if !latchedOn(g, "PAGE") {
+					t.Fatal("the soft latch did not lock the page")
+				}
+				assertFrameContentEventsHidden(t, g, delayedChildText, "while the soft latch holds")
+				v := nestContext(g, session, 171, "http://localhost:7002", frame, "", "ord-def-"+kind, true)
+				if latchedOn(g, "PAGE") {
+					t.Fatal("an ordinary default context did not release the soft latch")
+				}
+				if !pageHasMethod(v.page, "DOM.documentUpdated") {
+					t.Fatal("releasing the soft latch to ordinary did not emit DOM.documentUpdated")
+				}
+				if !pageHasMethod(v.page, "Accessibility.loadComplete") {
+					t.Fatal("releasing the soft latch to ordinary did not emit Accessibility.loadComplete after Accessibility.enable")
+				}
+				if pageHasMethod(v.page, delayedChildText) {
+					t.Fatal("the rebuild events carried frame content")
+				}
+				assertFrameContentEventsFlow(t, g, "ordinary-after-release-4b1c", "after the soft latch released")
+				doc := nestCommand(g, "S", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true})
+				if doc.reply != nil || doc.forward == nil {
+					t.Fatalf("DOM.getDocument after ordinary release: forward=%v reply=%s", doc.forward != nil, doc.reply)
+				}
+				if !clientSees(g.fromBrowser(delayedChildDocument(nestCalls, frame)), delayedChildText) {
+					t.Fatal("DOM.getDocument pierce after ordinary release did not show the child's text")
 				}
 			})
 		}
 	}
+}
+
+func TestExtensionSoftLatchProtectedDefaultSkipsRebuild(t *testing.T) {
+	for _, kind := range []string{"blank", "srcdoc"} {
+		for _, session := range []string{"N", "S"} {
+			t.Run(kind+"/"+session, func(t *testing.T) {
+				g := newGuard(protect.MustNew([]string{sevenOrigin}), t.Logf)
+				guardedNestPage(t, g, true)
+				enableClientDOM(t, g)
+				enableClientAX(t, g)
+				frame := "CHILD-PROT-" + kind
+				nestContext(g, session, 180, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", frame, "slicc harness content script", "prot-ext-"+kind, false)
+				v := nestContext(g, session, 181, sevenOrigin, frame, "", "prot-def-"+kind, true)
+				if !latchedOn(g, "PAGE") {
+					t.Fatal("seven's default context did not lock the page")
+				}
+				if pageHasMethod(v.page, "DOM.documentUpdated") || pageHasMethod(v.page, "Accessibility.loadComplete") {
+					t.Fatal("a protected default emitted a DOM/AX rebuild event")
+				}
+				doc := nestCommand(g, "S", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true})
+				if doc.forward != nil || doc.reply == nil || !strings.Contains(string(doc.reply), "refused") {
+					t.Fatalf("DOM.getDocument must stay refused after a protected default: forward=%v reply=%s", doc.forward != nil, doc.reply)
+				}
+			})
+		}
+	}
+}
+
+func TestExtensionProtectedFrameDOMEventsDropped(t *testing.T) {
+	for _, kind := range []string{"blank", "srcdoc"} {
+		for _, session := range []string{"N", "S"} {
+			t.Run(kind+"/"+session, func(t *testing.T) {
+				g := newGuard(protect.MustNew([]string{sevenOrigin}), t.Logf)
+				guardedNestPage(t, g, true)
+				frame := "CHILD-" + kind
+				nestContext(g, session, 150, sevenOrigin, frame, "", "prot-def-"+kind, true)
+				if !latchedOn(g, "PAGE") {
+					t.Fatal("seven's default context did not lock the page")
+				}
+				assertFrameContentEventsHidden(t, g, delayedChildText, "while a frame under protection holds a latch")
+			})
+		}
+	}
+}
+
+func TestExtensionOrdinaryPageDOMEventsKeepFlowing(t *testing.T) {
+	g := newGuard(protect.MustNew([]string{sevenOrigin, "chrome-extension://sevenextid"}), t.Logf)
+	ordinaryNestPage(t, g)
+	injectExtensionWorld(g, "S", "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", "HOST", "ord-host-ext", 160)
+	injectExtensionWorld(g, "S", "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", "INNER", "ord-inner-ext", 161)
+	if latchedOn(g, "PAGE") {
+		t.Fatal("extension worlds on an ordinary nest page locked it")
+	}
+	assertFrameContentEventsFlow(t, g, "ordinary-child-text-9c2e", "ordinary nest page with extension worlds")
 }
