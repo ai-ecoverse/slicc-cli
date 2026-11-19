@@ -545,6 +545,10 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 	}
 	if wc := w.contexts[c.ID]; wc != nil {
 		wc.seen[session] = true
+		wc.defaultWorld = c.AuxData.IsDefault
+		if c.Name != "" {
+			wc.name = c.Name
+		}
 		if c.AuxData.FrameID != "" {
 			wc.frame = c.AuxData.FrameID
 		}
@@ -560,7 +564,7 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 		w.full = true
 		return
 	}
-	w.contexts[c.ID] = &worldCtx{frame: c.AuxData.FrameID, unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: frame}
+	w.contexts[c.ID] = &worldCtx{defaultWorld: c.AuxData.IsDefault, frame: c.AuxData.FrameID, unique: c.UniqueID, name: c.Name, seen: map[string]bool{session: true}, protectedFrame: frame}
 	if c.UniqueID != "" {
 		g.worldUniques[c.UniqueID] = target
 	}
@@ -571,6 +575,83 @@ func (g *guard) contextLatchesLocked(c execContext) bool {
 		return true
 	}
 	return g.o.Loaded(c.Origin) && !protect.ExtensionScheme(c.Origin)
+}
+
+func (g *guard) frameDefaultSeenLocked(frame string) bool {
+	if frame == "" {
+		return false
+	}
+	for _, w := range g.worlds {
+		if w == nil {
+			continue
+		}
+		for _, wc := range w.contexts {
+			if wc != nil && wc.defaultWorld && wc.frame == frame {
+				return true
+			}
+		}
+	}
+	for _, s := range g.shown {
+		if s == nil {
+			continue
+		}
+		for _, sc := range s.contexts {
+			if sc != nil && sc.defaultWorld && sc.frame == frame {
+				return true
+			}
+		}
+	}
+	for _, h := range g.heldContexts {
+		if h != nil && h.context.AuxData.IsDefault && h.context.AuxData.FrameID == frame {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) frameWorldEvidenceLocked(frame string) bool {
+	if frame == "" {
+		return false
+	}
+	if g.frameDefaultSeenLocked(frame) {
+		return true
+	}
+	if raw := g.childFrames[frame]; raw != "" && !protect.Inheriting(raw) {
+		return true
+	}
+	if t := g.targets[frame]; t != nil && !t.gone && t.url != "" && !protect.Inheriting(t.url) {
+		return true
+	}
+	return false
+}
+
+func (g *guard) unknownNonDefaultWorldProtectsLocked(target string) bool {
+	if target == "" {
+		return false
+	}
+	if w := g.worlds[target]; w != nil {
+		for _, wc := range w.contexts {
+			if wc == nil || wc.defaultWorld || wc.frame == "" || wc.frame == target {
+				continue
+			}
+			if !g.frameWorldEvidenceLocked(wc.frame) {
+				return true
+			}
+		}
+	}
+	for _, h := range g.heldContexts {
+		if h == nil || h.target != target || h.context.AuxData.IsDefault {
+			continue
+		}
+		frame := h.context.AuxData.FrameID
+		if frame == "" || frame == target {
+			continue
+		}
+		if !g.frameWorldEvidenceLocked(frame) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *guard) latchHiddenUnderProtectedLocked(cut map[string]bool) {

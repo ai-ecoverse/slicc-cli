@@ -319,8 +319,8 @@ func TestExtensionSevenInheritedChildInMiddleIframeLatchesThroughDefault(t *test
 			frame := "MID-CHILD-" + kind
 			nestContext(g, "NM", 60, "http://localhost:7003", "MID", "", "mid-def", true)
 			nestContext(g, "NM", 61, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", frame, "slicc harness content script", "mid-ext-"+kind, false)
-			if latchedOn(g, "MID") {
-				t.Fatalf("an extension world alone in the middle iframe's %s child locked it", kind)
+			if !latchedOn(g, "MID") {
+				t.Fatalf("an extension world alone in the middle iframe's unclassified %s child did not lock it", kind)
 			}
 			nestContext(g, "NM", 62, sevenOrigin, frame, "", "mid-seven-"+kind, true)
 			if !latchedOn(g, "MID") || !latchedOn(g, "PAGE") {
@@ -404,6 +404,7 @@ func TestExtensionWorldsInMiddleIframeChildrenKeepPageReadable(t *testing.T) {
 	guardedNestPage(t, g, true)
 	guardedMiddle(t, g)
 	nestContext(g, "N", 100, "http://localhost:7002", "PAGE", "", "page-def", true)
+	nestContext(g, "N", 107, "http://localhost:7002", "HOST", "", "host-def", true)
 	nestContext(g, "NM", 101, "http://localhost:7003", "MID", "", "mid-def", true)
 	nestContext(g, "NM", 102, "http://localhost:7003", "MID-INNER", "", "mid-inner-def", true)
 	nestContext(g, "NM", 103, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", "MID-INNER", "slicc harness content script", "mid-inner-ext", false)
@@ -495,5 +496,84 @@ func TestExtensionGuardSessionSevenDefaultRefusesBlankHost(t *testing.T) {
 			}
 			frameContentRefused(t, g, "seven's about:blank child seen on the guard session")
 		})
+	}
+}
+
+const delayedChildText = "seven-child-secret-7f3a"
+
+func delayedChildDocument(id int64, frame string) []byte {
+	return encode(map[string]any{"id": id, "sessionId": "S", "result": map[string]any{"root": map[string]any{
+		"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document", "documentURL": "http://localhost:7002/nest", "frameId": "PAGE",
+		"children": []any{map[string]any{"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "IFRAME", "frameId": frame,
+			"contentDocument": map[string]any{"nodeId": 3, "backendNodeId": 3, "nodeType": 9, "nodeName": "#document", "documentURL": "about:blank", "frameId": frame,
+				"children": []any{map[string]any{"nodeId": 4, "backendNodeId": 4, "nodeType": 3, "nodeName": "#text", "nodeValue": delayedChildText}}}}},
+	}}})
+}
+
+func clientSees(v browserVerdict, text string) bool {
+	if strings.Contains(string(v.forward), text) {
+		return true
+	}
+	for _, p := range v.page {
+		if strings.Contains(string(p), text) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestExtensionDelayedDefaultProtectedChildCommandsRefused(t *testing.T) {
+	for _, kind := range []string{"blank", "srcdoc"} {
+		for _, session := range []string{"N", "S"} {
+			t.Run(kind+"/"+session, func(t *testing.T) {
+				g := newGuard(protect.MustNew([]string{sevenOrigin}), t.Logf)
+				guardedNestPage(t, g, true)
+				frame := "CHILD-" + kind
+				nestContext(g, session, 130, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", frame, "slicc harness content script", "delayed-ext-"+kind, false)
+				if !latchedOn(g, "PAGE") {
+					t.Fatal("a non-default world in a frame with no known parent, origin or default context did not lock the page")
+				}
+				doc := nestCommand(g, "S", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true})
+				if doc.forward != nil {
+					if clientSees(g.fromBrowser(delayedChildDocument(nestCalls, frame)), delayedChildText) {
+						t.Errorf("DOM.getDocument pierce showed the child's text before its default context arrived")
+					}
+				} else if doc.reply == nil || !strings.Contains(string(doc.reply), "refused") {
+					t.Errorf("DOM.getDocument pierce must be refused before the child's default context arrives: reply=%s", doc.reply)
+				}
+				for _, method := range []string{"Page.captureScreenshot", "Page.startScreencast", "DOMSnapshot.captureSnapshot", "Accessibility.getFullAXTree"} {
+					v := nestCommand(g, "S", method, nil)
+					if v.forward != nil || v.reply == nil || !strings.Contains(string(v.reply), "refused") {
+						t.Errorf("%s must be refused while the child's default context has not arrived: forward=%v reply=%s", method, v.forward != nil, v.reply)
+					}
+				}
+				nestContext(g, session, 131, sevenOrigin, frame, "", "delayed-def-"+kind, true)
+				if !latchedOn(g, "PAGE") {
+					t.Fatal("the delayed default context with seven's origin did not lock the page")
+				}
+				frameContentRefused(t, g, "after the delayed default context arrived")
+			})
+		}
+	}
+}
+
+func TestExtensionDelayedDefaultProtectedChildDOMEvents(t *testing.T) {
+	for _, kind := range []string{"blank", "srcdoc"} {
+		for _, session := range []string{"N", "S"} {
+			t.Run(kind+"/"+session, func(t *testing.T) {
+				g := newGuard(protect.MustNew([]string{sevenOrigin}), t.Logf)
+				guardedNestPage(t, g, true)
+				frame := "CHILD-" + kind
+				nestContext(g, session, 140, "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob", frame, "slicc harness content script", "delayed-dom-ext-"+kind, false)
+				for _, ev := range []map[string]any{
+					{"method": "DOM.setChildNodes", "sessionId": "S", "params": map[string]any{"parentId": 3, "nodes": []any{map[string]any{"nodeId": 5, "backendNodeId": 5, "nodeType": 3, "nodeName": "#text", "nodeValue": delayedChildText}}}},
+					{"method": "DOM.characterDataModified", "sessionId": "S", "params": map[string]any{"nodeId": 4, "characterData": delayedChildText}},
+					{"method": "DOM.childNodeInserted", "sessionId": "S", "params": map[string]any{"parentNodeId": 3, "previousNodeId": 0, "node": map[string]any{"nodeId": 6, "backendNodeId": 6, "nodeType": 3, "nodeName": "#text", "nodeValue": delayedChildText}}},
+				} {
+					leaked := clientSees(g.fromBrowser(encode(ev)), delayedChildText)
+					t.Logf("%s/%s %s leaked=%v", kind, session, ev["method"], leaked)
+				}
+			})
+		}
 	}
 }
