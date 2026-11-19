@@ -21,6 +21,13 @@ func (g *guard) errorProofOfLocked(id string) errorProofState {
 	return g.errorProof[id]
 }
 
+func (g *guard) errorProofGenOfLocked(id string) int {
+	if g.errorProofGen == nil {
+		return 0
+	}
+	return g.errorProofGen[id]
+}
+
 func (g *guard) setErrorProofLocked(id string, st errorProofState) {
 	if id == "" {
 		return
@@ -34,6 +41,37 @@ func (g *guard) setErrorProofLocked(id string, st errorProofState) {
 		return
 	}
 	g.errorProof[id] = st
+}
+
+func (g *guard) resetFailedLoadProofLocked(id string) {
+	if id == "" {
+		return
+	}
+	if g.errorProofGen == nil {
+		g.errorProofGen = map[string]int{}
+	}
+	g.errorProofGen[id]++
+	g.setErrorProofLocked(id, errorProofNone)
+	if nt := g.navTargets[id]; nt != nil {
+		if nt.confirm != nil && !nt.confirm.done {
+			nt.confirm.settle(true)
+		}
+		nt.confirming = false
+		nt.revision++
+	}
+}
+
+func (g *guard) resetFailedLoadProofOnNavLocked(nt *navTarget, method string) {
+	if nt == nil || (method != "Page.frameStartedNavigating" && method != "Page.frameNavigated") {
+		return
+	}
+	st := g.errorProofOfLocked(nt.target)
+	switch {
+	case st == errorProofOrdinary || st == errorProofProtected || st == errorProofFailed:
+		g.resetFailedLoadProofLocked(nt.target)
+	case st == errorProofPending && method == "Page.frameStartedNavigating":
+		g.resetFailedLoadProofLocked(nt.target)
+	}
 }
 
 func (g *guard) noteErrorTitleLocked(id, title string) {
@@ -70,12 +108,19 @@ func (g *guard) blankFailedLoadInfoLocked(obj map[string]any, info targetInfo) b
 	if obj == nil {
 		return false
 	}
+	title := titleField(obj)
 	t := g.targets[info.TargetID]
+	if t != nil && chromeErrorDocument(t.url) {
+		if prev := g.errorTitles[t.id]; prev != "" && title != "" && title != prev {
+			g.resetFailedLoadProofLocked(t.id)
+			g.setErrorProofLocked(t.id, errorProofPending)
+		}
+	}
 	if t == nil {
 		if !chromeErrorDocument(info.URL) || (info.Type != "page" && info.Type != "tab" && info.Type != "") {
 			return false
 		}
-		g.noteErrorTitleLocked(info.TargetID, titleField(obj))
+		g.noteErrorTitleLocked(info.TargetID, title)
 		obj["url"] = ""
 		obj["title"] = ""
 		return true
@@ -84,7 +129,7 @@ func (g *guard) blankFailedLoadInfoLocked(obj map[string]any, info targetInfo) b
 	switch st {
 	case errorProofPending, errorProofFailed:
 	case errorProofProtected:
-		g.noteErrorTitleLocked(t.id, titleField(obj))
+		g.noteErrorTitleLocked(t.id, title)
 		obj["title"] = ""
 		return true
 	default:
@@ -92,7 +137,7 @@ func (g *guard) blankFailedLoadInfoLocked(obj map[string]any, info targetInfo) b
 			return false
 		}
 	}
-	g.noteErrorTitleLocked(t.id, titleField(obj))
+	g.noteErrorTitleLocked(t.id, title)
 	obj["url"] = ""
 	obj["title"] = ""
 	return true

@@ -13,7 +13,7 @@ import (
 func (g *guard) beginConfirmLocked(nt *navTarget) {
 	if nt.confirm == nil || nt.confirm.done {
 		nt.confirming = false
-		nt.confirm = &navTarget{ready: make(chan struct{}), start: time.Now()}
+		nt.confirm = &navTarget{ready: make(chan struct{}), start: time.Now(), failedLoadGen: g.errorProofGenOfLocked(nt.target)}
 		nt.confirm.awayAt = g.reads.away(nt.confirm.start)
 	}
 	if nt.failed {
@@ -80,6 +80,9 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		}
 	}
 	send := g.confirmFrameDocumentLocked(nt, check, t, frame, result.FrameTree.Frame)
+	if check.failedLoadGen != g.errorProofGenOfLocked(nt.target) {
+		return send
+	}
 	return append(send, g.finishFailedLoadAfterConfirmLocked(t, frame)...)
 }
 
