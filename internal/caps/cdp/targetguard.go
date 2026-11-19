@@ -58,13 +58,14 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 		} `json:"frameTree"`
 	}
 	var frame confirmFrame
-	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
-		check.settle(true)
-		return nil
-	}
+	bad := m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe)
 	t := g.targets[nt.target]
-	if t == nil || t.gone {
+	if bad || t == nil || t.gone {
 		check.settle(true)
+		if t != nil && !nt.iframe && chromeErrorDocument(t.url) {
+			g.setErrorProofLocked(t.id, errorProofFailed)
+			return g.finishFailedLoadHeldLocked(t.id, true)
+		}
 		return nil
 	}
 	if nt.iframe {
@@ -88,6 +89,9 @@ type confirmFrame struct {
 func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, frame confirmFrame, raw json.RawMessage) [][]byte {
 	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
 	g.noteErrorPageSnapshotLocked(nt, frame.URL, frame.SecurityOrigin, frame.UnreachableURL)
+	if !nt.iframe && (t.typ == "page" || t.typ == "tab") && chromeErrorDocument(frame.URL) {
+		return g.settleFailedLoadFromConfirmLocked(nt, check, t, frame)
+	}
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
 		check.settle(false)
 		return g.markLocked(t)
