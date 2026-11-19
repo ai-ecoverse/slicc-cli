@@ -141,133 +141,134 @@ type guard struct {
 	logf            func(format string, args ...any)
 	scheduleInitial func(*navTarget)
 
-	relaySession          string
-	documentsOnly         bool
-	verifiesInput         bool
-	lost                  bool
-	hostTarget            func() string
-	targets               map[string]*target
-	tombstones            []string
-	opened                map[string]bool
-	openedOrder           []string
-	listed                map[string]bool
-	touchSeq              int
-	touchedAt             map[string]int
-	pendingTouch          map[callKey]touchReservation
-	touchedOrder          []string
-	openedSeenAt          map[string]int
-	openedSeenOrder       []string
-	openedIneligible      map[string]bool
-	openedWait            map[string]string
-	sessions              map[string]*session
-	hidden                map[string]bool
-	hiddenOwner           map[string]string
-	attachParent          string
-	refused               map[string]bool
-	refusedOrder          []string
-	browserSessions       map[string]bool
-	ownContexts           map[string]bool
-	pending               map[callKey]callKind
-	relayCalls            map[callKey]*relayCall
-	retiredCalls          map[callKey]time.Time
-	nextID                int64
-	marked                map[string]map[string]bool
-	markedCount           int
-	saturated             map[string]bool
-	credMarked            map[string]map[string]bool
-	credCount             int
-	credSaturated         map[string]bool
-	swProtected           map[string]bool
-	navTargets            map[string]*navTarget
-	navSessions           map[string]*navTarget
-	unknown               map[string]*navTarget
-	watchStopped          bool
-	heldWaits             map[string]*heldWait
-	parkedAnswers         map[callKey]bool
-	keptURLLatch          map[string]bool
-	gone                  map[string]bool
-	goneOrder             []string
-	held                  map[string]*heldSession
-	heldContexts          map[heldContextKey]*heldContext
-	contextSettlePage     [][]byte
-	contextSettleSend     [][]byte
-	frameWorldWaits       map[string]*frameWorldWait
-	worldEpochs           map[string]*worldEpoch
-	treeCalls             map[callKey]bool
-	childFrames           map[string]string
-	frameParents          map[string]string
-	frameParentsFull      bool
-	ancestryDisputed      map[string]bool
-	ancestryDisputedUnder map[string]string
-	blockedChildren       map[string]string
-	explicit              map[string]int
-	attachCalls           map[callKey]string
-	patterns              []any
-	heldExtras            map[requestKey][]heldExtra
-	heldExtraCount        int
-	seen                  map[requestKey]reqLevel
-	seenOrder             []requestKey
-	handed                map[requestKey]int
-	handedOrder           []handedPause
-	pauses                int
-	pauseURLs             map[requestKey]string
-	pauseLinks            map[requestKey]requestKey
-	clientRequests        map[requestKey]*clientRequestState
-	clientCalls           map[callKey]clientMark
-	continues             map[callKey]handedPause
-	bodyCalls             map[callKey]bodyCall
-	heldAnswers           map[callKey]*heldAnswer
-	streams               map[string]bool
-	streamOrder           []string
-	bounds                guardBounds
-	reads                 readClock
-	frameProbeAttempts    map[string]int
-	frameProbed           map[string]bool
-	frames                map[string]map[string]bool
-	worlds                map[string]*worldSet
-	worldUniques          map[string]string
-	shown                 map[string]*shownSet
-	shownUniques          map[string]string
-	worldRequests         map[requestKey]bool
-	worldRequestCount     map[string]int
-	worldRequestsFull     map[string]bool
-	navSeen               map[requestKey]bool
-	navSeenOrder          []requestKey
-	navChains             map[requestKey][]string
-	knownRedirects        map[string]*assetSet
-	tainted               map[string]*assetSet
-	clean                 map[string]*assetSet
-	assets                map[string]*assetSet
-	heldPauses            map[requestKey][]heldPause
-	heldPauseCount        int
-	commitMarks           map[callKey]commitMark
-	maxWorlds             int
-	casting               map[string]bool
-	castCut               map[string]bool
-	domEnabled            map[string]bool
-	axEnabled             map[string]bool
-	softLatched           map[string]bool
-	debuggers             map[string]*debuggerState
-	debuggerReplies       map[callKey]debuggerReply
-	debuggerBytes         int
-	debuggerLimit         int
-	heldExtensionPaints   map[callKey]*heldExtensionPaint
-	pendingPage           [][]byte
-	paintMethods          map[callKey]string
-	extensionShownCleared bool
-	extensionProbeWorlds  map[string]bool
-	extensionProbeCache   map[extensionWorldKey]*extensionProbeWorld
-	extensionProbePending map[extensionWorldKey]*extensionWorldPending
-	extensionFrameURLs    map[string]map[string]string
-	extensionCaptureDirty map[callKey]bool
-	extensionOwnerCalls   map[callKey]string
-	extensionOwnerReplies map[callKey]int
-	extensionMarkCalls    map[callKey]string
-	extensionMarkReplies  map[callKey]string
-	extensionPaintGen     uint64
-	versionCalls          map[callKey]bool
-	versionReplies        map[callKey]int
-	scripts               map[string]bool
+	relaySession             string
+	documentsOnly            bool
+	verifiesInput            bool
+	lost                     bool
+	hostTarget               func() string
+	targets                  map[string]*target
+	tombstones               []string
+	opened                   map[string]bool
+	openedOrder              []string
+	listed                   map[string]bool
+	touchSeq                 int
+	touchedAt                map[string]int
+	pendingTouch             map[callKey]touchReservation
+	touchedOrder             []string
+	openedSeenAt             map[string]int
+	openedSeenOrder          []string
+	openedIneligible         map[string]bool
+	openedWait               map[string]string
+	sessions                 map[string]*session
+	hidden                   map[string]bool
+	hiddenOwner              map[string]string
+	attachParent             string
+	refused                  map[string]bool
+	refusedOrder             []string
+	browserSessions          map[string]bool
+	ownContexts              map[string]bool
+	pending                  map[callKey]callKind
+	relayCalls               map[callKey]*relayCall
+	retiredCalls             map[callKey]time.Time
+	nextID                   int64
+	marked                   map[string]map[string]bool
+	markedCount              int
+	saturated                map[string]bool
+	credMarked               map[string]map[string]bool
+	credCount                int
+	credSaturated            map[string]bool
+	swProtected              map[string]bool
+	navTargets               map[string]*navTarget
+	navSessions              map[string]*navTarget
+	unknown                  map[string]*navTarget
+	watchStopped             bool
+	heldWaits                map[string]*heldWait
+	parkedAnswers            map[callKey]bool
+	keptURLLatch             map[string]bool
+	gone                     map[string]bool
+	goneOrder                []string
+	held                     map[string]*heldSession
+	heldContexts             map[heldContextKey]*heldContext
+	contextSettlePage        [][]byte
+	contextSettleSend        [][]byte
+	frameWorldWaits          map[string]*frameWorldWait
+	worldEpochs              map[string]*worldEpoch
+	treeCalls                map[callKey]bool
+	childFrames              map[string]string
+	frameParents             map[string]string
+	frameParentsFull         bool
+	ancestryDisputed         map[string]bool
+	ancestryDisputedUnder    map[string]string
+	ancestryDisputedOverflow map[string]bool
+	blockedChildren          map[string]string
+	explicit                 map[string]int
+	attachCalls              map[callKey]string
+	patterns                 []any
+	heldExtras               map[requestKey][]heldExtra
+	heldExtraCount           int
+	seen                     map[requestKey]reqLevel
+	seenOrder                []requestKey
+	handed                   map[requestKey]int
+	handedOrder              []handedPause
+	pauses                   int
+	pauseURLs                map[requestKey]string
+	pauseLinks               map[requestKey]requestKey
+	clientRequests           map[requestKey]*clientRequestState
+	clientCalls              map[callKey]clientMark
+	continues                map[callKey]handedPause
+	bodyCalls                map[callKey]bodyCall
+	heldAnswers              map[callKey]*heldAnswer
+	streams                  map[string]bool
+	streamOrder              []string
+	bounds                   guardBounds
+	reads                    readClock
+	frameProbeAttempts       map[string]int
+	frameProbed              map[string]bool
+	frames                   map[string]map[string]bool
+	worlds                   map[string]*worldSet
+	worldUniques             map[string]string
+	shown                    map[string]*shownSet
+	shownUniques             map[string]string
+	worldRequests            map[requestKey]bool
+	worldRequestCount        map[string]int
+	worldRequestsFull        map[string]bool
+	navSeen                  map[requestKey]bool
+	navSeenOrder             []requestKey
+	navChains                map[requestKey][]string
+	knownRedirects           map[string]*assetSet
+	tainted                  map[string]*assetSet
+	clean                    map[string]*assetSet
+	assets                   map[string]*assetSet
+	heldPauses               map[requestKey][]heldPause
+	heldPauseCount           int
+	commitMarks              map[callKey]commitMark
+	maxWorlds                int
+	casting                  map[string]bool
+	castCut                  map[string]bool
+	domEnabled               map[string]bool
+	axEnabled                map[string]bool
+	softLatched              map[string]bool
+	debuggers                map[string]*debuggerState
+	debuggerReplies          map[callKey]debuggerReply
+	debuggerBytes            int
+	debuggerLimit            int
+	heldExtensionPaints      map[callKey]*heldExtensionPaint
+	pendingPage              [][]byte
+	paintMethods             map[callKey]string
+	extensionShownCleared    bool
+	extensionProbeWorlds     map[string]bool
+	extensionProbeCache      map[extensionWorldKey]*extensionProbeWorld
+	extensionProbePending    map[extensionWorldKey]*extensionWorldPending
+	extensionFrameURLs       map[string]map[string]string
+	extensionCaptureDirty    map[callKey]bool
+	extensionOwnerCalls      map[callKey]string
+	extensionOwnerReplies    map[callKey]int
+	extensionMarkCalls       map[callKey]string
+	extensionMarkReplies     map[callKey]string
+	extensionPaintGen        uint64
+	versionCalls             map[callKey]bool
+	versionReplies           map[callKey]int
+	scripts                  map[string]bool
 }
 
 func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard {
@@ -275,95 +276,96 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		logf = func(string, ...any) {}
 	}
 	g := &guard{
-		o:                     o,
-		logf:                  logf,
-		knownRedirects:        map[string]*assetSet{},
-		targets:               map[string]*target{},
-		opened:                map[string]bool{},
-		listed:                map[string]bool{},
-		touchedAt:             map[string]int{},
-		pendingTouch:          map[callKey]touchReservation{},
-		openedSeenAt:          map[string]int{},
-		openedIneligible:      map[string]bool{},
-		openedWait:            map[string]string{},
-		sessions:              map[string]*session{},
-		hidden:                map[string]bool{},
-		hiddenOwner:           map[string]string{},
-		refused:               map[string]bool{},
-		browserSessions:       map[string]bool{},
-		ownContexts:           map[string]bool{},
-		pending:               map[callKey]callKind{},
-		relayCalls:            map[callKey]*relayCall{},
-		retiredCalls:          map[callKey]time.Time{},
-		nextID:                relayIDBase,
-		marked:                map[string]map[string]bool{},
-		saturated:             map[string]bool{},
-		credMarked:            map[string]map[string]bool{},
-		credSaturated:         map[string]bool{},
-		swProtected:           map[string]bool{},
-		navTargets:            map[string]*navTarget{},
-		navSessions:           map[string]*navTarget{},
-		unknown:               map[string]*navTarget{},
-		heldWaits:             map[string]*heldWait{},
-		parkedAnswers:         map[callKey]bool{},
-		keptURLLatch:          map[string]bool{},
-		gone:                  map[string]bool{},
-		held:                  map[string]*heldSession{},
-		heldContexts:          map[heldContextKey]*heldContext{},
-		frameWorldWaits:       map[string]*frameWorldWait{},
-		worldEpochs:           map[string]*worldEpoch{},
-		treeCalls:             map[callKey]bool{},
-		childFrames:           map[string]string{},
-		frameParents:          map[string]string{},
-		ancestryDisputed:      map[string]bool{},
-		ancestryDisputedUnder: map[string]string{},
-		blockedChildren:       map[string]string{},
-		explicit:              map[string]int{},
-		attachCalls:           map[callKey]string{},
-		heldExtras:            map[requestKey][]heldExtra{},
-		seen:                  map[requestKey]reqLevel{},
-		handed:                map[requestKey]int{},
-		pauseURLs:             map[requestKey]string{},
-		pauseLinks:            map[requestKey]requestKey{},
-		clientRequests:        map[requestKey]*clientRequestState{},
-		clientCalls:           map[callKey]clientMark{},
-		continues:             map[callKey]handedPause{},
-		bodyCalls:             map[callKey]bodyCall{},
-		heldAnswers:           map[callKey]*heldAnswer{},
-		streams:               map[string]bool{},
-		frameProbeAttempts:    map[string]int{},
-		frameProbed:           map[string]bool{},
-		frames:                map[string]map[string]bool{},
-		worlds:                map[string]*worldSet{},
-		worldUniques:          map[string]string{},
-		shown:                 map[string]*shownSet{},
-		shownUniques:          map[string]string{},
-		worldRequests:         map[requestKey]bool{},
-		worldRequestCount:     map[string]int{},
-		worldRequestsFull:     map[string]bool{},
-		navSeen:               map[requestKey]bool{},
-		navChains:             map[requestKey][]string{},
-		tainted:               map[string]*assetSet{},
-		clean:                 map[string]*assetSet{},
-		assets:                map[string]*assetSet{},
-		heldPauses:            map[requestKey][]heldPause{},
-		commitMarks:           map[callKey]commitMark{},
-		casting:               map[string]bool{},
-		castCut:               map[string]bool{},
-		domEnabled:            map[string]bool{},
-		axEnabled:             map[string]bool{},
-		softLatched:           map[string]bool{},
-		debuggers:             map[string]*debuggerState{},
-		debuggerReplies:       map[callKey]debuggerReply{},
-		debuggerLimit:         debuggerBudgetFromEnv(),
-		paintMethods:          map[callKey]string{},
-		heldExtensionPaints:   map[callKey]*heldExtensionPaint{},
-		extensionProbeCache:   map[extensionWorldKey]*extensionProbeWorld{},
-		extensionProbePending: map[extensionWorldKey]*extensionWorldPending{},
-		extensionCaptureDirty: map[callKey]bool{},
-		scripts:               map[string]bool{},
-		maxWorlds:             maxWorlds,
-		bounds:                boundsFromEnv(),
+		o:                        o,
+		logf:                     logf,
+		knownRedirects:           map[string]*assetSet{},
+		targets:                  map[string]*target{},
+		opened:                   map[string]bool{},
+		listed:                   map[string]bool{},
+		touchedAt:                map[string]int{},
+		pendingTouch:             map[callKey]touchReservation{},
+		openedSeenAt:             map[string]int{},
+		openedIneligible:         map[string]bool{},
+		openedWait:               map[string]string{},
+		sessions:                 map[string]*session{},
+		hidden:                   map[string]bool{},
+		hiddenOwner:              map[string]string{},
+		refused:                  map[string]bool{},
+		browserSessions:          map[string]bool{},
+		ownContexts:              map[string]bool{},
+		pending:                  map[callKey]callKind{},
+		relayCalls:               map[callKey]*relayCall{},
+		retiredCalls:             map[callKey]time.Time{},
+		nextID:                   relayIDBase,
+		marked:                   map[string]map[string]bool{},
+		saturated:                map[string]bool{},
+		credMarked:               map[string]map[string]bool{},
+		credSaturated:            map[string]bool{},
+		swProtected:              map[string]bool{},
+		navTargets:               map[string]*navTarget{},
+		navSessions:              map[string]*navTarget{},
+		unknown:                  map[string]*navTarget{},
+		heldWaits:                map[string]*heldWait{},
+		parkedAnswers:            map[callKey]bool{},
+		keptURLLatch:             map[string]bool{},
+		gone:                     map[string]bool{},
+		held:                     map[string]*heldSession{},
+		heldContexts:             map[heldContextKey]*heldContext{},
+		frameWorldWaits:          map[string]*frameWorldWait{},
+		worldEpochs:              map[string]*worldEpoch{},
+		treeCalls:                map[callKey]bool{},
+		childFrames:              map[string]string{},
+		frameParents:             map[string]string{},
+		ancestryDisputed:         map[string]bool{},
+		ancestryDisputedUnder:    map[string]string{},
+		ancestryDisputedOverflow: map[string]bool{},
+		blockedChildren:          map[string]string{},
+		explicit:                 map[string]int{},
+		attachCalls:              map[callKey]string{},
+		heldExtras:               map[requestKey][]heldExtra{},
+		seen:                     map[requestKey]reqLevel{},
+		handed:                   map[requestKey]int{},
+		pauseURLs:                map[requestKey]string{},
+		pauseLinks:               map[requestKey]requestKey{},
+		clientRequests:           map[requestKey]*clientRequestState{},
+		clientCalls:              map[callKey]clientMark{},
+		continues:                map[callKey]handedPause{},
+		bodyCalls:                map[callKey]bodyCall{},
+		heldAnswers:              map[callKey]*heldAnswer{},
+		streams:                  map[string]bool{},
+		frameProbeAttempts:       map[string]int{},
+		frameProbed:              map[string]bool{},
+		frames:                   map[string]map[string]bool{},
+		worlds:                   map[string]*worldSet{},
+		worldUniques:             map[string]string{},
+		shown:                    map[string]*shownSet{},
+		shownUniques:             map[string]string{},
+		worldRequests:            map[requestKey]bool{},
+		worldRequestCount:        map[string]int{},
+		worldRequestsFull:        map[string]bool{},
+		navSeen:                  map[requestKey]bool{},
+		navChains:                map[requestKey][]string{},
+		tainted:                  map[string]*assetSet{},
+		clean:                    map[string]*assetSet{},
+		assets:                   map[string]*assetSet{},
+		heldPauses:               map[requestKey][]heldPause{},
+		commitMarks:              map[callKey]commitMark{},
+		casting:                  map[string]bool{},
+		castCut:                  map[string]bool{},
+		domEnabled:               map[string]bool{},
+		axEnabled:                map[string]bool{},
+		softLatched:              map[string]bool{},
+		debuggers:                map[string]*debuggerState{},
+		debuggerReplies:          map[callKey]debuggerReply{},
+		debuggerLimit:            debuggerBudgetFromEnv(),
+		paintMethods:             map[callKey]string{},
+		heldExtensionPaints:      map[callKey]*heldExtensionPaint{},
+		extensionProbeCache:      map[extensionWorldKey]*extensionProbeWorld{},
+		extensionProbePending:    map[extensionWorldKey]*extensionWorldPending{},
+		extensionCaptureDirty:    map[callKey]bool{},
+		scripts:                  map[string]bool{},
+		maxWorlds:                maxWorlds,
+		bounds:                   boundsFromEnv(),
 	}
 	g.patterns = g.protectedRequestPatterns()
 	return g
@@ -608,6 +610,14 @@ func (g *guard) markAncestryDisputedLocked(id, under string) {
 		return
 	}
 	if len(g.ancestryDisputed) >= maxAncestryDisputed {
+		page := under
+		if page == "" {
+			page = g.framePageOfLocked(id)
+		}
+		if page != "" && !g.ancestryDisputedOverflow[page] {
+			g.ancestryDisputedOverflow[page] = true
+			g.logf("cdp: ancestryDisputed at cap; latching page overflow page=%s frame=%s", page, id)
+		}
 		return
 	}
 	g.ancestryDisputed[id] = true
@@ -616,12 +626,35 @@ func (g *guard) markAncestryDisputedLocked(id, under string) {
 	}
 }
 
+func (g *guard) framePageOfLocked(id string) string {
+	if id == "" {
+		return ""
+	}
+	if t := g.targets[id]; t != nil && (t.typ == "page" || t.typ == "tab") {
+		return id
+	}
+	seen := map[string]bool{}
+	for cur := id; cur != "" && !seen[cur]; {
+		seen[cur] = true
+		if t := g.targets[cur]; t != nil && (t.typ == "page" || t.typ == "tab") {
+			return cur
+		}
+		parent := g.frameParentOfLocked(cur)
+		if parent == "" {
+			return ""
+		}
+		cur = parent
+	}
+	return ""
+}
+
 func (g *guard) forgetAncestryDisputedLocked(id string) {
 	if id == "" {
 		return
 	}
 	delete(g.ancestryDisputed, id)
 	delete(g.ancestryDisputedUnder, id)
+	delete(g.ancestryDisputedOverflow, id)
 	for frame, under := range g.ancestryDisputedUnder {
 		if under == id {
 			delete(g.ancestryDisputed, frame)

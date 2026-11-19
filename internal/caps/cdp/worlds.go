@@ -88,6 +88,9 @@ func (g *guard) isolatedWorldReadyLocked(frame, page string) (ready, refuse bool
 	if g.frameUnderProtectedLocked(frame) {
 		return true, true
 	}
+	if g.ancestryDisputedOverflow[page] || g.ancestryDisputed[frame] {
+		return true, true
+	}
 	if g.frameContextAncestrySettledLocked(frame, page) {
 		return true, false
 	}
