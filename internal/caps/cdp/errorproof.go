@@ -1,6 +1,8 @@
 package cdp
 
 import (
+	"encoding/json"
+
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
@@ -80,8 +82,12 @@ func (g *guard) blankFailedLoadInfoLocked(obj map[string]any, info targetInfo) b
 		obj["title"] = ""
 		return true
 	}
-	if !g.failedLoadNeedsProofLocked(t) && g.errorProofOfLocked(t.id) != errorProofFailed {
-		return false
+	switch g.errorProofOfLocked(t.id) {
+	case errorProofPending, errorProofFailed, errorProofProtected:
+	default:
+		if !g.failedLoadNeedsProofLocked(t) {
+			return false
+		}
 	}
 	g.noteErrorTitleLocked(t.id, titleField(obj))
 	obj["url"] = ""
@@ -121,9 +127,9 @@ func (g *guard) holdFailedLoadAttachLocked(m *message, pSession string, waiting 
 		return browserVerdict{}, false
 	}
 	switch g.errorProofOfLocked(t.id) {
-	case errorProofProtected, errorProofFailed:
+	case errorProofFailed:
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)}, true
-	case errorProofOrdinary:
+	case errorProofOrdinary, errorProofProtected:
 		return browserVerdict{}, false
 	}
 	g.noteErrorTitleLocked(t.id, attachTitle(m))
@@ -162,7 +168,7 @@ func (g *guard) keepHeldForFailedLoadLocked(h *heldSession, info any) bool {
 	return true
 }
 
-func (g *guard) settleFailedLoadFromConfirmLocked(nt, check *navTarget, t *target, frame confirmFrame) [][]byte {
+func (g *guard) settleFailedLoadFromConfirmLocked(nt, check *navTarget, t *target, frame confirmFrame, raw json.RawMessage) [][]byte {
 	if t == nil || (t.typ != "page" && t.typ != "tab") || !chromeErrorDocument(frame.URL) {
 		return nil
 	}
@@ -175,8 +181,12 @@ func (g *guard) settleFailedLoadFromConfirmLocked(nt, check *navTarget, t *targe
 	if g.o.Loaded(frame.UnreachableURL) {
 		check.settle(false)
 		g.setErrorProofLocked(t.id, errorProofProtected)
-		send := g.markLocked(t)
-		return append(send, g.finishFailedLoadHeldLocked(t.id, true)...)
+		send := g.finishFailedLoadHeldLocked(t.id, true)
+		ev := protect.Evidence{DocumentURL: frame.URL, UnreachableURL: frame.UnreachableURL}
+		if protect.ErrorPage(frame.UnreachableURL, ev) && !protect.Inheriting(frame.UnreachableURL) {
+			return append(send, g.navEventLocked(nt, &message{Method: "Page.frameNavigated", Params: encode(map[string]any{"frame": raw})})...)
+		}
+		return send
 	}
 	check.settle(false)
 	g.setErrorProofLocked(t.id, errorProofOrdinary)

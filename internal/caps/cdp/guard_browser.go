@@ -438,7 +438,8 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 		if keep {
 			g.noteWorkerShownLocked(info)
 		}
-		blanked := obj != nil && (g.errorProofOfLocked(info.TargetID) == errorProofPending || g.errorProofOfLocked(info.TargetID) == errorProofFailed || g.failedLoadNeedsProofLocked(g.targets[info.TargetID]))
+		st := g.errorProofOfLocked(info.TargetID)
+		blanked := obj != nil && (st == errorProofPending || st == errorProofFailed || st == errorProofProtected || g.failedLoadNeedsProofLocked(g.targets[info.TargetID]))
 		changed := obj != nil && (g.targetProtectedLocked(info.TargetID) || g.infoVerdictLocked(info).protected || blanked)
 		return keep, changed, send
 	})

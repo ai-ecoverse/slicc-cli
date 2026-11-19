@@ -90,7 +90,7 @@ func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, fram
 	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
 	g.noteErrorPageSnapshotLocked(nt, frame.URL, frame.SecurityOrigin, frame.UnreachableURL)
 	if !nt.iframe && (t.typ == "page" || t.typ == "tab") && chromeErrorDocument(frame.URL) {
-		return g.settleFailedLoadFromConfirmLocked(nt, check, t, frame)
+		return g.settleFailedLoadFromConfirmLocked(nt, check, t, frame, raw)
 	}
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
 		check.settle(false)

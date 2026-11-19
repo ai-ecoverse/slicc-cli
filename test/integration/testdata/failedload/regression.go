@@ -202,8 +202,9 @@ func TestFailedLoadProtectedProofHidesWithoutClientAttach(t *testing.T) {
 	if payloadsContain(page, "attachedToTarget") {
 		t.Fatalf("protected proof announced attach: %v", page)
 	}
-	if !g.targetProtectedLocked("POPUP") {
-		t.Fatal("protected failed load was not sticky-protected")
+	assertNoFailedHost(t, "protected-proof-page", page)
+	if g.errorProofOfLocked("POPUP") != errorProofProtected {
+		t.Fatal("protected failed load was not classified")
 	}
 	if g.sessions["S-POPUP"] != nil {
 		t.Fatal("client session present after protected proof")
@@ -211,6 +212,8 @@ func TestFailedLoadProtectedProofHidesWithoutClientAttach(t *testing.T) {
 	if g.held["S-POPUP"] != nil {
 		t.Fatal("held session remained after protected proof")
 	}
+	v := g.fromBrowser(chromeErrorChanged(failedHostTitle, "OPENER"))
+	assertNoFailedHost(t, "protected-listing", clientPayloads(v))
 }
 
 func TestFailedLoadOrdinaryProofReleasesRealTitle(t *testing.T) {
