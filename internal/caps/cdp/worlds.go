@@ -1579,7 +1579,7 @@ func (g *guard) worldPauseLocked(m *message, p map[string]any) ([]byte, bool) {
 	if !auth && !g.worldRequestKnownLocked(t, other) && !g.worldRequestKnownLocked(t, id) {
 		return nil, false
 	}
-	delete(g.handed, requestKey{m.SessionID, id})
+	g.dropHandedLocked(requestKey{m.SessionID, id})
 	g.markRequestLocked(m.SessionID, id)
 	g.markRequestLocked(m.SessionID, other)
 	method, params := continueWorld(m.Method, id, p)

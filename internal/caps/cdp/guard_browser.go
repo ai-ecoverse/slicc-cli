@@ -115,12 +115,18 @@ func (g *guard) forwardBrowserEventLocked(m *message, data []byte) browserVerdic
 	if g.framesProtectedDomainEventLocked(m.Method, m.SessionID) {
 		return browserVerdict{}
 	}
-	if strings.HasPrefix(m.Method, "Storage.") || strings.HasPrefix(m.Method, "BackgroundService.") || strings.HasPrefix(m.Method, "DOMStorage.") {
-		if p, ok := decodeObject(m.Params); ok && g.eventProtected(p, 0) {
-			return browserVerdict{}
-		}
+	if g.storageEventDropped(m) {
+		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}
+}
+
+func (g *guard) storageEventDropped(m *message) bool {
+	if !strings.HasPrefix(m.Method, "Storage.") && !strings.HasPrefix(m.Method, "BackgroundService.") && !strings.HasPrefix(m.Method, "DOMStorage.") {
+		return false
+	}
+	p, ok := decodeObject(m.Params)
+	return ok && (g.eventProtected(p, 0) || credentialNamed(p, 0))
 }
 
 func (g *guard) ownsClientAnswerLocked(k callKey) bool {
@@ -237,6 +243,10 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		return send, hide
 	case kindCookies:
 		res["cookies"] = g.filterCookies(res["cookies"])
+	case kindTrustTokens:
+		res["tokens"] = filterTrustTokens(res["tokens"])
+	case kindAffectedURLs:
+		res["matchedUrls"] = filterStrings(res["matchedUrls"], protect.CredentialURL)
 	case kindStreams:
 		g.recordStreamsLocked(res)
 	case kindBrowserSession:
@@ -381,6 +391,7 @@ var eventHandlers = map[string]eventHandler{
 	"Profiler.consoleProfileFinished":            (*guard).consoleProfileEvent,
 	"Console.messageAdded":                       (*guard).consoleMessageEvent,
 	"Log.entryAdded":                             (*guard).logEntryEvent,
+	"Audits.issueAdded":                          (*guard).auditIssueEvent,
 	"Network.requestWillBeSent":                  afterRequest((*guard).requestEvent, levelKnown),
 	"Network.requestWillBeSentExtraInfo":         (*guard).extraEvent,
 	"Network.responseReceived":                   afterRequest((*guard).responseEvent, levelSettled),

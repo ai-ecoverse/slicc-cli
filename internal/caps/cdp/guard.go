@@ -35,6 +35,8 @@ const (
 
 var refusedParse = strings.TrimPrefix(protect.UnparseableRefusal(), "slicc: refused: ")
 
+var refusedCredential = protect.CredentialReason()
+
 type callKey struct {
 	session string
 	id      int64
@@ -58,6 +60,8 @@ const (
 	kindStreams
 	kindPaint
 	kindScript
+	kindTrustTokens
+	kindAffectedURLs
 )
 
 type relayCall struct {
@@ -169,6 +173,9 @@ type guard struct {
 	marked                map[string]map[string]bool
 	markedCount           int
 	saturated             map[string]bool
+	credMarked            map[string]map[string]bool
+	credCount             int
+	credSaturated         map[string]bool
 	swProtected           map[string]bool
 	navTargets            map[string]*navTarget
 	navSessions           map[string]*navTarget
@@ -201,6 +208,7 @@ type guard struct {
 	handed                map[requestKey]int
 	handedOrder           []handedPause
 	pauses                int
+	pauseURLs             map[requestKey]string
 	pauseLinks            map[requestKey]requestKey
 	clientRequests        map[requestKey]*clientRequestState
 	clientCalls           map[callKey]clientMark
@@ -287,6 +295,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		nextID:                relayIDBase,
 		marked:                map[string]map[string]bool{},
 		saturated:             map[string]bool{},
+		credMarked:            map[string]map[string]bool{},
+		credSaturated:         map[string]bool{},
 		swProtected:           map[string]bool{},
 		navTargets:            map[string]*navTarget{},
 		navSessions:           map[string]*navTarget{},
@@ -309,6 +319,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		heldExtras:            map[requestKey][]heldExtra{},
 		seen:                  map[requestKey]reqLevel{},
 		handed:                map[requestKey]int{},
+		pauseURLs:             map[requestKey]string{},
 		pauseLinks:            map[requestKey]requestKey{},
 		clientRequests:        map[requestKey]*clientRequestState{},
 		clientCalls:           map[callKey]clientMark{},
@@ -1625,6 +1636,9 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.markedCount -= len(g.marked[id])
 	delete(g.marked, id)
 	delete(g.saturated, id)
+	g.credCount -= len(g.credMarked[id])
+	delete(g.credMarked, id)
+	delete(g.credSaturated, id)
 	delete(g.assets, id)
 	g.forgetExtrasLocked(id)
 	for k := range g.pending {
@@ -1673,6 +1687,30 @@ func (g *guard) markRequestLocked(sessionID, requestID string) {
 	}
 	m[requestID] = true
 	g.markedCount++
+}
+
+func (g *guard) credMarkLocked(sessionID, requestID string) {
+	if requestID == "" {
+		return
+	}
+	m := g.credMarked[sessionID]
+	if m == nil {
+		m = map[string]bool{}
+		g.credMarked[sessionID] = m
+	}
+	if m[requestID] {
+		return
+	}
+	if g.credCount >= maxMarked {
+		g.credSaturated[sessionID] = true
+		return
+	}
+	m[requestID] = true
+	g.credCount++
+}
+
+func (g *guard) credMarkedLocked(sessionID, requestID string) bool {
+	return g.credSaturated[sessionID] || g.credMarked[sessionID][requestID]
 }
 
 func (g *guard) requestMarkedLocked(sessionID, requestID string) bool {
