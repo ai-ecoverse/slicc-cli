@@ -340,3 +340,176 @@ func TestExtensionFrameURLDoesNotLatchPage(t *testing.T) {
 		t.Fatalf("Page.getFrameTree with extension-frame child: forward=%v reply=%s", v.forward != nil, v.reply)
 	}
 }
+
+func privateTreeID(t *testing.T, send [][]byte) int64 {
+	t.Helper()
+	for _, raw := range send {
+		var c struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(raw, &c) == nil && c.Method == "Page.getFrameTree" {
+			return c.ID
+		}
+	}
+	t.Fatalf("no private Page.getFrameTree in send=%q", send)
+	return 0
+}
+
+func TestExtensionForeignWorldOnUnclassifiedReleasesAfterPrivateTree(t *testing.T) {
+	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001"}), t.Logf)
+	page := map[string]any{"targetId": "PAGE", "type": "page", "url": "http://localhost:7002/nest", "attached": true}
+	g.fromBrowser(encode(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": page}}))
+	g.fromBrowser(encode(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "S", "waitingForDebugger": false, "targetInfo": page}}))
+	g.mu.Lock()
+	ready := make(chan struct{})
+	close(ready)
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", session: "S", ready: ready, done: true}
+	g.mu.Unlock()
+	created, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S",
+		"params": map[string]any{"context": map[string]any{
+			"id": 71, "origin": "http://localhost:7002", "name": "slicc-ext-probe-forged-foreign-unclass", "uniqueId": "foreign-unclass",
+			"auxData": map[string]any{"isDefault": false, "type": "isolated", "frameId": "MID"},
+		}},
+	})
+	createdVerdict := g.fromBrowser(created)
+	if locked, pf := pageLatch(g); !locked {
+		t.Fatalf("foreign world on an unclassified ordinary child must latch at once: protectedFrame=%q held=%v send=%q", pf, func() bool {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			return g.contextHeldLocked("PAGE", 71)
+		}(), createdVerdict.send)
+	}
+	id := privateTreeID(t, createdVerdict.send)
+	clientMsgs := append([][]byte{}, createdVerdict.page...)
+	if len(createdVerdict.forward) > 0 {
+		clientMsgs = append(clientMsgs, createdVerdict.forward)
+	}
+	for _, raw := range clientMsgs {
+		var m struct {
+			ID     *int64 `json:"id"`
+			Method string `json:"method"`
+			Result any    `json:"result"`
+		}
+		if json.Unmarshal(raw, &m) == nil && m.ID != nil && *m.ID == id {
+			t.Fatalf("private Page.getFrameTree must not reach the client: %s", raw)
+		}
+	}
+	g.fromBrowser(encode(map[string]any{"id": id, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
+		"frame": map[string]any{"id": "PAGE", "url": "http://localhost:7002/nest", "securityOrigin": "http://localhost:7002"},
+		"childFrames": []any{
+			map[string]any{"frame": map[string]any{"id": "MID", "parentId": "PAGE", "url": "http://localhost:7002/inner", "securityOrigin": "http://localhost:7002"}},
+		},
+	}}}))
+	if locked, pf := pageLatch(g); locked {
+		t.Fatalf("private tree classifying MID ordinary must release the latch: protectedFrame=%q", pf)
+	}
+	ok := g.fromCommand(&command{id: 2, method: "Page.getFrameTree", session: "S"}, 1, true)
+	if ok.reply != nil || ok.forward == nil {
+		t.Fatalf("Page.getFrameTree after private-tree release: forward=%v reply=%s", ok.forward != nil, ok.reply)
+	}
+}
+
+func TestExtensionProtectedBlankChildOfSevenNeverReleasedByPrivateTree(t *testing.T) {
+	g := newGuard(protect.MustNew([]string{"http://127.0.0.1:7001"}), t.Logf)
+	page := map[string]any{"targetId": "PAGE", "type": "page", "url": "http://localhost:7002/framed-seven", "attached": true}
+	seven := map[string]any{"targetId": "SEVEN", "type": "iframe", "url": "http://127.0.0.1:7001/frame.html", "attached": true}
+	g.fromBrowser(encode(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": page}}))
+	g.fromBrowser(encode(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "S", "waitingForDebugger": false, "targetInfo": page}}))
+	g.fromBrowser(encode(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": seven}}))
+	g.mu.Lock()
+	ready := make(chan struct{})
+	close(ready)
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", session: "S", ready: ready, done: true}
+	g.frames["PAGE"] = map[string]bool{"SEVEN": true, "CHILD": true}
+	_, _ = g.noteFrameParentLocked("SEVEN", "PAGE")
+	_, _ = g.noteFrameParentLocked("CHILD", "SEVEN")
+	_ = g.noteChildFrameLocked("SEVEN", "http://127.0.0.1:7001/frame.html")
+	_ = g.noteChildFrameLocked("CHILD", "about:blank")
+	if t7 := g.targets["SEVEN"]; t7 != nil {
+		t7.protected = true
+	}
+	g.mu.Unlock()
+	created, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S",
+		"params": map[string]any{"context": map[string]any{
+			"id": 81, "origin": "http://127.0.0.1:7001", "name": "", "uniqueId": "blank-under-seven",
+			"auxData": map[string]any{"isDefault": false, "type": "isolated", "frameId": "CHILD"},
+		}},
+	})
+	createdVerdict := g.fromBrowser(created)
+	if locked, _ := pageLatch(g); !locked {
+		t.Fatal("protected about:blank child of a seven page must latch")
+	}
+	g.mu.Lock()
+	send := g.worldEpochLocked("PAGE", "S")
+	g.mu.Unlock()
+	if len(send) == 0 {
+		send = createdVerdict.send
+	}
+	id := privateTreeID(t, send)
+	tree := g.fromBrowser(encode(map[string]any{"id": id, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
+		"frame": map[string]any{"id": "PAGE", "url": "http://localhost:7002/framed-seven", "securityOrigin": "http://localhost:7002"},
+		"childFrames": []any{
+			map[string]any{"frame": map[string]any{"id": "SEVEN", "parentId": "PAGE", "url": "http://127.0.0.1:7001/frame.html", "securityOrigin": "http://127.0.0.1:7001"}, "childFrames": []any{
+				map[string]any{"frame": map[string]any{"id": "CHILD", "parentId": "SEVEN", "url": "about:blank", "securityOrigin": "http://127.0.0.1:7001"}},
+			}},
+		},
+	}}}))
+	clientTree := append([][]byte{}, tree.page...)
+	if len(tree.forward) > 0 {
+		clientTree = append(clientTree, tree.forward)
+	}
+	for _, raw := range clientTree {
+		var m struct {
+			Method string `json:"method"`
+			Result any    `json:"result"`
+		}
+		if json.Unmarshal(raw, &m) == nil && m.Result != nil {
+			t.Fatalf("private tree result must not reach the client: %s", raw)
+		}
+	}
+	if locked, pf := pageLatch(g); !locked {
+		t.Fatalf("private tree saying seven/unknown must not release a protected about:blank child: protectedFrame=%q", pf)
+	}
+	for _, ev := range []map[string]any{
+		{"method": "DOM.attributeModified", "sessionId": "S", "params": map[string]any{"nodeId": 1, "name": "src", "value": "about:blank", "frameId": "CHILD"}},
+		{"method": "Accessibility.loadComplete", "sessionId": "S", "params": map[string]any{"frameId": "CHILD", "root": map[string]any{"role": map[string]any{"value": "WebArea"}}}},
+		{"method": "DOM.documentUpdated", "sessionId": "S", "params": map[string]any{"frameId": "CHILD"}},
+	} {
+		leak := g.fromBrowser(encode(ev))
+		if len(leak.forward) > 0 {
+			t.Fatalf("DOM/Accessibility event from protected about:blank child leaked to the client: method=%s forward=%s", ev["method"], leak.forward)
+		}
+	}
+	srcdoc, _ := json.Marshal(map[string]any{
+		"method": "Runtime.executionContextCreated", "sessionId": "S",
+		"params": map[string]any{"context": map[string]any{
+			"id": 82, "origin": "http://127.0.0.1:7001", "name": "", "uniqueId": "srcdoc-under-seven",
+			"auxData": map[string]any{"isDefault": false, "type": "isolated", "frameId": "SRCDOC"},
+		}},
+	})
+	g.mu.Lock()
+	_, _ = g.noteFrameParentLocked("SRCDOC", "SEVEN")
+	_ = g.noteChildFrameLocked("SRCDOC", "about:srcdoc")
+	g.mu.Unlock()
+	_ = g.fromBrowser(srcdoc)
+	g.mu.Lock()
+	send = g.worldEpochLocked("PAGE", "S")
+	g.mu.Unlock()
+	if len(send) > 0 {
+		sid := privateTreeID(t, send)
+		g.fromBrowser(encode(map[string]any{"id": sid, "sessionId": "S", "result": map[string]any{"frameTree": map[string]any{
+			"frame": map[string]any{"id": "PAGE", "url": "http://localhost:7002/framed-seven", "securityOrigin": "http://localhost:7002"},
+			"childFrames": []any{
+				map[string]any{"frame": map[string]any{"id": "SEVEN", "parentId": "PAGE", "url": "http://127.0.0.1:7001/frame.html", "securityOrigin": "http://127.0.0.1:7001"}, "childFrames": []any{
+					map[string]any{"frame": map[string]any{"id": "SRCDOC", "parentId": "SEVEN", "url": "about:srcdoc", "securityOrigin": "http://127.0.0.1:7001"}},
+				}},
+			},
+		}}}))
+	}
+	if locked, pf := pageLatch(g); !locked {
+		t.Fatalf("protected about:srcdoc child of seven must stay latched after private tree: protectedFrame=%q", pf)
+	}
+}

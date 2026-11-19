@@ -29,7 +29,7 @@ func TestCDPExtensionWorldOnAboutBlankHostDoesNotLockPage(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestExtension(World|OwnProbe|ProbeNamed|Unclassified|CopiedProbe|FrameURL|PendingProbe)", "./internal/caps/cdp")
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestExtension(World|OwnProbe|ProbeNamed|Unclassified|CopiedProbe|FrameURL|PendingProbe|ForeignWorldOnUnclassified|ProtectedBlankChild)", "./internal/caps/cdp")
 	command.Dir = root
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("extension worlds on ordinary/protected frames: %v\n%s", err, output)
