@@ -1375,35 +1375,78 @@ func TestEmptyURLHoldPageBeforeTabProtectedHide_KnownResidual(t *testing.T) {
 	}
 }
 
+func emptyURLHoldArmBlockChildPage(t *testing.T, g *guard, tabSession, tabID, pageSession, pageID string) {
+	t.Helper()
+	_ = g.fromBrowser(emptyURLNamedTabAttach(tabSession, tabID, "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach(tabSession, pageSession, pageID, "OPENER", true))
+	if g.sessions[tabSession] == nil || g.held[pageSession] == nil {
+		t.Fatal("expected announced tab and held page before Fetch block-child")
+	}
+}
+
+func emptyURLHoldPausedDocument(session, reqID, networkID, frameID string) []byte {
+	params := map[string]any{
+		"requestId":    reqID,
+		"networkId":    networkID,
+		"frameId":      frameID,
+		"resourceType": "Document",
+		"request":      map[string]any{"url": "https://seven.sliccy.ai/child"},
+	}
+	return encode(map[string]any{
+		"sessionId": session,
+		"method":    "Fetch.requestPaused",
+		"params":    params,
+	})
+}
+
+func emptyURLHoldAssertPausedFlushesTabDetach(t *testing.T, g *guard, v browserVerdict, tabSession, label string) {
+	t.Helper()
+	ps := emptyURLHoldPayloads(v)
+	if len(g.pendingPage) > 0 {
+		t.Fatalf("%s left client tab detach parked on pendingPage: pending=%v payloads=%v", label, len(g.pendingPage), ps)
+	}
+	if g.sessions[tabSession] != nil {
+		t.Fatalf("%s blocked held child left announced tab attached: payloads=%v", label, ps)
+	}
+	emptyURLAssertClientSawTabDetach(t, ps, tabSession)
+}
+
 func TestEmptyURLHoldNavFetchBlockChildFlushesTabDetach(t *testing.T) {
 	g := emptyURLHoldGuard(t)
-	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-BC", "TAB-BC", "", true))
-	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-BC", "S-PAGE-BC", "PAGE-BC", "OPENER", true))
-	if g.sessions["S-TAB-BC"] == nil || g.held["S-PAGE-BC"] == nil {
-		t.Fatal("expected announced tab and held page before nav Fetch block")
-	}
+	emptyURLHoldArmBlockChildPage(t, g, "S-TAB-BC", "TAB-BC", "S-PAGE-BC", "PAGE-BC")
 	nt := &navTarget{target: "OPENER", session: "NAV-BC", ready: make(chan struct{})}
 	g.navTargets["OPENER"] = nt
 	g.navSessions["NAV-BC"] = nt
-	v := g.fromBrowser(encode(map[string]any{
-		"sessionId": "NAV-BC",
-		"method":    "Fetch.requestPaused",
-		"params": map[string]any{
-			"requestId":    "REQ-BC",
-			"networkId":    "NET-BC",
-			"frameId":      "PAGE-BC",
-			"resourceType": "Document",
-			"request":      map[string]any{"url": "https://seven.sliccy.ai/child"},
-		},
-	}))
-	ps := emptyURLHoldPayloads(v)
-	if len(g.pendingPage) > 0 {
-		t.Fatalf("nav Fetch.requestPaused left client tab detach parked on pendingPage: pending=%v payloads=%v", len(g.pendingPage), ps)
-	}
-	if g.sessions["S-TAB-BC"] != nil {
-		t.Fatalf("blocked held child left announced tab attached: payloads=%v", ps)
-	}
-	emptyURLAssertClientSawTabDetach(t, ps, "S-TAB-BC")
+	v := g.fromBrowser(emptyURLHoldPausedDocument("NAV-BC", "REQ-BC", "NET-BC", "PAGE-BC"))
+	emptyURLHoldAssertPausedFlushesTabDetach(t, g, v, "S-TAB-BC", "nav Fetch.requestPaused")
+}
+
+func TestEmptyURLHoldPausedNoNavSessionFlushesTabDetach(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldArmBlockChildPage(t, g, "S-TAB-PN", "TAB-PN", "S-PAGE-PN", "PAGE-PN")
+	v := g.fromBrowser(emptyURLHoldPausedDocument("S-OPENER", "REQ-PN", "NET-PN", "PAGE-PN"))
+	emptyURLHoldAssertPausedFlushesTabDetach(t, g, v, "S-TAB-PN", "Fetch.requestPaused with no nav session")
+}
+
+func TestEmptyURLHoldPausedNavSeenFlushesTabDetach(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldArmBlockChildPage(t, g, "S-TAB-PS", "TAB-PS", "S-PAGE-PS", "PAGE-PS")
+	nt := &navTarget{target: "OPENER", session: "NAV-PS", ready: make(chan struct{})}
+	g.navTargets["OPENER"] = nt
+	g.navSessions["NAV-PS"] = nt
+	g.navSeen[requestKey{"OPENER", "NET-PS"}] = true
+	v := g.fromBrowser(emptyURLHoldPausedDocument("S-OPENER", "REQ-PS", "NET-PS", "PAGE-PS"))
+	emptyURLHoldAssertPausedFlushesTabDetach(t, g, v, "S-TAB-PS", "Fetch.requestPaused with navSeen")
+}
+
+func TestEmptyURLHoldPausedEmptyNetworkIDFlushesTabDetach(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldArmBlockChildPage(t, g, "S-TAB-PE", "TAB-PE", "S-PAGE-PE", "PAGE-PE")
+	nt := &navTarget{target: "OPENER", session: "NAV-PE", ready: make(chan struct{})}
+	g.navTargets["OPENER"] = nt
+	g.navSessions["NAV-PE"] = nt
+	v := g.fromBrowser(emptyURLHoldPausedDocument("S-OPENER", "REQ-PE", "", "PAGE-PE"))
+	emptyURLHoldAssertPausedFlushesTabDetach(t, g, v, "S-TAB-PE", "Fetch.requestPaused with empty networkId")
 }
 
 func TestEmptyURLHoldProtectedTabCascadesShownWorkerChild(t *testing.T) {
