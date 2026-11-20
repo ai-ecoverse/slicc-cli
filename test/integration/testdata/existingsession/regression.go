@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
@@ -652,5 +653,372 @@ func TestExistingSessionMatrixSummary(t *testing.T) {
 	t.Log("\n" + strings.Join(lines, "\n"))
 	if len(red) > 0 {
 		t.Errorf("existing-session red cell classes: %d (see log table)", len(red))
+	}
+}
+
+const (
+	esRetriableMark = "Execution context was destroyed"
+	esHoldCap       = 256
+	esReadID2       = 72
+	esReadID3       = 73
+)
+
+func esSessionCut(g *guard) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	s := g.sessions[esSession]
+	return s == nil || s.refused || g.refused[esSession]
+}
+
+func esHasRetriable(o esOutcome) bool {
+	if strings.Contains(o.refusal, esRetriableMark) {
+		return true
+	}
+	for _, p := range o.payloads {
+		if esIsReadReply(p) && strings.Contains(p, esRetriableMark) {
+			return true
+		}
+	}
+	return false
+}
+
+func esFrameTreeAnswer(id int64, session, url, loader string) []byte {
+	return esEncode(map[string]any{
+		"id":        id,
+		"sessionId": session,
+		"result": map[string]any{
+			"frameTree": map[string]any{
+				"frame": map[string]any{
+					"id":             esTarget,
+					"loaderId":       loader,
+					"url":            url,
+					"securityOrigin": "://",
+					"mimeType":       "text/html",
+				},
+			},
+		},
+	})
+}
+
+func esIssueContent(g *guard, o *esOutcome, id int64, cmd esCommand, live string, committed bool) {
+	pv := g.fromCommand(&command{id: id, method: cmd.method, session: esSession, params: cmd.params}, id, true)
+	if pv.reply != nil {
+		o.refused = true
+		o.payloads = append(o.payloads, string(pv.reply))
+		o.refusal = string(pv.reply)
+		return
+	}
+	if pv.wait != nil {
+		o.waited = true
+		return
+	}
+	if pv.forward != nil {
+		o.forwarded = true
+		reply := esContentReply(cmd, id, live, committed)
+		esDrain(g, o, g.fromBrowser(reply), live)
+	}
+}
+
+func TestExistingSessionBaselineUpdatesOnOrdinaryNavigation(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	esDeliverLearn(g, &o, esOrdinaryB, esEventsBoth)
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	esIssueContent(g, &o, int64(esReadID), cmd, esOrdinaryB, true)
+	o.notePayloadsFor(esOrdinaryB)
+	if o.delivered && strings.Contains(strings.Join(o.payloads, ""), esSecret) {
+		t.Fatalf("ordinary baseline update must not deliver protected content")
+	}
+	if esSessionCut(g) {
+		t.Fatalf("ordinary→ordinary must not cut the session")
+	}
+	if o.refused && !esHasRetriable(o) && strings.Contains(o.refusal, "slicc: refused:") {
+		t.Fatalf("after the guard learns an ordinary commit, admit baseline must move with it so a later read is not a hard refuse: %s", o.refusal)
+	}
+}
+
+func TestExistingSessionOutcomeAProtectedCuts(t *testing.T) {
+	for _, live := range esProtectedURLs() {
+		live := live
+		t.Run(live, func(t *testing.T) {
+			g := esGuard(t)
+			_ = esAdmit(t, g)
+			var o esOutcome
+			cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "document.body.innerText"}}
+			esIssueContent(g, &o, int64(esReadID), cmd, live, true)
+			o.notePayloadsFor(live)
+			if o.delivered {
+				t.Fatalf("outcome (a): never-learn must drop protected content before the client sees it: %v", o.payloads)
+			}
+			if !esSessionCut(g) {
+				t.Fatalf("outcome (a): protected or unaccountable identity must cut the session (refused=%t mechanism=%s)", o.refused, o.mechanism)
+			}
+		})
+	}
+}
+
+func TestExistingSessionOutcomeBOrdinaryIdentityChangeRetriableNoCut(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
+	if pv.reply != nil {
+		t.Fatalf("admit on ordinary must forward: %s", pv.reply)
+	}
+	if pv.forward == nil {
+		t.Fatalf("expected forward")
+	}
+	esDrain(g, &o, g.fromBrowser(esContentReply(cmd, int64(esReadID), esOrdinaryB, true)), esOrdinaryB)
+	esDeliverLearn(g, &o, esOrdinaryB, esEventsBoth)
+	o.notePayloadsFor(esOrdinaryB)
+	if esSessionCut(g) {
+		t.Fatalf("outcome (b): ordinary identity change must not cut the session")
+	}
+	if o.delivered && !esHasRetriable(o) {
+		t.Fatalf("outcome (b): ordinary→ordinary identity change across the command must drop with a retriable refusal, not forward the result: payloads=%v", o.payloads)
+	}
+	if !esHasRetriable(o) && !o.refused {
+		t.Fatalf("outcome (b): expected a retriable refusal shaped like %q", esRetriableMark)
+	}
+	pv2 := g.fromCommand(&command{id: int64(esReadID2), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID2), true)
+	if pv2.reply != nil && strings.Contains(string(pv2.reply), refusedTarget) && esSessionCut(g) {
+		t.Fatalf("outcome (b): session must remain usable after the retriable drop")
+	}
+}
+
+func TestExistingSessionIndependentHoldsAndCoalescing(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	live := esProtectedURLs()[0]
+	for _, id := range []int64{esReadID, esReadID2, esReadID3} {
+		pv := g.fromCommand(&command{id: id, method: cmd.method, session: esSession, params: cmd.params}, id, true)
+		if pv.reply != nil {
+			t.Fatalf("parallel admits must not refuse before post-read: id=%d %s", id, pv.reply)
+		}
+		if pv.forward == nil {
+			t.Fatalf("expected forward id=%d", id)
+		}
+		esDrain(g, &o, g.fromBrowser(esContentReply(cmd, id, live, true)), live)
+	}
+	var clientBefore int
+	for _, p := range o.payloads {
+		if strings.Contains(p, esSecret) {
+			clientBefore++
+		}
+	}
+	if clientBefore > 0 {
+		t.Fatalf("independent holds: no covered reply may reach the client before a post-read taken after that reply: leaked=%d", clientBefore)
+	}
+	if esSessionCut(g) && clientBefore == 0 && !o.refused {
+		t.Fatalf("holds must settle via post-read, not a silent cut")
+	}
+}
+
+func TestExistingSessionHoldCapRetriableNoCut(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	live := esProtectedURLs()[0]
+	var o esOutcome
+	var sawRetriable bool
+	for i := 0; i < esHoldCap+8; i++ {
+		id := int64(1000 + i)
+		pv := g.fromCommand(&command{id: id, method: cmd.method, session: esSession, params: cmd.params}, id, true)
+		if pv.reply != nil {
+			if strings.Contains(string(pv.reply), esRetriableMark) {
+				sawRetriable = true
+			}
+			continue
+		}
+		if pv.forward != nil {
+			esDrain(g, &o, g.fromBrowser(esContentReply(cmd, id, live, true)), live)
+		}
+	}
+	if esSessionCut(g) {
+		t.Fatalf("hold-cap trip must be retriable without cutting the session")
+	}
+	for _, p := range o.payloads {
+		if strings.Contains(p, esRetriableMark) {
+			sawRetriable = true
+		}
+		if strings.Contains(p, esSecret) {
+			t.Fatalf("cap trip must not forward a held protected result")
+		}
+	}
+	if !sawRetriable {
+		t.Fatalf("exceeding the per-session hold cap (%d) must fail closed with a retriable refusal", esHoldCap)
+	}
+}
+
+func TestExistingSessionIdentityAbsentCases(t *testing.T) {
+	t.Run("empty-empty-ordinary-blank-passes", func(t *testing.T) {
+		g := esGuard(t)
+		var o esOutcome
+		esDrain(g, &o, g.fromBrowser(esRelay("Target.targetCreated", "about:blank")), "about:blank")
+		esArmNav(g, "about:blank")
+		pv := g.fromCommand(&command{id: esAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": esTarget, "flatten": true}}, esAttachID, true)
+		if pv.reply != nil && strings.Contains(string(pv.reply), "slicc: refused:") {
+			t.Fatalf("blank attach must admit: %s", pv.reply)
+		}
+		esDrain(g, &o, g.fromBrowser(esAttached("about:blank")), "about:blank")
+		esDrain(g, &o, g.fromBrowser(esAttachReply()), "about:blank")
+		cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+		esIssueContent(g, &o, int64(esReadID), cmd, "about:blank", false)
+		if esSessionCut(g) {
+			t.Fatalf("unchanged empty identity on inheriting blank must not cut")
+		}
+	})
+	t.Run("unreadable-identity-fail-closed", func(t *testing.T) {
+		o := esRunCell(t, esCommand{label: "DOM.getDocument", method: "DOM.getDocument", params: map[string]any{}}, esProtectedURLs()[0], esNeverLearn, esEventsBoth)
+		if o.delivered {
+			t.Fatalf("missing/unreadable post-read identity must not deliver protected content")
+		}
+	})
+}
+
+func TestExistingSessionChromeErrorSkipsIdentityCheck(t *testing.T) {
+	g := esGuard(t)
+	announced := "chrome-error://chromewebdata/"
+	live := "https://seven.sliccy.ai/doc"
+	var o esOutcome
+	esDrain(g, &o, g.fromBrowser(esRelay("Target.targetCreated", announced)), live)
+	ready := make(chan struct{})
+	close(ready)
+	nt := &navTarget{
+		target:      esTarget,
+		session:     esNavSession,
+		ready:       ready,
+		done:        true,
+		documentURL: announced,
+		errorURL:    live,
+	}
+	g.navTargets[esTarget] = nt
+	g.navSessions[esNavSession] = nt
+	g.setErrorProofLocked(esTarget, errorProofOrdinary)
+	_ = g.fromCommand(&command{id: esAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": esTarget, "flatten": true}}, esAttachID, true)
+	esDrain(g, &o, g.fromBrowser(esAttached(announced)), live)
+	esDrain(g, &o, g.fromBrowser(esAttachReply()), live)
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	esIssueContent(g, &o, int64(esReadID), cmd, announced, false)
+	o.notePayloadsFor(live)
+	if o.delivered && strings.Contains(strings.Join(o.payloads, ""), esSecret) {
+		t.Fatalf("chrome-error path must not expose protected content")
+	}
+}
+
+func TestExistingSessionMainFrameOnly(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	child := "ES-IFRAME"
+	esDrain(g, &o, g.fromBrowser(esEncode(map[string]any{
+		"sessionId": esNavSession,
+		"method":    "Page.frameNavigated",
+		"params": map[string]any{
+			"frame": map[string]any{
+				"id":             child,
+				"parentId":       esTarget,
+				"loaderId":       "L-IFRAME",
+				"url":            "view-source:https://vault.sliccy.ai/iframe",
+				"securityOrigin": "://",
+			},
+			"type": "Navigation",
+		},
+	})), "view-source:https://vault.sliccy.ai/iframe")
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	esIssueContent(g, &o, int64(esReadID), cmd, esOrdinary, false)
+	o.notePayloadsFor(esOrdinary)
+	if o.delivered && strings.Contains(strings.Join(o.payloads, ""), esSecret) {
+		t.Fatalf("iframe navigation must not by itself leak through a main-frame content command")
+	}
+}
+
+func TestExistingSessionPostReadOnRelayOrWatchNotClient(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	live := esProtectedURLs()[0]
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
+	if pv.forward == nil && pv.reply == nil {
+		t.Fatalf("expected admit")
+	}
+	var clientPost bool
+	var guardPost bool
+	inspect := func(send [][]byte) {
+		for _, raw := range send {
+			_, method, session := esOutbound(raw)
+			if method != "Page.getFrameTree" && method != "Target.getTargetInfo" {
+				continue
+			}
+			switch session {
+			case esSession:
+				clientPost = true
+			case "RELAY", esNavSession:
+				guardPost = true
+			}
+		}
+	}
+	inspect(pv.send)
+	if pv.forward != nil {
+		v := g.fromBrowser(esContentReply(cmd, int64(esReadID), live, true))
+		o.take(v)
+		inspect(v.send)
+		for _, raw := range v.send {
+			id, method, session := esOutbound(raw)
+			if method == "Page.getFrameTree" && (session == "RELAY" || session == esNavSession) {
+				guardPost = true
+				esDrain(g, &o, g.fromBrowser(esFrameTreeAnswer(id, session, live, "L-POST")), live)
+			}
+			if method == "Target.getTargetInfo" && session == "RELAY" {
+				guardPost = true
+				esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(id, live)), live)
+			}
+			if method == "Target.getTargetInfo" && session == esSession {
+				clientPost = true
+			}
+		}
+	}
+	o.notePayloadsFor(live)
+	if clientPost {
+		t.Fatalf("post-read must use the guard watch/relay session, never the client session")
+	}
+	if o.delivered {
+		t.Fatalf("post-read path must drop protected content; guardPost=%t", guardPost)
+	}
+	if !guardPost && !o.refused {
+		t.Fatalf("expected a post-read on RELAY or %s before releasing a covered reply", esNavSession)
+	}
+}
+
+func TestExistingSessionPostReadDeadlineFailClosed(t *testing.T) {
+	t.Setenv(HoldTimeoutEnv, "5ms")
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	live := esProtectedURLs()[0]
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
+	if pv.forward != nil {
+		esDrain(g, &o, g.fromBrowser(esContentReply(cmd, int64(esReadID), live, true)), live)
+	}
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		o.notePayloadsFor(live)
+		if o.refused || esSessionCut(g) {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	o.notePayloadsFor(live)
+	if o.delivered {
+		t.Fatalf("deadline must fail closed without forwarding protected content")
+	}
+	if !o.refused && !esSessionCut(g) {
+		t.Fatalf("post-read deadline must refuse (and cut when the document cannot be classified ordinary)")
 	}
 }
