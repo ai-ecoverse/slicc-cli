@@ -350,7 +350,8 @@ func (g *guard) relayEventLocked(m *message) browserVerdict {
 		v.send = append(send, v.send...)
 		return v
 	case "Target.targetDestroyed":
-		g.destroyedLocked(p.TargetID)
+		page, goneSend := g.destroyedLocked(p.TargetID)
+		return browserVerdict{send: goneSend, page: page}
 	case "Target.detachedFromTarget":
 		g.navDetachedLocked(p.SessionID)
 	}
@@ -492,13 +493,16 @@ func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
 		TargetID string `json:"targetId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	var send [][]byte
+	var page [][]byte
 	if m.Method == "Target.targetDestroyed" {
 		g.forgetAncestryDisputedLocked(p.TargetID)
+		page, send = g.destroyedLocked(p.TargetID)
 	}
 	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && (g.protectedWorkerIDLocked(p.TargetID) || g.workerConcealedLocked(p.TargetID) || g.workerUnshownLocked(p.TargetID) || g.protectedIframeIDLocked(p.TargetID) || g.iframeConcealedLocked(p.TargetID) || g.iframeUnshownLocked(p.TargetID))) {
-		return browserVerdict{}
+		return browserVerdict{send: send, page: page}
 	}
-	return browserVerdict{forward: data}
+	return browserVerdict{forward: data, send: send, page: page}
 }
 
 func (g *guard) hiddenTargetLocked(id string) bool {
@@ -547,22 +551,6 @@ func (g *guard) attachedUnderHeldLocked(m *message, data []byte) browserVerdict 
 	return v
 }
 
-func (g *guard) admittedOrdinaryOpenerLocked(openerID string) bool {
-	if openerID == "" {
-		return false
-	}
-	t := g.targets[openerID]
-	if t == nil || t.gone || t.protected || protect.Inheriting(t.url) {
-		return false
-	}
-	for _, s := range g.sessions {
-		if s != nil && s.target == openerID && !s.refused {
-			return true
-		}
-	}
-	return false
-}
-
 func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
 	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		if t := g.targets[info.TargetID]; t != nil {
@@ -570,15 +558,20 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 		}
 	}
 	if g.attachedShouldHideLocked(info, m.SessionID) {
-		send = append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)
+		h := &heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, typ: info.Type, waiting: waiting, at: time.Now()}
+		send = append(send, g.hideLocked(h)...)
+		var page [][]byte
 		if info.Type == "page" {
+			var part browserVerdict
 			if m.SessionID != "" {
-				send = append(send, g.detachAnnouncedTabSessionLocked(m.SessionID, true)...)
+				part = g.detachAnnouncedTabSessionLocked(m.SessionID, true)
 			} else {
-				send = append(send, g.detachUnmatchedEmptyOpenerTabsLocked(true)...)
+				part = g.detachUnmatchedEmptyTabsAroundLocked(time.Now(), true)
 			}
+			send = append(send, part.send...)
+			page = append(page, part.page...)
 		}
-		return browserVerdict{send: send}, true
+		return browserVerdict{send: send, page: page}, true
 	}
 	if v, handled := g.holdFailedLoadAttachLocked(m, pSession, waiting, info, send); handled {
 		return v, true
@@ -625,13 +618,6 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	if info.Type == "tab" {
 		g.adoptHeldFlatPageLocked(p.SessionID, info.OpenerID)
-	}
-	if info.Type == "page" {
-		if m.SessionID != "" {
-			g.markAnnouncedTabMatchedLocked(m.SessionID)
-		} else if g.admittedOrdinaryOpenerLocked(info.OpenerID) {
-			g.matchFlatOrdinaryEmptyOpenerTabLocked()
-		}
 	}
 	send = append(send, g.touchLocked(info.TargetID, info.Type)...)
 	if params := decodeParams(m.Params); params != nil {

@@ -30,9 +30,6 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 	sid, _ := params["sessionId"].(string)
 	h := &heldSession{id: sid, parent: parent, target: info.TargetID, typ: info.Type, params: params, waiting: waiting, at: time.Now()}
 	g.held[sid] = h
-	if parent != "" {
-		g.markAnnouncedTabMatchedLocked(parent)
-	}
 	if workerTypes[info.Type] {
 		g.logf("cdp: holding an auto-attached worker until its URL or creator frame is known target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 		return nil
@@ -61,22 +58,9 @@ func heldOpenerLocked(h *heldSession) string {
 	return s
 }
 
-func (g *guard) markAnnouncedTabMatchedLocked(sid string) {
-	if sid == "" {
-		return
-	}
-	if s := g.sessions[sid]; s == nil || s.typ != "tab" {
-		return
-	}
-	g.matchedEmptyOpenerTabs[sid] = true
-}
-
-func (g *guard) tabHasPageChildLocked(sid string) bool {
+func (g *guard) tabHasNestedPageChildLocked(sid string) bool {
 	for _, h := range g.held {
-		if h == nil || h.typ != "page" {
-			continue
-		}
-		if h.parent == sid || h.adoptedTab == sid {
+		if h != nil && h.typ == "page" && h.parent == sid {
 			return true
 		}
 	}
@@ -88,30 +72,29 @@ func (g *guard) tabHasPageChildLocked(sid string) bool {
 	return false
 }
 
-func (g *guard) unmatchedEmptyOpenerTabSessionsLocked() []string {
+func (g *guard) unmatchedEmptyTabCandidatesAroundLocked(at time.Time) []string {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	windowStart := at.Add(-holdTimeout())
 	var out []string
 	for sid, s := range g.sessions {
 		if s == nil || s.typ != "tab" || s.refused || !s.emptyAtAnnounce {
 			continue
 		}
-		if g.matchedEmptyOpenerTabs[sid] || g.tabHasPageChildLocked(sid) {
+		if g.tabHasNestedPageChildLocked(sid) {
 			continue
 		}
 		t := g.targets[s.target]
-		if t == nil || t.opener != "" || t.url != "" {
+		if t == nil || t.url != "" {
+			continue
+		}
+		if s.at.Before(windowStart) || s.at.After(at) {
 			continue
 		}
 		out = append(out, sid)
 	}
 	return out
-}
-
-func (g *guard) matchFlatOrdinaryEmptyOpenerTabLocked() {
-	cands := g.unmatchedEmptyOpenerTabSessionsLocked()
-	if len(cands) != 1 {
-		return
-	}
-	g.matchedEmptyOpenerTabs[cands[0]] = true
 }
 
 func (g *guard) adoptHeldFlatPageLocked(tabSession, tabOpener string) {
@@ -135,41 +118,46 @@ func (g *guard) adoptHeldFlatPageLocked(tabSession, tabOpener string) {
 		return
 	}
 	cand.adoptedTab = tabSession
-	g.markAnnouncedTabMatchedLocked(tabSession)
 }
 
-func (g *guard) detachAnnouncedTabSessionLocked(sid string, protected bool) [][]byte {
+func (g *guard) detachAnnouncedTabSessionLocked(sid string, protected bool) browserVerdict {
 	s := g.sessions[sid]
 	if s == nil || s.typ != "tab" {
-		return nil
+		return browserVerdict{}
 	}
 	delete(g.matchedEmptyOpenerTabs, sid)
-	g.noteHiddenLocked(sid, s.target)
+	target, parent, waiting := s.target, s.parent, s.waiting
+	s.refused = true
+	g.addRefusedLocked(sid)
 	if protected {
-		g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", s.target, sid, s.parent, s.waiting)
+		g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", target, sid, parent, waiting)
 	} else {
-		g.logf("cdp: detached an auto-attached session that never got a URL target=%s session=%s parent=%s waiting=%t", s.target, sid, s.parent, s.waiting)
+		g.logf("cdp: detached an auto-attached session that never got a URL target=%s session=%s parent=%s waiting=%t", target, sid, parent, waiting)
 	}
 	var send [][]byte
-	if s.waiting {
-		send = append(send, g.resumeLocked(sid, s.target))
+	if waiting {
+		send = append(send, g.resumeLocked(sid, target))
 	}
-	msg, _ := g.newCallLocked(s.parent, "Target.detachFromTarget", map[string]any{"sessionId": sid}, false)
+	msg, _ := g.newCallLocked(parent, "Target.detachFromTarget", map[string]any{"sessionId": sid}, false)
+	send = append(send, msg)
+	page := [][]byte{g.detachEventLocked(sid, target, parent)}
 	g.forgetSessionLocked(sid)
-	return append(send, msg)
+	return browserVerdict{send: send, page: page}
 }
 
-func (g *guard) detachUnmatchedEmptyOpenerTabsLocked(protected bool) [][]byte {
-	var send [][]byte
-	for _, sid := range g.unmatchedEmptyOpenerTabSessionsLocked() {
-		send = append(send, g.detachAnnouncedTabSessionLocked(sid, protected)...)
+func (g *guard) detachUnmatchedEmptyTabsAroundLocked(at time.Time, protected bool) browserVerdict {
+	var v browserVerdict
+	for _, sid := range g.unmatchedEmptyTabCandidatesAroundLocked(at) {
+		part := g.detachAnnouncedTabSessionLocked(sid, protected)
+		v.send = append(v.send, part.send...)
+		v.page = append(v.page, part.page...)
 	}
-	return send
+	return v
 }
 
-func (g *guard) detachAnnouncedTabsForPageLocked(h *heldSession, protected bool) [][]byte {
+func (g *guard) detachAnnouncedTabsForPageLocked(h *heldSession, protected bool) browserVerdict {
 	if h == nil || h.typ != "page" {
-		return nil
+		return browserVerdict{}
 	}
 	if h.parent != "" {
 		return g.detachAnnouncedTabSessionLocked(h.parent, protected)
@@ -177,7 +165,23 @@ func (g *guard) detachAnnouncedTabsForPageLocked(h *heldSession, protected bool)
 	if h.adoptedTab != "" {
 		return g.detachAnnouncedTabSessionLocked(h.adoptedTab, protected)
 	}
-	return g.detachUnmatchedEmptyOpenerTabsLocked(protected)
+	return g.detachUnmatchedEmptyTabsAroundLocked(h.at, protected)
+}
+
+func (g *guard) hideHeldPageAndTabsLocked(h *heldSession, protected bool) browserVerdict {
+	var v browserVerdict
+	if h == nil {
+		return v
+	}
+	if protected {
+		v.send = append(v.send, g.hideLocked(h)...)
+	} else {
+		v.send = append(v.send, g.expireDetachLocked(h)...)
+	}
+	part := g.detachAnnouncedTabsForPageLocked(h, protected)
+	v.send = append(v.send, part.send...)
+	v.page = append(v.page, part.page...)
+	return v
 }
 
 func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
@@ -209,23 +213,14 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 		}
 		delete(g.held, h.id)
 		if hide {
-			v.send = append(v.send, g.hideLocked(h)...)
-			v.send = append(v.send, g.detachAnnouncedTabsForPageLocked(h, true)...)
+			part := g.hideHeldPageAndTabsLocked(h, true)
+			v.send = append(v.send, part.send...)
+			v.page = append(v.page, part.page...)
 			continue
 		}
 		part := g.deliverHeldLocked(h)
 		v.send = append(v.send, part.send...)
 		v.page = append(v.page, part.page...)
-		if h.typ == "page" {
-			switch {
-			case h.parent != "":
-				g.markAnnouncedTabMatchedLocked(h.parent)
-			case h.adoptedTab != "":
-				g.markAnnouncedTabMatchedLocked(h.adoptedTab)
-			case g.admittedOrdinaryOpenerLocked(heldOpenerLocked(h)):
-				g.matchFlatOrdinaryEmptyOpenerTabLocked()
-			}
-		}
 	}
 	return v
 }
@@ -234,8 +229,7 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	var v browserVerdict
 	delete(g.held, h.id)
 	if g.targetProtectedLocked(h.target) {
-		v.send = append(v.send, g.hideLocked(h)...)
-		return v
+		return g.hideHeldPageAndTabsLocked(h, true)
 	}
 	waiting := false
 	switch {
@@ -251,7 +245,7 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	if t := g.targets[h.target]; t != nil && (workerTypes[t.typ] || t.typ == "iframe") {
 		t.shown = true
 	}
-	g.sessions[h.id] = &session{id: h.id, target: h.target, parent: h.parent, typ: h.typ, waiting: waiting}
+	g.sessions[h.id] = &session{id: h.id, target: h.target, parent: h.parent, typ: h.typ, waiting: waiting, at: time.Now()}
 	v.send = append(v.send, g.touchLocked(h.target, h.typ)...)
 	if h.params == nil {
 		h.params = map[string]any{}
@@ -411,29 +405,31 @@ func (g *guard) expireDetachLocked(h *heldSession) [][]byte {
 	return append(send, msg)
 }
 
-func (g *guard) expireHold(sessionID string) [][]byte {
+func (g *guard) expireHold(sessionID string) (page, send [][]byte) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	h, ok := g.held[sessionID]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	delete(g.held, sessionID)
 	g.logf("cdp: an auto-attached target never got a URL target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
-	send := g.expireDetachLocked(h)
-	send = append(send, g.detachAnnouncedTabsForPageLocked(h, false)...)
+	part := g.hideHeldPageAndTabsLocked(h, false)
 	g.resolveUnknownLocked()
-	return send
+	return part.page, part.send
 }
 
-func (g *guard) dropHeldLocked(targetID string) {
+func (g *guard) dropHeldLocked(targetID string) (page, send [][]byte) {
 	for sid, h := range g.held {
-		if h.target == targetID {
-			delete(g.held, sid)
-			g.refuseHeldWaitLocked(h.target)
-			g.noteHiddenLocked(sid, h.target)
+		if h.target != targetID {
+			continue
 		}
+		delete(g.held, sid)
+		part := g.hideHeldPageAndTabsLocked(h, true)
+		send = append(send, part.send...)
+		page = append(page, part.page...)
 	}
+	return page, send
 }
 
 func (g *guard) blockChildLocked(parent, frame string) [][]byte {
@@ -449,7 +445,9 @@ func (g *guard) blockChildLocked(parent, frame string) [][]byte {
 			continue
 		}
 		delete(g.held, sid)
-		send = append(send, g.hideLocked(h)...)
+		part := g.hideHeldPageAndTabsLocked(h, true)
+		send = append(send, part.send...)
+		g.pendingPage = append(g.pendingPage, part.page...)
 	}
 	g.resolveUnknownLocked()
 	return send

@@ -1681,7 +1681,7 @@ func (g *guard) addRefusedLocked(id string) {
 	}
 }
 
-func (g *guard) destroyedLocked(id string) {
+func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
 	g.clearBlockedChildrenLocked(id)
 	delete(g.frameProbeAttempts, id)
 	delete(g.frameProbed, id)
@@ -1692,7 +1692,7 @@ func (g *guard) destroyedLocked(id string) {
 	g.forgetExtensionFrameURLLocked("", id)
 	g.forgetExtensionProbeWorldsForTargetLocked(id)
 	g.navForgetLocked(id)
-	g.dropHeldLocked(id)
+	page, send = g.dropHeldLocked(id)
 	g.forgetWorldsLocked(id)
 	g.forgetWorldRequestsLocked(id)
 	g.forgetOpenedSeenLocked(id)
@@ -1701,7 +1701,7 @@ func (g *guard) destroyedLocked(id string) {
 	delete(g.errorTitles, id)
 	t, ok := g.targets[id]
 	if !ok || t.gone {
-		return
+		return page, send
 	}
 	t.gone = true
 	g.tombstones = append(g.tombstones, id)
@@ -1712,6 +1712,7 @@ func (g *guard) destroyedLocked(id string) {
 			delete(g.targets, old)
 		}
 	}
+	return page, send
 }
 
 func (g *guard) forgetSessionLocked(id string) {

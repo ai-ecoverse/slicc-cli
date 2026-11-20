@@ -207,7 +207,8 @@ func TestEmptyURLHoldExpiryDetachesAnnouncedTabWithoutProtectedLabel(t *testing.
 	if g.sessions["S-TAB"] == nil || g.held["S-PAGE"] == nil {
 		t.Fatal("expected announced tab and held page before expiry")
 	}
-	sends := emptyURLHoldSends(browserVerdict{send: g.expireHold("S-PAGE")})
+	_, expSend := g.expireHold("S-PAGE")
+	sends := emptyURLHoldSends(browserVerdict{send: expSend})
 	if g.sessions["S-TAB"] != nil || g.sessions["S-PAGE"] != nil {
 		t.Fatal("expiry left a dangling client session")
 	}
@@ -346,7 +347,7 @@ func TestEmptyURLHoldMutationExpiryLabelledProtected(t *testing.T) {
 	if g.held["S-PAGE"] == nil {
 		t.Fatal("expected page held")
 	}
-	_ = g.expireHold("S-PAGE")
+	_, _ = g.expireHold("S-PAGE")
 	for _, line := range logs {
 		if strings.Contains(line, "protected origin") {
 			t.Fatalf("mutation surface: unclassified expiry used protected-origin wording: %s", line)
@@ -566,7 +567,8 @@ func TestEmptyURLHoldSiblingOpenerProtectedLeavesOtherHeldBothOutcomes(t *testin
 func TestEmptyURLHoldSiblingOpenerExpiryIndependent(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	emptyURLAttachSiblingPairs(t, g, true)
-	sends := emptyURLHoldSends(browserVerdict{send: g.expireHold("S-PAGE-A")})
+	_, expSend := g.expireHold("S-PAGE-A")
+	sends := emptyURLHoldSends(browserVerdict{send: expSend})
 	if g.held["S-PAGE-A"] != nil {
 		t.Fatal("expiry of A left page A held")
 	}
@@ -582,7 +584,8 @@ func TestEmptyURLHoldSiblingOpenerExpiryIndependent(t *testing.T) {
 	if g.sessions["S-PAGE-B"] != nil {
 		t.Fatal("expiry of A admitted page B")
 	}
-	sends = emptyURLHoldSends(browserVerdict{send: g.expireHold("S-PAGE-B")})
+	_, expSend = g.expireHold("S-PAGE-B")
+	sends = emptyURLHoldSends(browserVerdict{send: expSend})
 	if g.held["S-PAGE-B"] != nil || g.sessions["S-TAB-B"] != nil || g.sessions["S-PAGE-B"] != nil {
 		t.Fatal("expiry of B left B behind")
 	}
@@ -786,7 +789,8 @@ func emptyURLAssertFlatExpiredDetachesAll(t *testing.T, n int) {
 	if g.held["S-PAGE-E"] == nil {
 		t.Fatal("expected flat empty page held")
 	}
-	sends := emptyURLHoldSends(browserVerdict{send: g.expireHold("S-PAGE-E")})
+	_, expSend := g.expireHold("S-PAGE-E")
+	sends := emptyURLHoldSends(browserVerdict{send: expSend})
 	for i := 1; i <= n; i++ {
 		sid := fmt.Sprintf("S-TAB-%d", i)
 		if g.sessions[sid] != nil || (emptyURLHoldDetachIndex(sends, sid) < 0 && !g.hidden[sid]) {
@@ -1166,14 +1170,8 @@ func TestEmptyURLHoldFlatExpiredClientSeesTabDetach(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	_ = emptyURLAnnounceFlatTabs(t, g, 1)
 	_ = g.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-E", "PAGE-E", "OPENER", true))
-	_ = g.expireHold("S-PAGE-E")
-	chromeAck := g.fromBrowser(encode(map[string]any{
-		"method": "Target.detachedFromTarget",
-		"params": map[string]any{"sessionId": "S-TAB-1", "targetId": "TAB-1"},
-	}))
-	if emptyURLHoldClientDetachIndex(emptyURLHoldPayloads(chromeAck), "S-TAB-1") < 0 {
-		t.Fatalf("client must receive Target.detachedFromTarget for the announced tab after expiry (Chrome ack must not be swallowed): %v", emptyURLHoldPayloads(chromeAck))
-	}
+	page, _ := g.expireHold("S-PAGE-E")
+	emptyURLAssertClientSawTabDetach(t, emptyURLHoldPayloads(browserVerdict{page: page}), "S-TAB-1")
 }
 
 func emptyURLAssertFlatProtectedClientDetachesAll(t *testing.T, n int) {
@@ -1227,7 +1225,7 @@ func TestEmptyURLHoldStaleEmptyTabOutsideHoldWindowUntouched(t *testing.T) {
 	if h := g.held["S-PAGE-E"]; h != nil {
 		h.at = time.Now()
 	}
-	_ = g.expireHold("S-PAGE-E")
+	_, _ = g.expireHold("S-PAGE-E")
 	if g.sessions["S-TAB-OLD"] == nil {
 		t.Fatal("stale empty tab outside the hold window must not be detached by an unrelated expiry")
 	}
@@ -1254,11 +1252,14 @@ func TestEmptyURLHoldFailedLoadProtectedDetachesAnnouncedTab(t *testing.T) {
 	g.targets["PAGE-FL"].url = "chrome-error://chromewebdata/"
 	g.setErrorProofLocked("PAGE-FL", errorProofProtected)
 	send := g.finishFailedLoadHeldLocked("PAGE-FL", true)
-	ps := emptyURLHoldPayloads(browserVerdict{send: send})
-	sends := emptyURLHoldSends(browserVerdict{send: send})
-	if g.sessions["S-TAB-FL"] != nil || (emptyURLHoldDetachIndex(sends, "S-TAB-FL") < 0 && emptyURLHoldClientDetachIndex(ps, "S-TAB-FL") < 0 && !g.hidden["S-TAB-FL"]) {
-		t.Fatalf("failed-load protected hide left announced tab attached: sessions=%v payloads=%v sends=%v", g.sessions["S-TAB-FL"] != nil, ps, sends)
+	g.mu.Lock()
+	page := g.takePendingPageLocked()
+	g.mu.Unlock()
+	ps := emptyURLHoldPayloads(browserVerdict{send: send, page: page})
+	if g.sessions["S-TAB-FL"] != nil {
+		t.Fatalf("failed-load protected hide left announced tab session: payloads=%v sends=%v", ps, send)
 	}
+	emptyURLAssertClientSawTabDetach(t, ps, "S-TAB-FL")
 }
 
 func TestEmptyURLHoldDestroyWhileHeldDetachesAnnouncedTab(t *testing.T) {
