@@ -76,6 +76,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	if nt, ok := g.navSessions[m.SessionID]; ok && m.SessionID != "" {
 		v := g.navRequestLocked(nt, &m)
 		v.send = append(v.send, g.navEventLocked(nt, &m)...)
+		v.page = append(v.page, g.takePendingPageLocked()...)
 		return v
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
@@ -673,8 +674,9 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		delete(g.held, p.SessionID)
 		g.refuseHeldWaitLocked(h.target)
+		part := g.detachAnnouncedTabsForPageLocked(h, true)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
+		return browserVerdict{send: part.send, page: append(append(page, part.page...), g.takePendingPageLocked()...)}
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)

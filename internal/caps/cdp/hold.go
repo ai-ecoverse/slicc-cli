@@ -125,7 +125,6 @@ func (g *guard) detachAnnouncedTabSessionLocked(sid string, protected bool) brow
 	if s == nil || s.typ != "tab" {
 		return browserVerdict{}
 	}
-	delete(g.matchedEmptyOpenerTabs, sid)
 	target, parent, waiting := s.target, s.parent, s.waiting
 	s.refused = true
 	g.addRefusedLocked(sid)
@@ -141,6 +140,9 @@ func (g *guard) detachAnnouncedTabSessionLocked(sid string, protected bool) brow
 	msg, _ := g.newCallLocked(parent, "Target.detachFromTarget", map[string]any{"sessionId": sid}, false)
 	send = append(send, msg)
 	page := [][]byte{g.detachEventLocked(sid, target, parent)}
+	page = append(page, g.cascadeOrphansLocked(sid)...)
+	page = append(page, g.takePendingMissingLocked(sid)...)
+	g.navDetachedLocked(sid)
 	g.forgetSessionLocked(sid)
 	return browserVerdict{send: send, page: page}
 }

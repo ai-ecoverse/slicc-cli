@@ -193,7 +193,6 @@ type guard struct {
 	gone                     map[string]bool
 	goneOrder                []string
 	held                     map[string]*heldSession
-	matchedEmptyOpenerTabs   map[string]bool
 	heldContexts             map[heldContextKey]*heldContext
 	contextSettlePage        [][]byte
 	contextSettleSend        [][]byte
@@ -320,7 +319,6 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		errorTitles:              map[string]string{},
 		gone:                     map[string]bool{},
 		held:                     map[string]*heldSession{},
-		matchedEmptyOpenerTabs:   map[string]bool{},
 		heldContexts:             map[heldContextKey]*heldContext{},
 		frameWorldWaits:          map[string]*frameWorldWait{},
 		worldEpochs:              map[string]*worldEpoch{},
@@ -1725,7 +1723,6 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.forgetExtensionOwnerCallsLocked(id)
 	g.forgetVersionCallsLocked(id)
 	g.releaseExtensionPaintsForSessionLocked(id)
-	delete(g.matchedEmptyOpenerTabs, id)
 	delete(g.sessions, id)
 	delete(g.browserSessions, id)
 	g.markedCount -= len(g.marked[id])

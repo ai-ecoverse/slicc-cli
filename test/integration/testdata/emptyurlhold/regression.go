@@ -1102,24 +1102,6 @@ func TestEmptyURLHoldAdoptKeepsFlatPageDetachEnvelope(t *testing.T) {
 	}
 }
 
-func emptyURLMatchedTab(g *guard, sid string) bool {
-	return g.matchedEmptyOpenerTabs[sid]
-}
-
-func TestEmptyURLHoldMatchedTabClearedOnForget(t *testing.T) {
-	g := emptyURLHoldGuard(t)
-	_ = emptyURLAnnounceFlatTabs(t, g, 1)
-	_ = g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "OPENER", "https://ordinary.test/popup", false))
-	matched := emptyURLMatchedTab(g, "S-TAB-1")
-	_ = g.fromBrowser(encode(map[string]any{
-		"method": "Target.detachedFromTarget",
-		"params": map[string]any{"sessionId": "S-TAB-1", "targetId": "TAB-1"},
-	}))
-	if matched && emptyURLMatchedTab(g, "S-TAB-1") {
-		t.Fatal("matchedEmptyOpenerTabs entry survived session forget")
-	}
-}
-
 func emptyURLHoldClientDetachSession(s string) (string, bool) {
 	var m struct {
 		Method string `json:"method"`
