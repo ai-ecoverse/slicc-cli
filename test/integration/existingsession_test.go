@@ -105,6 +105,38 @@ func esIdentityMutations() []esIdentityMutation {
 				"func (g *guard) docIdentityWatchBadLocked(url string) bool {\n\tif url == \"\" || chromeErrorDocument(url) {\n\t\treturn false\n\t}\n\tif g.o.URL(url) {\n\t\treturn true\n\t}\n\treturn false\n}\n",
 			}},
 		},
+		{
+			name: "drop-nav-ordinary-note",
+			run:  "^TestExistingSessionP1TaintSourceInFlightReply/(frameNavigated-protected|frameNavigated-unparseable|frameNavigated-empty-to-wrapped|frameNavigated-bfcache-restore-protected|history-navigateToHistoryEntry-then-frameNavigated)$",
+			replace: [][2]string{{
+				"func (g *guard) noteOrdinaryDocIdentityFromNavLocked(nt *navTarget) {\n\tif nt == nil {\n\t\treturn\n\t}\n\tg.noteDocIdentityChromeErrorCommitLocked(nt.target, nt.documentURL)\n\tg.noteDocIdentityWatchURLLocked(nt.target, nt.documentURL)\n}\n",
+				"func (g *guard) noteOrdinaryDocIdentityFromNavLocked(nt *navTarget) {\n\t_ = nt\n}\n",
+			}},
+		},
+		{
+			name: "drop-target-ordinary-note",
+			run:  "^TestExistingSessionP1TaintSourceInFlightReply/watch-session-url-already-protected-observe$",
+			replace: [][2]string{{
+				"func (g *guard) noteOrdinaryDocIdentityFromTargetLocked(t *target) {\n\tif t == nil || (t.typ != \"page\" && t.typ != \"tab\") {\n\t\treturn\n\t}\n\tg.noteDocIdentityChromeErrorCommitLocked(t.id, t.url)\n\tg.noteDocIdentityWatchURLLocked(t.id, t.url)\n}\n",
+				"func (g *guard) noteOrdinaryDocIdentityFromTargetLocked(t *target) {\n\t_ = t\n}\n",
+			}},
+		},
+		{
+			name: "drop-watch-url-note",
+			run:  "^TestExistingSessionP1TaintSourceInFlightReply/(frameNavigated-protected|watch-session-url-already-protected-observe)$",
+			replace: [][2]string{{
+				"func (g *guard) noteDocIdentityWatchURLLocked(target, url string) {\n\tif target == \"\" || !g.docIdentityWatchBadLocked(url) {\n\t\treturn\n\t}\n\tg.bumpDocIdentityTaintLocked(target)\n}\n",
+				"func (g *guard) noteDocIdentityWatchURLLocked(target, url string) {\n\t_, _ = target, url\n}\n",
+			}},
+		},
+		{
+			name: "drop-bump-taint",
+			run:  "^TestExistingSessionP1TaintSourceInFlightReply/(frameNavigated-protected|targetInfoChanged-newly-protected)$",
+			replace: [][2]string{{
+				"func (g *guard) bumpDocIdentityTaintLocked(target string) {\n\tif target == \"\" {\n\t\treturn\n\t}\n\tif g.docIdentityTaint == nil {\n\t\tg.docIdentityTaint = map[string]uint64{}\n\t}\n\tg.docIdentityTaint[target]++\n}\n",
+				"func (g *guard) bumpDocIdentityTaintLocked(target string) {\n\t_ = target\n}\n",
+			}},
+		},
 	}
 }
 

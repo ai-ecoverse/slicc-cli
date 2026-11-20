@@ -1433,3 +1433,350 @@ func TestExistingSessionPostReadDeadlineFailClosed(t *testing.T) {
 		t.Fatalf("post-read deadline must refuse (and cut when the document cannot be classified ordinary)")
 	}
 }
+
+const esExtFrameURL = "chrome-extension://ankmbodmgimjemnojmeddfcdlbocolob/frame.html"
+
+type esTaintSource struct {
+	name       string
+	url        string
+	fire       func(*guard, *esOutcome, string)
+	wantTaint  bool
+	guardSees  bool
+	assumption string
+}
+
+func esInFlightHoldSecret(t *testing.T, g *guard, o *esOutcome) (infoID int64) {
+	t.Helper()
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "document.body.innerText"}}
+	pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
+	if pv.forward == nil {
+		t.Fatalf("admit must forward: %s", pv.reply)
+	}
+	held := g.fromBrowser(esContentReply(cmd, int64(esReadID), esProtectedURLs()[0], true))
+	o.take(held)
+	for _, raw := range held.send {
+		id, method, session := esOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			infoID = id
+		}
+	}
+	if infoID == 0 {
+		t.Fatal("expected identity hold getTargetInfo")
+	}
+	return infoID
+}
+
+func esSettleOrdinary(g *guard, o *esOutcome, infoID int64) {
+	esDrain(g, o, g.fromBrowser(esTargetInfoAnswer(infoID, esOrdinaryB)), esOrdinaryB)
+	o.notePayloadsFor(esProtectedURLs()[0])
+}
+
+func esFrameStartedNavigating(url string) []byte {
+	return esEncode(map[string]any{
+		"sessionId": esNavSession,
+		"method":    "Page.frameStartedNavigating",
+		"params":    map[string]any{"frameId": esTarget, "url": url, "loaderId": "L-START", "navigationType": "Navigation"},
+	})
+}
+
+func esFrameNavigatedTyped(url, loader, navType string) []byte {
+	raw := esFrameNavigated(url, loader)
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	params, _ := m["params"].(map[string]any)
+	params["type"] = navType
+	return esEncode(m)
+}
+
+func esExecutionContextCreated(id int64, origin, unique string) []byte {
+	return esEncode(map[string]any{
+		"sessionId": esSession,
+		"method":    "Runtime.executionContextCreated",
+		"params": map[string]any{
+			"context": map[string]any{
+				"id": id, "origin": origin, "name": "", "uniqueId": unique,
+				"auxData": map[string]any{"isDefault": true, "frameId": esTarget},
+			},
+		},
+	})
+}
+
+func esTaintSources() []esTaintSource {
+	protected := esProtectedURLs()
+	return []esTaintSource{
+		{name: "frameNavigated-protected", url: protected[0], wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esFrameNavigated(u, "L-SRC")), u)
+		}},
+		{name: "frameNavigated-unparseable", url: "view-source:!!!not-a-url!!!", wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esFrameNavigated(u, "L-BAD")), u)
+		}},
+		{name: "frameNavigated-empty-to-wrapped", url: "blob:", wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esFrameNavigated(u, "L-WRAP")), u)
+		}},
+		{name: "frameNavigated-bfcache-restore-protected", url: protected[0], wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esFrameNavigatedTyped(u, "L-BF", "BackForwardCacheRestore")), u)
+		}},
+		{name: "history-navigateToHistoryEntry-then-frameNavigated", url: protected[0], wantTaint: true, guardSees: true, assumption: "navigateToHistoryEntry itself does not bump; the resulting frameNavigated commit does", fire: func(g *guard, o *esOutcome, u string) {
+			_ = g.fromCommand(&command{id: int64(esReadID2), method: "Page.navigateToHistoryEntry", session: esSession, params: map[string]any{"entryId": json.Number("1")}}, int64(esReadID2), true)
+			esDrain(g, o, g.fromBrowser(esFrameNavigated(u, "L-HIST")), u)
+		}},
+		{name: "watch-session-url-already-protected-observe", url: protected[0], wantTaint: true, guardSees: true, assumption: "already-protected targetInfoChanged takes the else branch and noteDocIdentityWatchURLLocked bumps", fire: func(g *guard, o *esOutcome, u string) {
+			g.mu.Lock()
+			if t0 := g.targets[esTarget]; t0 != nil {
+				t0.protected = true
+				t0.url = u
+			}
+			g.mu.Unlock()
+			esDrain(g, o, g.fromBrowser(esRelay("Target.targetInfoChanged", u)), u)
+		}},
+		{name: "targetInfoChanged-newly-protected", url: protected[0], wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esRelay("Target.targetInfoChanged", u)), u)
+		}},
+		{name: "targetInfoChanged-unparseable", url: "view-source:!!!not-a-url!!!", wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esRelay("Target.targetInfoChanged", u)), u)
+		}},
+		{name: "targetInfoChanged-empty-to-wrapped", url: "blob:", wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esRelay("Target.targetInfoChanged", u)), u)
+		}},
+		{name: "frameStartedNavigating-protected", url: protected[0], wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esFrameStartedNavigating(u)), u)
+		}},
+		{name: "targetCreated-protected-observe", url: protected[1], wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esRelay("Target.targetCreated", u)), u)
+		}},
+		{name: "attachedToTarget-protected-url", url: protected[0], wantTaint: false, guardSees: true, assumption: "attachedToTarget on an already-admitted page session is unusual; modelled as a second attach event carrying a protected targetInfo URL", fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esEncode(map[string]any{
+				"method": "Target.attachedToTarget",
+				"params": map[string]any{
+					"sessionId": "S-ES-2", "waitingForDebugger": false,
+					"targetInfo": map[string]any{"targetId": esTarget, "type": "page", "url": u, "browserContextId": "CTX"},
+				},
+			})), u)
+		}},
+		{name: "navigatedWithinDocument-protected", url: protected[0], wantTaint: false, guardSees: false, assumption: "Page.navigatedWithinDocument has no documentidentity observe hook; event is only on the error-page allowlist", fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esEncode(map[string]any{
+				"sessionId": esNavSession, "method": "Page.navigatedWithinDocument",
+				"params": map[string]any{"frameId": esTarget, "url": u},
+			})), u)
+		}},
+		{name: "frameRestoredFromBackForwardCache", url: protected[0], wantTaint: false, guardSees: false, assumption: "Page.frameRestoredFromBackForwardCache is not in the guard event map; bfcache restores arrive as frameNavigated type=BackForwardCacheRestore", fire: func(g *guard, o *esOutcome, u string) {
+			_ = g
+			_ = o
+			_ = u
+		}},
+		{name: "prerender-activation", url: protected[0], wantTaint: false, guardSees: false, assumption: "no Page.prerender* / frameCommittedInPrerender / activation handler in the guard event map", fire: func(g *guard, o *esOutcome, u string) {
+			_ = g
+			_ = o
+			_ = u
+		}},
+	}
+}
+
+func TestExistingSessionP1TaintSourceInFlightReply(t *testing.T) {
+	for _, src := range esTaintSources() {
+		src := src
+		t.Run(src.name, func(t *testing.T) {
+			if !src.guardSees {
+				t.Skip(src.assumption)
+			}
+			g := esGuard(t)
+			_ = esAdmit(t, g)
+			var o esOutcome
+			g.mu.Lock()
+			before := g.docIdentityTaint[esTarget]
+			g.mu.Unlock()
+			infoID := esInFlightHoldSecret(t, g, &o)
+			src.fire(g, &o, src.url)
+			g.mu.Lock()
+			after := g.docIdentityTaint[esTarget]
+			g.mu.Unlock()
+			bumped := after != before
+			if bumped != src.wantTaint {
+				t.Fatalf("taint bump want=%t got=%t (before=%d after=%d)", src.wantTaint, bumped, before, after)
+			}
+			esSettleOrdinary(g, &o, infoID)
+			joined := strings.Join(o.payloads, "")
+			if strings.Contains(joined, esSecret) {
+				t.Fatalf("P1-1: in-flight reply must not deliver protected content after source %s (wantTaint=%t); payloads=%v", src.name, src.wantTaint, o.payloads)
+			}
+			if !esSessionCut(g) && !o.refused && !esHasRetriable(o) {
+				t.Fatalf("P1-1: source %s must drop+cut (or retriable) the held reply; cut=%t payloads=%v", src.name, esSessionCut(g), o.payloads)
+			}
+		})
+	}
+}
+
+func TestExistingSessionP1RefusedSessionMustNotDeliverHeldReply(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	infoID := esInFlightHoldSecret(t, g, &o)
+	esDrain(g, &o, g.fromBrowser(esRelay("Target.targetInfoChanged", esProtectedURLs()[0])), esProtectedURLs()[0])
+	g.mu.Lock()
+	g.addRefusedLocked(esSession)
+	if s := g.sessions[esSession]; s != nil {
+		s.refused = true
+	}
+	g.mu.Unlock()
+	esSettleOrdinary(g, &o, infoID)
+	joined := strings.Join(o.payloads, "")
+	if strings.Contains(joined, esSecret) {
+		t.Fatalf("P1-1: held reply must not deliver when the session is already refused/cut; payloads=%v", o.payloads)
+	}
+}
+
+func TestExistingSessionP1ExtensionShownPaintSkipsIdentityHold(t *testing.T) {
+	whenShown := []string{"Page.captureScreenshot"}
+	whilePresentExempt := []string{"Page.printToPDF", "Page.captureSnapshot"}
+	t.Run("WhenShown-methods", func(t *testing.T) {
+		for _, method := range whenShown {
+			if !protect.ExtensionShownMethod(method) {
+				t.Fatalf("%s must be ExtensionShownMethod per catalog", method)
+			}
+		}
+		for _, method := range whilePresentExempt {
+			if protect.ExtensionShownMethod(method) {
+				t.Fatalf("%s is WhilePresent, not WhenShown; do not model as ExtensionShown identity bypass", method)
+			}
+			if !protect.ExtensionPresentMethod(method) && method != "Page.captureSnapshot" {
+				t.Fatalf("%s expected ExtensionPresentMethod", method)
+			}
+		}
+	})
+	for _, method := range whenShown {
+		method := method
+		t.Run(method, func(t *testing.T) {
+			g := esGuard(t)
+			_ = esAdmit(t, g)
+			live := esProtectedURLs()[0]
+			g.mu.Lock()
+			if t0 := g.targets[esTarget]; t0 != nil {
+				t0.url = live
+			}
+			g.targets["ES-EXT"] = &target{id: "ES-EXT", typ: "iframe", url: esExtFrameURL, ctx: "CTX", parentFrame: esTarget}
+			g.noteExtensionFrameURLLocked(esTarget, "ES-EXT", esExtFrameURL)
+			g.mu.Unlock()
+			var o esOutcome
+			id := int64(esReadID)
+			cmd := &command{id: id, method: method, session: esSession, params: map[string]any{}}
+			pv := g.afterExtensionShown(cmd, false, true)
+			if pv.reply != nil {
+				t.Fatalf("afterExtensionShown(cleared) must forward: %s", pv.reply)
+			}
+			if pv.forward == nil {
+				t.Fatal("expected forward")
+			}
+			reply := esContentReply(esCommand{method: method}, id, live, true)
+			if !strings.Contains(string(reply), esSecret) {
+				t.Fatal("fixture must carry secret pixels/body")
+			}
+			v := g.fromBrowser(reply)
+			o.take(v)
+			g.mu.Lock()
+			held := false
+			for k := range g.heldExtensionPaints {
+				if k.session == esSession && k.id == id {
+					held = true
+					_ = g.finishExtensionPaintLocked(k, false, true)
+					o.payloads = append(o.payloads, stringBytes(g.takePendingPageLocked())...)
+				}
+			}
+			asks := len(g.docIdentityAsks)
+			holds := len(g.docIdentityHolds)
+			g.mu.Unlock()
+			if !held {
+				t.Fatalf("expected extension paint hold (identity dropped before holdExtensionPaint); send=%d page=%d", len(v.send), len(v.page))
+			}
+			if asks != 0 || holds != 0 {
+				t.Fatalf("P1-2: covered paint must not skip identity: asks=%d holds=%d", asks, holds)
+			}
+			joined := strings.Join(o.payloads, "")
+			if strings.Contains(joined, esSecret) {
+				t.Fatalf("P1-2: extension-shown paint release must not deliver protected document bytes without identity post-read; payloads=%v", o.payloads)
+			}
+		})
+	}
+}
+
+func stringBytes(pages [][]byte) []string {
+	var out []string
+	for _, p := range pages {
+		out = append(out, string(p))
+	}
+	return out
+}
+
+func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
+	type row struct {
+		name       string
+		origin     string
+		pin        string
+		wantShow   bool
+		assumption string
+	}
+	rows := []row{
+		{name: "opaque-origin-://-contextId", origin: "://", pin: "contextId", wantShow: true, assumption: "Chrome often reports opaque/empty security origin for view-source documents; worldContextLocked shows when !Loaded(origin)"},
+		{name: "opaque-origin-null-uniqueContextId", origin: "null", pin: "uniqueContextId", wantShow: true, assumption: "opaque origin null is not Loaded; default main-frame context is shown"},
+		{name: "vault-origin-contextId", origin: "https://vault.sliccy.ai", pin: "contextId", wantShow: false, assumption: "if Chrome reports the inner protected origin, Loaded(origin) hides the context before pin"},
+	}
+	for _, tc := range rows {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			g := esGuard(t)
+			_ = esAdmit(t, g)
+			live := "view-source:https://vault.sliccy.ai/doc"
+			g.mu.Lock()
+			if t0 := g.targets[esTarget]; t0 != nil {
+				t0.url = live
+			}
+			g.mu.Unlock()
+			var o esOutcome
+			ctxID := int64(42)
+			unique := "view-source-ctx-1"
+			esDrain(g, &o, g.fromBrowser(esExecutionContextCreated(ctxID, tc.origin, unique)), live)
+			g.mu.Lock()
+			shown := g.shown[esTarget] != nil && g.shown[esTarget].contexts[ctxID] != nil
+			hidden := g.contextHiddenLocked(esTarget, ctxID)
+			g.mu.Unlock()
+			if shown != tc.wantShow {
+				t.Fatalf("context show want=%t got shown=%t hidden=%t (%s)", tc.wantShow, shown, hidden, tc.assumption)
+			}
+			params := map[string]any{"expression": "document.documentElement.outerHTML"}
+			switch tc.pin {
+			case "contextId":
+				params["contextId"] = json.Number("42")
+			case "uniqueContextId":
+				params["uniqueContextId"] = unique
+			}
+			cmd := esCommand{label: "Runtime.evaluate+pin", method: "Runtime.evaluate", params: params, pinned: true}
+			pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
+			if !tc.wantShow {
+				if pv.reply == nil {
+					t.Fatalf("hidden context must refuse pinned evaluate at admit")
+				}
+				return
+			}
+			if pv.reply != nil {
+				t.Fatalf("shown context pinned evaluate must not refuse at admit: %s", pv.reply)
+			}
+			if pv.forward == nil {
+				t.Fatal("expected forward")
+			}
+			g.mu.Lock()
+			_, admitted := g.docIdentityCalls[callKey{esSession, esReadID}]
+			g.mu.Unlock()
+			if admitted {
+				t.Fatal("pinned evaluate must not enter docIdentityCalls")
+			}
+			reply := esEncode(map[string]any{
+				"id": int64(esReadID), "sessionId": esSession,
+				"result": map[string]any{"result": map[string]any{"type": "string", "value": "<html>" + esSecret + "</html>"}},
+			})
+			esDrain(g, &o, g.fromBrowser(reply), live)
+			joined := strings.Join(o.payloads, "")
+			if strings.Contains(joined, esSecret) {
+				t.Fatalf("P1-3: pinned evaluate on a shown view-source context must not deliver protected source (%s); payloads=%v", tc.assumption, o.payloads)
+			}
+		})
+	}
+}
