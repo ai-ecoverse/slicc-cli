@@ -26,6 +26,7 @@ type worldCtx struct {
 	protectedFrame string
 	unique         string
 	name           string
+	placeSeq       uint64
 	seen           map[string]bool
 	scripts        []string
 }
@@ -512,7 +513,7 @@ func (g *guard) showContextLocked(target, session string, c execContext) {
 		s.full = true
 		return
 	}
-	s.contexts[c.ID] = &worldCtx{defaultWorld: c.AuxData.IsDefault, frame: c.AuxData.FrameID, unique: c.UniqueID, seen: map[string]bool{session: true}}
+	s.contexts[c.ID] = &worldCtx{defaultWorld: c.AuxData.IsDefault, frame: c.AuxData.FrameID, unique: c.UniqueID, placeSeq: g.docPlaceSeq[target], seen: map[string]bool{session: true}}
 	if c.UniqueID != "" {
 		g.shownUniques[c.UniqueID] = target
 	}

@@ -35,18 +35,21 @@ type docIdentityAdmit struct {
 }
 
 type docIdentityHold struct {
-	baseline    docIdentity
-	known       bool
-	taint       uint64
-	seq         uint64
-	data        []byte
-	id          int64
-	session     string
-	target      string
-	arrived     time.Time
-	deadline    time.Time
-	timer       *time.Timer
-	reservation *link.Reservation
+	baseline        docIdentity
+	known           bool
+	taint           uint64
+	seq             uint64
+	data            []byte
+	id              int64
+	session         string
+	target          string
+	method          string
+	extensionAfter  bool
+	extensionFrames []string
+	arrived         time.Time
+	deadline        time.Time
+	timer           *time.Timer
+	reservation     *link.Reservation
 }
 
 type docIdentityAsk struct {
@@ -164,12 +167,30 @@ func (g *guard) noteDocIdentityChromeErrorCommitLocked(target, url string) {
 	g.docChromeErrorSeq[target] = g.docIdentitySeq
 }
 
+func (g *guard) noteDocIdentityPlaceLocked(target, url string) {
+	if target == "" {
+		return
+	}
+	if g.docPlaceURL == nil {
+		g.docPlaceURL = map[string]string{}
+	}
+	if g.docPlaceSeq == nil {
+		g.docPlaceSeq = map[string]uint64{}
+	}
+	if g.docPlaceSeq[target] > 0 && g.docPlaceURL[target] == url {
+		return
+	}
+	g.docPlaceURL[target] = url
+	g.docPlaceSeq[target]++
+}
+
 func (g *guard) noteOrdinaryDocIdentityFromTargetLocked(t *target) {
 	if t == nil || (t.typ != "page" && t.typ != "tab") {
 		return
 	}
 	g.noteDocIdentityChromeErrorCommitLocked(t.id, t.url)
 	g.noteDocIdentityWatchURLLocked(t.id, t.url)
+	g.noteDocIdentityPlaceLocked(t.id, t.url)
 }
 
 func (g *guard) noteOrdinaryDocIdentityFromNavLocked(nt *navTarget) {
@@ -178,10 +199,88 @@ func (g *guard) noteOrdinaryDocIdentityFromNavLocked(nt *navTarget) {
 	}
 	g.noteDocIdentityChromeErrorCommitLocked(nt.target, nt.documentURL)
 	g.noteDocIdentityWatchURLLocked(nt.target, nt.documentURL)
+	g.noteDocIdentityPlaceLocked(nt.target, nt.documentURL)
+}
+
+func (g *guard) docIdentityPinnedNeedsHoldLocked(c *command) bool {
+	if c == nil || !docIdentityPinned(c) {
+		return false
+	}
+	t := g.sessionTargetLocked(c.session)
+	if t == nil || !navTypes[t.typ] {
+		return false
+	}
+	cur := g.currentDocIdentityLocked(t.id)
+	if cur.url == "" {
+		cur.url = t.url
+	}
+	if g.docIdentityWatchBadLocked(cur.url) || g.docIdentityWatchBadLocked(t.url) {
+		return true
+	}
+	place := g.docPlaceSeq[t.id]
+	ctxPlace, ok := g.shownContextPlaceSeqLocked(t.id, c.params)
+	if !ok {
+		return false
+	}
+	return ctxPlace < place
+}
+
+func (g *guard) shownContextPlaceSeqLocked(target string, params map[string]any) (uint64, bool) {
+	s := g.shown[target]
+	if s == nil {
+		return 0, false
+	}
+	if id, ok := intParam(params, "contextId"); ok {
+		if sc := s.contexts[id]; sc != nil {
+			return sc.placeSeq, true
+		}
+	}
+	if id, ok := intParam(params, "executionContextId"); ok {
+		if sc := s.contexts[id]; sc != nil {
+			return sc.placeSeq, true
+		}
+	}
+	if u, ok := params["uniqueContextId"].(string); ok && u != "" {
+		for _, sc := range s.contexts {
+			if sc != nil && sc.unique == u {
+				return sc.placeSeq, true
+			}
+		}
+	}
+	if u, ok := params["executionContextUniqueId"].(string); ok && u != "" {
+		for _, sc := range s.contexts {
+			if sc != nil && sc.unique == u {
+				return sc.placeSeq, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func intParam(params map[string]any, key string) (int64, bool) {
+	if params == nil {
+		return 0, false
+	}
+	switch v := params[key].(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case json.Number:
+		n, err := v.Int64()
+		return n, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func (g *guard) noteDocIdentityAdmitLocked(c *command) {
-	if c == nil || !docIdentityCoveredMethod(c.method) || docIdentityPinned(c) {
+	if c == nil || !docIdentityCoveredMethod(c.method) {
+		return
+	}
+	if docIdentityPinned(c) && !g.docIdentityPinnedNeedsHoldLocked(c) {
 		return
 	}
 	t := g.sessionTargetLocked(c.session)
@@ -422,10 +521,12 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 	var send [][]byte
 	tainted := g.docIdentityTaint[h.target] != h.taint
 	switch {
+	case g.sessionRefusedLocked(h.session):
+		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
 	case chromeErrorDocument(current.url):
 		eventSeq, saw := g.docChromeErrorSeq[h.target]
 		if saw && h.seq < eventSeq {
-			g.pendingPage = append(g.pendingPage, h.data)
+			send = append(send, g.deliverDocIdentityDataLocked(h)...)
 		} else {
 			g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
 		}
@@ -442,9 +543,23 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 		if current.full {
 			g.noteOrdinaryDocIdentityLocked(h.target, current.frameID, current.loaderID, current.url, true)
 		}
-		g.pendingPage = append(g.pendingPage, h.data)
+		send = append(send, g.deliverDocIdentityDataLocked(h)...)
 	}
 	return send
+}
+
+func (g *guard) deliverDocIdentityDataLocked(h *docIdentityHold) [][]byte {
+	if h == nil {
+		return nil
+	}
+	if h.extensionAfter && protect.ExtensionShownMethod(h.method) && g.extensionFramesPresentLocked(h.target) {
+		id := h.id
+		m := &message{ID: &id, SessionID: h.session}
+		v := g.holdExtensionPaintLocked(m, h.data, h.target, h.extensionFrames)
+		return v.send
+	}
+	g.pendingPage = append(g.pendingPage, h.data)
+	return nil
 }
 
 func (g *guard) releaseDocIdentityReservationLocked(h *docIdentityHold) {

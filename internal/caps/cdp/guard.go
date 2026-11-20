@@ -214,6 +214,8 @@ type guard struct {
 	docIdentityTaint         map[string]uint64
 	docIdentitySeq           uint64
 	docChromeErrorSeq        map[string]uint64
+	docPlaceSeq              map[string]uint64
+	docPlaceURL              map[string]string
 	docIdentityCalls         map[callKey]docIdentityAdmit
 	docIdentityHolds         map[callKey]*docIdentityHold
 	docIdentityAsks          map[string]*docIdentityAsk
@@ -346,6 +348,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		docBaselines:             map[string]docIdentity{},
 		docIdentityTaint:         map[string]uint64{},
 		docChromeErrorSeq:        map[string]uint64{},
+		docPlaceSeq:              map[string]uint64{},
+		docPlaceURL:              map[string]string{},
 		docIdentityCalls:         map[callKey]docIdentityAdmit{},
 		docIdentityHolds:         map[callKey]*docIdentityHold{},
 		docIdentityAsks:          map[string]*docIdentityAsk{},
@@ -1595,14 +1599,14 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && v.protected && !v.unparseable {
 		nt.historyLocked = true
 		g.beginConfirmLocked(nt)
+		g.noteOrdinaryDocIdentityFromTargetLocked(t)
 		return append(send, g.confirmTargetLocked(nt)...)
 	}
 	t.protected = g.decide(t, prev)
 	if t.protected && !prev {
 		send = append(send, g.protectLocked(t)...)
-	} else {
-		g.noteOrdinaryDocIdentityFromTargetLocked(t)
 	}
+	g.noteOrdinaryDocIdentityFromTargetLocked(t)
 	if (t.typ == "page" || t.typ == "tab") && prevURL != "" && prevURL != t.url && g.errorProofOfLocked(t.id) != errorProofNone {
 		g.resetFailedLoadProofLocked(t.id)
 	}

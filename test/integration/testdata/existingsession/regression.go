@@ -1516,11 +1516,14 @@ func esTaintSources() []esTaintSource {
 		{name: "frameNavigated-bfcache-restore-protected", url: protected[0], wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
 			esDrain(g, o, g.fromBrowser(esFrameNavigatedTyped(u, "L-BF", "BackForwardCacheRestore")), u)
 		}},
+		{name: "frameNavigated-prerender-type-protected", url: protected[0], wantTaint: true, guardSees: true, assumption: "any Page.frameNavigated type (including a Prerender activation type if Chrome emits one) bumps via noteOrdinaryDocIdentityFromNavLocked", fire: func(g *guard, o *esOutcome, u string) {
+			esDrain(g, o, g.fromBrowser(esFrameNavigatedTyped(u, "L-PRERENDER", "Prerender")), u)
+		}},
 		{name: "history-navigateToHistoryEntry-then-frameNavigated", url: protected[0], wantTaint: true, guardSees: true, assumption: "navigateToHistoryEntry itself does not bump; the resulting frameNavigated commit does", fire: func(g *guard, o *esOutcome, u string) {
 			_ = g.fromCommand(&command{id: int64(esReadID2), method: "Page.navigateToHistoryEntry", session: esSession, params: map[string]any{"entryId": json.Number("1")}}, int64(esReadID2), true)
 			esDrain(g, o, g.fromBrowser(esFrameNavigated(u, "L-HIST")), u)
 		}},
-		{name: "watch-session-url-already-protected-observe", url: protected[0], wantTaint: true, guardSees: true, assumption: "already-protected targetInfoChanged takes the else branch and noteDocIdentityWatchURLLocked bumps", fire: func(g *guard, o *esOutcome, u string) {
+		{name: "watch-session-url-already-protected-observe", url: protected[0], wantTaint: true, guardSees: true, assumption: "already-protected targetInfoChanged notes watch URL", fire: func(g *guard, o *esOutcome, u string) {
 			g.mu.Lock()
 			if t0 := g.targets[esTarget]; t0 != nil {
 				t0.protected = true
@@ -1529,22 +1532,22 @@ func esTaintSources() []esTaintSource {
 			g.mu.Unlock()
 			esDrain(g, o, g.fromBrowser(esRelay("Target.targetInfoChanged", u)), u)
 		}},
-		{name: "targetInfoChanged-newly-protected", url: protected[0], wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+		{name: "targetInfoChanged-newly-protected", url: protected[0], wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
 			esDrain(g, o, g.fromBrowser(esRelay("Target.targetInfoChanged", u)), u)
 		}},
-		{name: "targetInfoChanged-unparseable", url: "view-source:!!!not-a-url!!!", wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+		{name: "targetInfoChanged-unparseable", url: "view-source:!!!not-a-url!!!", wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
 			esDrain(g, o, g.fromBrowser(esRelay("Target.targetInfoChanged", u)), u)
 		}},
-		{name: "targetInfoChanged-empty-to-wrapped", url: "blob:", wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+		{name: "targetInfoChanged-empty-to-wrapped", url: "blob:", wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
 			esDrain(g, o, g.fromBrowser(esRelay("Target.targetInfoChanged", u)), u)
 		}},
-		{name: "frameStartedNavigating-protected", url: protected[0], wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+		{name: "frameStartedNavigating-protected", url: protected[0], wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
 			esDrain(g, o, g.fromBrowser(esFrameStartedNavigating(u)), u)
 		}},
-		{name: "targetCreated-protected-observe", url: protected[1], wantTaint: false, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
+		{name: "targetCreated-protected-observe", url: protected[1], wantTaint: true, guardSees: true, fire: func(g *guard, o *esOutcome, u string) {
 			esDrain(g, o, g.fromBrowser(esRelay("Target.targetCreated", u)), u)
 		}},
-		{name: "attachedToTarget-protected-url", url: protected[0], wantTaint: false, guardSees: true, assumption: "attachedToTarget on an already-admitted page session is unusual; modelled as a second attach event carrying a protected targetInfo URL", fire: func(g *guard, o *esOutcome, u string) {
+		{name: "attachedToTarget-protected-url", url: protected[0], wantTaint: true, guardSees: true, assumption: "attachedToTarget on an already-admitted page session is unusual; modelled as a second attach event carrying a protected targetInfo URL", fire: func(g *guard, o *esOutcome, u string) {
 			esDrain(g, o, g.fromBrowser(esEncode(map[string]any{
 				"method": "Target.attachedToTarget",
 				"params": map[string]any{
@@ -1553,18 +1556,18 @@ func esTaintSources() []esTaintSource {
 				},
 			})), u)
 		}},
-		{name: "navigatedWithinDocument-protected", url: protected[0], wantTaint: false, guardSees: false, assumption: "Page.navigatedWithinDocument has no documentidentity observe hook; event is only on the error-page allowlist", fire: func(g *guard, o *esOutcome, u string) {
+		{name: "navigatedWithinDocument-protected", url: protected[0], wantTaint: false, guardSees: false, assumption: "documented residual: same-document navigation does not change the document; no identity handler", fire: func(g *guard, o *esOutcome, u string) {
 			esDrain(g, o, g.fromBrowser(esEncode(map[string]any{
 				"sessionId": esNavSession, "method": "Page.navigatedWithinDocument",
 				"params": map[string]any{"frameId": esTarget, "url": u},
 			})), u)
 		}},
-		{name: "frameRestoredFromBackForwardCache", url: protected[0], wantTaint: false, guardSees: false, assumption: "Page.frameRestoredFromBackForwardCache is not in the guard event map; bfcache restores arrive as frameNavigated type=BackForwardCacheRestore", fire: func(g *guard, o *esOutcome, u string) {
+		{name: "frameRestoredFromBackForwardCache", url: protected[0], wantTaint: false, guardSees: false, assumption: "not in event map; bfcache restores arrive as frameNavigated type=BackForwardCacheRestore", fire: func(g *guard, o *esOutcome, u string) {
 			_ = g
 			_ = o
 			_ = u
 		}},
-		{name: "prerender-activation", url: protected[0], wantTaint: false, guardSees: false, assumption: "no Page.prerender* / frameCommittedInPrerender / activation handler in the guard event map", fire: func(g *guard, o *esOutcome, u string) {
+		{name: "prerender-activation-dedicated-event", url: protected[0], wantTaint: false, guardSees: false, assumption: "documented residual until link-route trace; activation arriving as Page.frameNavigated (any type) is covered by frameNavigated-prerender-type-protected", fire: func(g *guard, o *esOutcome, u string) {
 			_ = g
 			_ = o
 			_ = u
@@ -1611,7 +1614,6 @@ func TestExistingSessionP1RefusedSessionMustNotDeliverHeldReply(t *testing.T) {
 	_ = esAdmit(t, g)
 	var o esOutcome
 	infoID := esInFlightHoldSecret(t, g, &o)
-	esDrain(g, &o, g.fromBrowser(esRelay("Target.targetInfoChanged", esProtectedURLs()[0])), esProtectedURLs()[0])
 	g.mu.Lock()
 	g.addRefusedLocked(esSession)
 	if s := g.sessions[esSession]; s != nil {
@@ -1621,81 +1623,124 @@ func TestExistingSessionP1RefusedSessionMustNotDeliverHeldReply(t *testing.T) {
 	esSettleOrdinary(g, &o, infoID)
 	joined := strings.Join(o.payloads, "")
 	if strings.Contains(joined, esSecret) {
-		t.Fatalf("P1-1: held reply must not deliver when the session is already refused/cut; payloads=%v", o.payloads)
+		t.Fatalf("P1-1: held reply must not deliver when the session is already refused/cut (ordinary post-read, no taint); payloads=%v", o.payloads)
 	}
 }
 
-func TestExistingSessionP1ExtensionShownPaintSkipsIdentityHold(t *testing.T) {
-	whenShown := []string{"Page.captureScreenshot"}
-	whilePresentExempt := []string{"Page.printToPDF", "Page.captureSnapshot"}
-	t.Run("WhenShown-methods", func(t *testing.T) {
-		for _, method := range whenShown {
-			if !protect.ExtensionShownMethod(method) {
-				t.Fatalf("%s must be ExtensionShownMethod per catalog", method)
+func TestExistingSessionP1ExtensionShownPaintIdentityThenShown(t *testing.T) {
+	method := "Page.captureScreenshot"
+	if !protect.ExtensionShownMethod(method) {
+		t.Fatalf("%s must be ExtensionShownMethod per catalog", method)
+	}
+	t.Run("identity-refuse-leaves-no-extension-hold", func(t *testing.T) {
+		g := esGuard(t)
+		_ = esAdmit(t, g)
+		live := esProtectedURLs()[0]
+		g.mu.Lock()
+		if t0 := g.targets[esTarget]; t0 != nil {
+			t0.url = live
+		}
+		g.targets["ES-EXT"] = &target{id: "ES-EXT", typ: "iframe", url: esExtFrameURL, ctx: "CTX", parentFrame: esTarget}
+		g.noteExtensionFrameURLLocked(esTarget, "ES-EXT", esExtFrameURL)
+		g.mu.Unlock()
+		var o esOutcome
+		id := int64(esReadID)
+		pv := g.afterExtensionShown(&command{id: id, method: method, session: esSession, params: map[string]any{}}, false, true)
+		if pv.forward == nil {
+			t.Fatalf("admit must forward: %s", pv.reply)
+		}
+		reply := esContentReply(esCommand{method: method}, id, live, true)
+		v := g.fromBrowser(reply)
+		o.take(v)
+		g.mu.Lock()
+		extHeld := len(g.heldExtensionPaints)
+		idHeld := false
+		extAfter := false
+		for k, h := range g.docIdentityHolds {
+			if k.session == esSession && k.id == id {
+				idHeld = true
+				extAfter = h != nil && h.extensionAfter
 			}
 		}
-		for _, method := range whilePresentExempt {
-			if protect.ExtensionShownMethod(method) {
-				t.Fatalf("%s is WhilePresent, not WhenShown; do not model as ExtensionShown identity bypass", method)
+		g.mu.Unlock()
+		if extHeld != 0 {
+			t.Fatalf("P1-2: identity must run before extension hold; heldExtensionPaints=%d", extHeld)
+		}
+		if !idHeld || !extAfter {
+			t.Fatalf("P1-2: expected identity hold with extensionAfter; idHeld=%t extAfter=%t send=%d", idHeld, extAfter, len(v.send))
+		}
+		var infoID int64
+		for _, raw := range v.send {
+			rid, mth, session := esOutbound(raw)
+			if mth == "Target.getTargetInfo" && session == "RELAY" {
+				infoID = rid
 			}
-			if !protect.ExtensionPresentMethod(method) && method != "Page.captureSnapshot" {
-				t.Fatalf("%s expected ExtensionPresentMethod", method)
-			}
+		}
+		if infoID == 0 {
+			t.Fatal("expected identity post-read")
+		}
+		esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(infoID, live)), live)
+		g.mu.Lock()
+		extLeft := len(g.heldExtensionPaints)
+		idLeft := len(g.docIdentityHolds)
+		g.mu.Unlock()
+		if extLeft != 0 || idLeft != 0 {
+			t.Fatalf("P1-2: identity refuse must leave no extension or identity hold; ext=%d id=%d", extLeft, idLeft)
+		}
+		if strings.Contains(strings.Join(o.payloads, ""), esSecret) {
+			t.Fatalf("P1-2: refused identity must not deliver secret; payloads=%v", o.payloads)
 		}
 	})
-	for _, method := range whenShown {
-		method := method
-		t.Run(method, func(t *testing.T) {
-			g := esGuard(t)
-			_ = esAdmit(t, g)
-			live := esProtectedURLs()[0]
-			g.mu.Lock()
-			if t0 := g.targets[esTarget]; t0 != nil {
-				t0.url = live
+	t.Run("identity-accept-then-extension-probe", func(t *testing.T) {
+		g := esGuard(t)
+		_ = esAdmit(t, g)
+		g.mu.Lock()
+		g.targets["ES-EXT"] = &target{id: "ES-EXT", typ: "iframe", url: esExtFrameURL, ctx: "CTX", parentFrame: esTarget}
+		g.noteExtensionFrameURLLocked(esTarget, "ES-EXT", esExtFrameURL)
+		g.mu.Unlock()
+		var o esOutcome
+		id := int64(esReadID)
+		pv := g.afterExtensionShown(&command{id: id, method: method, session: esSession, params: map[string]any{}}, false, true)
+		if pv.forward == nil {
+			t.Fatalf("admit must forward: %s", pv.reply)
+		}
+		reply := esContentReply(esCommand{method: method}, id, esOrdinary, true)
+		v := g.fromBrowser(reply)
+		o.take(v)
+		g.mu.Lock()
+		if len(g.heldExtensionPaints) != 0 {
+			t.Fatalf("extension hold must wait for identity accept; got %d", len(g.heldExtensionPaints))
+		}
+		g.mu.Unlock()
+		var infoID int64
+		for _, raw := range v.send {
+			rid, mth, session := esOutbound(raw)
+			if mth == "Target.getTargetInfo" && session == "RELAY" {
+				infoID = rid
 			}
-			g.targets["ES-EXT"] = &target{id: "ES-EXT", typ: "iframe", url: esExtFrameURL, ctx: "CTX", parentFrame: esTarget}
-			g.noteExtensionFrameURLLocked(esTarget, "ES-EXT", esExtFrameURL)
-			g.mu.Unlock()
-			var o esOutcome
-			id := int64(esReadID)
-			cmd := &command{id: id, method: method, session: esSession, params: map[string]any{}}
-			pv := g.afterExtensionShown(cmd, false, true)
-			if pv.reply != nil {
-				t.Fatalf("afterExtensionShown(cleared) must forward: %s", pv.reply)
+		}
+		if infoID == 0 {
+			t.Fatal("expected identity post-read before extension release")
+		}
+		esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(infoID, esOrdinaryB)), esOrdinaryB)
+		g.mu.Lock()
+		extKeys := 0
+		for k := range g.heldExtensionPaints {
+			if k.session == esSession && k.id == id {
+				extKeys++
+				_ = g.finishExtensionPaintLocked(k, true, true)
+				o.payloads = append(o.payloads, stringBytes(g.takePendingPageLocked())...)
 			}
-			if pv.forward == nil {
-				t.Fatal("expected forward")
-			}
-			reply := esContentReply(esCommand{method: method}, id, live, true)
-			if !strings.Contains(string(reply), esSecret) {
-				t.Fatal("fixture must carry secret pixels/body")
-			}
-			v := g.fromBrowser(reply)
-			o.take(v)
-			g.mu.Lock()
-			held := false
-			for k := range g.heldExtensionPaints {
-				if k.session == esSession && k.id == id {
-					held = true
-					_ = g.finishExtensionPaintLocked(k, false, true)
-					o.payloads = append(o.payloads, stringBytes(g.takePendingPageLocked())...)
-				}
-			}
-			asks := len(g.docIdentityAsks)
-			holds := len(g.docIdentityHolds)
-			g.mu.Unlock()
-			if !held {
-				t.Fatalf("expected extension paint hold (identity dropped before holdExtensionPaint); send=%d page=%d", len(v.send), len(v.page))
-			}
-			if asks != 0 || holds != 0 {
-				t.Fatalf("P1-2: covered paint must not skip identity: asks=%d holds=%d", asks, holds)
-			}
-			joined := strings.Join(o.payloads, "")
-			if strings.Contains(joined, esSecret) {
-				t.Fatalf("P1-2: extension-shown paint release must not deliver protected document bytes without identity post-read; payloads=%v", o.payloads)
-			}
-		})
-	}
+		}
+		left := len(g.heldExtensionPaints)
+		g.mu.Unlock()
+		if extKeys != 1 {
+			t.Fatalf("P1-2: after identity accept expected one extension hold, got %d", extKeys)
+		}
+		if left != 0 {
+			t.Fatalf("extension finish must clear hold; left=%d", left)
+		}
+	})
 }
 
 func stringBytes(pages [][]byte) []string {
@@ -1719,15 +1764,15 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 		assumption string
 	}
 	rows := []row{
-		{name: "opaque-origin-://-contextId", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "opaque-origin shape: worldContextLocked shows when !Loaded(origin); pin skips identity"},
-		{name: "opaque-origin-null-uniqueContextId", wrapper: "view-source:" + inner, origin: "null", pin: "uniqueContextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "opaque origin null is not Loaded; default main-frame context is shown"},
+		{name: "opaque-origin-://-contextId", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "option (a): pinned evaluate on watch-bad document identity-holds"},
+		{name: "opaque-origin-null-uniqueContextId", wrapper: "view-source:" + inner, origin: "null", pin: "uniqueContextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "option (a): uniqueContextId pin on watch-bad document identity-holds"},
 		{name: "context-origin-inner-protected", wrapper: "view-source:" + inner, origin: "https://vault.sliccy.ai", pin: "contextId", seed: "url-only", wantShow: false, wantSecret: false, assumption: "contextCreatedEvent suppresses default main-frame context when Loaded(origin)"},
-		{name: "measured-view-source-tree-then-opaque", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "measured shape after classify: target wrapper + frame/history inner protected → target.protected → frameUnderProtected hides opaque context"},
-		{name: "measured-view-source-opaque-before-tree", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "measured timing: opaque context before guard reads tree/observe; show+pin delivers"},
-		{name: "measured-view-source-context-origin-inner", wrapper: "view-source:" + inner, origin: "https://vault.sliccy.ai", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "measured: tree/history inner + context origin inner protected → suppress/hide"},
-		{name: "measured-blob-opaque-before-tree", wrapper: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "blob wrapper opaque-before-classify timing"},
-		{name: "measured-filesystem-opaque-before-tree", wrapper: "filesystem:https://vault.sliccy.ai/temporary/x.html", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "filesystem wrapper opaque-before-classify timing"},
-		{name: "measured-blob-tree-then-opaque", wrapper: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "blob wrapper after classify hides opaque context"},
+		{name: "measured-view-source-tree-then-opaque", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "measured after classify: protected target hides opaque context"},
+		{name: "measured-view-source-opaque-before-tree", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "measured timing stress: opaque before tree; pin identity-holds on watch-bad URL"},
+		{name: "measured-view-source-context-origin-inner", wrapper: "view-source:" + inner, origin: "https://vault.sliccy.ai", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "measured: context origin inner protected → suppress/hide"},
+		{name: "measured-blob-opaque-before-tree", wrapper: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "blob wrapper: pin identity-holds"},
+		{name: "measured-filesystem-opaque-before-tree", wrapper: "filesystem:https://vault.sliccy.ai/temporary/x.html", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "filesystem wrapper: pin identity-holds"},
+		{name: "measured-blob-tree-then-opaque", wrapper: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "blob after classify hides opaque context"},
 	}
 	for _, tc := range rows {
 		tc := tc
@@ -1783,14 +1828,26 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 			g.mu.Lock()
 			_, admitted := g.docIdentityCalls[callKey{esSession, esReadID}]
 			g.mu.Unlock()
-			if admitted {
-				t.Fatal("pinned evaluate must not enter docIdentityCalls")
+			if !admitted {
+				t.Fatal("P1-3 option (a): pinned evaluate on unplaced/watch-bad document must enter docIdentityCalls")
 			}
 			reply := esEncode(map[string]any{
 				"id": int64(esReadID), "sessionId": esSession,
 				"result": map[string]any{"result": map[string]any{"type": "string", "value": "<html>" + esSecret + "</html>"}},
 			})
-			esDrain(g, &o, g.fromBrowser(reply), tc.wrapper)
+			held := g.fromBrowser(reply)
+			o.take(held)
+			var infoID int64
+			for _, raw := range held.send {
+				rid, mth, session := esOutbound(raw)
+				if mth == "Target.getTargetInfo" && session == "RELAY" {
+					infoID = rid
+				}
+			}
+			if infoID == 0 {
+				t.Fatal("expected identity post-read for pinned evaluate")
+			}
+			esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(infoID, tc.wrapper)), tc.wrapper)
 			joined := strings.Join(o.payloads, "")
 			gotSecret := strings.Contains(joined, esSecret)
 			if gotSecret != tc.wantSecret {

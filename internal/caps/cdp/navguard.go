@@ -242,6 +242,26 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 	return nil
 }
 
+func (g *guard) noteDocIdentityNavEventLocked(nt *navTarget, m *message) {
+	if nt == nil || m == nil {
+		return
+	}
+	switch m.Method {
+	case "Page.frameNavigated":
+		g.noteKeptLatchLocked(nt)
+		g.noteOrdinaryDocIdentityFromNavLocked(nt)
+	case "Page.frameStartedNavigating":
+		var started struct {
+			FrameID        string `json:"frameId"`
+			URL            string `json:"url"`
+			NavigationType string `json:"navigationType"`
+		}
+		if json.Unmarshal(m.Params, &started) == nil && started.FrameID == nt.target && !sameDocument[started.NavigationType] {
+			g.noteDocIdentityWatchURLLocked(nt.target, started.URL)
+		}
+	}
+}
+
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if nt.shared && m.Method == "Inspector.targetCrashed" {
 		return g.navReleaseLocked(nt)
@@ -249,10 +269,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	send := g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
-	if m.Method == "Page.frameNavigated" {
-		g.noteKeptLatchLocked(nt)
-		g.noteOrdinaryDocIdentityFromNavLocked(nt)
-	}
+	g.noteDocIdentityNavEventLocked(nt, m)
 	g.resetFailedLoadProofOnNavLocked(nt, m.Method)
 	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {
 		nt.revision++
