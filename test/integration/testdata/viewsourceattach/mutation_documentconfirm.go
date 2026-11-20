@@ -38,6 +38,10 @@ func (g *guard) failDocConfirmLocked(dc *docConfirm) [][]byte {
 	return nil
 }
 
+func (g *guard) docConfirmLiveProtectedDocumentLocked(url string) bool {
+	return false
+}
+
 func (g *guard) docConfirmAttachEventLocked(m *message, data []byte, session string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
 	return browserVerdict{}, false
 }
