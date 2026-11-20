@@ -578,7 +578,7 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 			if !g.browserRootSessionLocked(m.SessionID) {
 				part = g.detachAnnouncedTabSessionLocked(m.SessionID, true)
 			} else {
-				part = g.detachUnmatchedEmptyTabsAroundLocked(time.Now(), true)
+				part = g.detachUnmatchedEmptyTabsAroundLocked(time.Now(), true, "immediate hide", info.TargetID)
 			}
 			send = append(send, part.send...)
 			page = append(page, part.page...)
@@ -689,7 +689,7 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		delete(g.held, p.SessionID)
 		g.refuseHeldWaitLocked(h.target)
-		part := g.detachAnnouncedTabsForPageLocked(h, true)
+		part := g.detachAnnouncedTabsForPageLocked(h, true, "destroy-while-held")
 		g.forgetSessionLocked(p.SessionID)
 		return browserVerdict{send: append(send, part.send...), page: append(append(page, part.page...), g.takePendingPageLocked()...)}
 	}

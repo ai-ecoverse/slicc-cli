@@ -1904,6 +1904,54 @@ func TestEmptyURLHoldPageThenTabURLTabNotCandidate(t *testing.T) {
 	}
 }
 
+func TestEmptyURLHoldWindowMatchLogsUnmatchedDetachNotAdoptedOrNested(t *testing.T) {
+	const needle = "detached an unmatched empty tab by hold-window match"
+	var logs []string
+	capture := func(format string, args ...any) {
+		logs = append(logs, strings.TrimSpace(fmt.Sprintf(format, args...)))
+	}
+	g := emptyURLHoldGuardLog(t, capture)
+	_ = emptyURLAnnounceFlatTabs(t, g, 1)
+	_ = g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-WL", "PAGE-WL", "OPENER", "https://seven.sliccy.ai/wl", false))
+	sawWindow := false
+	for _, line := range logs {
+		if strings.Contains(line, needle) && strings.Contains(line, "session=S-TAB-1") && strings.Contains(line, "held=PAGE-WL") && strings.Contains(line, "why=immediate hide") && strings.Contains(line, "window=") {
+			sawWindow = true
+			break
+		}
+	}
+	if !sawWindow {
+		t.Fatalf("window-matched unmatched empty tab detach missing hold-window match log: %v", logs)
+	}
+	logs = nil
+	g2 := emptyURLHoldGuardLog(t, capture)
+	_ = g2.fromBrowser(emptyURLNamedTabAttach("S-TAB-WN", "TAB-WN", "OPENER", true))
+	_ = g2.fromBrowser(emptyURLNamedPageAttach("S-TAB-WN", "S-PAGE-WN", "PAGE-WN", "OPENER", true))
+	_ = g2.fromBrowser(emptyURLNamedRelayChanged("PAGE-WN", "page", "https://seven.sliccy.ai/wn", "OPENER"))
+	for _, line := range logs {
+		if strings.Contains(line, needle) {
+			t.Fatalf("nested parent tab detach must not log hold-window match: %s", line)
+		}
+	}
+	logs = nil
+	g3 := emptyURLHoldGuardLog(t, capture)
+	_ = g3.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-WA", "PAGE-WA", "OPENER", true))
+	_ = g3.fromBrowser(emptyURLNamedTabAttach("S-TAB-WA", "TAB-WA", "OPENER", true))
+	if h := g3.held["S-PAGE-WA"]; h == nil || h.adoptedTab != "S-TAB-WA" {
+		adopted := ""
+		if h != nil {
+			adopted = h.adoptedTab
+		}
+		t.Fatalf("expected adopted flat tab before protected hide: held=%v adopted=%q", g3.held["S-PAGE-WA"] != nil, adopted)
+	}
+	_ = g3.fromBrowser(emptyURLNamedRelayChanged("PAGE-WA", "page", "https://seven.sliccy.ai/wa", "OPENER"))
+	for _, line := range logs {
+		if strings.Contains(line, needle) {
+			t.Fatalf("adopted tab detach must not log hold-window match: %s", line)
+		}
+	}
+}
+
 func TestEmptyURLHoldExplicitAttachEmptyURLUsesDocConfirmNotPageHold(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	_ = g.fromBrowser(encode(map[string]any{
