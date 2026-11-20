@@ -1752,3 +1752,111 @@ func TestEmptyURLHoldProtectedTabCommandStaysRefusedTarget(t *testing.T) {
 		t.Fatalf("protected path today answers refusedTarget on the detached tab session, got %s", pv.reply)
 	}
 }
+
+func emptyURLHoldPageThenLaterTab(t *testing.T, g *guard, browserRoot bool, pageSession, pageID, tabSession, tabID string) {
+	t.Helper()
+	if browserRoot {
+		emptyURLHoldArmBrowserEnvelope(t, g)
+		_ = g.fromBrowser(emptyURLNamedPageAttach("S-BR", pageSession, pageID, "", true))
+	} else {
+		_ = g.fromBrowser(emptyURLNamedPageAttachFirst(pageSession, pageID, "", true))
+	}
+	if g.held[pageSession] == nil {
+		t.Fatal("expected flat empty page held before later tab announce")
+	}
+	if h := g.held[pageSession]; h != nil {
+		h.at = time.Now().Add(-time.Millisecond)
+	}
+	_ = g.fromBrowser(emptyURLNamedTabAttach(tabSession, tabID, "", true))
+	if g.sessions[tabSession] == nil {
+		t.Fatal("expected empty tab announced after the page was held")
+	}
+	if s, h := g.sessions[tabSession], g.held[pageSession]; s != nil && h != nil && !s.at.After(h.at) {
+		t.Fatal("expected tab announce time after held page start")
+	}
+}
+
+func TestEmptyURLHoldPageThenTabProtectedDetachesTabEmptyEnvelope(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldPageThenLaterTab(t, g, false, "S-PAGE-PT1", "PAGE-PT1", "S-TAB-PT1", "TAB-PT1")
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-PT1", "page", "https://seven.sliccy.ai/pt1", ""))
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-PT1", emptyURLHoldPayloads(v), emptyURLHoldSends(v), "page-then-tab empty-envelope protected")
+}
+
+func TestEmptyURLHoldPageThenTabProtectedDetachesTabBrowserRoot(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldPageThenLaterTab(t, g, true, "S-PAGE-PT2", "PAGE-PT2", "S-TAB-PT2", "TAB-PT2")
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-PT2", "page", "https://seven.sliccy.ai/pt2", ""))
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-PT2", emptyURLHoldPayloads(v), emptyURLHoldSends(v), "page-then-tab browser-root protected")
+}
+
+func TestEmptyURLHoldPageThenTabExpiryDetachesTabEmptyEnvelope(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldPageThenLaterTab(t, g, false, "S-PAGE-PE1", "PAGE-PE1", "S-TAB-PE1", "TAB-PE1")
+	page, send := g.expireHold("S-PAGE-PE1")
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-PE1", emptyURLHoldPayloads(browserVerdict{page: page}), emptyURLHoldSends(browserVerdict{send: send}), "page-then-tab empty-envelope expiry")
+}
+
+func TestEmptyURLHoldPageThenTabExpiryDetachesTabBrowserRoot(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldPageThenLaterTab(t, g, true, "S-PAGE-PE2", "PAGE-PE2", "S-TAB-PE2", "TAB-PE2")
+	page, send := g.expireHold("S-PAGE-PE2")
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-PE2", emptyURLHoldPayloads(browserVerdict{page: page}), emptyURLHoldSends(browserVerdict{send: send}), "page-then-tab browser-root expiry")
+}
+
+func TestEmptyURLHoldPageThenTabFailedLoadProtectedDetachesTabEmptyEnvelope(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldPageThenLaterTab(t, g, false, "S-PAGE-PF1", "PAGE-PF1", "S-TAB-PF1", "TAB-PF1")
+	g.targets["PAGE-PF1"].url = "chrome-error://chromewebdata/"
+	g.setErrorProofLocked("PAGE-PF1", errorProofProtected)
+	send := g.finishFailedLoadHeldLocked("PAGE-PF1", true)
+	g.mu.Lock()
+	page := g.takePendingPageLocked()
+	g.mu.Unlock()
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-PF1", emptyURLHoldPayloads(browserVerdict{send: send, page: page}), emptyURLHoldSends(browserVerdict{send: send}), "page-then-tab empty-envelope failed-load")
+}
+
+func TestEmptyURLHoldPageThenTabFailedLoadProtectedDetachesTabBrowserRoot(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldPageThenLaterTab(t, g, true, "S-PAGE-PF2", "PAGE-PF2", "S-TAB-PF2", "TAB-PF2")
+	g.targets["PAGE-PF2"].url = "chrome-error://chromewebdata/"
+	g.setErrorProofLocked("PAGE-PF2", errorProofProtected)
+	send := g.finishFailedLoadHeldLocked("PAGE-PF2", true)
+	g.mu.Lock()
+	page := g.takePendingPageLocked()
+	g.mu.Unlock()
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-PF2", emptyURLHoldPayloads(browserVerdict{send: send, page: page}), emptyURLHoldSends(browserVerdict{send: send}), "page-then-tab browser-root failed-load")
+}
+
+func TestEmptyURLHoldPageThenTabDestroyWhileHeldDetachesTabEmptyEnvelope(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldPageThenLaterTab(t, g, false, "S-PAGE-PD1", "PAGE-PD1", "S-TAB-PD1", "TAB-PD1")
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.targetDestroyed",
+		"params": map[string]any{"targetId": "PAGE-PD1"},
+	}))
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-PD1", emptyURLHoldPayloads(v), emptyURLHoldSends(v), "page-then-tab empty-envelope destroy")
+}
+
+func TestEmptyURLHoldPageThenTabDestroyWhileHeldDetachesTabBrowserRoot(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldPageThenLaterTab(t, g, true, "S-PAGE-PD2", "PAGE-PD2", "S-TAB-PD2", "TAB-PD2")
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.targetDestroyed",
+		"params": map[string]any{"targetId": "PAGE-PD2"},
+	}))
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-PD2", emptyURLHoldPayloads(v), emptyURLHoldSends(v), "page-then-tab browser-root destroy")
+}
+
+func TestEmptyURLHoldPageThenTabURLTabNotCandidate(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-PU", "PAGE-PU", "", true))
+	if h := g.held["S-PAGE-PU"]; h != nil {
+		h.at = time.Now().Add(-time.Millisecond)
+	}
+	_ = g.fromBrowser(emptyURLNamedTabAttachURL("S-TAB-PU", "TAB-PU", "", "https://ordinary.test/known", false))
+	page, send := g.expireHold("S-PAGE-PU")
+	if g.sessions["S-TAB-PU"] == nil {
+		t.Fatalf("URL tab must not be an unmatched empty-tab candidate: payloads=%v sends=%v", emptyURLHoldPayloads(browserVerdict{page: page}), emptyURLHoldSends(browserVerdict{send: send}))
+	}
+}
