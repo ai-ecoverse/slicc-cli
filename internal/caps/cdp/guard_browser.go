@@ -542,21 +542,6 @@ func (g *guard) attachedHoldParams(m *message, pSession string, waiting bool, in
 
 func (g *guard) attachedUnderHeldLocked(m *message, data []byte) browserVerdict {
 	v := g.attachedEvent(m, data)
-	var p struct {
-		SessionID string `json:"sessionId"`
-	}
-	_ = json.Unmarshal(m.Params, &p)
-	parent := g.held[m.SessionID]
-	if parent != nil && p.SessionID != "" && g.sessions[p.SessionID] != nil {
-		part := g.deliverHeldLocked(parent)
-		v.send = append(v.send, part.send...)
-		v.page = append(part.page, v.page...)
-		if v.forward != nil {
-			v.page = append(v.page, v.forward)
-		}
-		v.forward = nil
-		return v
-	}
 	v.forward = nil
 	v.page = nil
 	return v
@@ -634,7 +619,7 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	g.attachParent = ""
 	g.noteWorkerShownLocked(info)
-	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
+	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger, emptyAtAnnounce: info.Type == "tab" && info.URL == ""}
 	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
 	}

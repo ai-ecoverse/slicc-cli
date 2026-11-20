@@ -124,12 +124,13 @@ func (g *guard) infoVerdictLocked(info targetInfo) urlVerdict {
 }
 
 type session struct {
-	id      string
-	target  string
-	parent  string
-	typ     string
-	refused bool
-	waiting bool
+	id              string
+	target          string
+	parent          string
+	typ             string
+	refused         bool
+	waiting         bool
+	emptyAtAnnounce bool
 }
 
 type guard struct {
@@ -1722,6 +1723,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.forgetExtensionOwnerCallsLocked(id)
 	g.forgetVersionCallsLocked(id)
 	g.releaseExtensionPaintsForSessionLocked(id)
+	delete(g.matchedEmptyOpenerTabs, id)
 	delete(g.sessions, id)
 	delete(g.browserSessions, id)
 	g.markedCount -= len(g.marked[id])

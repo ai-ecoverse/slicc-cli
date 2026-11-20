@@ -15,14 +15,15 @@ func holdTimeout() time.Duration {
 }
 
 type heldSession struct {
-	id      string
-	parent  string
-	target  string
-	typ     string
-	params  map[string]any
-	waiting bool
-	resumed bool
-	at      time.Time
+	id         string
+	parent     string
+	adoptedTab string
+	target     string
+	typ        string
+	params     map[string]any
+	waiting    bool
+	resumed    bool
+	at         time.Time
 }
 
 func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo, waiting bool) [][]byte {
@@ -72,7 +73,10 @@ func (g *guard) markAnnouncedTabMatchedLocked(sid string) {
 
 func (g *guard) tabHasPageChildLocked(sid string) bool {
 	for _, h := range g.held {
-		if h != nil && h.parent == sid && h.typ == "page" {
+		if h == nil || h.typ != "page" {
+			continue
+		}
+		if h.parent == sid || h.adoptedTab == sid {
 			return true
 		}
 	}
@@ -87,14 +91,14 @@ func (g *guard) tabHasPageChildLocked(sid string) bool {
 func (g *guard) unmatchedEmptyOpenerTabSessionsLocked() []string {
 	var out []string
 	for sid, s := range g.sessions {
-		if s == nil || s.typ != "tab" || s.refused {
+		if s == nil || s.typ != "tab" || s.refused || !s.emptyAtAnnounce {
 			continue
 		}
 		if g.matchedEmptyOpenerTabs[sid] || g.tabHasPageChildLocked(sid) {
 			continue
 		}
 		t := g.targets[s.target]
-		if t == nil || t.opener != "" {
+		if t == nil || t.opener != "" || t.url != "" {
 			continue
 		}
 		out = append(out, sid)
@@ -116,7 +120,7 @@ func (g *guard) adoptHeldFlatPageLocked(tabSession, tabOpener string) {
 	}
 	var cand *heldSession
 	for _, h := range g.held {
-		if h == nil || h.typ != "page" || h.parent != "" {
+		if h == nil || h.typ != "page" || h.parent != "" || h.adoptedTab != "" {
 			continue
 		}
 		if heldOpenerLocked(h) != tabOpener {
@@ -130,7 +134,7 @@ func (g *guard) adoptHeldFlatPageLocked(tabSession, tabOpener string) {
 	if cand == nil {
 		return
 	}
-	cand.parent = tabSession
+	cand.adoptedTab = tabSession
 	g.markAnnouncedTabMatchedLocked(tabSession)
 }
 
@@ -169,6 +173,9 @@ func (g *guard) detachAnnouncedTabsForPageLocked(h *heldSession, protected bool)
 	}
 	if h.parent != "" {
 		return g.detachAnnouncedTabSessionLocked(h.parent, protected)
+	}
+	if h.adoptedTab != "" {
+		return g.detachAnnouncedTabSessionLocked(h.adoptedTab, protected)
 	}
 	return g.detachUnmatchedEmptyOpenerTabsLocked(protected)
 }
@@ -210,9 +217,12 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 		v.send = append(v.send, part.send...)
 		v.page = append(v.page, part.page...)
 		if h.typ == "page" {
-			if h.parent != "" {
+			switch {
+			case h.parent != "":
 				g.markAnnouncedTabMatchedLocked(h.parent)
-			} else if g.admittedOrdinaryOpenerLocked(heldOpenerLocked(h)) {
+			case h.adoptedTab != "":
+				g.markAnnouncedTabMatchedLocked(h.adoptedTab)
+			case g.admittedOrdinaryOpenerLocked(heldOpenerLocked(h)):
 				g.matchFlatOrdinaryEmptyOpenerTabLocked()
 			}
 		}

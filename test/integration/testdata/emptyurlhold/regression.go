@@ -593,8 +593,11 @@ func TestEmptyURLHoldSiblingOpenerExpiryIndependent(t *testing.T) {
 func TestEmptyURLHoldSiblingOpenerPageBeforeTabIndependent(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	emptyURLAttachSiblingPairs(t, g, false)
-	if g.held["S-PAGE-A"].parent != "S-TAB-A" || g.held["S-PAGE-B"].parent != "S-TAB-B" {
-		t.Fatalf("page-before-tab must adopt each held page under its announced tab: A=%q B=%q", g.held["S-PAGE-A"].parent, g.held["S-PAGE-B"].parent)
+	if g.held["S-PAGE-A"].parent != "" || g.held["S-PAGE-B"].parent != "" {
+		t.Fatalf("page-before-tab adopt must keep flat detach parent empty: A=%q B=%q", g.held["S-PAGE-A"].parent, g.held["S-PAGE-B"].parent)
+	}
+	if g.held["S-PAGE-A"].adoptedTab != "S-TAB-A" || g.held["S-PAGE-B"].adoptedTab != "S-TAB-B" {
+		t.Fatalf("page-before-tab must adopt each held page to its announced tab: A=%q B=%q", g.held["S-PAGE-A"].adoptedTab, g.held["S-PAGE-B"].adoptedTab)
 	}
 	if heldOpenerLocked(g.held["S-PAGE-A"]) != "SHARED" {
 		t.Fatal("page-before-tab pair A missing shared opener link")
