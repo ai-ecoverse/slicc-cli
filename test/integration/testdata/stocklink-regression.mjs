@@ -702,8 +702,7 @@ for (const label of ['connect', 'reconnect']) if (result[label]) Object.assign(r
 for (const [label, { lines }] of Object.entries(traces)) {
   for (const line of lines) console.log(`SEQ ${label} ${line}`);
 }
-console.log(`RESULT ${JSON.stringify(result)}`);
 probe.close();
 observer.close();
 proxy.close();
-process.exit(0);
+process.stdout.write(`RESULT ${JSON.stringify(result)}\n`, () => process.exit(0));
