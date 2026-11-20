@@ -1860,3 +1860,59 @@ func TestEmptyURLHoldPageThenTabURLTabNotCandidate(t *testing.T) {
 		t.Fatalf("URL tab must not be an unmatched empty-tab candidate: payloads=%v sends=%v", emptyURLHoldPayloads(browserVerdict{page: page}), emptyURLHoldSends(browserVerdict{send: send}))
 	}
 }
+
+func TestEmptyURLHoldExplicitAttachEmptyURLUsesDocConfirmNotPageHold(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(encode(map[string]any{
+		"sessionId": "RELAY",
+		"method":    "Target.targetCreated",
+		"params": map[string]any{
+			"targetInfo": map[string]any{"targetId": "PAGE-EX", "type": "page", "url": "", "openerId": "SHARED"},
+		},
+	}))
+	pv := g.fromCommand(&command{id: 8501, method: "Target.attachToTarget", params: map[string]any{"targetId": "PAGE-EX", "flatten": true}}, 8501, true)
+	if pv.reply != nil {
+		t.Fatalf("explicit attach refused before confirm: %s", pv.reply)
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-PAGE-EX",
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": "PAGE-EX", "type": "page", "url": "", "openerId": "SHARED"},
+		},
+	}))
+	if g.held["S-PAGE-EX"] != nil {
+		t.Fatal("explicit empty-URL attach must use document confirmation, not the empty-URL page hold")
+	}
+	asked := false
+	for _, raw := range v.send {
+		var m struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		if m.Method == "Target.getTargetInfo" && m.SessionID == "RELAY" {
+			asked = true
+		}
+	}
+	if !asked {
+		t.Fatalf("expected document-confirm Target.getTargetInfo, payloads=%v sends=%v", emptyURLHoldPayloads(v), emptyURLHoldSends(v))
+	}
+	if g.docInflight["PAGE-EX"] == nil || g.docInflight["PAGE-EX"].done {
+		t.Fatal("expected an in-flight document confirmation for the explicit empty-URL attach")
+	}
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-EX", "TAB-EX", "", true))
+	if g.sessions["S-TAB-EX"] == nil {
+		t.Fatal("empty tab auto-attach must still be announced while an explicit empty page is under document confirm")
+	}
+	g2 := emptyURLHoldGuard(t)
+	_ = g2.fromBrowser(emptyURLPageAttachFirst(true))
+	if g2.held["S-PAGE"] == nil {
+		t.Fatal("non-explicit empty-URL page must still enter the empty-URL page hold")
+	}
+	_ = g2.fromBrowser(emptyURLTabAttach(true))
+	if g2.sessions["S-TAB"] == nil {
+		t.Fatal("non-explicit empty tab must still be announced under the empty-URL hold path")
+	}
+}
