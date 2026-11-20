@@ -211,7 +211,7 @@ type guard struct {
 	docFailed                map[string]bool
 	docPassed                map[string]bool
 	docBaselines             map[string]docIdentity
-	docIdentityCalls         map[callKey]docIdentity
+	docIdentityCalls         map[callKey]docIdentityAdmit
 	docIdentityHolds         map[callKey]*docIdentityHold
 	docIdentityAsks          map[string]*docIdentityAsk
 	flushAsync               func(send, page [][]byte)
@@ -341,7 +341,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		docFailed:                map[string]bool{},
 		docPassed:                map[string]bool{},
 		docBaselines:             map[string]docIdentity{},
-		docIdentityCalls:         map[callKey]docIdentity{},
+		docIdentityCalls:         map[callKey]docIdentityAdmit{},
 		docIdentityHolds:         map[callKey]*docIdentityHold{},
 		docIdentityAsks:          map[string]*docIdentityAsk{},
 		heldExtras:               map[requestKey][]heldExtra{},
@@ -1889,8 +1889,12 @@ func (g *guard) releaseAllocations() {
 		g.dropDebuggerLocked(s)
 	}
 	g.releaseHeldExtensionPaintLocked()
+	for _, h := range g.docIdentityHolds {
+		g.releaseDocIdentityReservationLocked(h)
+	}
 	clear(g.heldExtras)
 	clear(g.heldAnswers)
 	clear(g.heldPauses)
+	clear(g.docIdentityHolds)
 	releaseReservations(g.takeReleasesLocked())
 }

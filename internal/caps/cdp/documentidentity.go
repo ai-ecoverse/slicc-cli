@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
@@ -17,21 +18,32 @@ type docIdentity struct {
 	frameID  string
 	loaderID string
 	url      string
+	full     bool
 }
 
 func (a docIdentity) equal(b docIdentity) bool {
-	return a.frameID == b.frameID && a.loaderID == b.loaderID && a.url == b.url
+	if a.full && b.full {
+		return a.frameID == b.frameID && a.loaderID == b.loaderID && a.url == b.url
+	}
+	return a.url == b.url
+}
+
+type docIdentityAdmit struct {
+	baseline docIdentity
+	known    bool
 }
 
 type docIdentityHold struct {
-	baseline docIdentity
-	data     []byte
-	id       int64
-	session  string
-	target   string
-	arrived  time.Time
-	deadline time.Time
-	timer    *time.Timer
+	baseline    docIdentity
+	known       bool
+	data        []byte
+	id          int64
+	session     string
+	target      string
+	arrived     time.Time
+	deadline    time.Time
+	timer       *time.Timer
+	reservation *link.Reservation
 }
 
 type docIdentityAsk struct {
@@ -104,7 +116,7 @@ func (g *guard) currentDocIdentityLocked(target string) docIdentity {
 	return id
 }
 
-func (g *guard) noteOrdinaryDocIdentityLocked(target, frameID, loaderID, url string) {
+func (g *guard) noteOrdinaryDocIdentityLocked(target, frameID, loaderID, url string, full bool) {
 	if target == "" || g.docIdentitySkipTargetLocked(target) {
 		return
 	}
@@ -120,25 +132,15 @@ func (g *guard) noteOrdinaryDocIdentityLocked(target, frameID, loaderID, url str
 	if g.docBaselines == nil {
 		g.docBaselines = map[string]docIdentity{}
 	}
-	g.docBaselines[target] = docIdentity{frameID: frameID, loaderID: loaderID, url: url}
+	g.docBaselines[target] = docIdentity{frameID: frameID, loaderID: loaderID, url: url, full: full}
 }
 
 func (g *guard) noteOrdinaryDocIdentityFromTargetLocked(t *target) {
-	if t == nil || t.protected || (t.typ != "page" && t.typ != "tab") || t.url == "" || g.o.Loaded(t.url) || chromeErrorDocument(t.url) {
-		return
-	}
-	loader := ""
-	if nt := g.navTargets[t.id]; nt != nil {
-		loader = nt.loaderID
-	}
-	g.noteOrdinaryDocIdentityLocked(t.id, t.id, loader, t.url)
+	_ = t
 }
 
 func (g *guard) noteOrdinaryDocIdentityFromNavLocked(nt *navTarget) {
-	if nt == nil || nt.documentURL == "" || g.o.Loaded(nt.documentURL) || chromeErrorDocument(nt.documentURL) || nt.errorURL != "" {
-		return
-	}
-	g.noteOrdinaryDocIdentityLocked(nt.target, nt.target, nt.loaderID, nt.documentURL)
+	_ = nt
 }
 
 func (g *guard) noteDocIdentityAdmitLocked(c *command) {
@@ -149,26 +151,22 @@ func (g *guard) noteDocIdentityAdmitLocked(c *command) {
 	if t == nil || !navTypes[t.typ] || g.docIdentitySkipTargetLocked(t.id) {
 		return
 	}
-	baseline, ok := g.docBaselines[t.id]
-	if !ok {
-		baseline = g.currentDocIdentityLocked(t.id)
-		if baseline.url == "" {
-			baseline.url = t.url
+	admit := docIdentityAdmit{}
+	if baseline, ok := g.docBaselines[t.id]; ok && baseline.full {
+		admit.baseline = baseline
+		admit.known = true
+	} else {
+		cur := g.currentDocIdentityLocked(t.id)
+		if cur.url == "" {
+			cur.url = t.url
 		}
-		if baseline.frameID == "" {
-			baseline.frameID = t.id
-		}
-		g.noteOrdinaryDocIdentityLocked(t.id, baseline.frameID, baseline.loaderID, baseline.url)
-		baseline = g.docBaselines[t.id]
-		if baseline.frameID == "" {
-			baseline = g.currentDocIdentityLocked(t.id)
-		}
+		admit.baseline = docIdentity{url: cur.url}
 	}
 	k := callKey{c.session, c.id}
 	if g.docIdentityCalls == nil {
-		g.docIdentityCalls = map[callKey]docIdentity{}
+		g.docIdentityCalls = map[callKey]docIdentityAdmit{}
 	}
-	g.docIdentityCalls[k] = baseline
+	g.docIdentityCalls[k] = admit
 }
 
 func (g *guard) dropDocIdentityCallLocked(k callKey) {
@@ -194,9 +192,12 @@ func retriableContextDestroyed(id int64, session string) []byte {
 }
 
 func (g *guard) holdDocIdentityReplyLocked(k callKey, m *message, data []byte) (send, page [][]byte, held bool) {
-	baseline, ok := g.docIdentityCalls[k]
+	admit, ok := g.docIdentityCalls[k]
 	delete(g.docIdentityCalls, k)
 	if !ok || m == nil || m.ID == nil {
+		return nil, nil, false
+	}
+	if g.relaySession == "" {
 		return nil, nil, false
 	}
 	target := g.worldTargetLocked(m.SessionID)
@@ -207,15 +208,22 @@ func (g *guard) holdDocIdentityReplyLocked(k callKey, m *message, data []byte) (
 		g.logf("cdp: too many document identity holds on a session; dropping one")
 		return nil, [][]byte{retriableContextDestroyed(*m.ID, m.SessionID)}, true
 	}
+	reservation, reserved := g.holdReservation(data)
+	if !reserved {
+		g.logf("cdp: document identity hold exceeded the write budget; refusing the reply")
+		return nil, [][]byte{retriableContextDestroyed(*m.ID, m.SessionID)}, true
+	}
 	now := time.Now()
 	h := &docIdentityHold{
-		baseline: baseline,
-		data:     append([]byte(nil), data...),
-		id:       *m.ID,
-		session:  m.SessionID,
-		target:   target,
-		arrived:  now,
-		deadline: now.Add(holdTimeout()),
+		baseline:    admit.baseline,
+		known:       admit.known,
+		data:        append([]byte(nil), data...),
+		id:          *m.ID,
+		session:     m.SessionID,
+		target:      target,
+		arrived:     now,
+		deadline:    now.Add(holdTimeout()),
+		reservation: reservation,
 	}
 	if g.docIdentityHolds == nil {
 		g.docIdentityHolds = map[callKey]*docIdentityHold{}
@@ -240,24 +248,14 @@ func (g *guard) ensureDocIdentityAskLocked(target string, after time.Time) [][]b
 	}
 	ask := &docIdentityAsk{target: target, started: time.Now()}
 	g.docIdentityAsks[target] = ask
-	var send [][]byte
-	if nt := g.navTargets[target]; nt != nil && nt.session != "" {
-		ask.askingTree = true
-		ask.infoDone = true
-		send = append(send, g.callbackLocked(nt.session, "Page.getFrameTree", nil, func(m message) [][]byte {
-			return g.answeredDocIdentityTreeLocked(target, m)
-		}))
-		return send
-	}
 	if g.relaySession == "" {
 		return g.failDocIdentityHoldsLocked(target, true)
 	}
 	ask.askingInfo = true
 	ask.treeDone = true
-	send = append(send, g.callbackLocked(g.relaySession, "Target.getTargetInfo", map[string]any{"targetId": target}, func(m message) [][]byte {
+	return [][]byte{g.callbackLocked(g.relaySession, "Target.getTargetInfo", map[string]any{"targetId": target}, func(m message) [][]byte {
 		return g.answeredDocIdentityInfoLocked(target, m)
-	}))
-	return send
+	})}
 }
 
 func (g *guard) answeredDocIdentityInfoLocked(target string, m message) [][]byte {
@@ -274,13 +272,10 @@ func (g *guard) answeredDocIdentityInfoLocked(target string, m message) [][]byte
 		ask.infoID = docIdentity{}
 		return g.settleDocIdentityAskLocked(target)
 	}
-	id := docIdentity{frameID: target, url: result.TargetInfo.URL}
-	if nt := g.navTargets[target]; nt != nil && nt.loaderID != "" {
-		id.loaderID = nt.loaderID
-	}
+	id := docIdentity{frameID: target, url: result.TargetInfo.URL, full: true}
 	ask.infoID = id
 	if result.TargetInfo.URL != "" && !g.o.Loaded(result.TargetInfo.URL) && !chromeErrorDocument(result.TargetInfo.URL) {
-		g.noteOrdinaryDocIdentityLocked(target, target, id.loaderID, result.TargetInfo.URL)
+		g.noteOrdinaryDocIdentityLocked(target, target, "", result.TargetInfo.URL, true)
 	}
 	if g.docIdentityProtectedLocked(id) || !ask.askingTree || g.docIdentityInfoSufficientLocked(target, ask, id) {
 		ask.askingTree = false
@@ -299,48 +294,6 @@ func (g *guard) docIdentityInfoSufficientLocked(target string, ask *docIdentityA
 		}
 	}
 	return true
-}
-
-func (g *guard) answeredDocIdentityTreeLocked(target string, m message) [][]byte {
-	ask := g.docIdentityAsks[target]
-	if ask == nil {
-		return nil
-	}
-	ask.askingTree = false
-	ask.treeDone = true
-	var result struct {
-		FrameTree *struct {
-			Frame struct {
-				ID             string `json:"id"`
-				ParentID       string `json:"parentId"`
-				LoaderID       string `json:"loaderId"`
-				URL            string `json:"url"`
-				SecurityOrigin string `json:"securityOrigin"`
-				UnreachableURL string `json:"unreachableUrl"`
-			} `json:"frame"`
-		} `json:"frameTree"`
-	}
-	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || result.FrameTree == nil || result.FrameTree.Frame.ID != target || result.FrameTree.Frame.ParentID != "" {
-		return g.settleDocIdentityAskLocked(target)
-	}
-	frame := result.FrameTree.Frame
-	if nt := g.navTargets[target]; nt != nil {
-		nt.documentURL = frame.URL
-		nt.loaderID = frame.LoaderID
-		nt.errorURL = frame.UnreachableURL
-		if frame.SecurityOrigin != "" {
-			nt.securityOrigin = frame.SecurityOrigin
-		}
-	}
-	url := frame.URL
-	if frame.UnreachableURL != "" {
-		url = frame.UnreachableURL
-	}
-	ask.infoID = docIdentity{frameID: frame.ID, loaderID: frame.LoaderID, url: url}
-	if url != "" && !g.o.Loaded(url) && !chromeErrorDocument(url) && frame.UnreachableURL == "" {
-		g.noteOrdinaryDocIdentityLocked(target, frame.ID, frame.LoaderID, frame.URL)
-	}
-	return g.settleDocIdentityAskLocked(target)
 }
 
 func (g *guard) settleDocIdentityAskLocked(target string) [][]byte {
@@ -423,6 +376,10 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 		h.timer = nil
 	}
 	delete(g.docIdentityHolds, k)
+	if h.reservation != nil {
+		g.pendingRelease = append(g.pendingRelease, h.reservation)
+		h.reservation = nil
+	}
 	var send [][]byte
 	switch {
 	case g.docIdentityProtectedLocked(current):
@@ -431,12 +388,32 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 	case !g.docIdentityOrdinaryLocked(current):
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
 		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
+	case !h.known:
+		if h.baseline.url != "" && !protect.Inheriting(h.baseline.url) && h.baseline.url != current.url {
+			g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
+		} else {
+			if current.full {
+				g.noteOrdinaryDocIdentityLocked(h.target, current.frameID, current.loaderID, current.url, true)
+			}
+			g.pendingPage = append(g.pendingPage, h.data)
+		}
 	case !current.equal(h.baseline):
 		g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
 	default:
+		if current.full {
+			g.noteOrdinaryDocIdentityLocked(h.target, current.frameID, current.loaderID, current.url, true)
+		}
 		g.pendingPage = append(g.pendingPage, h.data)
 	}
 	return send
+}
+
+func (g *guard) releaseDocIdentityReservationLocked(h *docIdentityHold) {
+	if h == nil || h.reservation == nil {
+		return
+	}
+	g.pendingRelease = append(g.pendingRelease, h.reservation)
+	h.reservation = nil
 }
 
 func (g *guard) failDocIdentityHoldsLocked(target string, cut bool) [][]byte {
@@ -449,6 +426,7 @@ func (g *guard) failDocIdentityHoldsLocked(target string, cut bool) [][]byte {
 			h.timer.Stop()
 			h.timer = nil
 		}
+		g.releaseDocIdentityReservationLocked(h)
 		delete(g.docIdentityHolds, k)
 		ordinary := false
 		cur := g.currentDocIdentityLocked(target)
@@ -509,6 +487,7 @@ func (g *guard) expireDocIdentityHold(k callKey) {
 		h.timer.Stop()
 		h.timer = nil
 	}
+	g.releaseDocIdentityReservationLocked(h)
 	delete(g.docIdentityHolds, k)
 	var send, page [][]byte
 	if ordinary {
@@ -527,8 +506,10 @@ func (g *guard) expireDocIdentityHold(k callKey) {
 	if !still {
 		delete(g.docIdentityAsks, target)
 	}
+	releases := g.takeReleasesLocked()
 	flush := g.flushAsync
 	g.mu.Unlock()
+	releaseReservations(releases)
 	if flush != nil {
 		flush(send, page)
 	}
@@ -545,6 +526,7 @@ func (g *guard) pruneDocIdentitySessionLocked(session string) {
 		if h.timer != nil {
 			h.timer.Stop()
 		}
+		g.releaseDocIdentityReservationLocked(h)
 		delete(g.docIdentityHolds, k)
 	}
 	for k := range g.docIdentityCalls {
@@ -567,6 +549,7 @@ func (g *guard) pruneDocIdentityTargetLocked(target string) {
 		if h.timer != nil {
 			h.timer.Stop()
 		}
+		g.releaseDocIdentityReservationLocked(h)
 		delete(g.docIdentityHolds, k)
 	}
 }
