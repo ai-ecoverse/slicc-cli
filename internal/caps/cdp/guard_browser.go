@@ -567,7 +567,7 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 		var page [][]byte
 		if info.Type == "page" {
 			var part browserVerdict
-			if m.SessionID != "" {
+			if !g.browserRootSessionLocked(m.SessionID) {
 				part = g.detachAnnouncedTabSessionLocked(m.SessionID, true)
 			} else {
 				part = g.detachUnmatchedEmptyTabsAroundLocked(time.Now(), true)

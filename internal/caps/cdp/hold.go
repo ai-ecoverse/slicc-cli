@@ -97,13 +97,17 @@ func (g *guard) unmatchedEmptyTabCandidatesAroundLocked(at time.Time) []string {
 	return out
 }
 
+func (g *guard) browserRootSessionLocked(parent string) bool {
+	return parent == "" || g.browserSessions[parent]
+}
+
 func (g *guard) adoptHeldFlatPageLocked(tabSession, tabOpener string) {
 	if tabSession == "" || tabOpener == "" {
 		return
 	}
 	var cand *heldSession
 	for _, h := range g.held {
-		if h == nil || h.typ != "page" || h.parent != "" || h.adoptedTab != "" {
+		if h == nil || h.typ != "page" || !g.browserRootSessionLocked(h.parent) || h.adoptedTab != "" {
 			continue
 		}
 		if heldOpenerLocked(h) != tabOpener {
@@ -127,8 +131,8 @@ func (g *guard) detachAnnouncedTabSessionLocked(sid string, protected bool) brow
 	}
 	target, parent, waiting := s.target, s.parent, s.waiting
 	s.refused = true
-	g.addRefusedLocked(sid)
 	if protected {
+		g.addRefusedLocked(sid)
 		g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", target, sid, parent, waiting)
 	} else {
 		g.logf("cdp: detached an auto-attached session that never got a URL target=%s session=%s parent=%s waiting=%t", target, sid, parent, waiting)
@@ -163,7 +167,7 @@ func (g *guard) detachAnnouncedTabsForPageLocked(h *heldSession, protected bool)
 	if h == nil || h.typ != "page" {
 		return browserVerdict{}
 	}
-	if h.parent != "" {
+	if !g.browserRootSessionLocked(h.parent) {
 		return g.detachAnnouncedTabSessionLocked(h.parent, protected)
 	}
 	if h.adoptedTab != "" {
