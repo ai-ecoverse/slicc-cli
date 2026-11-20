@@ -207,6 +207,9 @@ type guard struct {
 	blockedChildren          map[string]string
 	explicit                 map[string]int
 	attachCalls              map[callKey]string
+	docAttach                map[string]bool
+	docConfirms              map[string]*docConfirm
+	docFailed                map[string]bool
 	patterns                 []any
 	heldExtras               map[requestKey][]heldExtra
 	heldExtraCount           int
@@ -329,6 +332,9 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		blockedChildren:          map[string]string{},
 		explicit:                 map[string]int{},
 		attachCalls:              map[callKey]string{},
+		docAttach:                map[string]bool{},
+		docConfirms:              map[string]*docConfirm{},
+		docFailed:                map[string]bool{},
 		heldExtras:               map[requestKey][]heldExtra{},
 		seen:                     map[requestKey]reqLevel{},
 		handed:                   map[requestKey]int{},

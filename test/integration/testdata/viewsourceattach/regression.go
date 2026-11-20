@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -60,6 +61,29 @@ func vsReadReply() []byte {
 	})
 }
 
+func vsTargetInfoAnswer(id int64, url string) []byte {
+	return encode(map[string]any{
+		"id":        id,
+		"sessionId": "RELAY",
+		"result": map[string]any{
+			"targetInfo": map[string]any{"targetId": vsTarget, "type": "page", "url": url, "browserContextId": "CTX"},
+		},
+	})
+}
+
+func vsOutbound(raw []byte) (id int64, method, session string) {
+	var m struct {
+		ID        *int64 `json:"id"`
+		Method    string `json:"method"`
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.Unmarshal(raw, &m)
+	if m.ID != nil {
+		id = *m.ID
+	}
+	return id, m.Method, m.SessionID
+}
+
 func vsWatchReady(g *guard) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -106,7 +130,17 @@ func (o *vsOutcome) summarize() {
 	}
 }
 
-func vsRead(g *guard, o *vsOutcome) {
+func vsDrain(g *guard, o *vsOutcome, v browserVerdict, live string) {
+	o.take(v)
+	for _, raw := range v.send {
+		id, method, session := vsOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			vsDrain(g, o, g.fromBrowser(vsTargetInfoAnswer(id, live)), live)
+		}
+	}
+}
+
+func vsRead(g *guard, o *vsOutcome, live string) {
 	pv := g.fromCommand(&command{id: vsReadID, method: "Runtime.evaluate", session: vsSession, params: map[string]any{"expression": "document.body.innerText"}}, vsReadID, true)
 	if pv.reply != nil {
 		o.readRefused = true
@@ -114,9 +148,13 @@ func vsRead(g *guard, o *vsOutcome) {
 		o.refusal = string(pv.reply)
 		return
 	}
+	if pv.wait != nil {
+		o.readRefused = true
+		return
+	}
 	if pv.forward != nil {
 		o.readForwarded = true
-		o.take(g.fromBrowser(vsReadReply()))
+		vsDrain(g, o, g.fromBrowser(vsReadReply()), live)
 	}
 }
 
@@ -134,7 +172,7 @@ func vsRun(t *testing.T, order int, live string, s vsScenario) vsOutcome {
 	}
 	g := vsGuard(t)
 	var o vsOutcome
-	g.fromBrowser(vsRelay("Target.targetCreated", announced))
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), live)
 	if s.watched && !s.lateArm {
 		vsWatchReady(g)
 	}
@@ -144,23 +182,23 @@ func vsRun(t *testing.T, order int, live string, s vsScenario) vsOutcome {
 		o.summarize()
 		return o
 	}
-	o.take(g.fromBrowser(vsAttachedEvent(announced)))
+	vsDrain(g, &o, g.fromBrowser(vsAttachedEvent(announced)), live)
 	if s.lateArm {
 		vsWatchReady(g)
 	}
 	switch order {
 	case 1:
-		o.take(g.fromBrowser(vsRelay("Target.targetInfoChanged", live)))
-		o.take(g.fromBrowser(vsAttachReply()))
-		vsRead(g, &o)
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", live)), live)
+		vsDrain(g, &o, g.fromBrowser(vsAttachReply()), live)
+		vsRead(g, &o, live)
 	case 2:
-		o.take(g.fromBrowser(vsAttachReply()))
-		o.take(g.fromBrowser(vsRelay("Target.targetInfoChanged", live)))
-		vsRead(g, &o)
+		vsDrain(g, &o, g.fromBrowser(vsAttachReply()), live)
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", live)), live)
+		vsRead(g, &o, live)
 	default:
-		o.take(g.fromBrowser(vsAttachReply()))
-		vsRead(g, &o)
-		o.take(g.fromBrowser(vsRelay("Target.targetInfoChanged", live)))
+		vsDrain(g, &o, g.fromBrowser(vsAttachReply()), live)
+		vsRead(g, &o, live)
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", live)), live)
 	}
 	o.summarize()
 	return o
@@ -252,5 +290,15 @@ func TestViewSourceAttachControlOrdinaryIsReadable(t *testing.T) {
 				t.Errorf("announced=%s lateArm=%t watched=%t order %d: an ordinary target must stay attachable and readable in this model (refused=%t read=%t payloads=%v)", s.announced, s.lateArm, s.watched, order, o.attachRefused, o.readDelivered, o.clientPayloads)
 			}
 		}
+	}
+}
+
+func TestViewSourceAttachMutationConfirmDisabled(t *testing.T) {
+	documentConfirmEnabled = false
+	t.Cleanup(func() { documentConfirmEnabled = true })
+	url := "view-source:https://vault.sliccy.ai/doc"
+	o := vsRun(t, 3, url, vsScenario{watched: true})
+	if o.attachRefused || !o.readDelivered {
+		t.Fatalf("mutation: with confirmation disabled the watched order-3 attach must still admit and deliver the read (refused=%t delivered=%t payloads=%v)", o.attachRefused, o.readDelivered, o.clientPayloads)
 	}
 }

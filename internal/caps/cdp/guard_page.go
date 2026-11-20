@@ -121,6 +121,9 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	if gate := g.framesGateLocked(c.session); gate != nil {
 		return pageVerdict{wait: gate}
 	}
+	if wait := g.docConfirmWaitLocked(c.session); wait != nil {
+		return pageVerdict{wait: wait}
+	}
 	if c.method == "Page.navigateToHistoryEntry" {
 		if reason := g.historyRefusalLocked(c); reason != "" {
 			return pageVerdict{reply: refusal(c.id, c.session, reason)}
@@ -168,6 +171,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	if t := c.str("targetId"); c.method == "Target.attachToTarget" && t != "" {
 		g.attachCalls[k] = t
 		g.explicit[t]++
+		g.noteDocAttachLocked(t)
 		g.noteWireTouchLocked(k, t)
 	}
 	v := pageVerdict{forward: c.bytes(), cmd: c}
