@@ -1,11 +1,15 @@
 package cdp
 
+import "time"
+
 type docConfirm struct {
-	target string
-	holds  map[string]*docHold
-	ready  chan struct{}
-	done   bool
-	failed bool
+	target   string
+	holds    map[string]*docHold
+	ready    chan struct{}
+	start    time.Time
+	deadline time.Time
+	done     bool
+	failed   bool
 }
 
 type docHold struct {
@@ -29,6 +33,10 @@ func (g *guard) pruneDocConfirmSessionLocked(session string) {}
 func (g *guard) pruneDocConfirmTargetLocked(target string) {}
 
 func (g *guard) expireDocConfirm(target string) {}
+
+func (g *guard) failDocConfirmLocked(dc *docConfirm) [][]byte {
+	return nil
+}
 
 func (g *guard) docConfirmAttachEventLocked(m *message, data []byte, session string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
 	return browserVerdict{}, false

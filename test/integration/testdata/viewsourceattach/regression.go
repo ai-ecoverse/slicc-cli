@@ -739,3 +739,143 @@ func TestViewSourceAttachErrorPageReportingProtectedURLAdmitted(t *testing.T) {
 		})
 	}
 }
+
+func vsCountRelayGetTargetInfo(send [][]byte) (n int, ids []int64) {
+	for _, raw := range send {
+		id, method, session := vsOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			n++
+			ids = append(ids, id)
+		}
+	}
+	return n, ids
+}
+
+func TestViewSourceAttachOneConfirmGatesEventAndReply(t *testing.T) {
+	for _, order := range []string{"event-then-reply", "reply-then-event"} {
+		order := order
+		t.Run(order, func(t *testing.T) {
+			g := vsGuard(t)
+			var o vsOutcome
+			var asked int
+			vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), vsOrdinary)
+			vsWatchReady(g)
+			_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+			hold := func(v browserVerdict) {
+				o.take(v)
+				n, ids := vsCountRelayGetTargetInfo(v.send)
+				asked += n
+				for _, id := range ids {
+					more := g.fromBrowser(vsTargetInfoAnswer(id, vsOrdinary))
+					o.take(more)
+					extra, _ := vsCountRelayGetTargetInfo(more.send)
+					asked += extra
+					for _, p := range more.page {
+						o.clientPayloads = append(o.clientPayloads, string(p))
+					}
+				}
+				for _, p := range v.page {
+					o.clientPayloads = append(o.clientPayloads, string(p))
+				}
+			}
+			switch order {
+			case "event-then-reply":
+				hold(g.fromBrowser(vsAttachedEvent("about:blank")))
+				hold(g.fromBrowser(vsAttachReply()))
+			default:
+				hold(g.fromBrowser(vsAttachReply()))
+				hold(g.fromBrowser(vsAttachedEvent("about:blank")))
+			}
+			o.summarize()
+			if asked != 1 {
+				t.Fatalf("%s: expected exactly one relay Target.getTargetInfo, got %d payloads=%v", order, asked, o.clientPayloads)
+			}
+			if o.attachRefused || !o.attachReplied || !o.sawAttachEvent {
+				t.Fatalf("%s: both event and reply must release after the single pass (refused=%t replied=%t event=%t payloads=%v)", order, o.attachRefused, o.attachReplied, o.sawAttachEvent, o.clientPayloads)
+			}
+		})
+	}
+}
+
+func TestViewSourceAttachErrorPageWithoutProofPreArm(t *testing.T) {
+	live := "https://seven.sliccy.ai/doc"
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), live)
+	vsWatchReady(g)
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	vsDrain(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), live)
+	vsDrain(g, &o, g.fromBrowser(vsAttachReply()), live)
+	o.summarize()
+	if o.attachRefused {
+		t.Fatalf("recovery attach without pre-armed proof must admit when getTargetInfo names the protected unreachable URL (main redaction path): %v", o.clientPayloads)
+	}
+	if !o.attachReplied && !o.sawAttachEvent {
+		t.Fatalf("expected a client-visible attach: %v", o.clientPayloads)
+	}
+}
+
+func TestViewSourceAttachConfirmEarlyExpireRearms(t *testing.T) {
+	t.Setenv(HoldTimeoutEnv, "50ms")
+	g := vsGuard(t)
+	_ = g.fromBrowser(vsRelay("Target.targetCreated", "about:blank"))
+	vsWatchReady(g)
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	_ = g.fromBrowser(vsAttachedEvent("about:blank"))
+	_ = g.fromBrowser(vsAttachReply())
+	if !vsPendingConfirm(g, vsSession) {
+		t.Fatal("expected a pending confirm")
+	}
+	g.mu.Lock()
+	dc := g.docInflight[vsTarget]
+	if dc == nil {
+		g.mu.Unlock()
+		t.Fatal("missing inflight confirm")
+	}
+	dc.deadline = time.Now().Add(80 * time.Millisecond)
+	dc.start = time.Now()
+	g.mu.Unlock()
+	g.expireDocConfirm(vsTarget)
+	if !vsPendingConfirm(g, vsSession) {
+		t.Fatal("early expire must re-arm until the fixed deadline, not fail closed")
+	}
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !vsPendingConfirm(g, vsSession) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if vsPendingConfirm(g, vsSession) || vsDocConfirmCount(g) > 0 {
+		t.Errorf("confirm must fail closed once the fixed deadline elapses")
+	}
+}
+
+func TestViewSourceAttachDocFailedClearedOnDestroy(t *testing.T) {
+	g := vsGuard(t)
+	_ = g.fromBrowser(vsRelay("Target.targetCreated", "about:blank"))
+	vsWatchReady(g)
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	_ = g.fromBrowser(vsAttachedEvent("about:blank"))
+	_ = g.fromBrowser(vsAttachReply())
+	g.mu.Lock()
+	dc := g.docInflight[vsTarget]
+	if dc == nil {
+		g.mu.Unlock()
+		t.Fatal("expected pending confirm")
+	}
+	_ = g.failDocConfirmLocked(dc)
+	if !g.docFailed[vsSession] {
+		g.mu.Unlock()
+		t.Fatal("expected docFailed after refuse")
+	}
+	g.mu.Unlock()
+	_ = g.fromBrowser(encode(map[string]any{"sessionId": "RELAY", "method": "Target.targetDestroyed", "params": map[string]any{"targetId": vsTarget}}))
+	g.mu.Lock()
+	failed := g.docFailed[vsSession]
+	hidden := g.hidden[vsSession]
+	g.mu.Unlock()
+	if failed || hidden {
+		t.Errorf("docFailed/hidden must clear on target destroy when detach never arrives (failed=%t hidden=%t)", failed, hidden)
+	}
+}

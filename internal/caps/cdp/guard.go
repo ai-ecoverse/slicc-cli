@@ -209,6 +209,7 @@ type guard struct {
 	attachCalls              map[callKey]string
 	docInflight              map[string]*docConfirm
 	docFailed                map[string]bool
+	docPassed                map[string]bool
 	flushAsync               func(send, page [][]byte)
 	patterns                 []any
 	heldExtras               map[requestKey][]heldExtra
@@ -334,6 +335,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		attachCalls:              map[callKey]string{},
 		docInflight:              map[string]*docConfirm{},
 		docFailed:                map[string]bool{},
+		docPassed:                map[string]bool{},
 		heldExtras:               map[requestKey][]heldExtra{},
 		seen:                     map[requestKey]reqLevel{},
 		handed:                   map[requestKey]int{},
