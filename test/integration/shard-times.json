@@ -533,6 +533,8 @@
     "TestCDPExtensionFrameEvaluateResultUnmarked": 8,
     "TestCDPExtensionFrameInnerMessageMarkerStripped": 8,
     "TestCDPExtensionFrameDetachReleasesHeldPaint": 10,
-    "TestCDPDeliversOrdinaryIframeUnderTabAndPageAttachParents": 25.0
+    "TestCDPDeliversOrdinaryIframeUnderTabAndPageAttachParents": 25.0,
+    "TestDiagC10OnlyPrompt": 150,
+    "TestDiagC10OnlyLagging": 150
   }
 }
