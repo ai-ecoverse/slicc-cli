@@ -160,6 +160,18 @@ func esWindowTaintThenOrdinaryPostRead(t *testing.T, g *guard, learn func(*esOut
 	g.mu.Lock()
 	before := g.docIdentityTaint[esTarget]
 	g.mu.Unlock()
+	held := g.fromBrowser(esContentReply(cmd, int64(esReadID), esOrdinaryB, true))
+	o.take(held)
+	var infoID int64
+	for _, raw := range held.send {
+		id, method, session := esOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			infoID = id
+		}
+	}
+	if infoID == 0 {
+		t.Fatal("expected identity post-read getTargetInfo while the reply is held")
+	}
 	learn(&o)
 	g.mu.Lock()
 	after := g.docIdentityTaint[esTarget]
@@ -167,13 +179,20 @@ func esWindowTaintThenOrdinaryPostRead(t *testing.T, g *guard, learn func(*esOut
 	if after == before {
 		t.Fatalf("learn must bump docIdentityTaint (before=%d after=%d)", before, after)
 	}
-	esDrain(g, &o, g.fromBrowser(esContentReply(cmd, int64(esReadID), esOrdinaryB, true)), esOrdinaryB)
+	if esSessionCut(g) {
+		t.Fatalf("learn during the hold must not cut before identity settle (payloads=%v)", o.payloads)
+	}
+	esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(infoID, esOrdinaryB)), esOrdinaryB)
 	o.notePayloadsFor(esOrdinaryB)
+	joined := strings.Join(o.payloads, "")
+	if strings.Contains(joined, "committed Chrome's error page for a protected URL while this command ran") {
+		t.Fatalf("window taint must cut via identity taint, not outlived: payloads=%v", o.payloads)
+	}
 	if o.delivered {
 		t.Fatalf("window taint must drop the reply even when post-read is ordinary: payloads=%v", o.payloads)
 	}
-	if !esSessionCut(g) && !o.refused {
-		t.Fatalf("window taint must cut or refuse (cut=%t refused=%t payloads=%v)", esSessionCut(g), o.refused, o.payloads)
+	if !esSessionCut(g) {
+		t.Fatalf("window taint must cut the session (refused=%t payloads=%v)", o.refused, o.payloads)
 	}
 }
 
@@ -777,6 +796,12 @@ func TestExistingSessionBaselineUpdatesOnOrdinaryNavigation(t *testing.T) {
 	}
 	if o.refused && !esHasRetriable(o) && strings.Contains(o.refusal, "slicc: refused:") {
 		t.Fatalf("after the guard learns an ordinary commit, admit baseline must move with it so a later read is not a hard refuse: %s", o.refusal)
+	}
+	g.mu.Lock()
+	base, ok := g.docBaselines[esTarget]
+	g.mu.Unlock()
+	if !ok || base.url != esOrdinaryB {
+		t.Fatalf("after ordinary navigation learn+read, baseline must advance to %q: ok=%t url=%q", esOrdinaryB, ok, base.url)
 	}
 }
 
