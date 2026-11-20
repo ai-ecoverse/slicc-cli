@@ -208,6 +208,12 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if !ok {
 		return browserVerdict{forward: data, send: treeSend, page: treePage}
 	}
+	if kind == kindAttach {
+		if held, holdSend, holdPage := g.holdDocConfirmReplyLocked(attached, m, res); held {
+			acceptedAttach = true
+			return browserVerdict{send: append(treeSend, holdSend...), page: append(treePage, holdPage...)}
+		}
+	}
 	send, hide := g.applyResultKindLocked(kind, attached, m.SessionID, res)
 	send = append(treeSend, send...)
 	acceptedAttach = kind != kindAttach || !hide
@@ -611,6 +617,10 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	send = append(send, g.observeLocked(info)...)
 	if v, handled := g.attachedHideOrHoldLocked(m, p.SessionID, p.WaitingForDebugger, info, send); handled {
+		g.attachParent = ""
+		return v
+	}
+	if v, handled := g.docConfirmAttachEventLocked(m, data, p.SessionID, p.WaitingForDebugger, info, send); handled {
 		g.attachParent = ""
 		return v
 	}

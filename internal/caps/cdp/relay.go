@@ -91,6 +91,14 @@ func (r *Registry) serve(s *link.Stream) {
 	rl.g.reserveHold = func(data []byte) (*link.Reservation, bool) { return rl.g.reserveBytes(cap(data)) }
 	defer rl.g.releaseAllocations()
 	rl.g.scheduleInitial = rl.scheduleInitial
+	rl.g.flushAsync = func(send, page [][]byte) {
+		for _, msg := range send {
+			_ = rl.conn.Write(context.Background(), websocket.MessageText, msg)
+		}
+		for _, msg := range page {
+			_ = rl.writePage(msg)
+		}
+	}
 	err = rl.bootstrap(ctx)
 	cancel()
 	if err != nil {
