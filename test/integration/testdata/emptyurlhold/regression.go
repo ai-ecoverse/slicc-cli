@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -894,5 +895,219 @@ func TestEmptyURLHoldOrdinaryOpenerTabDetachedWhenChildProtected(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("ordinary-opener protected detach missing protected-origin label: %v", logs)
+	}
+}
+
+func emptyURLNamedTabAttachURL(session, target, opener, url string, waiting bool) []byte {
+	return encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          session,
+			"waitingForDebugger": waiting,
+			"targetInfo":         map[string]any{"targetId": target, "type": "tab", "url": url, "openerId": opener},
+		},
+	})
+}
+
+func emptyURLHoldDetachEnvelope(ss []string, targetSession, envelopeSession string) int {
+	for i, s := range ss {
+		if !strings.Contains(s, "detachFromTarget") {
+			continue
+		}
+		var m struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+			Params    struct {
+				SessionID string `json:"sessionId"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(s), &m); err != nil || m.Method != "Target.detachFromTarget" {
+			continue
+		}
+		if m.Params.SessionID == targetSession && m.SessionID == envelopeSession {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestEmptyURLHoldURLTabsSurviveFlatProtectedHide(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	for i := 1; i <= 3; i++ {
+		sid := fmt.Sprintf("S-TAB-U%d", i)
+		tid := fmt.Sprintf("TAB-U%d", i)
+		_ = g.fromBrowser(emptyURLNamedTabAttachURL(sid, tid, "", fmt.Sprintf("https://ordinary.test/t%d", i), false))
+		if g.sessions[sid] == nil {
+			t.Fatalf("expected %s announced with a URL", sid)
+		}
+	}
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-P", "PAGE-P", "OPENER", "https://seven.sliccy.ai/p", false))
+	ps := emptyURLHoldPayloads(v)
+	sends := emptyURLHoldSends(v)
+	if emptyURLHoldContains(ps, "attachedToTarget") || g.sessions["S-PAGE-P"] != nil {
+		t.Fatalf("protected flat page reached the client: %v", ps)
+	}
+	for i := 1; i <= 3; i++ {
+		sid := fmt.Sprintf("S-TAB-U%d", i)
+		if g.sessions[sid] == nil {
+			t.Fatalf("flat protected hide detached unrelated URL tab %s", sid)
+		}
+		if emptyURLHoldDetachIndex(sends, sid) >= 0 {
+			t.Fatalf("flat protected hide detached unrelated URL tab %s: %v", sid, sends)
+		}
+	}
+}
+
+func TestEmptyURLHoldOnlyEmptyURLTabIsFlatHideCandidate(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttachURL("S-TAB-URL", "TAB-URL", "", "https://ordinary.test/known", false))
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-EMPTY", "TAB-EMPTY", "", true))
+	if g.sessions["S-TAB-URL"] == nil || g.sessions["S-TAB-EMPTY"] == nil {
+		t.Fatal("expected both tabs announced before flat hide")
+	}
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-P", "PAGE-P", "OPENER", "https://seven.sliccy.ai/p", false))
+	sends := emptyURLHoldSends(v)
+	if g.sessions["S-TAB-URL"] == nil || emptyURLHoldDetachIndex(sends, "S-TAB-URL") >= 0 {
+		t.Fatalf("URL tab must never be a flat-hide candidate: sessions=%v sends=%v", g.sessions["S-TAB-URL"] != nil, sends)
+	}
+	if g.sessions["S-TAB-EMPTY"] != nil || (emptyURLHoldDetachIndex(sends, "S-TAB-EMPTY") < 0 && !g.hidden["S-TAB-EMPTY"]) {
+		t.Fatalf("still-empty unmatched tab must be detached on flat hide: sessions=%v sends=%v", g.sessions["S-TAB-EMPTY"] != nil, sends)
+	}
+}
+
+func TestEmptyURLHoldStartupProtectedPageLeavesOrdinaryTabs(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttachURL("S-TAB-1", "TAB-1", "", "https://ordinary.test/one", false))
+	_ = g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "", "https://ordinary.test/one", false))
+	_ = g.fromBrowser(emptyURLNamedTabAttachURL("S-TAB-2", "TAB-2", "", "https://ordinary.test/two", false))
+	_ = g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-2", "PAGE-2", "", "https://ordinary.test/two", false))
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-P", "PAGE-P", "", "https://seven.sliccy.ai/startup", false))
+	sends := emptyURLHoldSends(v)
+	if g.sessions["S-PAGE-P"] != nil {
+		t.Fatal("startup protected page admitted")
+	}
+	for _, sid := range []string{"S-TAB-1", "S-TAB-2", "S-PAGE-1", "S-PAGE-2"} {
+		if g.sessions[sid] == nil {
+			t.Fatalf("startup protected page detached ordinary %s", sid)
+		}
+		if emptyURLHoldDetachIndex(sends, sid) >= 0 {
+			t.Fatalf("startup protected page detached ordinary %s: %v", sid, sends)
+		}
+	}
+}
+
+func TestEmptyURLHoldIframeUnderHeldPageDoesNotDeliverParent(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-H", "PAGE-H", "OPENER", true))
+	if g.held["S-PAGE-H"] == nil {
+		t.Fatal("expected empty page held")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"sessionId": "S-PAGE-H",
+		"method":    "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-IFRAME",
+			"waitingForDebugger": false,
+			"targetInfo": map[string]any{
+				"targetId":      "IFRAME",
+				"type":          "iframe",
+				"url":           "https://ordinary.test/frame",
+				"openerId":      "",
+				"parentFrameId": "PAGE-H",
+			},
+		},
+	}))
+	ps := emptyURLHoldPayloads(v)
+	if g.held["S-PAGE-H"] == nil || g.sessions["S-PAGE-H"] != nil {
+		t.Fatalf("iframe under held empty page delivered the parent before classification: held=%v session=%v childSession=%v payloads=%v", g.held["S-PAGE-H"] != nil, g.sessions["S-PAGE-H"] != nil, g.sessions["S-IFRAME"] != nil, ps)
+	}
+	if emptyURLHoldAttachIndex(ps, "S-PAGE-H") >= 0 {
+		t.Fatalf("held empty page announced via iframe child: %v", ps)
+	}
+}
+
+func TestEmptyURLHoldWorkerUnderHeldPageDoesNotDeliverParent(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-H", "PAGE-H", "OPENER", true))
+	if g.held["S-PAGE-H"] == nil {
+		t.Fatal("expected empty page held")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"sessionId": "S-PAGE-H",
+		"method":    "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-WORKER",
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": "WORKER", "type": "worker", "url": "https://ordinary.test/w.js", "openerId": ""},
+		},
+	}))
+	ps := emptyURLHoldPayloads(v)
+	if g.held["S-PAGE-H"] == nil || g.sessions["S-PAGE-H"] != nil {
+		t.Fatalf("worker under held empty page delivered the parent before classification: held=%v session=%v childSession=%v payloads=%v", g.held["S-PAGE-H"] != nil, g.sessions["S-PAGE-H"] != nil, g.sessions["S-WORKER"] != nil, ps)
+	}
+	if emptyURLHoldAttachIndex(ps, "S-PAGE-H") >= 0 {
+		t.Fatalf("held empty page announced via worker child: %v", ps)
+	}
+}
+
+func TestEmptyURLHoldPageChildUnderHeldPageDoesNotDeliverParent(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-H", "PAGE-H", "OPENER", true))
+	if g.held["S-PAGE-H"] == nil {
+		t.Fatal("expected empty page held")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"sessionId": "S-PAGE-H",
+		"method":    "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-CHILD",
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": "CHILD", "type": "page", "url": "https://ordinary.test/child", "openerId": ""},
+		},
+	}))
+	ps := emptyURLHoldPayloads(v)
+	if g.held["S-PAGE-H"] == nil || g.sessions["S-PAGE-H"] != nil {
+		t.Fatalf("page child under held empty page delivered the parent before classification: held=%v session=%v childSession=%v payloads=%v", g.held["S-PAGE-H"] != nil, g.sessions["S-PAGE-H"] != nil, g.sessions["S-CHILD"] != nil, ps)
+	}
+	if emptyURLHoldAttachIndex(ps, "S-PAGE-H") >= 0 {
+		t.Fatalf("held empty page announced via page child: %v", ps)
+	}
+}
+
+func TestEmptyURLHoldAdoptKeepsFlatPageDetachEnvelope(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-A", "PAGE-A", "SHARED", true))
+	if g.held["S-PAGE-A"] == nil {
+		t.Fatal("expected flat empty page held")
+	}
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-A", "TAB-A", "SHARED", true))
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://seven.sliccy.ai/a", "SHARED"))
+	sends := emptyURLHoldSends(v)
+	if emptyURLHoldDetachEnvelope(sends, "S-PAGE-A", "S-TAB-A") >= 0 {
+		t.Fatalf("page detach envelope must stay browser-level even if adopt rewrote bookkeeping parent: %v", sends)
+	}
+	if g.hidden["S-PAGE-A"] || emptyURLHoldDetachEnvelope(sends, "S-PAGE-A", "") >= 0 || emptyURLHoldDetachIndex(sends, "S-PAGE-A") >= 0 {
+		return
+	}
+	if g.sessions["S-PAGE-A"] != nil {
+		t.Fatalf("protected flat page left a client session without a browser-level detach: %v", sends)
+	}
+}
+
+func emptyURLMatchedTab(g *guard, sid string) bool {
+	return g.matchedEmptyOpenerTabs[sid]
+}
+
+func TestEmptyURLHoldMatchedTabClearedOnForget(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = emptyURLAnnounceFlatTabs(t, g, 1)
+	_ = g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "OPENER", "https://ordinary.test/popup", false))
+	matched := emptyURLMatchedTab(g, "S-TAB-1")
+	_ = g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-TAB-1", "targetId": "TAB-1"},
+	}))
+	if matched && emptyURLMatchedTab(g, "S-TAB-1") {
+		t.Fatal("matchedEmptyOpenerTabs entry survived session forget")
 	}
 }
