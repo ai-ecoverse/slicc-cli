@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
@@ -1112,5 +1113,182 @@ func TestEmptyURLHoldMatchedTabClearedOnForget(t *testing.T) {
 	}))
 	if matched && emptyURLMatchedTab(g, "S-TAB-1") {
 		t.Fatal("matchedEmptyOpenerTabs entry survived session forget")
+	}
+}
+
+func emptyURLHoldClientDetachIndex(ss []string, sessionID string) int {
+	needle := `"sessionId":"` + sessionID + `"`
+	for i, s := range ss {
+		if strings.Contains(s, "detachedFromTarget") && strings.Contains(s, needle) {
+			return i
+		}
+	}
+	return -1
+}
+
+func emptyURLHoldClientDetachCount(ss []string, sessionID string) int {
+	n := 0
+	needle := `"sessionId":"` + sessionID + `"`
+	for _, s := range ss {
+		if strings.Contains(s, "detachedFromTarget") && strings.Contains(s, needle) {
+			n++
+		}
+	}
+	return n
+}
+
+func emptyURLAssertClientSawTabDetach(t *testing.T, payloads []string, tabSession string) {
+	t.Helper()
+	if n := emptyURLHoldClientDetachCount(payloads, tabSession); n != 1 {
+		t.Fatalf("client must see exactly one Target.detachedFromTarget for announced %s, got %d in %v", tabSession, n, payloads)
+	}
+}
+
+func TestEmptyURLHoldNestedProtectedClientSeesTabDetach(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	tabClient := emptyURLHoldPayloads(g.fromBrowser(emptyURLTabAttach(true)))
+	if emptyURLHoldAttachIndex(tabClient, "S-TAB") < 0 {
+		t.Fatal("expected announced tab before nested protect")
+	}
+	_ = g.fromBrowser(emptyURLPageAttach(true))
+	v := g.fromBrowser(emptyURLRelayChanged("PAGE", "page", "https://seven.sliccy.ai/popup"))
+	emptyURLAssertClientSawTabDetach(t, emptyURLHoldPayloads(v), "S-TAB")
+}
+
+func TestEmptyURLHoldFlatProtectedClientSeesTabDetach(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = emptyURLAnnounceFlatTabs(t, g, 1)
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-P", "PAGE-P", "OPENER", "https://seven.sliccy.ai/p", false))
+	emptyURLAssertClientSawTabDetach(t, emptyURLHoldPayloads(v), "S-TAB-1")
+}
+
+func TestEmptyURLHoldFlatExpiredClientSeesTabDetach(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = emptyURLAnnounceFlatTabs(t, g, 1)
+	_ = g.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-E", "PAGE-E", "OPENER", true))
+	_ = g.expireHold("S-PAGE-E")
+	chromeAck := g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-TAB-1", "targetId": "TAB-1"},
+	}))
+	if emptyURLHoldClientDetachIndex(emptyURLHoldPayloads(chromeAck), "S-TAB-1") < 0 {
+		t.Fatalf("client must receive Target.detachedFromTarget for the announced tab after expiry (Chrome ack must not be swallowed): %v", emptyURLHoldPayloads(chromeAck))
+	}
+}
+
+func emptyURLAssertFlatProtectedClientDetachesAll(t *testing.T, n int) {
+	t.Helper()
+	g := emptyURLHoldGuard(t)
+	_ = emptyURLAnnounceFlatTabs(t, g, n)
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-P", "PAGE-P", "OPENER", "https://seven.sliccy.ai/p", false))
+	ps := emptyURLHoldPayloads(v)
+	for i := 1; i <= n; i++ {
+		sid := fmt.Sprintf("S-TAB-%d", i)
+		emptyURLAssertClientSawTabDetach(t, ps, sid)
+	}
+}
+
+func TestEmptyURLHoldFlatProtectedClientDetachesOneUnmatchedTab(t *testing.T) {
+	emptyURLAssertFlatProtectedClientDetachesAll(t, 1)
+}
+func TestEmptyURLHoldFlatProtectedClientDetachesTwoUnmatchedTabs(t *testing.T) {
+	emptyURLAssertFlatProtectedClientDetachesAll(t, 2)
+}
+func TestEmptyURLHoldFlatProtectedClientDetachesThreeUnmatchedTabs(t *testing.T) {
+	emptyURLAssertFlatProtectedClientDetachesAll(t, 3)
+}
+
+func TestEmptyURLHoldFlatMatchDoesNotShieldProtectedPopupTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-B", "TAB-B", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-B", "PAGE-B", "OPENER", true))
+	if g.sessions["S-TAB-B"] == nil || g.held["S-PAGE-B"] == nil {
+		t.Fatal("expected TabB announced and page B held")
+	}
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-A", "PAGE-A", "OPENER", "https://ordinary.test/a", false))
+	if g.sessions["S-PAGE-A"] == nil {
+		t.Fatalf("ordinary flat page A should classify: %v", emptyURLHoldPayloads(v))
+	}
+	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://seven.sliccy.ai/b", "OPENER"))
+	ps := emptyURLHoldPayloads(v)
+	sends := emptyURLHoldSends(v)
+	if g.sessions["S-TAB-B"] != nil || (emptyURLHoldDetachIndex(sends, "S-TAB-B") < 0 && !g.hidden["S-TAB-B"] && emptyURLHoldClientDetachIndex(ps, "S-TAB-B") < 0) {
+		t.Fatalf("flat match must not shield TabB from page B protect: sessions=%v payloads=%v sends=%v", g.sessions["S-TAB-B"] != nil, ps, sends)
+	}
+}
+
+func TestEmptyURLHoldStaleEmptyTabOutsideHoldWindowUntouched(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-OLD", "TAB-OLD", "", true))
+	if s := g.sessions["S-TAB-OLD"]; s != nil {
+		s.at = time.Now().Add(-2 * HoldTimeout)
+	}
+	_ = g.fromBrowser(emptyURLNamedPageAttachFirst("S-PAGE-E", "PAGE-E", "OPENER", true))
+	if h := g.held["S-PAGE-E"]; h != nil {
+		h.at = time.Now()
+	}
+	_ = g.expireHold("S-PAGE-E")
+	if g.sessions["S-TAB-OLD"] == nil {
+		t.Fatal("stale empty tab outside the hold window must not be detached by an unrelated expiry")
+	}
+}
+
+func TestEmptyURLHoldStockOrdinaryFlatDoesNotDetachOwnTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	client := emptyURLAnnounceFlatTabs(t, g, 1)
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "OPENER", "https://ordinary.test/popup", false))
+	client = append(client, emptyURLHoldPayloads(v)...)
+	emptyURLAssertClientDrivesPage(t, g, client, "S-TAB-1", "S-PAGE-1")
+	if emptyURLHoldClientDetachIndex(client, "S-TAB-1") >= 0 {
+		t.Fatalf("stock ordinary flat release must not detach its tab: %v", client)
+	}
+}
+
+func TestEmptyURLHoldFailedLoadProtectedDetachesAnnouncedTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-FL", "TAB-FL", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-FL", "S-PAGE-FL", "PAGE-FL", "OPENER", true))
+	if g.sessions["S-TAB-FL"] == nil || g.held["S-PAGE-FL"] == nil {
+		t.Fatal("expected announced tab and held page before failed-load protect")
+	}
+	g.targets["PAGE-FL"].url = "chrome-error://chromewebdata/"
+	g.setErrorProofLocked("PAGE-FL", errorProofProtected)
+	send := g.finishFailedLoadHeldLocked("PAGE-FL", true)
+	ps := emptyURLHoldPayloads(browserVerdict{send: send})
+	sends := emptyURLHoldSends(browserVerdict{send: send})
+	if g.sessions["S-TAB-FL"] != nil || (emptyURLHoldDetachIndex(sends, "S-TAB-FL") < 0 && emptyURLHoldClientDetachIndex(ps, "S-TAB-FL") < 0 && !g.hidden["S-TAB-FL"]) {
+		t.Fatalf("failed-load protected hide left announced tab attached: sessions=%v payloads=%v sends=%v", g.sessions["S-TAB-FL"] != nil, ps, sends)
+	}
+}
+
+func TestEmptyURLHoldDestroyWhileHeldDetachesAnnouncedTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-D", "TAB-D", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-D", "S-PAGE-D", "PAGE-D", "OPENER", true))
+	if g.held["S-PAGE-D"] == nil || g.sessions["S-TAB-D"] == nil {
+		t.Fatal("expected held page under announced tab")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.targetDestroyed",
+		"params": map[string]any{"targetId": "PAGE-D"},
+	}))
+	ps := emptyURLHoldPayloads(v)
+	sends := emptyURLHoldSends(v)
+	if g.sessions["S-TAB-D"] != nil || (emptyURLHoldDetachIndex(sends, "S-TAB-D") < 0 && emptyURLHoldClientDetachIndex(ps, "S-TAB-D") < 0 && !g.hidden["S-TAB-D"]) {
+		t.Fatalf("destroy while held left announced tab: sessions=%v payloads=%v sends=%v", g.sessions["S-TAB-D"] != nil, ps, sends)
+	}
+}
+
+func TestEmptyURLHoldTabWithOpenerIsFlatHideCandidate(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-OP", "TAB-OP", "OPENER", true))
+	if g.sessions["S-TAB-OP"] == nil {
+		t.Fatal("expected empty tab with opener announced")
+	}
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-P", "PAGE-P", "OPENER", "https://seven.sliccy.ai/p", false))
+	ps := emptyURLHoldPayloads(v)
+	sends := emptyURLHoldSends(v)
+	if g.sessions["S-TAB-OP"] != nil || (emptyURLHoldDetachIndex(sends, "S-TAB-OP") < 0 && emptyURLHoldClientDetachIndex(ps, "S-TAB-OP") < 0 && !g.hidden["S-TAB-OP"]) {
+		t.Fatalf("empty-at-announce tab with opener must still be a flat-hide candidate: sessions=%v payloads=%v sends=%v", g.sessions["S-TAB-OP"] != nil, ps, sends)
 	}
 }

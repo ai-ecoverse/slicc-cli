@@ -131,6 +131,7 @@ type session struct {
 	refused         bool
 	waiting         bool
 	emptyAtAnnounce bool
+	at              time.Time
 }
 
 type guard struct {

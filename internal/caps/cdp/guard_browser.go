@@ -619,7 +619,7 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	g.attachParent = ""
 	g.noteWorkerShownLocked(info)
-	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger, emptyAtAnnounce: info.Type == "tab" && info.URL == ""}
+	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger, emptyAtAnnounce: info.Type == "tab" && info.URL == "", at: time.Now()}
 	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
 	}
