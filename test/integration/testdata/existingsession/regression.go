@@ -118,6 +118,10 @@ func esTargetInfoAnswer(id int64, url string) []byte {
 }
 
 func esFrameNavigated(url, loader string) []byte {
+	return esFrameNavigatedUnreachable(url, loader, "")
+}
+
+func esFrameNavigatedUnreachable(url, loader, unreachable string) []byte {
 	origin := "://"
 	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
 		origin = url
@@ -125,20 +129,52 @@ func esFrameNavigated(url, loader string) []byte {
 			origin = url[:8+i]
 		}
 	}
+	frame := map[string]any{
+		"id":             esTarget,
+		"loaderId":       loader,
+		"url":            url,
+		"securityOrigin": origin,
+		"mimeType":       "text/html",
+	}
+	if unreachable != "" {
+		frame["unreachableUrl"] = unreachable
+	}
 	return esEncode(map[string]any{
 		"sessionId": esNavSession,
 		"method":    "Page.frameNavigated",
 		"params": map[string]any{
-			"frame": map[string]any{
-				"id":             esTarget,
-				"loaderId":       loader,
-				"url":            url,
-				"securityOrigin": origin,
-				"mimeType":       "text/html",
-			},
-			"type": "Navigation",
+			"frame": frame,
+			"type":  "Navigation",
 		},
 	})
+}
+
+func esWindowTaintThenOrdinaryPostRead(t *testing.T, g *guard, learn func(*esOutcome)) {
+	t.Helper()
+	var o esOutcome
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "document.body.innerText"}}
+	pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
+	if pv.forward == nil {
+		t.Fatalf("admit must forward: reply=%s", pv.reply)
+	}
+	g.mu.Lock()
+	before := g.docIdentityTaint[esTarget]
+	g.mu.Unlock()
+	learn(&o)
+	g.mu.Lock()
+	after := g.docIdentityTaint[esTarget]
+	g.mu.Unlock()
+	if after == before {
+		t.Fatalf("learn must bump docIdentityTaint (before=%d after=%d)", before, after)
+	}
+	esDrain(g, &o, g.fromBrowser(esContentReply(cmd, int64(esReadID), esOrdinaryB, true)), esOrdinaryB)
+	o.notePayloadsFor(esOrdinaryB)
+	if o.delivered {
+		t.Fatalf("window taint must drop the reply even when post-read is ordinary: payloads=%v", o.payloads)
+	}
+	if !esSessionCut(g) && !o.refused {
+		t.Fatalf("window taint must cut or refuse (cut=%t refused=%t payloads=%v)", esSessionCut(g), o.refused, o.payloads)
+	}
 }
 
 func esOutbound(raw []byte) (id int64, method, session string) {
@@ -765,7 +801,7 @@ func TestExistingSessionOutcomeAProtectedCuts(t *testing.T) {
 	}
 }
 
-func TestExistingSessionOutcomeBOrdinaryIdentityChangeRetriableNoCut(t *testing.T) {
+func TestExistingSessionOutcomeBOrdinaryIdentityChangeAcceptsAndAdvancesBaseline(t *testing.T) {
 	g := esGuard(t)
 	_ = esAdmit(t, g)
 	var o esOutcome
@@ -778,20 +814,93 @@ func TestExistingSessionOutcomeBOrdinaryIdentityChangeRetriableNoCut(t *testing.
 		t.Fatalf("expected forward")
 	}
 	esDrain(g, &o, g.fromBrowser(esContentReply(cmd, int64(esReadID), esOrdinaryB, true)), esOrdinaryB)
-	esDeliverLearn(g, &o, esOrdinaryB, esEventsBoth)
 	o.notePayloadsFor(esOrdinaryB)
 	if esSessionCut(g) {
-		t.Fatalf("outcome (b): ordinary identity change must not cut the session")
+		t.Fatalf("outcome (b): ordinary identity change with a clean window must not cut")
 	}
-	if o.delivered && !esHasRetriable(o) {
-		t.Fatalf("outcome (b): ordinary→ordinary identity change across the command must drop with a retriable refusal, not forward the result: payloads=%v", o.payloads)
+	if esHasRetriable(o) {
+		t.Fatalf("outcome (b): ordinary→ordinary with no protected watch in the window must accept, not retriable: payloads=%v", o.payloads)
 	}
-	if !esHasRetriable(o) && !o.refused {
-		t.Fatalf("outcome (b): expected a retriable refusal shaped like %q", esRetriableMark)
+	if !o.delivered && !strings.Contains(strings.Join(o.payloads, ""), fmt.Sprintf(`"id":%d`, esReadID)) {
+		t.Fatalf("outcome (b): expected the held reply to be released to the client: payloads=%v", o.payloads)
+	}
+	g.mu.Lock()
+	base, ok := g.docBaselines[esTarget]
+	g.mu.Unlock()
+	if !ok || base.url != esOrdinaryB {
+		t.Fatalf("outcome (b): baseline must advance to the post-read ordinary identity: ok=%t url=%q", ok, base.url)
 	}
 	pv2 := g.fromCommand(&command{id: int64(esReadID2), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID2), true)
-	if pv2.reply != nil && strings.Contains(string(pv2.reply), refusedTarget) && esSessionCut(g) {
-		t.Fatalf("outcome (b): session must remain usable after the retriable drop")
+	if pv2.reply != nil {
+		t.Fatalf("outcome (b): session must remain usable after accept+baseline advance: %s", pv2.reply)
+	}
+}
+
+func TestExistingSessionWindowTaintProtectedEventCutsDespiteOrdinaryPostRead(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	esWindowTaintThenOrdinaryPostRead(t, g, func(o *esOutcome) {
+		esDeliverLearn(g, o, esProtectedURLs()[0], esEventsFrameOnly)
+	})
+}
+
+func TestExistingSessionWindowTaintUnparseableURLCutsDespiteOrdinaryPostRead(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	esWindowTaintThenOrdinaryPostRead(t, g, func(o *esOutcome) {
+		esDrain(g, o, g.fromBrowser(esFrameNavigated("view-source:!!!not-a-url!!!", "L-BAD")), "view-source:!!!not-a-url!!!")
+	})
+}
+
+func TestExistingSessionWindowTaintEmptyToWrappedUnresolvableCutsDespiteOrdinaryPostRead(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	esWindowTaintThenOrdinaryPostRead(t, g, func(o *esOutcome) {
+		esDrain(g, o, g.fromBrowser(esFrameNavigated("blob:", "L-WRAP")), "blob:")
+	})
+}
+
+func TestExistingSessionWindowTaintChromeErrorProtectedFailedURLCutsDespiteOrdinaryPostRead(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	esWindowTaintThenOrdinaryPostRead(t, g, func(o *esOutcome) {
+		failed := "https://seven.sliccy.ai/doc"
+		esDrain(g, o, g.fromBrowser(esFrameNavigatedUnreachable("chrome-error://chromewebdata/", "L-ERR", failed)), failed)
+	})
+}
+
+func TestExistingSessionWindowTaintChromeErrorOrdinaryFailedURLDoesNotTaint(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
+	if pv.forward == nil {
+		t.Fatalf("admit must forward: reply=%s", pv.reply)
+	}
+	failed := esOrdinary + "/missing"
+	esDrain(g, &o, g.fromBrowser(esFrameNavigatedUnreachable("chrome-error://chromewebdata/", "L-ERR", failed)), failed)
+	esDrain(g, &o, g.fromBrowser(esContentReply(cmd, int64(esReadID), esOrdinaryB, true)), esOrdinaryB)
+	if esSessionCut(g) {
+		t.Fatalf("chrome-error with an ordinary failed URL must not taint the window (stock recovery stays green)")
+	}
+	if esHasRetriable(o) || strings.Contains(strings.Join(o.payloads, ""), "slicc: refused:") {
+		t.Fatalf("chrome-error ordinary failed URL must not refuse the held reply: payloads=%v", o.payloads)
+	}
+}
+
+func TestExistingSessionSilentOrdinaryProtectedOrdinaryNoEvent_KnownResidual(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "document.body.innerText"}}
+	esIssueContent(g, &o, int64(esReadID), cmd, esOrdinary, true)
+	joined := strings.Join(o.payloads, "")
+	if esSessionCut(g) || strings.Contains(joined, "slicc: refused:") || esHasRetriable(o) {
+		t.Fatalf("KnownResidual documents that a clean-window ordinary post-read ACCEPTS the held reply (ordinary→protected→ordinary with no frameNavigated/targetInfoChanged). cut=%t payloads=%v — if this becomes a refuse/cut, update this KnownResidual test and the exposure statement deliberately; do not auto-green or auto-skip it", esSessionCut(g), o.payloads)
+	}
+	if !strings.Contains(joined, fmt.Sprintf(`"id":%d`, esReadID)) {
+		t.Fatalf("KnownResidual (pinned green-as-documented, like PageBeforeTabProtectedHide_KnownResidual): asserts the documented residual that a silent ordinary→protected→ordinary hop (view-source:/blob:/filesystem: only) can still supply the body when no watch event reaches the guard; failure means the residual closed or the accept path broke — update this test and the exposure statement deliberately")
 	}
 }
 
@@ -845,7 +954,7 @@ func TestExistingSessionHoldCapRetriableNoCut(t *testing.T) {
 	g := esGuard(t)
 	_ = esAdmit(t, g)
 	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
-	live := esOrdinaryB
+	live := esOrdinary
 	var o esOutcome
 	var sawRetriable bool
 	for i := 0; i < esHoldCap+8; i++ {
@@ -860,7 +969,7 @@ func TestExistingSessionHoldCapRetriableNoCut(t *testing.T) {
 		if pv.forward == nil {
 			continue
 		}
-		esDrain(g, &o, g.fromBrowser(esContentReply(cmd, id, live, true)), live)
+		o.take(g.fromBrowser(esContentReply(cmd, id, live, true)))
 		if esSessionCut(g) {
 			t.Fatalf("hold-cap trip must be retriable without cutting the session")
 		}

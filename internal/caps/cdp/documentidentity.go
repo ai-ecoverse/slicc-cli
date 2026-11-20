@@ -31,11 +31,13 @@ func (a docIdentity) equal(b docIdentity) bool {
 type docIdentityAdmit struct {
 	baseline docIdentity
 	known    bool
+	taint    uint64
 }
 
 type docIdentityHold struct {
 	baseline    docIdentity
 	known       bool
+	taint       uint64
 	data        []byte
 	id          int64
 	session     string
@@ -135,12 +137,71 @@ func (g *guard) noteOrdinaryDocIdentityLocked(target, frameID, loaderID, url str
 	g.docBaselines[target] = docIdentity{frameID: frameID, loaderID: loaderID, url: url, full: full}
 }
 
+func (g *guard) docIdentityFailedLoadTaintsLocked(target, unreachable string) bool {
+	switch g.errorProofOfLocked(target) {
+	case errorProofOrdinary:
+		return false
+	case errorProofProtected, errorProofFailed:
+		return true
+	}
+	if unreachable == "" {
+		return true
+	}
+	if protect.Unparseable(unreachable) || g.o.Loaded(unreachable) {
+		return true
+	}
+	if ordinaryFailedUnreachable(g.o, unreachable) {
+		return false
+	}
+	return true
+}
+
+func (g *guard) docIdentityWatchBadLocked(target, url, unreachable string) bool {
+	if chromeErrorDocument(url) {
+		return g.docIdentityFailedLoadTaintsLocked(target, unreachable)
+	}
+	if url == "" {
+		return false
+	}
+	if protect.Unparseable(url) || g.o.Loaded(url) {
+		return true
+	}
+	return false
+}
+
+func (g *guard) bumpDocIdentityTaintLocked(target string) {
+	if target == "" {
+		return
+	}
+	if g.docIdentityTaint == nil {
+		g.docIdentityTaint = map[string]uint64{}
+	}
+	g.docIdentityTaint[target]++
+}
+
+func (g *guard) noteDocIdentityWatchURLLocked(target, url, unreachable string) {
+	if target == "" || !g.docIdentityWatchBadLocked(target, url, unreachable) {
+		return
+	}
+	g.bumpDocIdentityTaintLocked(target)
+}
+
 func (g *guard) noteOrdinaryDocIdentityFromTargetLocked(t *target) {
-	_ = t
+	if t == nil || (t.typ != "page" && t.typ != "tab") {
+		return
+	}
+	unreachable := ""
+	if nt := g.navTargets[t.id]; nt != nil {
+		unreachable = nt.errorURL
+	}
+	g.noteDocIdentityWatchURLLocked(t.id, t.url, unreachable)
 }
 
 func (g *guard) noteOrdinaryDocIdentityFromNavLocked(nt *navTarget) {
-	_ = nt
+	if nt == nil {
+		return
+	}
+	g.noteDocIdentityWatchURLLocked(nt.target, nt.documentURL, nt.errorURL)
 }
 
 func (g *guard) noteDocIdentityAdmitLocked(c *command) {
@@ -151,7 +212,7 @@ func (g *guard) noteDocIdentityAdmitLocked(c *command) {
 	if t == nil || !navTypes[t.typ] || g.docIdentitySkipTargetLocked(t.id) {
 		return
 	}
-	admit := docIdentityAdmit{}
+	admit := docIdentityAdmit{taint: g.docIdentityTaint[t.id]}
 	if baseline, ok := g.docBaselines[t.id]; ok && baseline.full {
 		admit.baseline = baseline
 		admit.known = true
@@ -217,6 +278,7 @@ func (g *guard) holdDocIdentityReplyLocked(k callKey, m *message, data []byte) (
 	h := &docIdentityHold{
 		baseline:    admit.baseline,
 		known:       admit.known,
+		taint:       admit.taint,
 		data:        append([]byte(nil), data...),
 		id:          *m.ID,
 		session:     m.SessionID,
@@ -381,6 +443,7 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 		h.reservation = nil
 	}
 	var send [][]byte
+	tainted := g.docIdentityTaint[h.target] != h.taint
 	switch {
 	case g.docIdentityProtectedLocked(current):
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
@@ -388,17 +451,9 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 	case !g.docIdentityOrdinaryLocked(current):
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
 		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
-	case !h.known:
-		if h.baseline.url != "" && !protect.Inheriting(h.baseline.url) && h.baseline.url != current.url {
-			g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
-		} else {
-			if current.full {
-				g.noteOrdinaryDocIdentityLocked(h.target, current.frameID, current.loaderID, current.url, true)
-			}
-			g.pendingPage = append(g.pendingPage, h.data)
-		}
-	case !current.equal(h.baseline):
-		g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
+	case tainted:
+		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
+		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
 	default:
 		if current.full {
 			g.noteOrdinaryDocIdentityLocked(h.target, current.frameID, current.loaderID, current.url, true)
@@ -541,6 +596,7 @@ func (g *guard) pruneDocIdentityTargetLocked(target string) {
 		return
 	}
 	delete(g.docBaselines, target)
+	delete(g.docIdentityTaint, target)
 	delete(g.docIdentityAsks, target)
 	for k, h := range g.docIdentityHolds {
 		if h == nil || h.target != target {
