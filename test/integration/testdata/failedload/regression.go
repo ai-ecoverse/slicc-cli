@@ -199,13 +199,16 @@ func TestFailedLoadProtectedProofHidesWithoutClientAttach(t *testing.T) {
 	_ = g.fromBrowser(chromeErrorAttached(failedHostTitle, "OPENER", true))
 	_ = proveFailedLoad(t, g, failedProtected)
 	page := pageStrings(g.takePendingPageLocked())
-	assertNoFailedHost(t, "protected-proof-page", page)
 	if g.sessions["S-POPUP"] != nil {
 		t.Fatalf("protected proof admitted a client session: page=%v", page)
 	}
 	if payloadsContain(page, "attachedToTarget") {
-		t.Fatalf("protected proof announced attach: %v", page)
+		t.Fatalf("protected proof delivered a client attach: %v", page)
 	}
+	if len(page) > 0 {
+		t.Fatalf("protected proof delivered client page traffic: %v", page)
+	}
+	assertNoFailedHost(t, "protected-proof-page", page)
 	v := g.fromBrowser(chromeErrorChanged(failedHostTitle, "OPENER"))
 	assertNoFailedHost(t, "protected-listing", clientPayloads(v))
 }
@@ -652,8 +655,10 @@ func assertClientSeesOnlyFailedOrigin(t *testing.T, label string, raw []byte, fa
 	if strings.Contains(s, "/missing") || strings.Contains(s, "?q=") || strings.Contains(s, "#frag") || strings.Contains(s, "secret") {
 		t.Fatalf("%s carried more than the failed origin: %s", label, s)
 	}
-	if strings.Contains(s, `"title":"`+failedHostTitle+`"`) || strings.Contains(s, `"title": "`+failedHostTitle+`"`) || strings.Contains(s, `"name":"`+failedHostTitle+`"`) || strings.Contains(s, `"name": "`+failedHostTitle+`"`) {
-		t.Fatalf("%s carried a failed-load title/name: %s", label, s)
+	for _, key := range []string{"title", "name", "windowName"} {
+		if strings.Contains(s, `"`+key+`":"`+failedHostTitle+`"`) || strings.Contains(s, `"`+key+`": "`+failedHostTitle+`"`) {
+			t.Fatalf("%s carried a failed-load %s: %s", label, key, s)
+		}
 	}
 	_ = failedFull
 }
@@ -715,6 +720,11 @@ func TestFailedLoadAttachedSessionPathsStayAtOrigin(t *testing.T) {
 		{"Page.frameNavigated", "scrub", func(g *guard) []byte {
 			return encode(map[string]any{"sessionId": "S-POPUP", "method": "Page.frameNavigated", "params": map[string]any{
 				"frame": map[string]any{"id": "POPUP", "url": chromeErrorURL, "name": failedHostTitle, "securityOrigin": "https://seven.sliccy.ai", "unreachableUrl": failedFull},
+			}})
+		}},
+		{"Page.windowOpen", "scrub", func(g *guard) []byte {
+			return encode(map[string]any{"sessionId": "S-POPUP", "method": "Page.windowOpen", "params": map[string]any{
+				"url": failedFull, "windowName": failedHostTitle, "windowFeatures": []any{"noopener"}, "userGesture": true,
 			}})
 		}},
 		{"Page.frameStartedNavigating", "scrub", func(g *guard) []byte {
@@ -844,6 +854,13 @@ func TestFailedLoadOrdinaryKeepsRealTitles(t *testing.T) {
 	hout := string(g.scrub(hist))
 	if !strings.Contains(hout, `"title":"ordinary.test"`) && !strings.Contains(hout, `"title": "ordinary.test"`) {
 		t.Fatalf("ordinary history title was blanked: %s", hout)
+	}
+	openEvt := encode(map[string]any{"sessionId": "S-POPUP", "method": "Page.windowOpen", "params": map[string]any{
+		"url": failedOrdinary, "windowName": "ordinary.test", "windowFeatures": []any{"noopener"}, "userGesture": true,
+	}})
+	oout := string(g.scrub(append([]byte(nil), openEvt...)))
+	if !strings.Contains(oout, `"windowName":"ordinary.test"`) && !strings.Contains(oout, `"windowName": "ordinary.test"`) {
+		t.Fatalf("ordinary windowName was blanked: %s", oout)
 	}
 	v := g.fromBrowser(chromeErrorChanged("ordinary.test", "OPENER"))
 	ps := clientPayloads(v)
