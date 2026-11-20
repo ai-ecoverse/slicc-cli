@@ -1120,10 +1120,22 @@ func TestEmptyURLHoldMatchedTabClearedOnForget(t *testing.T) {
 	}
 }
 
+func emptyURLHoldClientDetachSession(s string) (string, bool) {
+	var m struct {
+		Method string `json:"method"`
+		Params struct {
+			SessionID string `json:"sessionId"`
+		} `json:"params"`
+	}
+	if json.Unmarshal([]byte(s), &m) != nil || m.Method != "Target.detachedFromTarget" {
+		return "", false
+	}
+	return m.Params.SessionID, m.Params.SessionID != ""
+}
+
 func emptyURLHoldClientDetachIndex(ss []string, sessionID string) int {
-	needle := `"sessionId":"` + sessionID + `"`
 	for i, s := range ss {
-		if strings.Contains(s, "detachedFromTarget") && strings.Contains(s, needle) {
+		if id, ok := emptyURLHoldClientDetachSession(s); ok && id == sessionID {
 			return i
 		}
 	}
@@ -1132,9 +1144,8 @@ func emptyURLHoldClientDetachIndex(ss []string, sessionID string) int {
 
 func emptyURLHoldClientDetachCount(ss []string, sessionID string) int {
 	n := 0
-	needle := `"sessionId":"` + sessionID + `"`
 	for _, s := range ss {
-		if strings.Contains(s, "detachedFromTarget") && strings.Contains(s, needle) {
+		if id, ok := emptyURLHoldClientDetachSession(s); ok && id == sessionID {
 			n++
 		}
 	}
@@ -1291,5 +1302,158 @@ func TestEmptyURLHoldTabWithOpenerIsFlatHideCandidate(t *testing.T) {
 	sends := emptyURLHoldSends(v)
 	if g.sessions["S-TAB-OP"] != nil || (emptyURLHoldDetachIndex(sends, "S-TAB-OP") < 0 && emptyURLHoldClientDetachIndex(ps, "S-TAB-OP") < 0 && !g.hidden["S-TAB-OP"]) {
 		t.Fatalf("empty-at-announce tab with opener must still be a flat-hide candidate: sessions=%v payloads=%v sends=%v", g.sessions["S-TAB-OP"] != nil, ps, sends)
+	}
+}
+
+func TestEmptyURLHoldDetachThenDestroyDetachesAnnouncedTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-DTD", "TAB-DTD", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-DTD", "S-PAGE-DTD", "PAGE-DTD", "OPENER", true))
+	if g.sessions["S-TAB-DTD"] == nil || g.held["S-PAGE-DTD"] == nil {
+		t.Fatal("expected announced tab and held page before Chrome page detach")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-PAGE-DTD", "targetId": "PAGE-DTD"},
+	}))
+	ps := emptyURLHoldPayloads(v)
+	v2 := g.fromBrowser(encode(map[string]any{
+		"method": "Target.targetDestroyed",
+		"params": map[string]any{"targetId": "PAGE-DTD"},
+	}))
+	ps = append(ps, emptyURLHoldPayloads(v2)...)
+	if g.sessions["S-TAB-DTD"] != nil {
+		t.Fatalf("detach-then-destroy left announced tab attached: payloads=%v", ps)
+	}
+	emptyURLAssertClientSawTabDetach(t, ps, "S-TAB-DTD")
+}
+
+func TestEmptyURLHoldDestroyThenDetachDetachesAnnouncedTabOnce(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-DTD2", "TAB-DTD2", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-DTD2", "S-PAGE-DTD2", "PAGE-DTD2", "OPENER", true))
+	if g.sessions["S-TAB-DTD2"] == nil || g.held["S-PAGE-DTD2"] == nil {
+		t.Fatal("expected announced tab and held page before destroy-then-detach")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.targetDestroyed",
+		"params": map[string]any{"targetId": "PAGE-DTD2"},
+	}))
+	ps := emptyURLHoldPayloads(v)
+	v2 := g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-PAGE-DTD2", "targetId": "PAGE-DTD2"},
+	}))
+	ps = append(ps, emptyURLHoldPayloads(v2)...)
+	if g.sessions["S-TAB-DTD2"] != nil {
+		t.Fatalf("destroy-then-detach left announced tab attached: payloads=%v", ps)
+	}
+	emptyURLAssertClientSawTabDetach(t, ps, "S-TAB-DTD2")
+}
+
+func TestEmptyURLHoldPageDetachAfterTabGoneDoesNotDouble(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-ADT", "TAB-ADT", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-ADT", "S-PAGE-ADT", "PAGE-ADT", "OPENER", true))
+	if g.sessions["S-TAB-ADT"] == nil || g.held["S-PAGE-ADT"] == nil {
+		t.Fatal("expected announced tab and held page")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-TAB-ADT", "targetId": "TAB-ADT"},
+	}))
+	ps := emptyURLHoldPayloads(v)
+	if g.sessions["S-TAB-ADT"] != nil {
+		t.Fatal("expected tab session cleared by Chrome tab detach")
+	}
+	v2 := g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-PAGE-ADT", "targetId": "PAGE-ADT"},
+	}))
+	ps = append(ps, emptyURLHoldPayloads(v2)...)
+	if n := emptyURLHoldClientDetachCount(ps, "S-TAB-ADT"); n != 1 {
+		t.Fatalf("page detach after tab already gone must not synthesize a second tab detach, got %d in %v", n, ps)
+	}
+}
+
+func TestEmptyURLHoldPageBeforeTabProtectedHide_KnownResidual(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-PBT", "PAGE-PBT", "", "https://seven.sliccy.ai/noopener", false))
+	ps := emptyURLHoldPayloads(v)
+	if emptyURLHoldAttachIndex(ps, "S-PAGE-PBT") >= 0 || g.sessions["S-PAGE-PBT"] != nil || g.held["S-PAGE-PBT"] != nil {
+		t.Fatalf("flat protected page-before-tab must hide the page without announcing it: payloads=%v", ps)
+	}
+	tabV := g.fromBrowser(emptyURLNamedTabAttach("S-TAB-PBT", "TAB-PBT", "", true))
+	tabClient := emptyURLHoldPayloads(tabV)
+	if emptyURLHoldAttachIndex(tabClient, "S-TAB-PBT") < 0 || g.sessions["S-TAB-PBT"] == nil {
+		t.Fatal("expected empty tab announced after the protected page hide")
+	}
+	if emptyURLHoldClientDetachIndex(tabClient, "S-TAB-PBT") >= 0 {
+		t.Fatalf("KnownResidual pin broken: a post-hide empty-tab detach appeared (must not use a window rule that can hit createTarget tabs): %v", tabClient)
+	}
+}
+
+func TestEmptyURLHoldNavFetchBlockChildFlushesTabDetach(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-BC", "TAB-BC", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-BC", "S-PAGE-BC", "PAGE-BC", "OPENER", true))
+	if g.sessions["S-TAB-BC"] == nil || g.held["S-PAGE-BC"] == nil {
+		t.Fatal("expected announced tab and held page before nav Fetch block")
+	}
+	nt := &navTarget{target: "OPENER", session: "NAV-BC", ready: make(chan struct{})}
+	g.navTargets["OPENER"] = nt
+	g.navSessions["NAV-BC"] = nt
+	v := g.fromBrowser(encode(map[string]any{
+		"sessionId": "NAV-BC",
+		"method":    "Fetch.requestPaused",
+		"params": map[string]any{
+			"requestId":    "REQ-BC",
+			"networkId":    "NET-BC",
+			"frameId":      "PAGE-BC",
+			"resourceType": "Document",
+			"request":      map[string]any{"url": "https://seven.sliccy.ai/child"},
+		},
+	}))
+	ps := emptyURLHoldPayloads(v)
+	if len(g.pendingPage) > 0 {
+		t.Fatalf("nav Fetch.requestPaused left client tab detach parked on pendingPage: pending=%v payloads=%v", len(g.pendingPage), ps)
+	}
+	if g.sessions["S-TAB-BC"] != nil {
+		t.Fatalf("blocked held child left announced tab attached: payloads=%v", ps)
+	}
+	emptyURLAssertClientSawTabDetach(t, ps, "S-TAB-BC")
+}
+
+func TestEmptyURLHoldProtectedTabCascadesShownWorkerChild(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-W", "TAB-W", "", true))
+	wv := g.fromBrowser(encode(map[string]any{
+		"sessionId": "S-TAB-W",
+		"method":    "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-WORKER-W",
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": "WORKER-W", "type": "worker", "url": "https://ordinary.test/w.js", "openerId": ""},
+		},
+	}))
+	if g.sessions["S-WORKER-W"] == nil {
+		t.Fatalf("expected worker shown under announced tab: payloads=%v held=%v", emptyURLHoldPayloads(wv), g.held["S-WORKER-W"] != nil)
+	}
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-W", "S-PAGE-W", "PAGE-W", "OPENER", true))
+	if g.held["S-PAGE-W"] == nil {
+		t.Fatal("expected page held under announced tab")
+	}
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-W", "page", "https://seven.sliccy.ai/w", "OPENER"))
+	ps := emptyURLHoldPayloads(v)
+	emptyURLAssertClientSawTabDetach(t, ps, "S-TAB-W")
+	if emptyURLHoldClientDetachIndex(ps, "S-WORKER-W") < 0 {
+		echo := g.fromBrowser(encode(map[string]any{
+			"method": "Target.detachedFromTarget",
+			"params": map[string]any{"sessionId": "S-TAB-W", "targetId": "TAB-W"},
+		}))
+		ps = append(ps, emptyURLHoldPayloads(echo)...)
+	}
+	if emptyURLHoldClientDetachIndex(ps, "S-WORKER-W") < 0 || g.sessions["S-WORKER-W"] != nil {
+		t.Fatalf("protected tab detach must cascade shown worker child as protectLocked does: payloads=%v session=%v", ps, g.sessions["S-WORKER-W"] != nil)
 	}
 }
