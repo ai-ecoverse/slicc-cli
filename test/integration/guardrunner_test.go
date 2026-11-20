@@ -666,6 +666,8 @@ type guardRun struct {
 	inject         string
 	rowTimeout     time.Duration
 	errorPageVault bool
+	repeatID       string
+	repeatN        int
 }
 
 func runGuardVectors(t *testing.T, variant string) {
@@ -787,6 +789,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		"sha":            sha,
 		"rowTimeoutMs":   run.rowTimeout.Milliseconds(),
 		"only":           run.only,
+		"repeat":         guardRepeat(run),
 		"skips":          guardSkips,
 		"inject":         run.inject,
 		"errorPageVault": run.errorPageVault,
@@ -961,4 +964,11 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 			t.Logf("guard set Pass=false only from waived rows: counts=%s", sum.Counts)
 		}
 	}
+}
+
+func guardRepeat(run guardRun) any {
+	if run.repeatN < 2 {
+		return nil
+	}
+	return map[string]any{"id": run.repeatID, "n": run.repeatN}
 }
