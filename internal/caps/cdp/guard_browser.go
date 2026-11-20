@@ -80,10 +80,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
 		if m.Method == "Target.attachedToTarget" && (g.attachedWorkerLocked(&m) || g.attachedIframeLocked(&m) || g.held[m.SessionID] != nil) {
-			v := g.attachedEvent(&m, data)
-			v.forward = nil
-			v.page = nil
-			return v
+			return g.attachedUnderHeldLocked(&m, data)
 		}
 		return browserVerdict{}
 	}
@@ -158,6 +155,9 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	delete(g.extensionMarkCalls, k)
 	kind := g.pending[k]
 	delete(g.pending, k)
+	if kind == kindCreate && g.creating > 0 {
+		g.creating--
+	}
 	treeCall := g.treeCalls[k]
 	delete(g.treeCalls, k)
 	g.clientRequestAnsweredLocked(k, m.Error != nil)
@@ -247,6 +247,9 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		}
 	case kindCreate:
 		id, _ := res["targetId"].(string)
+		if id != "" {
+			g.explicit[id]++
+		}
 		return g.touchLocked(id, "page"), false
 	case kindAttach:
 		return g.applyAttachResultLocked(attached, session, res)
@@ -543,6 +546,57 @@ func (g *guard) attachedHoldParams(m *message, pSession string, waiting bool, in
 	return map[string]any{"sessionId": pSession, "waitingForDebugger": waiting, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID, "parentFrameId": info.ParentFrameID, "parentId": info.ParentID}}
 }
 
+func (g *guard) attachedUnderHeldLocked(m *message, data []byte) browserVerdict {
+	v := g.attachedEvent(m, data)
+	var p struct {
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	parent := g.held[m.SessionID]
+	if parent != nil && p.SessionID != "" && g.sessions[p.SessionID] != nil {
+		part := g.deliverHeldLocked(parent)
+		v.send = append(v.send, part.send...)
+		v.page = append(part.page, v.page...)
+		if v.forward != nil {
+			v.page = append(v.page, v.forward)
+		}
+		v.forward = nil
+		return v
+	}
+	v.forward = nil
+	v.page = nil
+	return v
+}
+
+func (g *guard) admittedOrdinaryOpenerLocked(openerID string) bool {
+	if openerID == "" {
+		return false
+	}
+	t := g.targets[openerID]
+	if t == nil || t.gone || t.protected || protect.Inheriting(t.url) {
+		return false
+	}
+	for _, s := range g.sessions {
+		if s != nil && s.target == openerID && !s.refused {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) emptyURLHoldExemptLocked(info targetInfo) bool {
+	if g.explicit[info.TargetID] > 0 {
+		return true
+	}
+	if info.OpenerID == "" && g.creating > 0 && (info.Type == "tab" || info.Type == "page") {
+		return true
+	}
+	if info.Type == "tab" && g.admittedOrdinaryOpenerLocked(info.OpenerID) {
+		return true
+	}
+	return false
+}
+
 func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
 	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		if t := g.targets[info.TargetID]; t != nil {
@@ -558,7 +612,7 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
 	}
-	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe" || info.Type == "tab") && g.explicit[info.TargetID] == 0 && params != nil {
+	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe" || info.Type == "tab") && !g.emptyURLHoldExemptLocked(info) && params != nil {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, waiting)...), hold: []string{pSession}}, true
 	}
 	return browserVerdict{}, false

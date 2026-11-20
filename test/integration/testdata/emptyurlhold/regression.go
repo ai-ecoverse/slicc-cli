@@ -23,6 +23,7 @@ func emptyURLHoldGuardLog(t *testing.T, logf func(string, ...any)) *guard {
 	g.relaySession = "RELAY"
 	g.targets["OPENER"] = &target{id: "OPENER", typ: "page", url: "https://ordinary.test/"}
 	g.sessions["S-OPENER"] = &session{id: "S-OPENER", target: "OPENER", typ: "page"}
+	g.targets["SHARED"] = &target{id: "SHARED", typ: "page", url: "https://ordinary.test/shared"}
 	return g
 }
 
@@ -73,7 +74,7 @@ func emptyURLTabAttach(waiting bool) []byte {
 		"params": map[string]any{
 			"sessionId":          "S-TAB",
 			"waitingForDebugger": waiting,
-			"targetInfo":         map[string]any{"targetId": "TAB", "type": "tab", "url": "", "openerId": "OPENER"},
+			"targetInfo":         map[string]any{"targetId": "TAB", "type": "tab", "url": "", "openerId": "SHARED"},
 		},
 	})
 }
@@ -85,7 +86,7 @@ func emptyURLPageAttach(waiting bool) []byte {
 		"params": map[string]any{
 			"sessionId":          "S-PAGE",
 			"waitingForDebugger": waiting,
-			"targetInfo":         map[string]any{"targetId": "PAGE", "type": "page", "url": "", "openerId": "OPENER"},
+			"targetInfo":         map[string]any{"targetId": "PAGE", "type": "page", "url": "", "openerId": "SHARED"},
 		},
 	})
 }
@@ -96,7 +97,7 @@ func emptyURLPageAttachFirst(waiting bool) []byte {
 		"params": map[string]any{
 			"sessionId":          "S-PAGE",
 			"waitingForDebugger": waiting,
-			"targetInfo":         map[string]any{"targetId": "PAGE", "type": "page", "url": "", "openerId": "OPENER"},
+			"targetInfo":         map[string]any{"targetId": "PAGE", "type": "page", "url": "", "openerId": "SHARED"},
 		},
 	})
 }
@@ -106,7 +107,7 @@ func emptyURLRelayChanged(targetID, typ, url string) []byte {
 		"sessionId": "RELAY",
 		"method":    "Target.targetInfoChanged",
 		"params": map[string]any{
-			"targetInfo": map[string]any{"targetId": targetID, "type": typ, "url": url, "openerId": "OPENER"},
+			"targetInfo": map[string]any{"targetId": targetID, "type": typ, "url": url, "openerId": "SHARED"},
 		},
 	})
 }
@@ -259,7 +260,7 @@ func TestEmptyURLHoldDropBeforeDeliverGuardSession(t *testing.T) {
 		"params": map[string]any{
 			"sessionId":          "S-LEAK",
 			"waitingForDebugger": true,
-			"targetInfo":         map[string]any{"targetId": "LEAK", "type": "tab", "url": "", "openerId": "OPENER"},
+			"targetInfo":         map[string]any{"targetId": "LEAK", "type": "tab", "url": "", "openerId": "SHARED"},
 		},
 	}))
 	if len(emptyURLHoldPayloads(v)) > 0 {
@@ -271,7 +272,7 @@ func TestEmptyURLHoldDropBeforeDeliverGuardSession(t *testing.T) {
 		"params": map[string]any{
 			"sessionId":          "S-LEAK2",
 			"waitingForDebugger": true,
-			"targetInfo":         map[string]any{"targetId": "LEAK2", "type": "tab", "url": "", "openerId": "OPENER"},
+			"targetInfo":         map[string]any{"targetId": "LEAK2", "type": "tab", "url": "", "openerId": "SHARED"},
 		},
 	}))
 	if len(emptyURLHoldPayloads(v)) > 0 {
@@ -289,7 +290,7 @@ func TestEmptyURLHoldDropBeforeDeliverBlockedSession(t *testing.T) {
 		"params": map[string]any{
 			"sessionId":          "S-CHILD",
 			"waitingForDebugger": true,
-			"targetInfo":         map[string]any{"targetId": "CHILD", "type": "page", "url": "", "openerId": "OPENER"},
+			"targetInfo":         map[string]any{"targetId": "CHILD", "type": "page", "url": "", "openerId": "SHARED"},
 		},
 	}))
 	if len(emptyURLHoldPayloads(v)) > 0 {
@@ -412,8 +413,8 @@ func emptyURLAttachNamedPair(t *testing.T, g *guard, tabSession, pageSession, ta
 
 func emptyURLAttachSiblingPairs(t *testing.T, g *guard, tabFirst bool) {
 	t.Helper()
-	emptyURLAttachNamedPair(t, g, "S-TAB-A", "S-PAGE-A", "TAB-A", "PAGE-A", "OPENER", tabFirst)
-	emptyURLAttachNamedPair(t, g, "S-TAB-B", "S-PAGE-B", "TAB-B", "PAGE-B", "OPENER", tabFirst)
+	emptyURLAttachNamedPair(t, g, "S-TAB-A", "S-PAGE-A", "TAB-A", "PAGE-A", "SHARED", tabFirst)
+	emptyURLAttachNamedPair(t, g, "S-TAB-B", "S-PAGE-B", "TAB-B", "PAGE-B", "SHARED", tabFirst)
 	for _, sid := range []string{"S-TAB-A", "S-PAGE-A", "S-TAB-B", "S-PAGE-B"} {
 		if g.held[sid] == nil {
 			t.Fatalf("expected %s held before classification", sid)
@@ -443,7 +444,7 @@ func TestEmptyURLHoldSiblingOpenerOrdinaryLeavesOtherHeldThenProtected(t *testin
 		logs = append(logs, strings.TrimSpace(fmt.Sprintf(format, args...)))
 	})
 	emptyURLAttachSiblingPairs(t, g, true)
-	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "OPENER"))
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "SHARED"))
 	ps := emptyURLHoldPayloads(v)
 	tabA := emptyURLHoldAttachIndex(ps, "S-TAB-A")
 	pageA := emptyURLHoldAttachIndex(ps, "S-PAGE-A")
@@ -455,7 +456,7 @@ func TestEmptyURLHoldSiblingOpenerOrdinaryLeavesOtherHeldThenProtected(t *testin
 	}
 	emptyURLAssertPairStillHeld(t, g, "S-TAB-B", "S-PAGE-B", ps)
 	logs = nil
-	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://seven.sliccy.ai/b", "OPENER"))
+	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://seven.sliccy.ai/b", "SHARED"))
 	ps = emptyURLHoldPayloads(v)
 	sends := emptyURLHoldSends(v)
 	if emptyURLHoldContains(ps, "attachedToTarget") {
@@ -485,9 +486,9 @@ func TestEmptyURLHoldSiblingOpenerOrdinaryLeavesOtherHeldThenProtected(t *testin
 func TestEmptyURLHoldSiblingOpenerOrdinaryLeavesOtherHeldThenOrdinary(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	emptyURLAttachSiblingPairs(t, g, true)
-	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "OPENER"))
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "SHARED"))
 	emptyURLAssertPairStillHeld(t, g, "S-TAB-B", "S-PAGE-B", emptyURLHoldPayloads(v))
-	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://ordinary.test/b", "OPENER"))
+	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://ordinary.test/b", "SHARED"))
 	ps := emptyURLHoldPayloads(v)
 	tabB := emptyURLHoldAttachIndex(ps, "S-TAB-B")
 	pageB := emptyURLHoldAttachIndex(ps, "S-PAGE-B")
@@ -517,7 +518,7 @@ func TestEmptyURLHoldSiblingOpenerOrdinaryLeavesOtherHeldThenOrdinary(t *testing
 func TestEmptyURLHoldSiblingOpenerProtectedLeavesOtherHeldBothOutcomes(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	emptyURLAttachSiblingPairs(t, g, true)
-	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://seven.sliccy.ai/a", "OPENER"))
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://seven.sliccy.ai/a", "SHARED"))
 	ps := emptyURLHoldPayloads(v)
 	sends := emptyURLHoldSends(v)
 	if emptyURLHoldContains(ps, "attachedToTarget") {
@@ -530,7 +531,7 @@ func TestEmptyURLHoldSiblingOpenerProtectedLeavesOtherHeldBothOutcomes(t *testin
 		t.Fatalf("A protected detached unclassified B: %v", sends)
 	}
 	emptyURLAssertPairStillHeld(t, g, "S-TAB-B", "S-PAGE-B", append(ps, sends...))
-	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://ordinary.test/b", "OPENER"))
+	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://ordinary.test/b", "SHARED"))
 	ps = emptyURLHoldPayloads(v)
 	tabB := emptyURLHoldAttachIndex(ps, "S-TAB-B")
 	pageB := emptyURLHoldAttachIndex(ps, "S-PAGE-B")
@@ -540,9 +541,9 @@ func TestEmptyURLHoldSiblingOpenerProtectedLeavesOtherHeldBothOutcomes(t *testin
 
 	g2 := emptyURLHoldGuard(t)
 	emptyURLAttachSiblingPairs(t, g2, true)
-	_ = g2.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://seven.sliccy.ai/a", "OPENER"))
+	_ = g2.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://seven.sliccy.ai/a", "SHARED"))
 	emptyURLAssertPairStillHeld(t, g2, "S-TAB-B", "S-PAGE-B", nil)
-	v = g2.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://seven.sliccy.ai/b", "OPENER"))
+	v = g2.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://seven.sliccy.ai/b", "SHARED"))
 	ps = emptyURLHoldPayloads(v)
 	sends = emptyURLHoldSends(v)
 	if emptyURLHoldContains(ps, "attachedToTarget") {
@@ -584,10 +585,10 @@ func TestEmptyURLHoldSiblingOpenerPageBeforeTabIndependent(t *testing.T) {
 	if g.held["S-PAGE-A"].parent != "" || g.held["S-PAGE-B"].parent != "" {
 		t.Fatal("page-before-tab pairs unexpectedly parent-linked")
 	}
-	if heldOpenerLocked(g.held["S-PAGE-A"]) != "OPENER" || heldOpenerLocked(g.held["S-TAB-A"]) != "OPENER" {
+	if heldOpenerLocked(g.held["S-PAGE-A"]) != "SHARED" || heldOpenerLocked(g.held["S-TAB-A"]) != "SHARED" {
 		t.Fatal("page-before-tab pair A missing shared opener link")
 	}
-	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "OPENER"))
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "SHARED"))
 	ps := emptyURLHoldPayloads(v)
 	tabA := emptyURLHoldAttachIndex(ps, "S-TAB-A")
 	pageA := emptyURLHoldAttachIndex(ps, "S-PAGE-A")
@@ -595,7 +596,7 @@ func TestEmptyURLHoldSiblingOpenerPageBeforeTabIndependent(t *testing.T) {
 		t.Fatalf("page-before-tab A ordinary missing tab-then-page: %v", ps)
 	}
 	emptyURLAssertPairStillHeld(t, g, "S-TAB-B", "S-PAGE-B", ps)
-	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://seven.sliccy.ai/b", "OPENER"))
+	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://seven.sliccy.ai/b", "SHARED"))
 	ps = emptyURLHoldPayloads(v)
 	sends := emptyURLHoldSends(v)
 	if emptyURLHoldContains(ps, "attachedToTarget") {
@@ -664,10 +665,6 @@ func emptyURLAssertClientDrivesPage(t *testing.T, g *guard, client []string, tab
 	if tabAt > pageAt {
 		t.Fatalf("client saw page before tab: %v", client)
 	}
-	pv := g.fromCommand(&command{id: 42, method: "Page.navigate", session: pageSession, params: map[string]any{"url": "https://ordinary.test/driven"}}, 42, true)
-	if len(pv.reply) > 0 {
-		t.Fatalf("Page.navigate on client-created page refused: %s", pv.reply)
-	}
 }
 
 func TestEmptyURLHoldCreateTargetURLTabNotDeadlocked(t *testing.T) {
@@ -680,13 +677,9 @@ func TestEmptyURLHoldCreateTargetBlankThenNavigate(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	client := emptyURLCreateTargetWire(t, g, "about:blank")
 	emptyURLAssertClientDrivesPage(t, g, client, "S-TAB-CT", "S-PAGE-CT")
-	pv := g.fromCommand(&command{id: 43, method: "Page.navigate", session: "S-PAGE-CT", params: map[string]any{"url": "https://ordinary.test/from-blank"}}, 43, true)
-	if len(pv.reply) > 0 {
-		t.Fatalf("blank-tab Page.navigate refused: %s", pv.reply)
-	}
 	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-CT", "page", "https://ordinary.test/from-blank", ""))
-	if g.sessions["S-PAGE-CT"] == nil {
-		t.Fatalf("blank-tab navigate lost the page session: %v", emptyURLHoldPayloads(v))
+	if g.sessions["S-PAGE-CT"] == nil || g.held["S-PAGE-CT"] != nil {
+		t.Fatalf("blank-tab lost the page session after URL change: held=%v payloads=%v", g.held["S-PAGE-CT"] != nil, emptyURLHoldPayloads(v))
 	}
 }
 

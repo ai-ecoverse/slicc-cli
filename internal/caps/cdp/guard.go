@@ -206,6 +206,7 @@ type guard struct {
 	ancestryDisputedFull     bool
 	blockedChildren          map[string]string
 	explicit                 map[string]int
+	creating                 int
 	attachCalls              map[callKey]string
 	patterns                 []any
 	heldExtras               map[requestKey][]heldExtra

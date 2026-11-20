@@ -58,6 +58,51 @@ func heldOpenerLocked(h *heldSession) string {
 	return s
 }
 
+func (g *guard) emptyURLOpenerMateLocked(h *heldSession) *heldSession {
+	if h == nil || (h.typ != "tab" && h.typ != "page") {
+		return nil
+	}
+	opener := heldOpenerLocked(h)
+	if opener == "" {
+		return nil
+	}
+	want := "tab"
+	if h.typ == "tab" {
+		want = "page"
+	}
+	var best *heldSession
+	var bestDelta time.Duration
+	for _, o := range g.held {
+		if o == nil || o.typ != want || heldOpenerLocked(o) != opener {
+			continue
+		}
+		if want == "page" && o.parent != "" && o.parent != h.id {
+			continue
+		}
+		if want == "tab" {
+			owned := false
+			for _, c := range g.held {
+				if c != nil && c.parent == o.id && c.id != h.id {
+					owned = true
+					break
+				}
+			}
+			if owned {
+				continue
+			}
+		}
+		delta := o.at.Sub(h.at)
+		if delta < 0 {
+			delta = -delta
+		}
+		if best == nil || delta < bestDelta {
+			best = o
+			bestDelta = delta
+		}
+	}
+	return best
+}
+
 func (g *guard) emptyURLPopupGroupLocked(h *heldSession) []*heldSession {
 	if h == nil {
 		return nil
@@ -80,15 +125,17 @@ func (g *guard) emptyURLPopupGroupLocked(h *heldSession) []*heldSession {
 			add(o)
 		}
 	}
-	if opener := heldOpenerLocked(h); opener != "" {
-		for _, o := range g.held {
-			if o == nil || (o.typ != "tab" && o.typ != "page") {
-				continue
-			}
-			if heldOpenerLocked(o) == opener {
-				add(o)
-			}
+	hasTab, hasPage := false, false
+	for _, x := range out {
+		switch x.typ {
+		case "tab":
+			hasTab = true
+		case "page":
+			hasPage = true
 		}
+	}
+	if !hasTab || !hasPage {
+		add(g.emptyURLOpenerMateLocked(h))
 	}
 	slices.SortStableFunc(out, func(a, b *heldSession) int {
 		rank := func(h *heldSession) int {
