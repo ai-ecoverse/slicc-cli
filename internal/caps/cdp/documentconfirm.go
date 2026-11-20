@@ -5,11 +5,7 @@ import (
 	"time"
 )
 
-var documentConfirmEnabled = true
-
-type docConfirm struct {
-	target   string
-	session  string
+type docHold struct {
 	parent   string
 	typ      string
 	waiting  bool
@@ -19,89 +15,135 @@ type docConfirm struct {
 	replySid string
 	hasEvent bool
 	hasReply bool
-	ready    chan struct{}
-	start    time.Time
-	asking   bool
-	done     bool
-	failed   bool
 }
 
-func (g *guard) noteDocAttachLocked(target string) {
-	if !documentConfirmEnabled || target == "" {
-		return
+type docConfirm struct {
+	target string
+	holds  map[string]*docHold
+	ready  chan struct{}
+	start  time.Time
+	timer  *time.Timer
+	asking bool
+	done   bool
+	failed bool
+}
+
+func (g *guard) docConfirmWaitLocked(session string) <-chan struct{} {
+	if session == "" {
+		return nil
 	}
-	if g.docAttach == nil {
-		g.docAttach = map[string]bool{}
-	}
-	g.docAttach[target] = true
-}
-
-func (g *guard) clearDocAttachLocked(target string) {
-	delete(g.docAttach, target)
-}
-
-func (g *guard) needsDocConfirmLocked(target, typ string) bool {
-	if !documentConfirmEnabled || target == "" || typ == "browser" {
-		return false
-	}
-	return g.docAttach[target]
-}
-
-func (g *guard) docConfirmForTargetLocked(target string) *docConfirm {
-	for _, dc := range g.docConfirms {
-		if dc != nil && dc.target == target && !dc.done {
-			return dc
+	for _, dc := range g.docInflight {
+		if dc == nil || dc.done || dc.holds[session] == nil {
+			continue
 		}
+		return dc.ready
 	}
 	return nil
 }
 
-func (g *guard) docConfirmWaitLocked(session string) <-chan struct{} {
-	if session == "" || g.docConfirms == nil {
-		return nil
+func (g *guard) needsDocConfirmLocked(target, session, typ string) bool {
+	if target == "" || typ == "browser" {
+		return false
 	}
-	dc := g.docConfirms[session]
-	if dc == nil || dc.done {
-		return nil
+	if g.docFailed[session] {
+		return true
 	}
-	return dc.ready
+	if dc := g.docInflight[target]; dc != nil && !dc.done {
+		return true
+	}
+	if g.explicit[target] > 0 {
+		return true
+	}
+	for _, t := range g.attachCalls {
+		if t == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) docConfirmSkipChromeErrorLocked(url, target string) bool {
+	if chromeErrorDocument(url) {
+		return true
+	}
+	if t := g.targets[target]; t != nil && chromeErrorDocument(t.url) {
+		return true
+	}
+	if g.failedLoadNeedsProofLocked(g.targets[target]) || g.errorProofOfLocked(target) != errorProofNone {
+		return true
+	}
+	if nt := g.navTargets[target]; nt != nil && nt.done && nt.errorURL != "" && chromeErrorDocument(nt.documentURL) {
+		return true
+	}
+	return false
 }
 
 func (g *guard) beginDocConfirmLocked(target, session, parent, typ string, waiting bool) *docConfirm {
-	if g.docConfirms == nil {
-		g.docConfirms = map[string]*docConfirm{}
+	if g.docInflight == nil {
+		g.docInflight = map[string]*docConfirm{}
 	}
-	if dc := g.docConfirms[session]; dc != nil {
-		return dc
+	dc := g.docInflight[target]
+	if dc == nil || dc.done {
+		dc = &docConfirm{
+			target: target,
+			holds:  map[string]*docHold{},
+			ready:  make(chan struct{}),
+			start:  time.Now(),
+		}
+		g.docInflight[target] = dc
+		dc.timer = time.AfterFunc(holdTimeout(), func() {
+			g.expireDocConfirm(target)
+		})
 	}
-	dc := &docConfirm{
-		target:  target,
-		session: session,
-		parent:  parent,
-		typ:     typ,
-		waiting: waiting,
-		ready:   make(chan struct{}),
-		start:   time.Now(),
+	if dc.holds[session] == nil {
+		dc.holds[session] = &docHold{parent: parent, typ: typ, waiting: waiting}
+	} else {
+		h := dc.holds[session]
+		if parent != "" {
+			h.parent = parent
+		}
+		if typ != "" {
+			h.typ = typ
+		}
+		h.waiting = h.waiting || waiting
 	}
-	g.docConfirms[session] = dc
 	return dc
 }
 
+func (g *guard) expireDocConfirm(target string) {
+	g.mu.Lock()
+	dc := g.docInflight[target]
+	if dc == nil || dc.done || time.Since(dc.start) < holdTimeout() {
+		g.mu.Unlock()
+		return
+	}
+	g.logf("cdp: confirming a target's current document hit the hold bound")
+	send := g.failDocConfirmLocked(dc)
+	page := g.takePendingPageLocked()
+	flush := g.flushAsync
+	g.mu.Unlock()
+	if flush != nil {
+		flush(send, page)
+	}
+}
+
 func (g *guard) askDocConfirmLocked(dc *docConfirm) [][]byte {
-	if dc == nil || dc.asking || dc.done || g.relaySession == "" {
+	if dc == nil || dc.asking || dc.done {
 		return nil
+	}
+	if g.relaySession == "" {
+		return g.failDocConfirmLocked(dc)
 	}
 	dc.asking = true
 	dc.start = time.Now()
 	target := dc.target
-	session := dc.session
 	return [][]byte{g.callbackLocked(g.relaySession, "Target.getTargetInfo", map[string]any{"targetId": target}, func(m message) [][]byte {
-		return g.answeredDocConfirmLocked(session, m)
+		return g.answeredDocConfirmLocked(target, m)
 	})}
 }
 
-func (g *guard) answeredDocConfirmLocked(session string, m message) [][]byte {
-	dc := g.docConfirms[session]
+func (g *guard) answeredDocConfirmLocked(target string, m message) [][]byte {
+	dc := g.docInflight[target]
 	if dc == nil || dc.done {
 		return nil
 	}
@@ -114,113 +156,159 @@ func (g *guard) answeredDocConfirmLocked(session string, m message) [][]byte {
 		return g.failDocConfirmLocked(dc)
 	}
 	if result.TargetInfo.Type == "" {
-		result.TargetInfo.Type = dc.typ
+		for _, h := range dc.holds {
+			if h.typ != "" {
+				result.TargetInfo.Type = h.typ
+				break
+			}
+		}
 	}
 	send := g.observeLocked(result.TargetInfo)
-	v := g.infoVerdictLocked(result.TargetInfo)
-	if g.targetProtectedLocked(dc.target) || v.loaded() {
+	if g.targetReasonLocked(dc.target) != "" {
 		return append(send, g.failDocConfirmLocked(dc)...)
 	}
 	return append(send, g.passDocConfirmLocked(dc)...)
 }
 
+func (g *guard) stopDocTimerLocked(dc *docConfirm) {
+	if dc != nil && dc.timer != nil {
+		dc.timer.Stop()
+		dc.timer = nil
+	}
+}
+
+func (g *guard) cancelDocConfirmLocked(dc *docConfirm) {
+	if dc == nil || dc.done {
+		return
+	}
+	dc.done = true
+	g.stopDocTimerLocked(dc)
+	close(dc.ready)
+	delete(g.docInflight, dc.target)
+}
+
 func (g *guard) failDocConfirmLocked(dc *docConfirm) [][]byte {
-	if dc.done {
+	if dc == nil || dc.done {
 		return nil
 	}
 	dc.done = true
 	dc.failed = true
-	g.clearDocAttachLocked(dc.target)
+	g.stopDocTimerLocked(dc)
+	close(dc.ready)
+	delete(g.docInflight, dc.target)
 	if g.docFailed == nil {
 		g.docFailed = map[string]bool{}
 	}
-	g.docFailed[dc.session] = true
-	close(dc.ready)
-	delete(g.docConfirms, dc.session)
-	g.noteHiddenLocked(dc.session, dc.target)
 	var send [][]byte
-	if dc.waiting {
-		send = append(send, g.resumeLocked(dc.session, dc.target))
-	}
-	parent := dc.parent
-	if parent == "" {
-		parent = g.attachParent
-	}
-	msg, _ := g.newCallLocked(parent, "Target.detachFromTarget", map[string]any{"sessionId": dc.session}, false)
-	send = append(send, msg)
-	if dc.hasReply {
-		g.pendingPage = append(g.pendingPage, refusal(dc.replyID, dc.replySid, refusedTarget))
+	for sid, h := range dc.holds {
+		g.docFailed[sid] = true
+		g.noteHiddenLocked(sid, dc.target)
+		if h.waiting {
+			send = append(send, g.resumeLocked(sid, dc.target))
+		}
+		parent := h.parent
+		if parent == "" {
+			parent = g.attachParent
+		}
+		msg, _ := g.newCallLocked(parent, "Target.detachFromTarget", map[string]any{"sessionId": sid}, false)
+		send = append(send, msg)
+		if h.hasReply {
+			g.pendingPage = append(g.pendingPage, refusal(h.replyID, h.replySid, refusedTarget))
+		}
 	}
 	g.logf("cdp: refused an attach after confirming the target's current document")
 	return send
 }
 
 func (g *guard) passDocConfirmLocked(dc *docConfirm) [][]byte {
-	if dc.done {
+	if dc == nil || dc.done {
 		return nil
 	}
 	dc.done = true
 	dc.failed = false
-	g.clearDocAttachLocked(dc.target)
+	g.stopDocTimerLocked(dc)
 	close(dc.ready)
-	delete(g.docConfirms, dc.session)
+	delete(g.docInflight, dc.target)
 	var send [][]byte
-	if t := g.targets[dc.target]; t != nil {
-		if g.sessions[dc.session] == nil {
-			g.sessions[dc.session] = &session{id: dc.session, target: dc.target, parent: dc.parent, typ: dc.typ, waiting: dc.waiting}
-			if dc.typ == "browser" {
-				g.browserSessions[dc.session] = true
+	for sid, h := range dc.holds {
+		typ := h.typ
+		if typ == "" {
+			typ = "page"
+		}
+		if t := g.targets[dc.target]; t != nil {
+			typ = t.typ
+			if workerTypes[t.typ] || t.typ == "iframe" {
+				t.shown = true
+			}
+			g.markTouchedLocked(dc.target)
+		}
+		if g.sessions[sid] == nil {
+			g.sessions[sid] = &session{id: sid, target: dc.target, parent: h.parent, typ: typ, waiting: h.waiting}
+			if typ == "browser" {
+				g.browserSessions[sid] = true
 			}
 		}
-		if workerTypes[t.typ] || t.typ == "iframe" {
-			t.shown = true
+		send = append(send, g.touchLocked(dc.target, typ)...)
+		if h.hasEvent && len(h.event) > 0 {
+			g.pendingPage = append(g.pendingPage, h.event)
 		}
-		g.markTouchedLocked(dc.target)
-		send = append(send, g.touchLocked(dc.target, t.typ)...)
-	} else {
-		g.sessions[dc.session] = &session{id: dc.session, target: dc.target, parent: dc.parent, typ: dc.typ, waiting: dc.waiting}
-		send = append(send, g.touchLocked(dc.target, dc.typ)...)
-	}
-	if dc.hasEvent && len(dc.event) > 0 {
-		g.pendingPage = append(g.pendingPage, dc.event)
-	}
-	if dc.hasReply && len(dc.reply) > 0 {
-		g.pendingPage = append(g.pendingPage, dc.reply)
+		if h.hasReply && len(h.reply) > 0 {
+			g.pendingPage = append(g.pendingPage, h.reply)
+		}
 	}
 	return send
+}
+
+func (g *guard) pruneDocConfirmSessionLocked(session string) {
+	if session == "" {
+		return
+	}
+	delete(g.docFailed, session)
+	for _, dc := range g.docInflight {
+		if dc == nil || dc.holds[session] == nil {
+			continue
+		}
+		delete(dc.holds, session)
+		if len(dc.holds) == 0 && !dc.done {
+			g.cancelDocConfirmLocked(dc)
+		}
+	}
+}
+
+func (g *guard) pruneDocConfirmTargetLocked(target string) {
+	if target == "" {
+		return
+	}
+	if dc := g.docInflight[target]; dc != nil && !dc.done {
+		g.failDocConfirmLocked(dc)
+	}
 }
 
 func (g *guard) docConfirmAttachEventLocked(m *message, data []byte, session string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
 	if g.docFailed[session] {
 		return browserVerdict{send: send}, true
 	}
-	if !g.needsDocConfirmLocked(info.TargetID, info.Type) {
+	if !g.needsDocConfirmLocked(info.TargetID, session, info.Type) {
 		return browserVerdict{}, false
 	}
-	if chromeErrorDocument(info.URL) {
+	if g.docConfirmSkipChromeErrorLocked(info.URL, info.TargetID) {
 		return browserVerdict{}, false
 	}
 	dc := g.beginDocConfirmLocked(info.TargetID, session, m.SessionID, info.Type, waiting)
-	dc.hasEvent = true
+	h := dc.holds[session]
+	h.hasEvent = true
 	if params := decodeParams(m.Params); params != nil {
 		if obj, _ := params["targetInfo"].(map[string]any); g.redactInfoLocked(obj, info) {
 			m.Params = encode(params)
-			dc.event = encode(m)
+			h.event = encode(m)
 		} else {
-			dc.event = append([]byte(nil), data...)
+			h.event = append([]byte(nil), data...)
 		}
 	} else {
-		dc.event = append([]byte(nil), data...)
+		h.event = append([]byte(nil), data...)
 	}
 	ask := g.askDocConfirmLocked(dc)
-	if dc.done && dc.failed {
-		return browserVerdict{send: append(send, ask...)}, true
-	}
-	if dc.done && !dc.failed {
-		page := g.takePendingPageLocked()
-		return browserVerdict{forward: nil, send: append(send, ask...), page: page}, true
-	}
-	return browserVerdict{send: append(send, ask...)}, true
+	return browserVerdict{send: append(send, ask...), page: g.takePendingPageLocked()}, true
 }
 
 func (g *guard) holdDocConfirmReplyLocked(attached string, m *message, res map[string]any) (held bool, send [][]byte, page [][]byte) {
@@ -235,36 +323,31 @@ func (g *guard) holdDocConfirmReplyLocked(attached string, m *message, res map[s
 	if t := g.targets[attached]; t != nil {
 		typ = t.typ
 	}
-	if !g.needsDocConfirmLocked(attached, typ) && g.docConfirmForTargetLocked(attached) == nil && g.docConfirms[sid] == nil {
-		return false, nil, nil
-	}
-	if t := g.targets[attached]; t != nil && chromeErrorDocument(t.url) {
-		return false, nil, nil
-	}
 	if typ == "browser" {
 		return false, nil, nil
 	}
 	if typ == "" {
 		typ = "page"
 	}
-	dc := g.docConfirms[sid]
-	if dc == nil {
-		dc = g.beginDocConfirmLocked(attached, sid, m.SessionID, typ, false)
+	if g.docConfirmSkipChromeErrorLocked("", attached) {
+		return false, nil, nil
 	}
+	dc := g.beginDocConfirmLocked(attached, sid, m.SessionID, typ, false)
 	if dc.done {
-		if dc.failed {
+		if dc.failed || g.docFailed[sid] {
 			return true, nil, [][]byte{refusal(*m.ID, m.SessionID, refusedTarget)}
 		}
 		return false, nil, nil
 	}
-	dc.hasReply = true
-	dc.replyID = *m.ID
-	dc.replySid = m.SessionID
+	h := dc.holds[sid]
+	h.hasReply = true
+	h.replyID = *m.ID
+	h.replySid = m.SessionID
 	wrapped := map[string]any{"id": *m.ID, "result": res}
 	if m.SessionID != "" {
 		wrapped["sessionId"] = m.SessionID
 	}
-	dc.reply = encode(wrapped)
+	h.reply = encode(wrapped)
 	ask := g.askDocConfirmLocked(dc)
-	return true, ask, nil
+	return true, ask, g.takePendingPageLocked()
 }

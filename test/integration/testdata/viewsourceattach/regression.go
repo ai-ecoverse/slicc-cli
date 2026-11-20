@@ -3,8 +3,10 @@ package cdp
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
@@ -294,16 +296,6 @@ func TestViewSourceAttachControlOrdinaryIsReadable(t *testing.T) {
 	}
 }
 
-func TestViewSourceAttachMutationConfirmDisabled(t *testing.T) {
-	documentConfirmEnabled = false
-	t.Cleanup(func() { documentConfirmEnabled = true })
-	url := "view-source:https://vault.sliccy.ai/doc"
-	o := vsRun(t, 3, url, vsScenario{watched: true})
-	if o.attachRefused || !o.readDelivered {
-		t.Fatalf("mutation: with confirmation disabled the watched order-3 attach must still admit and deliver the read (refused=%t delivered=%t payloads=%v)", o.attachRefused, o.readDelivered, o.clientPayloads)
-	}
-}
-
 const (
 	vsSession2  = "S-VS-2"
 	vsAttachID2 = 60
@@ -369,14 +361,12 @@ func vsDrainAnswer(g *guard, o *vsOutcome, v browserVerdict, answer func(id int6
 func vsPendingConfirm(g *guard, session string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	dc := g.docConfirms[session]
-	return dc != nil && !dc.done
-}
-
-func vsDocAttachCount(g *guard) int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return len(g.docAttach)
+	for _, dc := range g.docInflight {
+		if dc != nil && !dc.done && dc.holds[session] != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func vsDocFailedCount(g *guard) int {
@@ -388,7 +378,7 @@ func vsDocFailedCount(g *guard) int {
 func vsDocConfirmCount(g *guard) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return len(g.docConfirms)
+	return len(g.docInflight)
 }
 
 func vsAttachIDKey(attachID int64) string {
@@ -411,17 +401,17 @@ func vsSecondAdmitted(payloads []string, session string, attachID int64) (event,
 	return event, reply, read
 }
 
-func vsCheckSecondRefused(t *testing.T, payloads []string, session string, attachID int64, askedS2 bool) {
+func vsCheckSecondRefused(t *testing.T, payloads []string, session string, attachID int64, confirmed bool) {
 	t.Helper()
 	event, reply, read := vsSecondAdmitted(payloads, session, attachID)
 	if read {
 		t.Errorf("second session %s read a protected document", session)
 	}
 	if event || reply {
-		t.Errorf("second session %s was client-visible for a protected live document (event=%t reply=%t askedConfirm=%t); each session needs its own confirmation before any client-visible admit", session, event, reply, askedS2)
+		t.Errorf("second session %s was client-visible for a protected live document (event=%t reply=%t confirmed=%t); a racing attach must wait for or reuse the same confirmation, never skip it", session, event, reply, confirmed)
 	}
-	if !askedS2 {
-		t.Errorf("second session %s never received its own Target.getTargetInfo confirmation", session)
+	if !confirmed {
+		t.Errorf("second session %s never waited on a Target.getTargetInfo confirmation for the shared target", session)
 	}
 }
 
@@ -470,7 +460,12 @@ func TestViewSourceAttachSecondSessionMustConfirm(t *testing.T) {
 						held = nil
 						return ids
 					}
-					s2Asked := 0
+					s2Confirmed := false
+					noteS2 := func() {
+						if vsPendingConfirm(g, vsSession2) || len(held) > 0 {
+							s2Confirmed = true
+						}
+					}
 					runS1 := func() {
 						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEventSession("about:blank", vsSession)), holdAnswers)
 						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReplyID(vsAttachID, vsSession)), holdAnswers)
@@ -483,9 +478,13 @@ func TestViewSourceAttachSecondSessionMustConfirm(t *testing.T) {
 					}
 					runS2EventReply := func() {
 						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEventSession("about:blank", vsSession2)), holdAnswers)
+						noteS2()
 						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReplyID(vsAttachID2, vsSession2)), holdAnswers)
+						noteS2()
 						ids := takeHeld()
-						s2Asked = len(ids)
+						if len(ids) > 0 {
+							s2Confirmed = true
+						}
 						answerIDs(ids, live)
 					}
 					switch order {
@@ -501,16 +500,22 @@ func TestViewSourceAttachSecondSessionMustConfirm(t *testing.T) {
 						runS2EventReply()
 					default:
 						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReplyID(vsAttachID2, vsSession2)), holdAnswers)
+						noteS2()
 						s2Pending := takeHeld()
-						s2Asked = len(s2Pending)
+						if len(s2Pending) > 0 {
+							s2Confirmed = true
+						}
 						runS1()
 						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEventSession("about:blank", vsSession2)), holdAnswers)
+						noteS2()
 						s2Pending = append(s2Pending, takeHeld()...)
-						s2Asked = len(s2Pending)
+						if len(s2Pending) > 0 {
+							s2Confirmed = true
+						}
 						answerIDs(s2Pending, live)
 					}
 					vsReadOn(g, &o, live, vsReadID2, vsSession2)
-					vsCheckSecondRefused(t, o.clientPayloads, vsSession2, vsAttachID2, s2Asked > 0)
+					vsCheckSecondRefused(t, o.clientPayloads, vsSession2, vsAttachID2, s2Confirmed)
 				})
 			}
 		}
@@ -519,7 +524,6 @@ func TestViewSourceAttachSecondSessionMustConfirm(t *testing.T) {
 
 func TestViewSourceAttachDocAttachClearedOnFailedAttach(t *testing.T) {
 	g := vsGuard(t)
-	baseAttach := vsDocAttachCount(g)
 	baseFailed := vsDocFailedCount(g)
 	baseConfirm := vsDocConfirmCount(g)
 	for i := 0; i < 32; i++ {
@@ -534,18 +538,16 @@ func TestViewSourceAttachDocAttachClearedOnFailedAttach(t *testing.T) {
 			"error": map[string]any{"code": -32000, "message": "No target with given id found"},
 		}))
 	}
-	if vsDocAttachCount(g) != baseAttach {
-		t.Errorf("docAttach grew from %d to %d after failed attaches; cleanup must follow attachDoneLocked", baseAttach, vsDocAttachCount(g))
-	}
 	if vsDocFailedCount(g) != baseFailed {
 		t.Errorf("docFailed grew from %d to %d after failed attaches", baseFailed, vsDocFailedCount(g))
 	}
 	if vsDocConfirmCount(g) != baseConfirm {
-		t.Errorf("docConfirms grew from %d to %d after failed attaches", baseConfirm, vsDocConfirmCount(g))
+		t.Errorf("docInflight grew from %d to %d after failed attaches", baseConfirm, vsDocConfirmCount(g))
 	}
 }
 
 func TestViewSourceAttachConfirmMustSettleWithoutAnswer(t *testing.T) {
+	t.Setenv(HoldTimeoutEnv, "5ms")
 	g := vsGuard(t)
 	var o vsOutcome
 	_ = g.fromBrowser(vsRelay("Target.targetCreated", "about:blank"))
@@ -567,7 +569,14 @@ func TestViewSourceAttachConfirmMustSettleWithoutAnswer(t *testing.T) {
 	if !vsPendingConfirm(g, vsSession) {
 		t.Fatal("confirm should still be pending before an answer")
 	}
-	if vsPendingConfirm(g, vsSession) {
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !vsPendingConfirm(g, vsSession) && vsDocConfirmCount(g) == 0 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if vsPendingConfirm(g, vsSession) || vsDocConfirmCount(g) > 0 {
 		t.Errorf("confirm left pending when getTargetInfo never arrives; must fail closed on the hold deadline")
 	}
 }
@@ -611,7 +620,7 @@ func TestViewSourceAttachConfirmTargetDestroyedFailsClosed(t *testing.T) {
 	if !vsPendingConfirm(g, vsSession) {
 		t.Fatal("expected a pending confirm before destroy")
 	}
-	_ = g.fromBrowser(encode(map[string]any{"method": "Target.targetDestroyed", "params": map[string]any{"targetId": vsTarget}}))
+	_ = g.fromBrowser(encode(map[string]any{"sessionId": "RELAY", "method": "Target.targetDestroyed", "params": map[string]any{"targetId": vsTarget}}))
 	if vsPendingConfirm(g, vsSession) || vsDocConfirmCount(g) > 0 {
 		t.Errorf("confirm left pending after the target was destroyed; must fail closed and prune")
 	}
@@ -654,5 +663,79 @@ func TestViewSourceAttachNavAfterConfirmStillCut(t *testing.T) {
 	}
 	if !o.readRefused {
 		t.Errorf("expected the first content command after a protected navigation to be refused")
+	}
+}
+
+func vsErrorPageShapes() []struct {
+	name string
+	live string
+} {
+	return []struct {
+		name string
+		live string
+	}{
+		{"C8.protected-error-page", "https://seven.sliccy.ai/doc"},
+		{"C8.protected-error-page.query", "https://seven.sliccy.ai/doc?q=1"},
+		{"C8.protected-error-page.fragment", "https://seven.sliccy.ai/doc#frag"},
+		{"C8.protected-document-restore", "https://seven.sliccy.ai/doc"},
+		{"C8.protected-error-page-sticky", "https://seven.sliccy.ai/doc"},
+		{"C8.protected-error-page-sticky.query", "https://seven.sliccy.ai/doc?q=1"},
+		{"C8.protected-error-page-sticky.fragment", "https://seven.sliccy.ai/doc#frag"},
+	}
+}
+
+func vsArmErrorPage(g *guard, live string, sticky bool) {
+	ready := make(chan struct{})
+	close(ready)
+	nt := &navTarget{
+		target:      vsTarget,
+		ready:       ready,
+		done:        true,
+		documentURL: "chrome-error://chromewebdata/",
+		errorURL:    live,
+	}
+	if sticky {
+		nt.historyLocked = true
+	}
+	g.navTargets[vsTarget] = nt
+	g.setErrorProofLocked(vsTarget, errorProofOrdinary)
+}
+
+func TestViewSourceAttachMutationProbe(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_MUTATION") == "" {
+		t.Skip("overlay mutation only")
+	}
+	url := "view-source:https://vault.sliccy.ai/doc"
+	o := vsRun(t, 3, url, vsScenario{watched: true})
+	if o.attachRefused || !o.readDelivered {
+		t.Fatalf("mutation: with confirmation stubbed the watched order-3 attach must still admit and deliver the read (refused=%t delivered=%t payloads=%v)", o.attachRefused, o.readDelivered, o.clientPayloads)
+	}
+}
+
+func TestViewSourceAttachErrorPageReportingProtectedURLAdmitted(t *testing.T) {
+	for _, shape := range vsErrorPageShapes() {
+		shape := shape
+		t.Run(shape.name, func(t *testing.T) {
+			g := vsGuard(t)
+			var o vsOutcome
+			announced := "chrome-error://chromewebdata/"
+			vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), shape.live)
+			vsArmErrorPage(g, shape.live, strings.Contains(shape.name, "sticky") || strings.Contains(shape.name, "restore"))
+			_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+			vsDrain(g, &o, g.fromBrowser(vsAttachedEvent(announced)), shape.live)
+			vsDrain(g, &o, g.fromBrowser(vsAttachReply()), shape.live)
+			o.summarize()
+			if o.attachRefused {
+				t.Fatalf("%s: error-page attach reporting %s must stay admitted (main attachRedacted path), got refused payloads=%v", shape.name, shape.live, o.clientPayloads)
+			}
+			if !o.attachReplied && !o.sawAttachEvent {
+				t.Fatalf("%s: expected a client-visible attach: %v", shape.name, o.clientPayloads)
+			}
+			for _, p := range o.clientPayloads {
+				if strings.Contains(p, "attachedToTarget") && strings.Contains(p, shape.live) {
+					t.Errorf("%s: protected URL leaked in attach event: %s", shape.name, p)
+				}
+			}
+		})
 	}
 }
