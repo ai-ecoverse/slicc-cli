@@ -60,6 +60,9 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 	var frame confirmFrame
 	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
 		check.settle(true)
+		if check.failedLoadGen != g.errorProofGenOfLocked(nt.target) {
+			return nil
+		}
 		t := g.targets[nt.target]
 		if t != nil && !nt.iframe && chromeErrorDocument(t.url) && g.heldFailedLoadLocked(t.id) {
 			g.setErrorProofLocked(t.id, errorProofFailed)

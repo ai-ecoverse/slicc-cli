@@ -181,8 +181,9 @@ func (g *guard) scrubFailed(m map[string]any) bool {
 	session, _ := m["sessionId"].(string)
 	g.mu.Lock()
 	forms := g.failedFormsLocked(session)
+	titles := g.failedTitleMarksLocked(session)
 	g.mu.Unlock()
-	if len(forms) == 0 {
+	if len(forms) == 0 && len(titles) == 0 {
 		return false
 	}
 	changed := false
@@ -198,6 +199,14 @@ func (g *guard) scrubFailed(m map[string]any) bool {
 			return t
 		case map[string]any:
 			for k, val := range t {
+				lk := strings.ToLower(k)
+				if (lk == "title" || lk == "name") && len(titles) > 0 {
+					if s, ok := val.(string); ok && s != "" && failedTitleMarked(s, titles) {
+						t[k] = ""
+						changed = true
+						continue
+					}
+				}
 				t[k] = walk(val)
 			}
 		case []any:
@@ -211,6 +220,43 @@ func (g *guard) scrubFailed(m map[string]any) bool {
 		m[k] = walk(val)
 	}
 	return changed
+}
+
+func (g *guard) failedTitleMarksLocked(sessionID string) []string {
+	s, ok := g.sessions[sessionID]
+	if !ok {
+		return nil
+	}
+	st := g.errorProofOfLocked(s.target)
+	if st != errorProofPending && st != errorProofProtected && st != errorProofFailed {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(v string) {
+		if v == "" || seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	add(g.errorTitles[s.target])
+	if nt := g.navTargets[s.target]; nt != nil {
+		for _, u := range nt.failedURLs {
+			add(protect.Host(u))
+		}
+		add(protect.Host(nt.errorURL))
+	}
+	return out
+}
+
+func failedTitleMarked(s string, titles []string) bool {
+	for _, t := range titles {
+		if t != "" && (s == t || strings.Contains(s, t)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *guard) cut(v any) (string, bool) {

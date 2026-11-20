@@ -1692,6 +1692,9 @@ func (g *guard) destroyedLocked(id string) {
 	g.forgetWorldsLocked(id)
 	g.forgetWorldRequestsLocked(id)
 	g.forgetOpenedSeenLocked(id)
+	delete(g.errorProof, id)
+	delete(g.errorProofGen, id)
+	delete(g.errorTitles, id)
 	t, ok := g.targets[id]
 	if !ok || t.gone {
 		return

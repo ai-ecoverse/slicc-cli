@@ -1,6 +1,8 @@
 package cdp
 
 import (
+	"net/url"
+
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
@@ -175,9 +177,9 @@ func (g *guard) holdFailedLoadAttachLocked(m *message, pSession string, waiting 
 		return browserVerdict{}, false
 	}
 	switch g.errorProofOfLocked(t.id) {
-	case errorProofFailed:
+	case errorProofFailed, errorProofProtected:
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)}, true
-	case errorProofOrdinary, errorProofProtected:
+	case errorProofOrdinary:
 		return browserVerdict{}, false
 	}
 	g.noteErrorTitleLocked(t.id, attachTitle(m))
@@ -225,6 +227,23 @@ func (g *guard) heldFailedLoadLocked(targetID string) bool {
 	return g.errorProofOfLocked(targetID) == errorProofPending
 }
 
+func ordinaryFailedUnreachable(o *protect.Origins, raw string) bool {
+	if raw == "" || o == nil || protect.Unparseable(raw) || protect.Inheriting(raw) {
+		return false
+	}
+	s := protect.Scheme(raw)
+	if s != "http" && s != "https" {
+		return false
+	}
+	if protect.Host(raw) == "" {
+		return false
+	}
+	if u, err := url.Parse(raw); err != nil || u.User != nil {
+		return false
+	}
+	return !o.Loaded(raw)
+}
+
 func (g *guard) finishFailedLoadAfterConfirmLocked(t *target, frame confirmFrame) [][]byte {
 	if t == nil || (t.typ != "page" && t.typ != "tab") || !chromeErrorDocument(frame.URL) {
 		return nil
@@ -232,19 +251,19 @@ func (g *guard) finishFailedLoadAfterConfirmLocked(t *target, frame confirmFrame
 	if !g.heldFailedLoadLocked(t.id) {
 		return nil
 	}
-	if frame.UnreachableURL == "" || protect.Unparseable(frame.UnreachableURL) {
+	if !ordinaryFailedUnreachable(g.o, frame.UnreachableURL) {
+		if frame.UnreachableURL != "" && g.o.Loaded(frame.UnreachableURL) {
+			g.setErrorProofLocked(t.id, errorProofProtected)
+			g.blankHeldFailedLoadTitleLocked(t.id)
+			return g.finishFailedLoadHeldLocked(t.id, true)
+		}
 		g.setErrorProofLocked(t.id, errorProofFailed)
 		return g.finishFailedLoadHeldLocked(t.id, true)
-	}
-	if g.o.Loaded(frame.UnreachableURL) {
-		g.setErrorProofLocked(t.id, errorProofProtected)
-		g.blankHeldFailedLoadTitleLocked(t.id)
-		return g.finishFailedLoadHeldLocked(t.id, false)
 	}
 	g.setErrorProofLocked(t.id, errorProofOrdinary)
 	if title := g.errorTitles[t.id]; title != "" {
 		for _, h := range g.held {
-			if h.target != t.id || h.params == nil {
+			if h == nil || h.target != t.id || h.params == nil {
 				continue
 			}
 			if obj, _ := h.params["targetInfo"].(map[string]any); obj != nil {

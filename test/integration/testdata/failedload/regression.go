@@ -818,3 +818,82 @@ func TestFailedLoadAttachedSessionPathsStayAtOrigin(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedLoadOrdinaryKeepsRealTitles(t *testing.T) {
+	g := failedLoadGuard(t)
+	_ = g.fromBrowser(chromeErrorAttached("ordinary.test", "OPENER", true))
+	_ = proveFailedLoad(t, g, failedOrdinary)
+	_ = g.takePendingPageLocked()
+	if g.sessions["S-POPUP"] == nil {
+		t.Fatal("ordinary proof left no client session")
+	}
+	if g.errorProofOfLocked("POPUP") != errorProofOrdinary {
+		t.Fatalf("want ordinary proof, got %d", g.errorProofOfLocked("POPUP"))
+	}
+	nav := encode(map[string]any{"sessionId": "S-POPUP", "method": "Page.frameNavigated", "params": map[string]any{
+		"frame": map[string]any{"id": "POPUP", "url": chromeErrorURL, "name": "ordinary.test", "securityOrigin": "://", "unreachableUrl": failedOrdinary},
+	}})
+	out := string(g.scrub(append([]byte(nil), nav...)))
+	if !strings.Contains(out, `"name":"ordinary.test"`) && !strings.Contains(out, `"name": "ordinary.test"`) {
+		t.Fatalf("ordinary frame.name was blanked: %s", out)
+	}
+	hist, _ := json.Marshal(map[string]any{"sessionId": "S-POPUP", "id": 31, "result": map[string]any{
+		"currentIndex": 0,
+		"entries":      []any{map[string]any{"id": 1, "url": failedOrdinary, "userTypedURL": failedOrdinary, "title": "ordinary.test"}},
+	}})
+	hout := string(g.scrub(hist))
+	if !strings.Contains(hout, `"title":"ordinary.test"`) && !strings.Contains(hout, `"title": "ordinary.test"`) {
+		t.Fatalf("ordinary history title was blanked: %s", hout)
+	}
+	v := g.fromBrowser(chromeErrorChanged("ordinary.test", "OPENER"))
+	ps := clientPayloads(v)
+	if !payloadsContain(ps, `"title":"ordinary.test"`) && !payloadsContain(ps, `"title": "ordinary.test"`) {
+		t.Fatalf("ordinary targetInfo title was blanked: %v", ps)
+	}
+}
+
+func TestFailedLoadAttachedSessionRecoveryCommands(t *testing.T) {
+	failedFull := "https://seven.sliccy.ai/missing?q=secret#frag"
+	for _, phase := range []string{"pending", "protected"} {
+		t.Run(phase, func(t *testing.T) {
+			g := attachedFailedLoadGuard(t, failedFull, phase == "protected")
+			if g.sessions["S-POPUP"] == nil {
+				t.Fatal("expected attached session")
+			}
+			if nt := g.navTargets["POPUP"]; nt != nil {
+				nt.done = true
+				nt.failed = false
+				if nt.confirm != nil && !nt.confirm.done {
+					nt.confirm.settle(false)
+				}
+			}
+			g.opened["POPUP"] = true
+			for i, call := range []struct {
+				method  string
+				session string
+				params  map[string]any
+			}{
+				{"Page.navigate", "S-POPUP", map[string]any{"url": "https://ordinary.test/"}},
+				{"Page.reload", "S-POPUP", map[string]any{}},
+				{"Target.closeTarget", "", map[string]any{"targetId": "POPUP"}},
+			} {
+				id := int64(40 + i)
+				v := g.fromCommand(&command{id: id, method: call.method, session: call.session, params: call.params}, id, true)
+				if v.reply != nil && strings.Contains(string(v.reply), "refused") {
+					t.Fatalf("%s refused during %s: %s", call.method, phase, v.reply)
+				}
+				if v.forward == nil && v.reply != nil && strings.Contains(string(v.reply), "error") {
+					t.Fatalf("%s errored during %s: %s", call.method, phase, v.reply)
+				}
+				if v.forward == nil && v.reply == nil && v.wait == nil && v.closeProof == nil && v.history == nil {
+					t.Fatalf("%s produced no verdict during %s", call.method, phase)
+				}
+			}
+			_ = g.fromBrowser(chromeErrorChangedURL("ok", "https://ordinary.test/", "OPENER"))
+			st := g.errorProofOfLocked("POPUP")
+			if st == errorProofPending || st == errorProofProtected || st == errorProofFailed {
+				t.Fatalf("%s: proof did not reset after navigate-away listing: state=%d", phase, st)
+			}
+		})
+	}
+}
