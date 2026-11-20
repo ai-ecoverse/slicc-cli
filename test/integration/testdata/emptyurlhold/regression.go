@@ -1439,3 +1439,120 @@ func TestEmptyURLHoldProtectedTabCascadesShownWorkerChild(t *testing.T) {
 		t.Fatalf("protected tab detach must cascade shown worker child as protectLocked does: payloads=%v session=%v", ps, g.sessions["S-WORKER-W"] != nil)
 	}
 }
+
+func emptyURLHoldAssertHeldPageNotGhost(t *testing.T, g *guard, pageSession, pageTarget string, hideSends []string) {
+	t.Helper()
+	if g.held[pageSession] != nil {
+		t.Fatalf("held page %s must not remain in g.held after parent tab detach", pageSession)
+	}
+	ev := g.fromBrowser(encode(map[string]any{
+		"sessionId": pageSession,
+		"method":    "Runtime.consoleAPICalled",
+		"params":    map[string]any{"type": "log", "args": []any{}},
+	}))
+	if ev.forward != nil || emptyURLHoldContains(emptyURLHoldPayloads(ev), "consoleAPICalled") {
+		t.Fatalf("events on orphaned held page session must be dropped (no forwarding ghost), got forward=%s payloads=%v held=%v hidden=%v refused=%v gone=%v", ev.forward, emptyURLHoldPayloads(ev), g.held[pageSession] != nil, g.hidden[pageSession], g.refused[pageSession], g.gone[pageSession])
+	}
+	if !g.hidden[pageSession] && !g.refused[pageSession] {
+		t.Fatalf("held page %s must be noteHidden or refused after parent tab detach (gone-only is a forwarding ghost): hidden=%v refused=%v gone=%v", pageSession, g.hidden[pageSession], g.refused[pageSession], g.gone[pageSession])
+	}
+	if emptyURLHoldDetachIndex(hideSends, pageSession) < 0 {
+		t.Fatalf("guard must send Target.detachFromTarget for held page %s: %v", pageSession, hideSends)
+	}
+	changed := g.fromBrowser(emptyURLNamedRelayChanged(pageTarget, "page", "https://seven.sliccy.ai/ghost", "OPENER"))
+	ps := emptyURLHoldPayloads(changed)
+	if emptyURLHoldContains(ps, "attachedToTarget") || g.sessions[pageSession] != nil {
+		t.Fatalf("later protected targetInfoChanged must not admit ghost page session: payloads=%v session=%v", ps, g.sessions[pageSession] != nil)
+	}
+	late := g.fromBrowser(encode(map[string]any{
+		"sessionId": pageSession,
+		"method":    "Network.requestWillBeSent",
+		"params":    map[string]any{"requestId": "GHOST", "request": map[string]any{"url": "https://seven.sliccy.ai/n"}},
+	}))
+	if late.forward != nil {
+		t.Fatalf("post-classify events on ghost page session must be dropped, got %s", late.forward)
+	}
+}
+
+func TestEmptyURLHoldClientTabDetachHidesNestedHeldPage(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-GH", "TAB-GH", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-GH", "S-PAGE-GH", "PAGE-GH", "OPENER", true))
+	if g.sessions["S-TAB-GH"] == nil || g.held["S-PAGE-GH"] == nil {
+		t.Fatal("expected announced tab and nested held page")
+	}
+	pv := g.fromCommand(&command{id: 90, method: "Target.detachFromTarget", params: map[string]any{"sessionId": "S-TAB-GH"}}, 90, true)
+	sends := make([]string, 0, len(pv.send))
+	for _, b := range pv.send {
+		sends = append(sends, string(b))
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-TAB-GH", "targetId": "TAB-GH"},
+	}))
+	sends = append(sends, emptyURLHoldSends(v)...)
+	emptyURLHoldAssertHeldPageNotGhost(t, g, "S-PAGE-GH", "PAGE-GH", sends)
+}
+
+func TestEmptyURLHoldProtectTabCascadesHideNestedHeldPage(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-PT", "TAB-PT", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-PT", "S-PAGE-PT", "PAGE-PT", "OPENER", true))
+	if g.sessions["S-TAB-PT"] == nil || g.held["S-PAGE-PT"] == nil {
+		t.Fatal("expected announced tab and nested held page before protectLocked on tab")
+	}
+	g.mu.Lock()
+	tab := g.targets["TAB-PT"]
+	tab.protected = true
+	protSend := g.protectLocked(tab)
+	g.mu.Unlock()
+	sends := emptyURLHoldSends(browserVerdict{send: protSend})
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-TAB-PT", "targetId": "TAB-PT"},
+	}))
+	sends = append(sends, emptyURLHoldSends(v)...)
+	emptyURLHoldAssertHeldPageNotGhost(t, g, "S-PAGE-PT", "PAGE-PT", sends)
+}
+
+func TestEmptyURLHoldShownPageCascadeUnchanged(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-SH", "TAB-SH", "", true))
+	pv := g.fromBrowser(emptyURLNamedPageAttachURL("S-TAB-SH", "S-PAGE-SH", "PAGE-SH", "OPENER", "https://ordinary.test/shown", false))
+	if g.sessions["S-PAGE-SH"] == nil {
+		t.Fatalf("expected ordinary nested page shown under tab: payloads=%v held=%v", emptyURLHoldPayloads(pv), g.held["S-PAGE-SH"] != nil)
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-TAB-SH", "targetId": "TAB-SH"},
+	}))
+	ps := emptyURLHoldPayloads(v)
+	if emptyURLHoldClientDetachIndex(ps, "S-PAGE-SH") < 0 || g.sessions["S-PAGE-SH"] != nil {
+		t.Fatalf("ordinary shown page under detached tab must still cascade client detach: payloads=%v session=%v", ps, g.sessions["S-PAGE-SH"] != nil)
+	}
+}
+
+func TestEmptyURLHoldClientTabDetachStillHidesHeldWorker(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-HW", "TAB-HW", "", true))
+	_ = g.fromBrowser(encode(map[string]any{
+		"sessionId": "S-TAB-HW",
+		"method":    "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-WORKER-HW",
+			"waitingForDebugger": true,
+			"targetInfo":         map[string]any{"targetId": "WORKER-HW", "type": "worker", "url": "", "openerId": ""},
+		},
+	}))
+	if g.held["S-WORKER-HW"] == nil {
+		t.Fatal("expected unresolved worker held under tab")
+	}
+	pv := g.fromCommand(&command{id: 91, method: "Target.detachFromTarget", params: map[string]any{"sessionId": "S-TAB-HW"}}, 91, true)
+	sends := make([]string, 0, len(pv.send))
+	for _, b := range pv.send {
+		sends = append(sends, string(b))
+	}
+	if g.held["S-WORKER-HW"] != nil || emptyURLHoldDetachIndex(sends, "S-WORKER-HW") < 0 && !g.hidden["S-WORKER-HW"] {
+		t.Fatalf("client tab detach must still hide held worker child: held=%v hidden=%v sends=%v", g.held["S-WORKER-HW"] != nil, g.hidden["S-WORKER-HW"], sends)
+	}
+}
