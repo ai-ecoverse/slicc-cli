@@ -578,68 +578,6 @@ func (g *guard) admittedOrdinaryOpenerLocked(openerID string) bool {
 	return false
 }
 
-func (g *guard) flatEmptyOpenerTabLocked(pageAt time.Time) *heldSession {
-	var best *heldSession
-	var bestDelta time.Duration
-	for _, h := range g.held {
-		if h == nil || h.typ != "tab" || h.parent != "" || heldOpenerLocked(h) != "" {
-			continue
-		}
-		owned := false
-		for _, c := range g.held {
-			if c != nil && c.parent == h.id {
-				owned = true
-				break
-			}
-		}
-		if owned {
-			continue
-		}
-		for _, s := range g.sessions {
-			if s != nil && s.parent == h.id {
-				owned = true
-				break
-			}
-		}
-		if owned {
-			continue
-		}
-		delta := h.at.Sub(pageAt)
-		if delta < 0 {
-			delta = -delta
-		}
-		if best == nil || delta < bestDelta {
-			best = h
-			bestDelta = delta
-		}
-	}
-	return best
-}
-
-func (g *guard) liftFlatEmptyOpenerTabLocked(info targetInfo, hide bool) browserVerdict {
-	if info.Type != "page" || info.OpenerID == "" {
-		return browserVerdict{}
-	}
-	if !hide && !g.admittedOrdinaryOpenerLocked(info.OpenerID) {
-		return browserVerdict{}
-	}
-	if hide {
-		op := g.targets[info.OpenerID]
-		if op == nil || op.gone {
-			return browserVerdict{}
-		}
-	}
-	mate := g.flatEmptyOpenerTabLocked(time.Now())
-	if mate == nil {
-		return browserVerdict{}
-	}
-	delete(g.held, mate.id)
-	if hide {
-		return browserVerdict{send: g.hideLocked(mate)}
-	}
-	return g.deliverHeldLocked(mate)
-}
-
 func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
 	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		if t := g.targets[info.TargetID]; t != nil {
@@ -648,9 +586,12 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 	}
 	if g.attachedShouldHideLocked(info, m.SessionID) {
 		send = append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)
-		if m.SessionID == "" {
-			part := g.liftFlatEmptyOpenerTabLocked(info, true)
-			send = append(send, part.send...)
+		if info.Type == "page" {
+			if m.SessionID != "" {
+				send = append(send, g.detachAnnouncedTabSessionLocked(m.SessionID, true)...)
+			} else {
+				send = append(send, g.detachUnmatchedEmptyOpenerTabsLocked(true)...)
+			}
 		}
 		return browserVerdict{send: send}, true
 	}
@@ -660,7 +601,7 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
 	}
-	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe" || info.Type == "tab") && g.explicit[info.TargetID] == 0 && params != nil {
+	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, waiting)...), hold: []string{pSession}}, true
 	}
 	return browserVerdict{}, false
@@ -697,22 +638,22 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
 	}
-	send = append(send, g.touchLocked(info.TargetID, info.Type)...)
-	var page [][]byte
-	if m.SessionID == "" && info.Type == "page" {
-		part := g.liftFlatEmptyOpenerTabLocked(info, false)
-		send = append(send, part.send...)
-		page = append(page, part.page...)
+	if info.Type == "tab" {
+		g.adoptHeldFlatPageLocked(p.SessionID, info.OpenerID)
 	}
+	if info.Type == "page" {
+		if m.SessionID != "" {
+			g.markAnnouncedTabMatchedLocked(m.SessionID)
+		} else if g.admittedOrdinaryOpenerLocked(info.OpenerID) {
+			g.matchFlatOrdinaryEmptyOpenerTabLocked()
+		}
+	}
+	send = append(send, g.touchLocked(info.TargetID, info.Type)...)
 	if params := decodeParams(m.Params); params != nil {
 		if obj, _ := params["targetInfo"].(map[string]any); g.redactInfoLocked(obj, info) {
 			m.Params = encode(params)
-			data = encode(m)
+			return browserVerdict{forward: encode(m), send: send}
 		}
-	}
-	if len(page) > 0 {
-		page = append(page, data)
-		return browserVerdict{send: send, page: page}
 	}
 	return browserVerdict{forward: data, send: send}
 }

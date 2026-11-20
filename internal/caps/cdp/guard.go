@@ -191,6 +191,7 @@ type guard struct {
 	gone                     map[string]bool
 	goneOrder                []string
 	held                     map[string]*heldSession
+	matchedEmptyOpenerTabs   map[string]bool
 	heldContexts             map[heldContextKey]*heldContext
 	contextSettlePage        [][]byte
 	contextSettleSend        [][]byte
@@ -317,6 +318,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		errorTitles:              map[string]string{},
 		gone:                     map[string]bool{},
 		held:                     map[string]*heldSession{},
+		matchedEmptyOpenerTabs:   map[string]bool{},
 		heldContexts:             map[heldContextKey]*heldContext{},
 		frameWorldWaits:          map[string]*frameWorldWait{},
 		worldEpochs:              map[string]*worldEpoch{},

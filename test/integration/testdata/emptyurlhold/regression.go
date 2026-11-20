@@ -592,8 +592,8 @@ func TestEmptyURLHoldSiblingOpenerExpiryIndependent(t *testing.T) {
 func TestEmptyURLHoldSiblingOpenerPageBeforeTabIndependent(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	emptyURLAttachSiblingPairs(t, g, false)
-	if g.held["S-PAGE-A"].parent != "" || g.held["S-PAGE-B"].parent != "" {
-		t.Fatal("page-before-tab pairs unexpectedly parent-linked")
+	if g.held["S-PAGE-A"].parent != "S-TAB-A" || g.held["S-PAGE-B"].parent != "S-TAB-B" {
+		t.Fatalf("page-before-tab must adopt each held page under its announced tab: A=%q B=%q", g.held["S-PAGE-A"].parent, g.held["S-PAGE-B"].parent)
 	}
 	if heldOpenerLocked(g.held["S-PAGE-A"]) != "SHARED" {
 		t.Fatal("page-before-tab pair A missing shared opener link")
@@ -829,14 +829,19 @@ func TestEmptyURLHoldProtectedOpenerPageHeld(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	g.targets["PROT"] = &target{id: "PROT", typ: "page", url: "https://seven.sliccy.ai/", protected: true}
 	g.sessions["S-PROT"] = &session{id: "S-PROT", target: "PROT", typ: "page"}
-	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-P", "TAB-P", "PROT", true))
-	if g.sessions["S-TAB-P"] == nil {
-		t.Fatal("protected-opener empty tab must still be announced")
+	tabV := g.fromBrowser(emptyURLNamedTabAttach("S-TAB-P", "TAB-P", "PROT", true))
+	tabPS := emptyURLHoldPayloads(tabV)
+	tabSends := emptyURLHoldSends(tabV)
+	if g.sessions["S-TAB-P"] != nil || emptyURLHoldAttachIndex(tabPS, "S-TAB-P") >= 0 {
+		t.Fatalf("protected-opener empty tab reached the client: sessions=%v payloads=%v", g.sessions["S-TAB-P"] != nil, tabPS)
+	}
+	if emptyURLHoldDetachIndex(tabSends, "S-TAB-P") < 0 && !g.hidden["S-TAB-P"] {
+		t.Fatalf("protected-opener empty tab was not hidden like main: sends=%v", tabSends)
 	}
 	v := g.fromBrowser(emptyURLNamedPageAttachURL("S-TAB-P", "S-PAGE-P", "PAGE-P", "PROT", "https://ordinary.test/from-prot", false))
 	ps := emptyURLHoldPayloads(v)
 	if emptyURLHoldAttachIndex(ps, "S-PAGE-P") >= 0 || g.sessions["S-PAGE-P"] != nil {
-		t.Fatalf("protected-opener page reached the client before its own classification path: %v", ps)
+		t.Fatalf("protected-opener page reached the client: %v", ps)
 	}
 }
 
