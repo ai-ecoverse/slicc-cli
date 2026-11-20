@@ -72,11 +72,14 @@ func (g *guard) tabHasNestedPageChildLocked(sid string) bool {
 	return false
 }
 
-func (g *guard) unmatchedEmptyTabCandidatesAroundLocked(at time.Time) []string {
-	if at.IsZero() {
-		at = time.Now()
+func (g *guard) unmatchedEmptyTabCandidatesInWindowLocked(holdStart, end time.Time) []string {
+	if end.IsZero() {
+		end = time.Now()
 	}
-	windowStart := at.Add(-holdTimeout())
+	if holdStart.IsZero() {
+		holdStart = end
+	}
+	windowStart := holdStart.Add(-holdTimeout())
 	var out []string
 	for sid, s := range g.sessions {
 		if s == nil || s.typ != "tab" || s.refused || !s.emptyAtAnnounce {
@@ -89,7 +92,7 @@ func (g *guard) unmatchedEmptyTabCandidatesAroundLocked(at time.Time) []string {
 		if t == nil || t.url != "" {
 			continue
 		}
-		if s.at.Before(windowStart) || s.at.After(at) {
+		if s.at.Before(windowStart) || s.at.After(end) {
 			continue
 		}
 		out = append(out, sid)
@@ -153,14 +156,29 @@ func (g *guard) detachAnnouncedTabSessionLocked(sid string, protected bool) brow
 	return browserVerdict{send: send, page: page}
 }
 
-func (g *guard) detachUnmatchedEmptyTabsAroundLocked(at time.Time, protected bool) browserVerdict {
+func (g *guard) detachUnmatchedEmptyTabsInWindowLocked(holdStart, end time.Time, protected bool) browserVerdict {
 	var v browserVerdict
-	for _, sid := range g.unmatchedEmptyTabCandidatesAroundLocked(at) {
+	for _, sid := range g.unmatchedEmptyTabCandidatesInWindowLocked(holdStart, end) {
 		part := g.detachAnnouncedTabSessionLocked(sid, protected)
 		v.send = append(v.send, part.send...)
 		v.page = append(v.page, part.page...)
 	}
 	return v
+}
+
+func (g *guard) detachUnmatchedEmptyTabsAroundLocked(at time.Time, protected bool) browserVerdict {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return g.detachUnmatchedEmptyTabsInWindowLocked(at, at, protected)
+}
+
+func (g *guard) detachUnmatchedEmptyTabsForHeldLocked(h *heldSession, protected bool) browserVerdict {
+	holdStart := time.Time{}
+	if h != nil {
+		holdStart = h.at
+	}
+	return g.detachUnmatchedEmptyTabsInWindowLocked(holdStart, time.Now(), protected)
 }
 
 func (g *guard) detachAnnouncedTabsForPageLocked(h *heldSession, protected bool) browserVerdict {
@@ -173,7 +191,7 @@ func (g *guard) detachAnnouncedTabsForPageLocked(h *heldSession, protected bool)
 	if h.adoptedTab != "" {
 		return g.detachAnnouncedTabSessionLocked(h.adoptedTab, protected)
 	}
-	return g.detachUnmatchedEmptyTabsAroundLocked(h.at, protected)
+	return g.detachUnmatchedEmptyTabsForHeldLocked(h, protected)
 }
 
 func (g *guard) hideHeldPageAndTabsLocked(h *heldSession, protected bool) browserVerdict {
