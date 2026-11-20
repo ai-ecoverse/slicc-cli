@@ -1050,3 +1050,138 @@ func TestFailedLoadAttachedSessionRecoveryCommands(t *testing.T) {
 		})
 	}
 }
+
+func TestFailedLoadCarrierDropBeforeScrub(t *testing.T) {
+	failedFull := "https://seven.sliccy.ai/missing?q=secret#frag"
+	oauthURL := "https://seven.sliccy.ai/oauth?code=SECRET_OAUTH_CODE"
+	type carrier struct {
+		name   string
+		raw    func(sessionID string) []byte
+		secret string
+	}
+	carriers := []carrier{
+		{"Page.windowOpen", func(sid string) []byte {
+			m := map[string]any{"method": "Page.windowOpen", "params": map[string]any{
+				"url": oauthURL, "windowName": failedHostTitle, "windowFeatures": []any{"noopener"}, "userGesture": true,
+			}}
+			if sid != "" {
+				m["sessionId"] = sid
+			}
+			return encode(m)
+		}, "SECRET_OAUTH_CODE"},
+		{"Page.downloadWillBegin", func(sid string) []byte {
+			m := map[string]any{"method": "Page.downloadWillBegin", "params": map[string]any{
+				"frameId": "POPUP", "guid": "dl-drop", "url": oauthURL, "suggestedFilename": failedHostTitle,
+			}}
+			if sid != "" {
+				m["sessionId"] = sid
+			}
+			return encode(m)
+		}, "SECRET_OAUTH_CODE"},
+		{"Browser.downloadWillBegin", func(sid string) []byte {
+			m := map[string]any{"method": "Browser.downloadWillBegin", "params": map[string]any{
+				"frameId": "POPUP", "guid": "dl-browser", "url": oauthURL, "suggestedFilename": failedHostTitle,
+			}}
+			if sid != "" {
+				m["sessionId"] = sid
+			}
+			return encode(m)
+		}, "SECRET_OAUTH_CODE"},
+		{"Network.contentDispositionFilename", func(sid string) []byte {
+			m := map[string]any{"method": "Network.responseReceived", "params": map[string]any{
+				"requestId": "r-drop",
+				"response": map[string]any{
+					"url":     oauthURL,
+					"headers": map[string]any{"content-disposition": "attachment; filename=\"" + failedHostTitle + "\""},
+				},
+			}}
+			if sid != "" {
+				m["sessionId"] = sid
+			}
+			return encode(m)
+		}, "SECRET_OAUTH_CODE"},
+	}
+	for _, c := range carriers {
+		t.Run(c.name+"/guard-session", func(t *testing.T) {
+			g := attachedFailedLoadGuard(t, failedFull, true)
+			nt := g.navTargets["POPUP"]
+			if nt == nil {
+				t.Fatal("missing nav target")
+			}
+			nt.session = "GUARD"
+			g.navSessions["GUARD"] = nt
+			v := g.fromBrowser(c.raw("GUARD"))
+			ps := clientPayloads(v)
+			if len(ps) > 0 {
+				t.Fatalf("guard-session delivered to client: %v", ps)
+			}
+			if payloadsContain(ps, c.secret) {
+				t.Fatalf("guard-session leaked secret: %v", ps)
+			}
+			v = g.fromBrowser(c.raw("RELAY"))
+			ps = clientPayloads(v)
+			if len(ps) > 0 {
+				t.Fatalf("relay-session delivered to client: %v", ps)
+			}
+			if payloadsContain(ps, c.secret) {
+				t.Fatalf("relay-session leaked secret: %v", ps)
+			}
+		})
+		t.Run(c.name+"/blocked-session", func(t *testing.T) {
+			g := attachedFailedLoadGuard(t, failedFull, true)
+			delete(g.sessions, "S-POPUP")
+			g.held["S-POPUP"] = &heldSession{id: "S-POPUP", target: "POPUP", typ: "page"}
+			v := g.fromBrowser(c.raw("S-POPUP"))
+			ps := clientPayloads(v)
+			if len(ps) > 0 {
+				t.Fatalf("held-session delivered to client: %v", ps)
+			}
+			g2 := attachedFailedLoadGuard(t, failedFull, true)
+			delete(g2.sessions, "S-POPUP")
+			g2.hidden["S-POPUP"] = true
+			v = g2.fromBrowser(c.raw("S-POPUP"))
+			ps = clientPayloads(v)
+			if len(ps) > 0 {
+				t.Fatalf("hidden-session delivered to client: %v", ps)
+			}
+			g3 := attachedFailedLoadGuard(t, failedFull, true)
+			delete(g3.sessions, "S-POPUP")
+			g3.refused["S-POPUP"] = true
+			v = g3.fromBrowser(c.raw("S-POPUP"))
+			ps = clientPayloads(v)
+			if len(ps) > 0 {
+				t.Fatalf("refused-session delivered to client: %v", ps)
+			}
+		})
+		t.Run(c.name+"/delivered-session", func(t *testing.T) {
+			g := attachedFailedLoadGuard(t, failedFull, true)
+			sid := "S-POPUP"
+			if c.name == "Browser.downloadWillBegin" {
+				sid = ""
+			}
+			v := g.fromBrowser(c.raw(sid))
+			var out []string
+			if v.forward != nil {
+				out = append(out, string(g.scrub(append([]byte(nil), v.forward...))))
+			}
+			for _, p := range v.page {
+				out = append(out, string(g.scrub(append([]byte(nil), p...))))
+			}
+			if len(out) == 0 {
+				t.Fatalf("delivered-session produced no client payload")
+			}
+			if payloadsContain(out, c.secret) {
+				t.Fatalf("delivered-session kept secret after scrub: %v", out)
+			}
+			joined := strings.Join(out, "\n")
+			for _, key := range []string{"windowName", "suggestedFilename"} {
+				if strings.Contains(joined, `"`+key+`":"`+failedHostTitle+`"`) || strings.Contains(joined, `"`+key+`": "`+failedHostTitle+`"`) {
+					t.Fatalf("delivered-session kept failed-load %s: %v", key, out)
+				}
+			}
+			if strings.Contains(joined, `filename=\"`+failedHostTitle) || strings.Contains(joined, `filename="`+failedHostTitle) {
+				t.Fatalf("delivered-session kept failed-load download filename: %v", out)
+			}
+		})
+	}
+}
