@@ -26,8 +26,9 @@ func diagViewSource(t *testing.T, run guardRun) {
 	if rows == 0 {
 		t.Fatal("DIAG no view-source rows ran")
 	}
+	t.Error("DIAG forcing the guard stderr dump so the attach decision lines are visible")
 }
 
 func TestDiagViewSourceUnderLoad(t *testing.T) {
-	diagViewSource(t, guardRun{variant: "lagging", slots: guardSlots(), repeatID: diagViewSourceID, repeatN: 20, rowTimeout: guardRowTimeout})
+	diagViewSource(t, guardRun{variant: "lagging", slots: guardSlots(), repeatID: diagViewSourceID, repeatN: 100, rowTimeout: guardRowTimeout})
 }
