@@ -536,6 +536,7 @@ func (g *guard) decide(t *target, previous bool) bool {
 	protected, reason := g.decideReasonLocked(t, previous)
 	if protected && !previous {
 		g.logf("cdp: protecting target=%s type=%s reason=%s", t.id, t.typ, reason)
+		g.diagLocked("protecting", t.id, t.url, t.typ)
 	}
 	return protected
 }
@@ -1520,6 +1521,10 @@ func (g *guard) record(info targetInfo) (*target, [][]byte) {
 	if !ok {
 		t = &target{id: info.TargetID}
 		g.targets[info.TargetID] = t
+		g.diagLocked("first-info", t.id, info.URL, info.Type)
+	}
+	if ok && t.url != info.URL {
+		g.diagLocked("url-change", t.id, info.URL, info.Type)
 	}
 	if nt := g.navTargets[t.id]; nt != nil && (t.url != info.URL || t.typ != info.Type) {
 		nt.revision++
@@ -1872,4 +1877,15 @@ func (g *guard) releaseAllocations() {
 	clear(g.heldAnswers)
 	clear(g.heldPauses)
 	releaseReservations(g.takeReleasesLocked())
+}
+
+func (g *guard) diagLocked(what, id, url, typ string) {
+	g.logf("cdp: diag %s target=%s type=%s url=%s ts=%d", what, id, typ, diagURL(url), time.Now().UnixMilli())
+}
+
+func diagURL(url string) string {
+	if i := strings.Index(url, "://"); i >= 0 {
+		return url[:i+3] + "<host>"
+	}
+	return url
 }

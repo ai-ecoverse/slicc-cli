@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
@@ -789,7 +790,20 @@ func (g *guard) idReasonLocked(k, s string, c *command) string {
 	if c.method == "Target.closeTarget" && k == "targetId" {
 		return g.closeTargetReasonLocked(s)
 	}
-	return g.targetReasonLocked(s)
+	reason := g.targetReasonLocked(s)
+	if c.method == "Target.attachToTarget" && k == "targetId" {
+		g.diagAttachLocked(s, reason)
+	}
+	return reason
+}
+
+func (g *guard) diagAttachLocked(id, reason string) {
+	t := g.targets[id]
+	url, typ := "", ""
+	if t != nil {
+		url, typ = t.url, t.typ
+	}
+	g.logf("cdp: diag attach-decision target=%s type=%s refused=%t known=%t protected=%t unconfirmed=%t url=%s ts=%d", id, typ, reason != "", t != nil, g.targetProtectedLocked(id), g.targetUnconfirmedLocked(id), diagURL(url), time.Now().UnixMilli())
 }
 
 func (g *guard) requestRule(id string, c *command) string {

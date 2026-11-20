@@ -470,6 +470,10 @@ export function guardStart(getLink, opts) {
   (async () => {
     const set = await (await fetch('/vendor/slicc-browsers/guard-vectors.json')).json();
     if (opts.only) set.vectors = set.vectors.filter((v) => v.id === opts.only);
+    if (opts.repeat?.id) {
+      const base = set.vectors.find((v) => v.id === opts.repeat.id);
+      for (let i = 1; base && i < opts.repeat.n; i += 1) set.vectors.push({ ...structuredClone(base), id: `${base.id}.rep${i}` });
+    }
     if (opts.errorPageVault) {
       set.vectors = set.vectors.filter((v) => v.trigger?.some((s) => s.errorPage));
       for (const v of set.vectors) {
