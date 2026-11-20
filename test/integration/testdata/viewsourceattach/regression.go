@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -300,5 +301,358 @@ func TestViewSourceAttachMutationConfirmDisabled(t *testing.T) {
 	o := vsRun(t, 3, url, vsScenario{watched: true})
 	if o.attachRefused || !o.readDelivered {
 		t.Fatalf("mutation: with confirmation disabled the watched order-3 attach must still admit and deliver the read (refused=%t delivered=%t payloads=%v)", o.attachRefused, o.readDelivered, o.clientPayloads)
+	}
+}
+
+const (
+	vsSession2  = "S-VS-2"
+	vsAttachID2 = 60
+	vsReadID2   = 61
+)
+
+func vsAttachedEventSession(url, session string) []byte {
+	return encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          session,
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": vsTarget, "type": "page", "url": url, "browserContextId": "CTX"},
+		},
+	})
+}
+
+func vsAttachReplyID(id int64, session string) []byte {
+	return encode(map[string]any{"id": id, "result": map[string]any{"sessionId": session}})
+}
+
+func vsReadOn(g *guard, o *vsOutcome, live string, id int64, session string) {
+	pv := g.fromCommand(&command{id: id, method: "Runtime.evaluate", session: session, params: map[string]any{"expression": "document.body.innerText"}}, id, true)
+	if pv.reply != nil {
+		o.readRefused = true
+		o.clientPayloads = append(o.clientPayloads, string(pv.reply))
+		o.refusal = string(pv.reply)
+		return
+	}
+	if pv.wait != nil {
+		o.readRefused = true
+		return
+	}
+	if pv.forward != nil {
+		o.readForwarded = true
+		reply := encode(map[string]any{
+			"id":        id,
+			"sessionId": session,
+			"result":    map[string]any{"result": map[string]any{"type": "string", "value": vsSecret}},
+		})
+		vsDrain(g, o, g.fromBrowser(reply), live)
+	}
+}
+
+func vsDrainAnswer(g *guard, o *vsOutcome, v browserVerdict, answer func(id int64) string) (asked []int64) {
+	o.take(v)
+	for _, raw := range v.send {
+		id, method, session := vsOutbound(raw)
+		if method != "Target.getTargetInfo" || session != "RELAY" {
+			continue
+		}
+		asked = append(asked, id)
+		url := answer(id)
+		if url == "" {
+			continue
+		}
+		more := vsDrainAnswer(g, o, g.fromBrowser(vsTargetInfoAnswer(id, url)), answer)
+		asked = append(asked, more...)
+	}
+	return asked
+}
+
+func vsPendingConfirm(g *guard, session string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	dc := g.docConfirms[session]
+	return dc != nil && !dc.done
+}
+
+func vsDocAttachCount(g *guard) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.docAttach)
+}
+
+func vsDocFailedCount(g *guard) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.docFailed)
+}
+
+func vsDocConfirmCount(g *guard) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.docConfirms)
+}
+
+func vsAttachIDKey(attachID int64) string {
+	return fmt.Sprintf(`"id":%d`, attachID)
+}
+
+func vsSecondAdmitted(payloads []string, session string, attachID int64) (event, reply, read bool) {
+	aid := vsAttachIDKey(attachID)
+	for _, p := range payloads {
+		if strings.Contains(p, "attachedToTarget") && strings.Contains(p, session) {
+			event = true
+		}
+		if strings.Contains(p, aid) && strings.Contains(p, `"result"`) && strings.Contains(p, session) {
+			reply = true
+		}
+		if strings.Contains(p, vsSecret) && strings.Contains(p, session) {
+			read = true
+		}
+	}
+	return event, reply, read
+}
+
+func vsCheckSecondRefused(t *testing.T, payloads []string, session string, attachID int64, askedS2 bool) {
+	t.Helper()
+	event, reply, read := vsSecondAdmitted(payloads, session, attachID)
+	if read {
+		t.Errorf("second session %s read a protected document", session)
+	}
+	if event || reply {
+		t.Errorf("second session %s was client-visible for a protected live document (event=%t reply=%t askedConfirm=%t); each session needs its own confirmation before any client-visible admit", session, event, reply, askedS2)
+	}
+	if !askedS2 {
+		t.Errorf("second session %s never received its own Target.getTargetInfo confirmation", session)
+	}
+}
+
+func TestViewSourceAttachSecondSessionMustConfirm(t *testing.T) {
+	for _, url := range vsProtectedURLs() {
+		for order := 1; order <= 3; order++ {
+			for _, s1Pass := range []bool{false, true} {
+				url, order, s1Pass := url, order, s1Pass
+				name := "s1fail/"
+				if s1Pass {
+					name = "s1pass/"
+				}
+				t.Run(vsOrderName(name, url, order), func(t *testing.T) {
+					g := vsGuard(t)
+					var o vsOutcome
+					live := url
+					vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), live)
+					vsWatchReady(g)
+					_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+					_ = g.fromCommand(&command{id: vsAttachID2, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID2, true)
+					s1Answer := live
+					if s1Pass {
+						s1Answer = vsOrdinary
+					}
+					var held []int64
+					holdAnswers := func(id int64) string {
+						held = append(held, id)
+						return ""
+					}
+					answerIDs := func(ids []int64, url string) {
+						for _, id := range ids {
+							vsDrainAnswer(g, &o, g.fromBrowser(vsTargetInfoAnswer(id, url)), func(int64) string { return url })
+						}
+					}
+					failIDs := func(ids []int64) {
+						for _, id := range ids {
+							vsDrainAnswer(g, &o, g.fromBrowser(encode(map[string]any{
+								"id":        id,
+								"sessionId": "RELAY",
+								"error":     map[string]any{"code": -32000, "message": "No target with given id found"},
+							})), func(int64) string { return "" })
+						}
+					}
+					takeHeld := func() []int64 {
+						ids := append([]int64(nil), held...)
+						held = nil
+						return ids
+					}
+					s2Asked := 0
+					runS1 := func() {
+						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEventSession("about:blank", vsSession)), holdAnswers)
+						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReplyID(vsAttachID, vsSession)), holdAnswers)
+						ids := takeHeld()
+						if s1Pass {
+							answerIDs(ids, s1Answer)
+						} else {
+							failIDs(ids)
+						}
+					}
+					runS2EventReply := func() {
+						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEventSession("about:blank", vsSession2)), holdAnswers)
+						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReplyID(vsAttachID2, vsSession2)), holdAnswers)
+						ids := takeHeld()
+						s2Asked = len(ids)
+						answerIDs(ids, live)
+					}
+					switch order {
+					case 1:
+						vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", live)), holdAnswers)
+						answerIDs(takeHeld(), live)
+						runS1()
+						runS2EventReply()
+					case 2:
+						runS1()
+						vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", live)), holdAnswers)
+						answerIDs(takeHeld(), live)
+						runS2EventReply()
+					default:
+						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReplyID(vsAttachID2, vsSession2)), holdAnswers)
+						s2Pending := takeHeld()
+						s2Asked = len(s2Pending)
+						runS1()
+						vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEventSession("about:blank", vsSession2)), holdAnswers)
+						s2Pending = append(s2Pending, takeHeld()...)
+						s2Asked = len(s2Pending)
+						answerIDs(s2Pending, live)
+					}
+					vsReadOn(g, &o, live, vsReadID2, vsSession2)
+					vsCheckSecondRefused(t, o.clientPayloads, vsSession2, vsAttachID2, s2Asked > 0)
+				})
+			}
+		}
+	}
+}
+
+func TestViewSourceAttachDocAttachClearedOnFailedAttach(t *testing.T) {
+	g := vsGuard(t)
+	baseAttach := vsDocAttachCount(g)
+	baseFailed := vsDocFailedCount(g)
+	baseConfirm := vsDocConfirmCount(g)
+	for i := 0; i < 32; i++ {
+		id := int64(1000 + i)
+		tid := fmt.Sprintf("MISSING-%d", i)
+		pv := g.fromCommand(&command{id: id, method: "Target.attachToTarget", params: map[string]any{"targetId": tid, "flatten": true}}, id, true)
+		if pv.reply != nil {
+			continue
+		}
+		_ = g.fromBrowser(encode(map[string]any{
+			"id":    id,
+			"error": map[string]any{"code": -32000, "message": "No target with given id found"},
+		}))
+	}
+	if vsDocAttachCount(g) != baseAttach {
+		t.Errorf("docAttach grew from %d to %d after failed attaches; cleanup must follow attachDoneLocked", baseAttach, vsDocAttachCount(g))
+	}
+	if vsDocFailedCount(g) != baseFailed {
+		t.Errorf("docFailed grew from %d to %d after failed attaches", baseFailed, vsDocFailedCount(g))
+	}
+	if vsDocConfirmCount(g) != baseConfirm {
+		t.Errorf("docConfirms grew from %d to %d after failed attaches", baseConfirm, vsDocConfirmCount(g))
+	}
+}
+
+func TestViewSourceAttachConfirmMustSettleWithoutAnswer(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	_ = g.fromBrowser(vsRelay("Target.targetCreated", "about:blank"))
+	vsWatchReady(g)
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	o.take(v)
+	var confirmID int64
+	for _, raw := range v.send {
+		id, method, session := vsOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			confirmID = id
+		}
+	}
+	if confirmID == 0 {
+		t.Fatal("expected a confirmation getTargetInfo")
+	}
+	_ = g.fromBrowser(vsAttachReply())
+	if !vsPendingConfirm(g, vsSession) {
+		t.Fatal("confirm should still be pending before an answer")
+	}
+	if vsPendingConfirm(g, vsSession) {
+		t.Errorf("confirm left pending when getTargetInfo never arrives; must fail closed on the hold deadline")
+	}
+}
+
+func TestViewSourceAttachConfirmEmptyRelayFailsClosed(t *testing.T) {
+	g := vsGuard(t)
+	_ = g.fromBrowser(vsRelay("Target.targetCreated", "about:blank"))
+	vsWatchReady(g)
+	g.relaySession = ""
+	var o vsOutcome
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	o.take(v)
+	asked := false
+	for _, raw := range v.send {
+		_, method, session := vsOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			asked = true
+		}
+	}
+	o.take(g.fromBrowser(vsAttachReply()))
+	if asked {
+		t.Fatal("empty relaySession must not send getTargetInfo")
+	}
+	if vsPendingConfirm(g, vsSession) || vsDocConfirmCount(g) > 0 {
+		t.Errorf("empty relaySession left a pending confirm; must fail closed immediately")
+	}
+	event, reply, _ := vsSecondAdmitted(o.clientPayloads, vsSession, vsAttachID)
+	if event || reply {
+		t.Errorf("empty relaySession still made the attach client-visible (event=%t reply=%t)", event, reply)
+	}
+}
+
+func TestViewSourceAttachConfirmTargetDestroyedFailsClosed(t *testing.T) {
+	g := vsGuard(t)
+	_ = g.fromBrowser(vsRelay("Target.targetCreated", "about:blank"))
+	vsWatchReady(g)
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	_ = g.fromBrowser(vsAttachedEvent("about:blank"))
+	_ = g.fromBrowser(vsAttachReply())
+	if !vsPendingConfirm(g, vsSession) {
+		t.Fatal("expected a pending confirm before destroy")
+	}
+	_ = g.fromBrowser(encode(map[string]any{"method": "Target.targetDestroyed", "params": map[string]any{"targetId": vsTarget}}))
+	if vsPendingConfirm(g, vsSession) || vsDocConfirmCount(g) > 0 {
+		t.Errorf("confirm left pending after the target was destroyed; must fail closed and prune")
+	}
+}
+
+func TestViewSourceAttachConfirmClientGoneFailsClosed(t *testing.T) {
+	g := vsGuard(t)
+	_ = g.fromBrowser(vsRelay("Target.targetCreated", "about:blank"))
+	vsWatchReady(g)
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	_ = g.fromBrowser(vsAttachedEvent("about:blank"))
+	_ = g.fromBrowser(vsAttachReply())
+	if !vsPendingConfirm(g, vsSession) {
+		t.Fatal("expected a pending confirm")
+	}
+	g.mu.Lock()
+	g.forgetSessionLocked(vsSession)
+	g.mu.Unlock()
+	if vsPendingConfirm(g, vsSession) || vsDocConfirmCount(g) > 0 || vsDocFailedCount(g) > 0 {
+		t.Errorf("confirm maps left residue after the client session was forgotten (confirms=%d failed=%d pending=%t)", vsDocConfirmCount(g), vsDocFailedCount(g), vsPendingConfirm(g, vsSession))
+	}
+}
+
+func TestViewSourceAttachNavAfterConfirmStillCut(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	_ = g.fromBrowser(vsRelay("Target.targetCreated", "about:blank"))
+	vsWatchReady(g)
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	vsDrain(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), vsOrdinary)
+	vsDrain(g, &o, g.fromBrowser(vsAttachReply()), vsOrdinary)
+	if o.attachRefused {
+		t.Fatalf("ordinary confirm must admit the session: %v", o.clientPayloads)
+	}
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", "view-source:https://vault.sliccy.ai/doc")), "view-source:https://vault.sliccy.ai/doc")
+	vsRead(g, &o, "view-source:https://vault.sliccy.ai/doc")
+	o.summarize()
+	if o.readDelivered {
+		t.Errorf("a navigation to a protected document after confirmation must still be cut before the first content command: %v", o.clientPayloads)
+	}
+	if !o.readRefused {
+		t.Errorf("expected the first content command after a protected navigation to be refused")
 	}
 }
