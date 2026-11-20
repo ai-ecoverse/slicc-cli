@@ -101,6 +101,7 @@ type navTarget struct {
 	protectedHistory  map[string]string
 	confirm           *navTarget
 	confirming        bool
+	failedLoadGen     int
 	revision          int
 	documentsOnly     bool
 	documentsAsked    bool
@@ -250,6 +251,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if m.Method == "Page.frameNavigated" {
 		g.noteKeptLatchLocked(nt)
 	}
+	g.resetFailedLoadProofOnNavLocked(nt, m.Method)
 	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {
 		nt.revision++
 	}

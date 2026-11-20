@@ -312,12 +312,21 @@ func (g *guard) infoLocked(v any) [][]byte {
 		return nil
 	}
 	send := g.observeLocked(info)
+	if g.blankFailedLoadInfoLocked(obj, info) {
+		return send
+	}
 	g.redactInfoLocked(obj, info)
 	return send
 }
 
 func (g *guard) redactInfoLocked(obj map[string]any, info targetInfo) bool {
-	if obj == nil || !g.targetProtectedLocked(info.TargetID) && !g.infoVerdictLocked(info).protected {
+	if obj == nil {
+		return false
+	}
+	if g.blankFailedLoadInfoLocked(obj, info) {
+		return true
+	}
+	if !g.targetProtectedLocked(info.TargetID) && !g.infoVerdictLocked(info).protected {
 		return false
 	}
 	redacted := redactURL(info.URL)
@@ -363,6 +372,7 @@ var eventHandlers = map[string]eventHandler{
 	"Target.detachedFromTarget":                  (*guard).detachedEvent,
 	"Target.receivedMessageFromTarget":           (*guard).innerMessageEvent,
 	"Page.frameNavigated":                        (*guard).frameNavigatedEvent,
+	"Page.frameStartedNavigating":                (*guard).frameStartedNavigatingEvent,
 	"Page.screencastFrame":                       (*guard).screencastFrameEvent,
 	"Runtime.executionContextCreated":            (*guard).contextCreatedEvent,
 	"Runtime.executionContextDestroyed":          (*guard).contextGoneEvent,
@@ -429,7 +439,10 @@ func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
 		if keep {
 			g.noteWorkerShownLocked(info)
 		}
-		return keep, obj != nil && (g.targetProtectedLocked(info.TargetID) || g.infoVerdictLocked(info).protected), send
+		st := g.errorProofOfLocked(info.TargetID)
+		blanked := obj != nil && (st == errorProofPending || st == errorProofFailed || st == errorProofProtected || g.failedLoadNeedsProofLocked(g.targets[info.TargetID]))
+		changed := obj != nil && (g.targetProtectedLocked(info.TargetID) || g.infoVerdictLocked(info).protected || blanked)
+		return keep, changed, send
 	})
 }
 
@@ -538,6 +551,9 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 	}
 	if g.attachedShouldHideLocked(info, m.SessionID) {
 		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)}, true
+	}
+	if v, handled := g.holdFailedLoadAttachLocked(m, pSession, waiting, info, send); handled {
+		return v, true
 	}
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
@@ -658,6 +674,24 @@ func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {
 	return browserVerdict{forward: data}
 }
 
+func (g *guard) frameStartedNavigatingEvent(m *message, data []byte) browserVerdict {
+	var p struct {
+		FrameID string `json:"frameId"`
+		URL     string `json:"url"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	t := g.sessionTargetLocked(m.SessionID)
+	if t != nil && p.FrameID == t.id && g.errorProofOfLocked(t.id) != errorProofNone {
+		if chromeErrorDocument(t.url) || chromeErrorDocument(p.URL) || p.URL == "" {
+			g.resetFailedLoadProofLocked(t.id)
+		}
+	}
+	if nt, ok := g.navSessions[m.SessionID]; ok {
+		return browserVerdict{forward: data, send: g.navEventLocked(nt, m)}
+	}
+	return browserVerdict{forward: data}
+}
+
 func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	var p struct {
 		Type  string `json:"type"`
@@ -702,13 +736,27 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 		return browserVerdict{send: append(append(decided, g.markLocked(t)...), settleSend...), page: settle}
 	}
 	send := append(append(decided, cut...), settleSend...)
-	if nt := g.navTargets[t.id]; nt != nil {
-		if (nt.confirm != nil && nt.confirm.done && nt.confirm.failed) || p.Type == "BackForwardCacheRestore" || p.Frame.UnreachableURL != "" || strings.HasPrefix(p.Frame.URL, "chrome-error:") || protect.Inheriting(p.Frame.URL) || protect.Unparseable(p.Frame.URL) {
-			g.beginConfirmLocked(nt)
-		}
-		send = append(send, g.navEventLocked(nt, m)...)
-	}
+	send = append(send, g.failedLoadFrameNavigatedLocked(t, m, p.Type, p.Frame.URL, p.Frame.UnreachableURL)...)
 	return browserVerdict{forward: data, send: send, page: settle}
+}
+
+func (g *guard) failedLoadFrameNavigatedLocked(t *target, m *message, navType, frameURL, unreachable string) [][]byte {
+	if t == nil {
+		return nil
+	}
+	if chromeErrorDocument(frameURL) || unreachable != "" || navType == "BackForwardCacheRestore" || strings.HasPrefix(frameURL, "chrome-error:") {
+		if g.errorProofOfLocked(t.id) != errorProofNone {
+			g.resetFailedLoadProofLocked(t.id)
+		}
+	}
+	nt := g.navTargets[t.id]
+	if nt == nil {
+		return nil
+	}
+	if (nt.confirm != nil && nt.confirm.done && nt.confirm.failed) || navType == "BackForwardCacheRestore" || unreachable != "" || strings.HasPrefix(frameURL, "chrome-error:") || protect.Inheriting(frameURL) || protect.Unparseable(frameURL) {
+		g.beginConfirmLocked(nt)
+	}
+	return g.navEventLocked(nt, m)
 }
 
 func (g *guard) contextCreatedEvent(m *message, data []byte) (verdict browserVerdict) {

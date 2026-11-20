@@ -177,12 +177,47 @@ func (g *guard) scrubExtensionFrames(m map[string]any) bool {
 	return changed
 }
 
+func failedLoadTitleField(lk string) bool {
+	return lk == "title" || lk == "name" || lk == "windowname" || lk == "suggestedfilename"
+}
+
+func scrubFailedString(s string, forms []failedForm) (string, bool) {
+	changed := false
+	for _, f := range forms {
+		if strings.Contains(s, f.form) {
+			s, changed = strings.ReplaceAll(s, f.form, f.redacted), true
+		}
+	}
+	return s, changed
+}
+
+func scrubFailedMarkedField(lk string, val any, titles []string) (any, bool, bool) {
+	if len(titles) == 0 {
+		return val, false, false
+	}
+	s, ok := val.(string)
+	if !ok || s == "" || !failedTitleMarked(s, titles) {
+		return val, false, false
+	}
+	if failedLoadTitleField(lk) {
+		return "", true, true
+	}
+	if lk != "content-disposition" {
+		return val, false, false
+	}
+	for _, title := range titles {
+		if title != "" && strings.Contains(s, title) {
+			s = strings.ReplaceAll(s, title, "")
+		}
+	}
+	return s, true, true
+}
+
 func (g *guard) scrubFailed(m map[string]any) bool {
-	session, _ := m["sessionId"].(string)
 	g.mu.Lock()
-	forms := g.failedFormsLocked(session)
+	forms, titles := g.failedScrubMarksLocked(m)
 	g.mu.Unlock()
-	if len(forms) == 0 {
+	if len(forms) == 0 && len(titles) == 0 {
 		return false
 	}
 	changed := false
@@ -190,14 +225,20 @@ func (g *guard) scrubFailed(m map[string]any) bool {
 	walk = func(v any) any {
 		switch t := v.(type) {
 		case string:
-			for _, f := range forms {
-				if strings.Contains(t, f.form) {
-					t, changed = strings.ReplaceAll(t, f.form, f.redacted), true
-				}
+			s, ok := scrubFailedString(t, forms)
+			if ok {
+				changed = true
 			}
-			return t
+			return s
 		case map[string]any:
 			for k, val := range t {
+				if next, handled, ok := scrubFailedMarkedField(strings.ToLower(k), val, titles); handled {
+					t[k] = next
+					if ok {
+						changed = true
+					}
+					continue
+				}
 				t[k] = walk(val)
 			}
 		case []any:
@@ -211,6 +252,65 @@ func (g *guard) scrubFailed(m map[string]any) bool {
 		m[k] = walk(val)
 	}
 	return changed
+}
+
+func (g *guard) failedScrubMarksLocked(m map[string]any) ([]failedForm, []string) {
+	session, _ := m["sessionId"].(string)
+	forms := g.failedFormsLocked(session)
+	titles := g.failedTitleMarksLocked(session)
+	if len(titles) > 0 {
+		return forms, titles
+	}
+	params, _ := m["params"].(map[string]any)
+	if params == nil {
+		return forms, nil
+	}
+	frameID, _ := params["frameId"].(string)
+	if frameID == "" {
+		return forms, nil
+	}
+	return forms, g.failedTitleMarksForTargetLocked(frameID)
+}
+
+func (g *guard) failedTitleMarksLocked(sessionID string) []string {
+	s, ok := g.sessions[sessionID]
+	if !ok {
+		return nil
+	}
+	return g.failedTitleMarksForTargetLocked(s.target)
+}
+
+func (g *guard) failedTitleMarksForTargetLocked(targetID string) []string {
+	st := g.errorProofOfLocked(targetID)
+	if st != errorProofPending && st != errorProofProtected && st != errorProofFailed {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(v string) {
+		if v == "" || seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	add(g.errorTitles[targetID])
+	if nt := g.navTargets[targetID]; nt != nil {
+		for _, u := range nt.failedURLs {
+			add(protect.Host(u))
+		}
+		add(protect.Host(nt.errorURL))
+	}
+	return out
+}
+
+func failedTitleMarked(s string, titles []string) bool {
+	for _, t := range titles {
+		if t != "" && (s == t || strings.Contains(s, t)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *guard) cut(v any) (string, bool) {
