@@ -344,7 +344,6 @@ func (g *guard) noteHiddenLocked(id, target string) {
 func (g *guard) hideLocked(h *heldSession) [][]byte {
 	g.refuseHeldWaitLocked(h.target)
 	g.noteHiddenLocked(h.id, h.target)
-	g.addRefusedLocked(h.id)
 	g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 	var send [][]byte
 	if h.waiting {

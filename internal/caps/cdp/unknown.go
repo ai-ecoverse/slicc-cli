@@ -203,7 +203,6 @@ func (g *guard) forgetOrphanLocked(id string, shown bool, target string) (page, 
 	if h := g.held[id]; h != nil {
 		delete(g.held, id)
 		send = append(send, g.hideLocked(h)...)
-		g.addRefusedLocked(h.id)
 	}
 	if g.hidden[id] {
 		delete(g.hidden, id)

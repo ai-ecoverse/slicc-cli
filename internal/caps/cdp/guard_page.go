@@ -317,7 +317,7 @@ func (g *guard) sessionRefusedLocked(id string) bool {
 	if id == "" {
 		return false
 	}
-	if id == g.relaySession || g.hidden[id] || g.refused[id] || g.held[id] != nil || g.navSessions[id] != nil {
+	if id == g.relaySession || g.hidden[id] || g.refused[id] || g.held[id] != nil || g.navSessions[id] != nil || g.gone[id] {
 		return true
 	}
 	if s, ok := g.sessions[id]; ok {

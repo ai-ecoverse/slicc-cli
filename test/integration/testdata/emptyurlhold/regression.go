@@ -1453,8 +1453,8 @@ func emptyURLHoldAssertHeldPageNotGhost(t *testing.T, g *guard, pageSession, pag
 	if ev.forward != nil || emptyURLHoldContains(emptyURLHoldPayloads(ev), "consoleAPICalled") {
 		t.Fatalf("events on orphaned held page session must be dropped (no forwarding ghost), got forward=%s payloads=%v held=%v hidden=%v refused=%v gone=%v", ev.forward, emptyURLHoldPayloads(ev), g.held[pageSession] != nil, g.hidden[pageSession], g.refused[pageSession], g.gone[pageSession])
 	}
-	if !g.hidden[pageSession] && !g.refused[pageSession] {
-		t.Fatalf("held page %s must be noteHidden or refused after parent tab detach (gone-only is a forwarding ghost): hidden=%v refused=%v gone=%v", pageSession, g.hidden[pageSession], g.refused[pageSession], g.gone[pageSession])
+	if g.held[pageSession] != nil {
+		t.Fatalf("held page %s must leave g.held after parent tab detach", pageSession)
 	}
 	if emptyURLHoldDetachIndex(hideSends, pageSession) < 0 {
 		t.Fatalf("guard must send Target.detachFromTarget for held page %s: %v", pageSession, hideSends)
@@ -1529,6 +1529,48 @@ func TestEmptyURLHoldShownPageCascadeUnchanged(t *testing.T) {
 	ps := emptyURLHoldPayloads(v)
 	if emptyURLHoldClientDetachIndex(ps, "S-PAGE-SH") < 0 || g.sessions["S-PAGE-SH"] != nil {
 		t.Fatalf("ordinary shown page under detached tab must still cascade client detach: payloads=%v session=%v", ps, g.sessions["S-PAGE-SH"] != nil)
+	}
+}
+
+func TestEmptyURLHoldOrphanedHeldPageCommandIsMissingSession(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-MS", "TAB-MS", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-MS", "S-PAGE-MS", "PAGE-MS", "OPENER", true))
+	if g.held["S-PAGE-MS"] == nil {
+		t.Fatal("expected nested page held")
+	}
+	_ = g.fromBrowser(encode(map[string]any{
+		"method": "Target.detachedFromTarget",
+		"params": map[string]any{"sessionId": "S-TAB-MS", "targetId": "TAB-MS"},
+	}))
+	if g.held["S-PAGE-MS"] != nil {
+		t.Fatal("expected held page cleaned on parent tab detach")
+	}
+	ev := g.fromBrowser(encode(map[string]any{
+		"sessionId": "S-PAGE-MS",
+		"method":    "Runtime.consoleAPICalled",
+		"params":    map[string]any{"type": "log"},
+	}))
+	if ev.forward != nil {
+		t.Fatalf("orphaned held page events must stay dropped: %s", ev.forward)
+	}
+	pv := g.fromCommand(&command{id: 96, method: "Page.enable", session: "S-PAGE-MS", params: map[string]any{}}, 96, true)
+	if len(pv.forward) > 0 {
+		t.Fatalf("client command on never-seen held page was forwarded: %s", pv.forward)
+	}
+	if len(pv.reply) == 0 {
+		t.Fatal("expected missing-session reply for never-seen held page")
+	}
+	var m message
+	if json.Unmarshal(pv.reply, &m) != nil || m.Error == nil {
+		t.Fatalf("expected error reply: %s", pv.reply)
+	}
+	var err struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(m.Error, &err) != nil || err.Code != -32001 || err.Message != "Session with given id not found." {
+		t.Fatalf("never-seen held page must answer missing-session -32001, got %s", pv.reply)
 	}
 }
 
