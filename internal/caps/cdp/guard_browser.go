@@ -76,8 +76,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	if nt, ok := g.navSessions[m.SessionID]; ok && m.SessionID != "" {
 		v := g.navRequestLocked(nt, &m)
 		v.send = append(v.send, g.navEventLocked(nt, &m)...)
-		v.page = append(v.page, g.takePendingPageLocked()...)
-		return v
+		return g.withPendingPageLocked(v)
 	}
 	if m.SessionID != "" && g.gone[m.SessionID] {
 		return browserVerdict{}
@@ -425,14 +424,17 @@ func (g *guard) withParams(m *message, data []byte, fn func(p map[string]any) (k
 		return browserVerdict{forward: data}
 	}
 	keep, changed, send := fn(p)
+	var v browserVerdict
 	switch {
 	case !keep:
-		return browserVerdict{send: send}
+		v = browserVerdict{send: send}
 	case changed:
 		m.Params = encode(p)
-		return browserVerdict{forward: encode(m), send: send}
+		v = browserVerdict{forward: encode(m), send: send}
+	default:
+		v = browserVerdict{forward: data, send: send}
 	}
-	return browserVerdict{forward: data, send: send}
+	return g.withPendingPageLocked(v)
 }
 
 func (g *guard) targetEvent(m *message, data []byte) browserVerdict {

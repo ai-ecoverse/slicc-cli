@@ -688,6 +688,11 @@ func (g *guard) takePendingPageLocked() [][]byte {
 	return out
 }
 
+func (g *guard) withPendingPageLocked(v browserVerdict) browserVerdict {
+	v.page = append(v.page, g.takePendingPageLocked()...)
+	return v
+}
+
 func (g *guard) releaseHeldExtensionPaintLocked() {
 	for k, h := range g.heldExtensionPaints {
 		if h != nil {
