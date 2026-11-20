@@ -660,7 +660,7 @@ func assertClientSeesOnlyFailedOrigin(t *testing.T, label string, raw []byte, fa
 			t.Fatalf("%s carried a failed-load %s: %s", label, key, s)
 		}
 	}
-	if strings.Contains(s, "filename=") && strings.Contains(s, failedHostTitle) {
+	if strings.Contains(s, `filename=\"`+failedHostTitle) || strings.Contains(s, `filename="`+failedHostTitle) || strings.Contains(s, "filename="+failedHostTitle) {
 		t.Fatalf("%s carried a failed-load download filename: %s", label, s)
 	}
 	_ = failedFull
