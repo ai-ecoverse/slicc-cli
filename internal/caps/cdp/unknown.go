@@ -192,8 +192,7 @@ func (g *guard) detachEventLocked(id, target, envelope string) []byte {
 	return encode(m)
 }
 
-func (g *guard) forgetOrphanLocked(id string, shown bool, target string) [][]byte {
-	var page [][]byte
+func (g *guard) forgetOrphanLocked(id string, shown bool, target string) (page, send [][]byte) {
 	if shown {
 		envelope := ""
 		if s := g.sessions[id]; s != nil {
@@ -203,7 +202,8 @@ func (g *guard) forgetOrphanLocked(id string, shown bool, target string) [][]byt
 	}
 	if h := g.held[id]; h != nil {
 		delete(g.held, id)
-		g.refuseHeldWaitLocked(h.target)
+		send = append(send, g.hideLocked(h)...)
+		g.addRefusedLocked(h.id)
 	}
 	if g.hidden[id] {
 		delete(g.hidden, id)
@@ -219,12 +219,12 @@ func (g *guard) forgetOrphanLocked(id string, shown bool, target string) [][]byt
 		delete(g.unknown, id)
 	}
 	g.forgetSessionLocked(id)
-	return page
+	return page, send
 }
 
-func (g *guard) cascadeOrphansLocked(parent string) [][]byte {
+func (g *guard) cascadeOrphansLocked(parent string) (page, send [][]byte) {
 	if parent == "" {
-		return nil
+		return nil, nil
 	}
 	type node struct {
 		id     string
@@ -261,9 +261,10 @@ func (g *guard) cascadeOrphansLocked(parent string) [][]byte {
 		}
 		return nodes[i].depth > nodes[j].depth
 	})
-	var page [][]byte
 	for _, n := range nodes {
-		page = append(page, g.forgetOrphanLocked(n.id, n.shown, n.target)...)
+		p, s := g.forgetOrphanLocked(n.id, n.shown, n.target)
+		page = append(page, p...)
+		send = append(send, s...)
 	}
-	return page
+	return page, send
 }

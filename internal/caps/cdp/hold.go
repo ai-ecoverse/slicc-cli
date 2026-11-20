@@ -140,7 +140,9 @@ func (g *guard) detachAnnouncedTabSessionLocked(sid string, protected bool) brow
 	msg, _ := g.newCallLocked(parent, "Target.detachFromTarget", map[string]any{"sessionId": sid}, false)
 	send = append(send, msg)
 	page := [][]byte{g.detachEventLocked(sid, target, parent)}
-	page = append(page, g.cascadeOrphansLocked(sid)...)
+	orphanPage, orphanSend := g.cascadeOrphansLocked(sid)
+	page = append(page, orphanPage...)
+	send = append(send, orphanSend...)
 	page = append(page, g.takePendingMissingLocked(sid)...)
 	g.navDetachedLocked(sid)
 	g.forgetSessionLocked(sid)
@@ -342,6 +344,7 @@ func (g *guard) noteHiddenLocked(id, target string) {
 func (g *guard) hideLocked(h *heldSession) [][]byte {
 	g.refuseHeldWaitLocked(h.target)
 	g.noteHiddenLocked(h.id, h.target)
+	g.addRefusedLocked(h.id)
 	g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 	var send [][]byte
 	if h.waiting {
@@ -381,13 +384,16 @@ func (g *guard) releaseHeldWorkersForSessionLocked(session, why string) [][]byte
 	}
 	var send [][]byte
 	for sid, h := range g.held {
-		if h == nil || h.parent != session || (!workerTypes[h.typ] && h.typ != "iframe") {
+		if h == nil || h.parent != session || (!workerTypes[h.typ] && h.typ != "iframe" && h.typ != "page") {
 			continue
 		}
 		delete(g.held, sid)
 		kind := "worker"
-		if h.typ == "iframe" {
+		switch h.typ {
+		case "iframe":
 			kind = "iframe"
+		case "page":
+			kind = "page"
 		}
 		g.logf("cdp: releasing a held %s because %s target=%s session=%s parent=%s waiting=%t", kind, why, h.target, h.id, h.parent, h.waiting)
 		send = append(send, g.hideLocked(h)...)

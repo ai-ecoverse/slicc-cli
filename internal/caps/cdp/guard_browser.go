@@ -667,7 +667,7 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 	if p.SessionID != "" && g.gone[p.SessionID] {
 		return browserVerdict{}
 	}
-	page := g.cascadeOrphansLocked(p.SessionID)
+	page, send := g.cascadeOrphansLocked(p.SessionID)
 	page = append(page, g.takePendingMissingLocked(p.SessionID)...)
 	g.navDetachedLocked(p.SessionID)
 	if h, ok := g.held[p.SessionID]; ok {
@@ -676,17 +676,17 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.refuseHeldWaitLocked(h.target)
 		part := g.detachAnnouncedTabsForPageLocked(h, true)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{send: part.send, page: append(append(page, part.page...), g.takePendingPageLocked()...)}
+		return browserVerdict{send: append(send, part.send...), page: append(append(page, part.page...), g.takePendingPageLocked()...)}
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)
 		delete(g.hiddenOwner, p.SessionID)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
+		return browserVerdict{send: send, page: append(page, g.takePendingPageLocked()...)}
 	}
 	g.forgetSessionLocked(p.SessionID)
 	page = append(page, data)
-	return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
+	return browserVerdict{send: send, page: append(page, g.takePendingPageLocked()...)}
 }
 
 func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {
