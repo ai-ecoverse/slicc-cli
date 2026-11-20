@@ -655,10 +655,13 @@ func assertClientSeesOnlyFailedOrigin(t *testing.T, label string, raw []byte, fa
 	if strings.Contains(s, "/missing") || strings.Contains(s, "?q=") || strings.Contains(s, "#frag") || strings.Contains(s, "secret") {
 		t.Fatalf("%s carried more than the failed origin: %s", label, s)
 	}
-	for _, key := range []string{"title", "name", "windowName"} {
+	for _, key := range []string{"title", "name", "windowName", "suggestedFilename"} {
 		if strings.Contains(s, `"`+key+`":"`+failedHostTitle+`"`) || strings.Contains(s, `"`+key+`": "`+failedHostTitle+`"`) {
 			t.Fatalf("%s carried a failed-load %s: %s", label, key, s)
 		}
+	}
+	if strings.Contains(s, "filename=") && strings.Contains(s, failedHostTitle) {
+		t.Fatalf("%s carried a failed-load download filename: %s", label, s)
 	}
 	_ = failedFull
 }
@@ -725,6 +728,26 @@ func TestFailedLoadAttachedSessionPathsStayAtOrigin(t *testing.T) {
 		{"Page.windowOpen", "scrub", func(g *guard) []byte {
 			return encode(map[string]any{"sessionId": "S-POPUP", "method": "Page.windowOpen", "params": map[string]any{
 				"url": failedFull, "windowName": failedHostTitle, "windowFeatures": []any{"noopener"}, "userGesture": true,
+			}})
+		}},
+		{"Page.downloadWillBegin", "scrub", func(g *guard) []byte {
+			return encode(map[string]any{"sessionId": "S-POPUP", "method": "Page.downloadWillBegin", "params": map[string]any{
+				"frameId": "POPUP", "guid": "dl1", "url": failedFull, "suggestedFilename": failedHostTitle,
+			}})
+		}},
+		{"Browser.downloadWillBegin", "scrub", func(g *guard) []byte {
+			return encode(map[string]any{"method": "Browser.downloadWillBegin", "params": map[string]any{
+				"frameId": "POPUP", "guid": "dl2", "url": failedFull, "suggestedFilename": failedHostTitle,
+			}})
+		}},
+		{"Network.contentDispositionFilename", "scrub", func(g *guard) []byte {
+			return encode(map[string]any{"sessionId": "S-POPUP", "method": "Network.responseReceived", "params": map[string]any{
+				"requestId": "r-cd", "response": map[string]any{
+					"url": failedFull,
+					"headers": map[string]any{
+						"content-disposition": "attachment; filename=\"" + failedHostTitle + "\"",
+					},
+				},
 			}})
 		}},
 		{"Page.frameStartedNavigating", "scrub", func(g *guard) []byte {
@@ -862,10 +885,123 @@ func TestFailedLoadOrdinaryKeepsRealTitles(t *testing.T) {
 	if !strings.Contains(oout, `"windowName":"ordinary.test"`) && !strings.Contains(oout, `"windowName": "ordinary.test"`) {
 		t.Fatalf("ordinary windowName was blanked: %s", oout)
 	}
+	dl := encode(map[string]any{"sessionId": "S-POPUP", "method": "Page.downloadWillBegin", "params": map[string]any{
+		"frameId": "POPUP", "guid": "dl-ord", "url": failedOrdinary, "suggestedFilename": "ordinary.test",
+	}})
+	dout := string(g.scrub(append([]byte(nil), dl...)))
+	if !strings.Contains(dout, `"suggestedFilename":"ordinary.test"`) && !strings.Contains(dout, `"suggestedFilename": "ordinary.test"`) {
+		t.Fatalf("ordinary suggestedFilename was blanked: %s", dout)
+	}
 	v := g.fromBrowser(chromeErrorChanged("ordinary.test", "OPENER"))
 	ps := clientPayloads(v)
 	if !payloadsContain(ps, `"title":"ordinary.test"`) && !payloadsContain(ps, `"title": "ordinary.test"`) {
 		t.Fatalf("ordinary targetInfo title was blanked: %v", ps)
+	}
+}
+
+func TestFailedLoadOrdinaryShapeFieldsUntouched(t *testing.T) {
+	solo := failedLoadGuard(t)
+	_ = solo.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-ORD",
+			"targetInfo":         map[string]any{"targetId": "ORD", "type": "page", "url": "https://ordinary.test/docs", "title": "Docs"},
+			"waitingForDebugger": false,
+		},
+	}))
+	if solo.sessions["S-ORD"] == nil {
+		t.Fatal("ordinary session missing")
+	}
+	assertOrdinaryShapeUntouched(t, "solo", solo)
+
+	sib := failedLoadGuard(t)
+	_ = sib.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-ORD",
+			"targetInfo":         map[string]any{"targetId": "ORD", "type": "page", "url": "https://ordinary.test/docs", "title": "Docs"},
+			"waitingForDebugger": false,
+		},
+	}))
+	_ = sib.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-POPUP",
+			"targetInfo":         map[string]any{"targetId": "POPUP", "type": "page", "url": "https://ordinary.test/", "title": "ok", "openerId": "OPENER"},
+			"waitingForDebugger": false,
+		},
+	}))
+	if sib.navTargets["POPUP"] == nil {
+		nt := &navTarget{target: "POPUP", session: "GUARD", ready: make(chan struct{})}
+		sib.navTargets["POPUP"] = nt
+		sib.navSessions["GUARD"] = nt
+	}
+	_ = sib.fromBrowser(chromeErrorChanged(failedHostTitle, "OPENER"))
+	if pop := sib.targets["POPUP"]; pop != nil {
+		pop.url = chromeErrorURL
+	}
+	sib.setErrorProofLocked("POPUP", errorProofProtected)
+	sib.errorTitles["POPUP"] = failedHostTitle
+	if nt := sib.navTargets["POPUP"]; nt != nil {
+		nt.errorURL = "https://seven.sliccy.ai/missing?q=secret#frag"
+		nt.failedURLs = []string{"https://seven.sliccy.ai/missing?q=secret#frag"}
+	}
+	assertOrdinaryShapeUntouched(t, "sibling-of-protected-failed", sib)
+}
+
+func assertOrdinaryShapeUntouched(t *testing.T, label string, g *guard) {
+	t.Helper()
+	linkName := "ordinary.test"
+	ax, _ := json.Marshal(map[string]any{"sessionId": "S-ORD", "id": 70, "result": map[string]any{
+		"nodes": []any{
+			map[string]any{"nodeId": "1", "role": map[string]any{"type": "role", "value": "link"}, "name": map[string]any{"type": "string", "value": linkName}},
+			map[string]any{"nodeId": "2", "role": map[string]any{"type": "role", "value": "StaticText"}, "name": map[string]any{"type": "string", "value": linkName}},
+		},
+	}})
+	axOut := string(g.scrub(ax))
+	if !strings.Contains(axOut, linkName) {
+		t.Fatalf("%s Accessibility.getFullAXTree blanked ordinary link name: %s", label, axOut)
+	}
+	snap, _ := json.Marshal(map[string]any{"sessionId": "S-ORD", "id": 71, "result": map[string]any{
+		"documents": []any{map[string]any{"nodes": map[string]any{"nodeName": []any{"A", "#text"}, "backendNodeId": []any{1, 2}}, "strings": []any{"href", linkName, "Click " + linkName}}},
+	}})
+	snapOut := string(g.scrub(snap))
+	if !strings.Contains(snapOut, linkName) {
+		t.Fatalf("%s DOMSnapshot blanked ordinary strings: %s", label, snapOut)
+	}
+	doc, _ := json.Marshal(map[string]any{"sessionId": "S-ORD", "id": 72, "result": map[string]any{
+		"root": map[string]any{"nodeId": 1, "documentURL": "https://ordinary.test/docs", "baseURL": "https://ordinary.test/docs", "nodeName": "HTML"},
+	}})
+	docOut := string(g.scrub(doc))
+	if !strings.Contains(docOut, "ordinary.test/docs") {
+		t.Fatalf("%s DOM.getDocument blanked ordinary urls: %s", label, docOut)
+	}
+	rt, _ := json.Marshal(map[string]any{"sessionId": "S-ORD", "id": 73, "result": map[string]any{
+		"result": map[string]any{"type": "object", "value": map[string]any{"name": linkName, "title": linkName}},
+	}})
+	rtOut := string(g.scrub(rt))
+	if !strings.Contains(rtOut, `"name":"`+linkName+`"`) && !strings.Contains(rtOut, `"name": "`+linkName+`"`) {
+		t.Fatalf("%s Runtime result name blanked: %s", label, rtOut)
+	}
+	if !strings.Contains(rtOut, `"title":"`+linkName+`"`) && !strings.Contains(rtOut, `"title": "`+linkName+`"`) {
+		t.Fatalf("%s Runtime result title blanked: %s", label, rtOut)
+	}
+	dl := encode(map[string]any{"sessionId": "S-ORD", "method": "Page.downloadWillBegin", "params": map[string]any{
+		"frameId": "ORD", "guid": "dl-ord-shape", "url": "https://ordinary.test/file.bin", "suggestedFilename": "report-" + linkName + ".bin",
+	}})
+	dlOut := string(g.scrub(append([]byte(nil), dl...)))
+	if !strings.Contains(dlOut, "report-"+linkName+".bin") {
+		t.Fatalf("%s ordinary download filename blanked: %s", label, dlOut)
+	}
+	openEvt := encode(map[string]any{"sessionId": "S-ORD", "method": "Page.windowOpen", "params": map[string]any{
+		"url": "https://ordinary.test/popup", "windowName": linkName, "windowFeatures": []any{"noopener", "width=400"}, "userGesture": true,
+	}})
+	openOut := string(g.scrub(append([]byte(nil), openEvt...)))
+	if !strings.Contains(openOut, `"windowName":"`+linkName+`"`) && !strings.Contains(openOut, `"windowName": "`+linkName+`"`) {
+		t.Fatalf("%s ordinary windowName blanked: %s", label, openOut)
+	}
+	if !strings.Contains(openOut, "width=400") {
+		t.Fatalf("%s ordinary windowFeatures altered: %s", label, openOut)
 	}
 }
 
