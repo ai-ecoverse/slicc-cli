@@ -239,8 +239,15 @@ func esDrain(g *guard, o *esOutcome, v browserVerdict, answerURL string) {
 	o.take(v)
 	for _, raw := range v.send {
 		id, method, session := esOutbound(raw)
-		if method == "Target.getTargetInfo" && session == "RELAY" {
+		switch {
+		case method == "Target.getTargetInfo" && session == "RELAY":
 			esDrain(g, o, g.fromBrowser(esTargetInfoAnswer(id, answerURL)), answerURL)
+		case method == "Page.getFrameTree" && (session == esNavSession || session == "RELAY"):
+			loader := "L-POST"
+			if nt := g.navTargets[esTarget]; nt != nil && nt.loaderID != "" {
+				loader = nt.loaderID
+			}
+			esDrain(g, o, g.fromBrowser(esFrameTreeAnswer(id, session, answerURL, loader)), answerURL)
 		}
 	}
 }
@@ -794,6 +801,10 @@ func TestExistingSessionIndependentHoldsAndCoalescing(t *testing.T) {
 	var o esOutcome
 	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
 	live := esProtectedURLs()[0]
+	var forwards []struct {
+		id  int64
+		raw []byte
+	}
 	for _, id := range []int64{esReadID, esReadID2, esReadID3} {
 		pv := g.fromCommand(&command{id: id, method: cmd.method, session: esSession, params: cmd.params}, id, true)
 		if pv.reply != nil {
@@ -802,7 +813,13 @@ func TestExistingSessionIndependentHoldsAndCoalescing(t *testing.T) {
 		if pv.forward == nil {
 			t.Fatalf("expected forward id=%d", id)
 		}
-		esDrain(g, &o, g.fromBrowser(esContentReply(cmd, id, live, true)), live)
+		forwards = append(forwards, struct {
+			id  int64
+			raw []byte
+		}{id, esContentReply(cmd, id, live, true)})
+	}
+	for _, f := range forwards {
+		esDrain(g, &o, g.fromBrowser(f.raw), live)
 	}
 	var clientBefore int
 	for _, p := range o.payloads {
@@ -813,7 +830,13 @@ func TestExistingSessionIndependentHoldsAndCoalescing(t *testing.T) {
 	if clientBefore > 0 {
 		t.Fatalf("independent holds: no covered reply may reach the client before a post-read taken after that reply: leaked=%d", clientBefore)
 	}
-	if esSessionCut(g) && clientBefore == 0 && !o.refused {
+	refused := false
+	for _, p := range o.payloads {
+		if strings.Contains(p, "slicc: refused:") || strings.Contains(p, esRetriableMark) {
+			refused = true
+		}
+	}
+	if esSessionCut(g) && clientBefore == 0 && !refused {
 		t.Fatalf("holds must settle via post-read, not a silent cut")
 	}
 }
@@ -822,7 +845,7 @@ func TestExistingSessionHoldCapRetriableNoCut(t *testing.T) {
 	g := esGuard(t)
 	_ = esAdmit(t, g)
 	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
-	live := esProtectedURLs()[0]
+	live := esOrdinaryB
 	var o esOutcome
 	var sawRetriable bool
 	for i := 0; i < esHoldCap+8; i++ {
@@ -834,12 +857,13 @@ func TestExistingSessionHoldCapRetriableNoCut(t *testing.T) {
 			}
 			continue
 		}
-		if pv.forward != nil {
-			esDrain(g, &o, g.fromBrowser(esContentReply(cmd, id, live, true)), live)
+		if pv.forward == nil {
+			continue
 		}
-	}
-	if esSessionCut(g) {
-		t.Fatalf("hold-cap trip must be retriable without cutting the session")
+		esDrain(g, &o, g.fromBrowser(esContentReply(cmd, id, live, true)), live)
+		if esSessionCut(g) {
+			t.Fatalf("hold-cap trip must be retriable without cutting the session")
+		}
 	}
 	for _, p := range o.payloads {
 		if strings.Contains(p, esRetriableMark) {

@@ -82,6 +82,7 @@ type navTarget struct {
 	unsure            bool
 	errorURL          string
 	documentURL       string
+	loaderID          string
 	navigationURL     string
 	securityOrigin    string
 	keptOrigin        string
@@ -250,6 +251,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	nt.commitLocked(m)
 	if m.Method == "Page.frameNavigated" {
 		g.noteKeptLatchLocked(nt)
+		g.noteOrdinaryDocIdentityFromNavLocked(nt)
 	}
 	g.resetFailedLoadProofOnNavLocked(nt, m.Method)
 	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {
@@ -467,6 +469,7 @@ func (nt *navTarget) commitFrameNavigatedLocked(p navCommitParams) {
 	}
 	nt.errorURL = p.Frame.UnreachableURL
 	nt.documentURL = p.Frame.URL
+	nt.loaderID = p.Frame.LoaderID
 	if p.Frame.SecurityOrigin != "" {
 		nt.securityOrigin = p.Frame.SecurityOrigin
 	}

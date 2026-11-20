@@ -11,7 +11,7 @@ var navigationControls = map[string]bool{
 	"Page.navigate": true, "Page.reload": true, "Page.stopLoading": true,
 	"Page.close": true, "Page.bringToFront": true, "Page.navigateToHistoryEntry": true,
 	"Page.getNavigationHistory": true, "Page.resetNavigationHistory": true,
-	"Page.getFrameTree": true, "Page.getResourceTree": true,
+	"Page.getFrameTree":       true,
 	"Target.detachFromTarget": true, "Target.closeTarget": true,
 	"Target.getTargetInfo": true, "Target.activateTarget": true,
 }

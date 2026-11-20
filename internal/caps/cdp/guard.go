@@ -210,6 +210,10 @@ type guard struct {
 	docInflight              map[string]*docConfirm
 	docFailed                map[string]bool
 	docPassed                map[string]bool
+	docBaselines             map[string]docIdentity
+	docIdentityCalls         map[callKey]docIdentity
+	docIdentityHolds         map[callKey]*docIdentityHold
+	docIdentityAsks          map[string]*docIdentityAsk
 	flushAsync               func(send, page [][]byte)
 	patterns                 []any
 	heldExtras               map[requestKey][]heldExtra
@@ -336,6 +340,10 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		docInflight:              map[string]*docConfirm{},
 		docFailed:                map[string]bool{},
 		docPassed:                map[string]bool{},
+		docBaselines:             map[string]docIdentity{},
+		docIdentityCalls:         map[callKey]docIdentity{},
+		docIdentityHolds:         map[callKey]*docIdentityHold{},
+		docIdentityAsks:          map[string]*docIdentityAsk{},
 		heldExtras:               map[requestKey][]heldExtra{},
 		seen:                     map[requestKey]reqLevel{},
 		handed:                   map[requestKey]int{},
@@ -1587,6 +1595,8 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	t.protected = g.decide(t, prev)
 	if t.protected && !prev {
 		send = append(send, g.protectLocked(t)...)
+	} else {
+		g.noteOrdinaryDocIdentityFromTargetLocked(t)
 	}
 	if (t.typ == "page" || t.typ == "tab") && prevURL != "" && prevURL != t.url && g.errorProofOfLocked(t.id) != errorProofNone {
 		g.resetFailedLoadProofLocked(t.id)
@@ -1686,6 +1696,7 @@ func (g *guard) addRefusedLocked(id string) {
 
 func (g *guard) destroyedLocked(id string) {
 	g.pruneDocConfirmTargetLocked(id)
+	g.pruneDocIdentityTargetLocked(id)
 	g.clearBlockedChildrenLocked(id)
 	delete(g.frameProbeAttempts, id)
 	delete(g.frameProbed, id)
@@ -1720,6 +1731,7 @@ func (g *guard) destroyedLocked(id string) {
 
 func (g *guard) forgetSessionLocked(id string) {
 	g.pruneDocConfirmSessionLocked(id)
+	g.pruneDocIdentitySessionLocked(id)
 	g.goneLocked(id)
 	g.forgetWorldSessionLocked(id)
 	g.forgetCastLocked(id)

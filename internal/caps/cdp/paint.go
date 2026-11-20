@@ -181,39 +181,54 @@ func (g *guard) answerLocked(m *message, data []byte) browserVerdict {
 	v := g.responseLocked(m, data)
 	delete(g.paintMethods, k)
 	if v.forward == nil || m.Error != nil {
+		g.dropDocIdentityCallLocked(k)
 		return v
 	}
 	target := g.worldTargetLocked(m.SessionID)
-	if method == "" {
-		return v
-	}
-	if paint && g.framesProtectedLocked(target) {
-		g.logf("cdp: dropped a rendering that finished after a protected frame appeared")
-		v.forward = refusal(*m.ID, m.SessionID, refusedTarget)
-		return v
-	}
-	if !g.extensionFramesPresentLocked(target) {
-		delete(g.extensionCaptureDirty, k)
-		return v
-	}
-	frames := g.extensionFrameIDsLocked(target)
-	if g.extensionPresentPaintMethod(method) || protect.ExtensionPresentMethod(method) {
-		g.logf("cdp: dropped a rendering that finished while an extension frame was present")
-		v.forward = refusal(*m.ID, m.SessionID, protect.PresentReason())
-		return v
-	}
-	if protect.ExtensionShownMethod(method) {
-		if g.extensionCaptureDirty[k] {
-			delete(g.extensionCaptureDirty, k)
-			g.logf("cdp: dropped a rendering that sampled an extension frame as shown during capture")
-			v.forward = refusal(*m.ID, m.SessionID, protect.ShownReason())
+	if method != "" {
+		if paint && g.framesProtectedLocked(target) {
+			g.logf("cdp: dropped a rendering that finished after a protected frame appeared")
+			v.forward = refusal(*m.ID, m.SessionID, refusedTarget)
+			g.dropDocIdentityCallLocked(k)
 			return v
 		}
-		return g.holdExtensionPaintLocked(m, v.forward, target, frames)
+		if g.extensionFramesPresentLocked(target) {
+			frames := g.extensionFrameIDsLocked(target)
+			if g.extensionPresentPaintMethod(method) || protect.ExtensionPresentMethod(method) {
+				g.logf("cdp: dropped a rendering that finished while an extension frame was present")
+				v.forward = refusal(*m.ID, m.SessionID, protect.PresentReason())
+				g.dropDocIdentityCallLocked(k)
+				return v
+			}
+			if protect.ExtensionShownMethod(method) {
+				if g.extensionCaptureDirty[k] {
+					delete(g.extensionCaptureDirty, k)
+					g.logf("cdp: dropped a rendering that sampled an extension frame as shown during capture")
+					v.forward = refusal(*m.ID, m.SessionID, protect.ShownReason())
+					g.dropDocIdentityCallLocked(k)
+					return v
+				}
+				g.dropDocIdentityCallLocked(k)
+				return g.holdExtensionPaintLocked(m, v.forward, target, frames)
+			}
+			if framePaintMethods[method] || stream && protect.ExtensionPresentMethod(method) {
+				g.logf("cdp: dropped a rendering that finished while an extension frame was present")
+				v.forward = refusal(*m.ID, m.SessionID, protect.PresentReason())
+				g.dropDocIdentityCallLocked(k)
+				return v
+			}
+		} else {
+			delete(g.extensionCaptureDirty, k)
+		}
 	}
-	if framePaintMethods[method] || stream && protect.ExtensionPresentMethod(method) {
-		g.logf("cdp: dropped a rendering that finished while an extension frame was present")
-		v.forward = refusal(*m.ID, m.SessionID, protect.PresentReason())
+	if v.forward != nil {
+		if send, page, held := g.holdDocIdentityReplyLocked(k, m, v.forward); held {
+			v.forward = nil
+			v.send = append(v.send, send...)
+			v.page = append(v.page, page...)
+			return v
+		}
 	}
+	g.dropDocIdentityCallLocked(k)
 	return v
 }
