@@ -1598,3 +1598,157 @@ func TestEmptyURLHoldClientTabDetachStillHidesHeldWorker(t *testing.T) {
 		t.Fatalf("client tab detach must still hide held worker child: held=%v hidden=%v sends=%v", g.held["S-WORKER-HW"] != nil, g.hidden["S-WORKER-HW"], sends)
 	}
 }
+
+func emptyURLHoldArmBrowserEnvelope(t *testing.T, g *guard) {
+	t.Helper()
+	g.targets["BROWSER"] = &target{id: "BROWSER", typ: "browser"}
+	g.sessions["S-BR"] = &session{id: "S-BR", target: "BROWSER", typ: "browser"}
+	g.browserSessions["S-BR"] = true
+}
+
+func emptyURLHoldBrowserEnvelopeHeld(t *testing.T, g *guard, tabSession, tabID, pageSession, pageID string) {
+	t.Helper()
+	emptyURLHoldArmBrowserEnvelope(t, g)
+	_ = g.fromBrowser(emptyURLNamedTabAttach(tabSession, tabID, "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-BR", pageSession, pageID, "OPENER", true))
+	if g.sessions[tabSession] == nil || g.held[pageSession] == nil || g.held[pageSession].parent != "S-BR" {
+		t.Fatalf("expected announced tab and flat page held under browser session: tab=%v held=%v parent=%q", g.sessions[tabSession] != nil, g.held[pageSession] != nil, func() string {
+			if g.held[pageSession] == nil {
+				return ""
+			}
+			return g.held[pageSession].parent
+		}())
+	}
+}
+
+func emptyURLHoldAssertTabDetached(t *testing.T, g *guard, tabSession string, ps []string, sends []string, why string) {
+	t.Helper()
+	if g.sessions[tabSession] != nil || (emptyURLHoldDetachIndex(sends, tabSession) < 0 && emptyURLHoldClientDetachIndex(ps, tabSession) < 0 && !g.hidden[tabSession]) {
+		t.Fatalf("%s left announced tab attached under browser-session envelope: sessions=%v payloads=%v sends=%v", why, g.sessions[tabSession] != nil, ps, sends)
+	}
+}
+
+func TestEmptyURLHoldBrowserEnvelopeProtectedDetachesTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldBrowserEnvelopeHeld(t, g, "S-TAB-BR", "TAB-BR", "S-PAGE-BR", "PAGE-BR")
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-BR", "page", "https://seven.sliccy.ai/br", "OPENER"))
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-BR", emptyURLHoldPayloads(v), emptyURLHoldSends(v), "browser-envelope protected classify")
+}
+
+func TestEmptyURLHoldBrowserEnvelopeExpiryDetachesTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldBrowserEnvelopeHeld(t, g, "S-TAB-BRE", "TAB-BRE", "S-PAGE-BRE", "PAGE-BRE")
+	page, send := g.expireHold("S-PAGE-BRE")
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-BRE", emptyURLHoldPayloads(browserVerdict{page: page}), emptyURLHoldSends(browserVerdict{send: send}), "browser-envelope expiry")
+}
+
+func TestEmptyURLHoldBrowserEnvelopeFailedLoadProtectedDetachesTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldBrowserEnvelopeHeld(t, g, "S-TAB-BRFL", "TAB-BRFL", "S-PAGE-BRFL", "PAGE-BRFL")
+	g.targets["PAGE-BRFL"].url = "chrome-error://chromewebdata/"
+	g.setErrorProofLocked("PAGE-BRFL", errorProofProtected)
+	send := g.finishFailedLoadHeldLocked("PAGE-BRFL", true)
+	g.mu.Lock()
+	page := g.takePendingPageLocked()
+	g.mu.Unlock()
+	ps := emptyURLHoldPayloads(browserVerdict{send: send, page: page})
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-BRFL", ps, emptyURLHoldSends(browserVerdict{send: send}), "browser-envelope failed-load protected")
+}
+
+func TestEmptyURLHoldBrowserEnvelopeDestroyWhileHeldDetachesTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldBrowserEnvelopeHeld(t, g, "S-TAB-BRD", "TAB-BRD", "S-PAGE-BRD", "PAGE-BRD")
+	v := g.fromBrowser(encode(map[string]any{
+		"method": "Target.targetDestroyed",
+		"params": map[string]any{"targetId": "PAGE-BRD"},
+	}))
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-BRD", emptyURLHoldPayloads(v), emptyURLHoldSends(v), "browser-envelope destroy-while-held")
+}
+
+func TestEmptyURLHoldBrowserEnvelopeImmediateHideDetachesTab(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldArmBrowserEnvelope(t, g)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-BRI", "TAB-BRI", "", true))
+	v := g.fromBrowser(emptyURLNamedPageAttachURL("S-BR", "S-PAGE-BRI", "PAGE-BRI", "OPENER", "https://seven.sliccy.ai/imm", false))
+	emptyURLHoldAssertTabDetached(t, g, "S-TAB-BRI", emptyURLHoldPayloads(v), emptyURLHoldSends(v), "browser-envelope immediate protect hide")
+}
+
+func TestEmptyURLHoldBrowserEnvelopeOrdinaryDeliversUnchanged(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	emptyURLHoldBrowserEnvelopeHeld(t, g, "S-TAB-BRO", "TAB-BRO", "S-PAGE-BRO", "PAGE-BRO")
+	tabClient := []string{}
+	if s := g.sessions["S-TAB-BRO"]; s != nil {
+		tabClient = append(tabClient, string(encode(map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{"sessionId": "S-TAB-BRO", "waitingForDebugger": true, "targetInfo": map[string]any{"targetId": "TAB-BRO", "type": "tab", "url": ""}},
+		})))
+	}
+	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-BRO", "page", "https://ordinary.test/br", "OPENER"))
+	ps := append(tabClient, emptyURLHoldPayloads(v)...)
+	if g.sessions["S-TAB-BRO"] == nil || g.sessions["S-PAGE-BRO"] == nil || emptyURLHoldAttachIndex(emptyURLHoldPayloads(v), "S-PAGE-BRO") < 0 {
+		t.Fatalf("browser-envelope ordinary deliver must keep tab and announce page: sessions tab=%v page=%v payloads=%v", g.sessions["S-TAB-BRO"] != nil, g.sessions["S-PAGE-BRO"] != nil, ps)
+	}
+	if emptyURLHoldClientDetachIndex(emptyURLHoldPayloads(v), "S-TAB-BRO") >= 0 {
+		t.Fatalf("browser-envelope ordinary must not detach its tab: %v", emptyURLHoldPayloads(v))
+	}
+}
+
+func emptyURLHoldAssertMissingSessionReply(t *testing.T, reply []byte, label string) {
+	t.Helper()
+	if len(reply) == 0 {
+		t.Fatalf("%s: expected missing-session reply", label)
+	}
+	var m message
+	if json.Unmarshal(reply, &m) != nil || m.Error == nil {
+		t.Fatalf("%s: expected error reply: %s", label, reply)
+	}
+	var err struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(m.Error, &err) != nil || err.Code != -32001 || err.Message != "Session with given id not found." {
+		t.Fatalf("%s: want missing-session -32001, got %s", label, reply)
+	}
+}
+
+func TestEmptyURLHoldExpiryTabCommandIsMissingSessionNotProtected(t *testing.T) {
+	var logs []string
+	g := emptyURLHoldGuardLog(t, func(format string, args ...any) {
+		logs = append(logs, strings.TrimSpace(fmt.Sprintf(format, args...)))
+	})
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-EX", "TAB-EX", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-EX", "S-PAGE-EX", "PAGE-EX", "OPENER", true))
+	page, send := g.expireHold("S-PAGE-EX")
+	ps := emptyURLHoldPayloads(browserVerdict{page: page})
+	sends := emptyURLHoldSends(browserVerdict{send: send})
+	if g.sessions["S-TAB-EX"] != nil && emptyURLHoldClientDetachIndex(ps, "S-TAB-EX") < 0 && emptyURLHoldDetachIndex(sends, "S-TAB-EX") < 0 {
+		t.Fatalf("expiry must detach announced tab: payloads=%v sends=%v", ps, sends)
+	}
+	for _, line := range logs {
+		if strings.Contains(line, "protected origin") {
+			t.Fatalf("unclassified expiry used protected-origin log: %s", line)
+		}
+	}
+	pv := g.fromCommand(&command{id: 96, method: "Page.enable", session: "S-TAB-EX", params: map[string]any{}}, 96, true)
+	if len(pv.forward) > 0 {
+		t.Fatalf("expiry tab command was forwarded: %s", pv.forward)
+	}
+	if strings.Contains(string(pv.reply), "seven's origin") || strings.Contains(string(pv.reply), `"code":-32000`) {
+		t.Fatalf("expiry must not answer protected-origin refuse on the detached tab: %s", pv.reply)
+	}
+	emptyURLHoldAssertMissingSessionReply(t, pv.reply, "expiry tab command")
+}
+
+func TestEmptyURLHoldProtectedTabCommandStaysRefusedTarget(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-PR", "TAB-PR", "", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-PR", "S-PAGE-PR", "PAGE-PR", "OPENER", true))
+	_ = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-PR", "page", "https://seven.sliccy.ai/pr", "OPENER"))
+	pv := g.fromCommand(&command{id: 97, method: "Page.enable", session: "S-TAB-PR", params: map[string]any{}}, 97, true)
+	if len(pv.forward) > 0 {
+		t.Fatalf("protected tab command was forwarded: %s", pv.forward)
+	}
+	if !strings.Contains(string(pv.reply), "seven's origin") {
+		t.Fatalf("protected path today answers refusedTarget on the detached tab session, got %s", pv.reply)
+	}
+}
