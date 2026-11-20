@@ -879,3 +879,158 @@ func TestViewSourceAttachDocFailedClearedOnDestroy(t *testing.T) {
 		t.Errorf("docFailed/hidden must clear on target destroy when detach never arrives (failed=%t hidden=%t)", failed, hidden)
 	}
 }
+
+const (
+	vsHTTPVault     = "view-source:http://vault.sliccy.ai:36309/doc?n=c8-close-protected-view-source"
+	vsHTTPVaultBare = "http://vault.sliccy.ai:36309/doc?n=c8-close-protected-view-source"
+	vsHTTPSVault    = "view-source:https://vault.sliccy.ai/doc"
+)
+
+func vsRunConfirmAnswer(t *testing.T, announced, confirmURL string, watched bool) (o vsOutcome, confirmAsked bool) {
+	t.Helper()
+	g := vsGuard(t)
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), confirmURL)
+	if watched {
+		vsWatchReady(g)
+	}
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(announced)), func(int64) string { return confirmURL })
+	asked = append(asked, vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return confirmURL })...)
+	confirmAsked = len(asked) > 0
+	vsRead(g, &o, confirmURL)
+	o.summarize()
+	return o, confirmAsked
+}
+
+func TestViewSourceAttachHypothesisARelayLagAdmitsBlank(t *testing.T) {
+	for _, watched := range []bool{false, true} {
+		for _, stale := range []string{"about:blank", vsOrdinary, ""} {
+			watched, stale := watched, stale
+			name := "unwatched/"
+			if watched {
+				name = "watched/"
+			}
+			if stale == "" {
+				name += "empty"
+			} else {
+				name += stale
+			}
+			t.Run(name, func(t *testing.T) {
+				o, asked := vsRunConfirmAnswer(t, "about:blank", stale, watched)
+				t.Logf("hyp-a watched=%t confirmURL=%q asked=%t attachRefused=%t attachReplied=%t sawAttachEvent=%t readDelivered=%t", watched, stale, asked, o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
+				if !asked {
+					t.Fatalf("hyp-a: expected a relay Target.getTargetInfo confirmation")
+				}
+				if !o.attachRefused && (o.attachReplied || o.sawAttachEvent) {
+					t.Errorf("hyp-a RED: lagging getTargetInfo answered %q while the live document is protected view-source; attach was admitted (refused=%t replied=%t event=%t read=%t)", stale, o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
+				}
+			})
+		}
+	}
+}
+
+func TestViewSourceAttachHypothesisBHTTPViewSourceForms(t *testing.T) {
+	forms := []string{
+		vsHTTPVault,
+		"view-source:http://vault.sliccy.ai/doc",
+		"view-source:http://seven.sliccy.ai/",
+		vsHTTPSVault,
+	}
+	for _, form := range forms {
+		form := form
+		t.Run(form, func(t *testing.T) {
+			o, err := protect.New(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded := o.Loaded(form)
+			live := (&guard{o: o}).docConfirmLiveProtectedDocumentLocked(form)
+			t.Logf("hyp-b Loaded=%t liveProtectedWrapper=%t", loaded, live)
+			if !loaded {
+				t.Errorf("hyp-b: Loaded(%q)=false; http view-source of a protected host must count as loaded", form)
+			}
+			if !live {
+				t.Errorf("hyp-b: docConfirmLiveProtectedDocumentLocked(%q)=false; unconfirmed carve-out would miss this form", form)
+			}
+			out, asked := vsRunConfirmAnswer(t, "about:blank", form, true)
+			t.Logf("hyp-b asked=%t attachRefused=%t attachReplied=%t sawAttachEvent=%t readDelivered=%t", asked, out.attachRefused, out.attachReplied, out.sawAttachEvent, out.readDelivered)
+			if !asked {
+				t.Fatalf("hyp-b: expected confirmation getTargetInfo")
+			}
+			if !out.attachRefused && (out.attachReplied || out.sawAttachEvent) {
+				t.Errorf("hyp-b RED: confirm answered the http/https view-source form and still admitted (refused=%t replied=%t event=%t)", out.attachRefused, out.attachReplied, out.sawAttachEvent)
+			}
+			if out.readDelivered {
+				t.Errorf("hyp-b: read delivered vault content through an admitted session")
+			}
+		})
+	}
+	t.Run("bare-http-vault-not-wrapper", func(t *testing.T) {
+		o, err := protect.New(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !o.Loaded(vsHTTPVaultBare) {
+			t.Fatalf("bare http vault must be Loaded")
+		}
+		if (&guard{o: o}).docConfirmLiveProtectedDocumentLocked(vsHTTPVaultBare) {
+			t.Fatalf("bare http vault must NOT match the live-wrapper carve-out (prefix view-source/blob/filesystem only)")
+		}
+	})
+}
+
+func TestViewSourceAttachHypothesisCFirstSightRace(t *testing.T) {
+	t.Run("attach-before-targetInfoChanged-confirm-fresh", func(t *testing.T) {
+		o, asked := vsRunConfirmAnswer(t, "about:blank", vsHTTPVault, true)
+		t.Logf("hyp-c fresh asked=%t attachRefused=%t attachReplied=%t sawAttachEvent=%t readDelivered=%t", asked, o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
+		if !asked {
+			t.Fatalf("hyp-c: expected confirmation")
+		}
+		if !o.attachRefused && (o.attachReplied || o.sawAttachEvent) {
+			t.Errorf("hyp-c RED: first sight about:blank, no targetInfoChanged before attach, but confirm returned the live view-source http form and still admitted")
+		}
+	})
+	t.Run("attach-before-targetInfoChanged-confirm-stale-blank", func(t *testing.T) {
+		g := vsGuard(t)
+		var o vsOutcome
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), vsHTTPVault)
+		vsWatchReady(g)
+		_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) string { return "about:blank" })
+		asked = append(asked, vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return "about:blank" })...)
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsHTTPVault)), vsHTTPVault)
+		vsRead(g, &o, vsHTTPVault)
+		o.summarize()
+		t.Logf("hyp-c stale asked=%d attachRefused=%t attachReplied=%t sawAttachEvent=%t readDelivered=%t", len(asked), o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
+		if len(asked) == 0 {
+			t.Fatalf("hyp-c: expected confirmation")
+		}
+		if !o.attachRefused && (o.attachReplied || o.sawAttachEvent) {
+			t.Errorf("hyp-c RED: observer-created target; first sight blank; confirm still blank; late targetInfoChanged; attach admitted (refused=%t replied=%t event=%t read=%t)", o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
+		}
+	})
+	t.Run("targetInfoChanged-before-attach", func(t *testing.T) {
+		g := vsGuard(t)
+		var o vsOutcome
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), vsHTTPVault)
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsHTTPVault)), vsHTTPVault)
+		vsWatchReady(g)
+		pv := g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+		if pv.reply != nil {
+			o.clientPayloads = append(o.clientPayloads, string(pv.reply))
+			o.summarize()
+			t.Logf("hyp-c prelearned immediate reply attachRefused=%t", o.attachRefused)
+			if !o.attachRefused {
+				t.Errorf("hyp-c: target already showing protected view-source before attach must refuse immediately")
+			}
+			return
+		}
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(vsHTTPVault)), func(int64) string { return vsHTTPVault })
+		asked = append(asked, vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return vsHTTPVault })...)
+		o.summarize()
+		t.Logf("hyp-c prelearned asked=%d attachRefused=%t attachReplied=%t sawAttachEvent=%t", len(asked), o.attachRefused, o.attachReplied, o.sawAttachEvent)
+		if !o.attachRefused && (o.attachReplied || o.sawAttachEvent) {
+			t.Errorf("hyp-c RED: pre-learned view-source http still admitted through confirm")
+		}
+	})
+}
