@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"net/url"
+	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
@@ -178,7 +179,9 @@ func (g *guard) holdFailedLoadAttachLocked(m *message, pSession string, waiting 
 	}
 	switch g.errorProofOfLocked(t.id) {
 	case errorProofFailed, errorProofProtected:
-		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)}, true
+		h := &heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, typ: info.Type, waiting: waiting, at: time.Now()}
+		part := g.hideHeldPageAndTabsLocked(h, true, "failed-load protected")
+		return browserVerdict{send: append(send, part.send...), page: part.page}, true
 	case errorProofOrdinary:
 		return browserVerdict{}, false
 	}
@@ -302,9 +305,11 @@ func (g *guard) finishFailedLoadHeldLocked(targetID string, hide bool) [][]byte 
 		if h == nil {
 			continue
 		}
+		delete(g.held, sid)
 		if hide {
-			delete(g.held, sid)
-			send = append(send, g.hideLocked(h)...)
+			part := g.hideHeldPageAndTabsLocked(h, true, "failed-load protected")
+			send = append(send, part.send...)
+			g.pendingPage = append(g.pendingPage, part.page...)
 			continue
 		}
 		part := g.deliverHeldLocked(h)

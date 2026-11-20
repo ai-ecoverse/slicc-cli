@@ -124,12 +124,14 @@ func (g *guard) infoVerdictLocked(info targetInfo) urlVerdict {
 }
 
 type session struct {
-	id      string
-	target  string
-	parent  string
-	typ     string
-	refused bool
-	waiting bool
+	id              string
+	target          string
+	parent          string
+	typ             string
+	refused         bool
+	waiting         bool
+	emptyAtAnnounce bool
+	at              time.Time
 }
 
 type guard struct {
@@ -1684,7 +1686,7 @@ func (g *guard) addRefusedLocked(id string) {
 	}
 }
 
-func (g *guard) destroyedLocked(id string) {
+func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
 	g.pruneDocConfirmTargetLocked(id)
 	g.clearBlockedChildrenLocked(id)
 	delete(g.frameProbeAttempts, id)
@@ -1696,7 +1698,7 @@ func (g *guard) destroyedLocked(id string) {
 	g.forgetExtensionFrameURLLocked("", id)
 	g.forgetExtensionProbeWorldsForTargetLocked(id)
 	g.navForgetLocked(id)
-	g.dropHeldLocked(id)
+	page, send = g.dropHeldLocked(id)
 	g.forgetWorldsLocked(id)
 	g.forgetWorldRequestsLocked(id)
 	g.forgetOpenedSeenLocked(id)
@@ -1705,7 +1707,7 @@ func (g *guard) destroyedLocked(id string) {
 	delete(g.errorTitles, id)
 	t, ok := g.targets[id]
 	if !ok || t.gone {
-		return
+		return page, send
 	}
 	t.gone = true
 	g.tombstones = append(g.tombstones, id)
@@ -1716,6 +1718,7 @@ func (g *guard) destroyedLocked(id string) {
 			delete(g.targets, old)
 		}
 	}
+	return page, send
 }
 
 func (g *guard) forgetSessionLocked(id string) {

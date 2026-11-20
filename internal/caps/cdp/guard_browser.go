@@ -76,14 +76,14 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	if nt, ok := g.navSessions[m.SessionID]; ok && m.SessionID != "" {
 		v := g.navRequestLocked(nt, &m)
 		v.send = append(v.send, g.navEventLocked(nt, &m)...)
-		return v
+		return g.withPendingPageLocked(v)
+	}
+	if m.SessionID != "" && g.gone[m.SessionID] {
+		return browserVerdict{}
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
-		if m.Method == "Target.attachedToTarget" && (g.attachedWorkerLocked(&m) || g.attachedIframeLocked(&m)) {
-			v := g.attachedEvent(&m, data)
-			v.forward = nil
-			v.page = nil
-			return v
+		if m.Method == "Target.attachedToTarget" && (g.attachedWorkerLocked(&m) || g.attachedIframeLocked(&m) || g.held[m.SessionID] != nil) {
+			return g.attachedUnderHeldLocked(&m, data)
 		}
 		return browserVerdict{}
 	}
@@ -359,7 +359,8 @@ func (g *guard) relayEventLocked(m *message) browserVerdict {
 		v.send = append(send, v.send...)
 		return v
 	case "Target.targetDestroyed":
-		g.destroyedLocked(p.TargetID)
+		page, goneSend := g.destroyedLocked(p.TargetID)
+		return browserVerdict{send: goneSend, page: page}
 	case "Target.detachedFromTarget":
 		g.navDetachedLocked(p.SessionID)
 	}
@@ -423,14 +424,17 @@ func (g *guard) withParams(m *message, data []byte, fn func(p map[string]any) (k
 		return browserVerdict{forward: data}
 	}
 	keep, changed, send := fn(p)
+	var v browserVerdict
 	switch {
 	case !keep:
-		return browserVerdict{send: send}
+		v = browserVerdict{send: send}
 	case changed:
 		m.Params = encode(p)
-		return browserVerdict{forward: encode(m), send: send}
+		v = browserVerdict{forward: encode(m), send: send}
+	default:
+		v = browserVerdict{forward: data, send: send}
 	}
-	return browserVerdict{forward: data, send: send}
+	return g.withPendingPageLocked(v)
 }
 
 func (g *guard) targetEvent(m *message, data []byte) browserVerdict {
@@ -501,13 +505,16 @@ func (g *guard) targetGoneEvent(m *message, data []byte) browserVerdict {
 		TargetID string `json:"targetId"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	var send [][]byte
+	var page [][]byte
 	if m.Method == "Target.targetDestroyed" {
 		g.forgetAncestryDisputedLocked(p.TargetID)
+		page, send = g.destroyedLocked(p.TargetID)
 	}
 	if g.hiddenTargetLocked(p.TargetID) || (m.Method == "Target.targetDestroyed" && (g.protectedWorkerIDLocked(p.TargetID) || g.workerConcealedLocked(p.TargetID) || g.workerUnshownLocked(p.TargetID) || g.protectedIframeIDLocked(p.TargetID) || g.iframeConcealedLocked(p.TargetID) || g.iframeUnshownLocked(p.TargetID))) {
-		return browserVerdict{}
+		return browserVerdict{send: send, page: page}
 	}
-	return browserVerdict{forward: data}
+	return browserVerdict{forward: data, send: send, page: page}
 }
 
 func (g *guard) hiddenTargetLocked(id string) bool {
@@ -549,6 +556,13 @@ func (g *guard) attachedHoldParams(m *message, pSession string, waiting bool, in
 	return map[string]any{"sessionId": pSession, "waitingForDebugger": waiting, "targetInfo": map[string]any{"targetId": info.TargetID, "type": info.Type, "url": info.URL, "openerId": info.OpenerID, "openerFrameId": info.OpenerFrameID, "parentFrameId": info.ParentFrameID, "parentId": info.ParentID}}
 }
 
+func (g *guard) attachedUnderHeldLocked(m *message, data []byte) browserVerdict {
+	v := g.attachedEvent(m, data)
+	v.forward = nil
+	v.page = nil
+	return v
+}
+
 func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
 	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		if t := g.targets[info.TargetID]; t != nil {
@@ -556,7 +570,20 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 		}
 	}
 	if g.attachedShouldHideLocked(info, m.SessionID) {
-		return browserVerdict{send: append(send, g.hideLocked(&heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, waiting: waiting})...)}, true
+		h := &heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, typ: info.Type, waiting: waiting, at: time.Now()}
+		send = append(send, g.hideLocked(h)...)
+		var page [][]byte
+		if info.Type == "page" {
+			var part browserVerdict
+			if !g.browserRootSessionLocked(m.SessionID) {
+				part = g.detachAnnouncedTabSessionLocked(m.SessionID, true)
+			} else {
+				part = g.detachUnmatchedEmptyTabsAroundLocked(time.Now(), true, "immediate hide", info.TargetID)
+			}
+			send = append(send, part.send...)
+			page = append(page, part.page...)
+		}
+		return browserVerdict{send: send, page: page}, true
 	}
 	if v, handled := g.holdFailedLoadAttachLocked(m, pSession, waiting, info, send); handled {
 		return v, true
@@ -601,9 +628,12 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	}
 	g.attachParent = ""
 	g.noteWorkerShownLocked(info)
-	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger}
+	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger, emptyAtAnnounce: info.Type == "tab" && info.URL == "", at: time.Now()}
 	if info.Type == "browser" {
 		g.browserSessions[p.SessionID] = true
+	}
+	if info.Type == "tab" {
+		g.adoptHeldFlatPageLocked(p.SessionID, info.OpenerID)
 	}
 	send = append(send, g.touchLocked(info.TargetID, info.Type)...)
 	if params := decodeParams(m.Params); params != nil {
@@ -652,25 +682,26 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 	if p.SessionID != "" && g.gone[p.SessionID] {
 		return browserVerdict{}
 	}
-	page := g.cascadeOrphansLocked(p.SessionID)
+	page, send := g.cascadeOrphansLocked(p.SessionID)
 	page = append(page, g.takePendingMissingLocked(p.SessionID)...)
 	g.navDetachedLocked(p.SessionID)
 	if h, ok := g.held[p.SessionID]; ok {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		delete(g.held, p.SessionID)
 		g.refuseHeldWaitLocked(h.target)
+		part := g.detachAnnouncedTabsForPageLocked(h, true, "destroy-while-held")
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
+		return browserVerdict{send: append(send, part.send...), page: append(append(page, part.page...), g.takePendingPageLocked()...)}
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)
 		delete(g.hiddenOwner, p.SessionID)
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
+		return browserVerdict{send: send, page: append(page, g.takePendingPageLocked()...)}
 	}
 	g.forgetSessionLocked(p.SessionID)
 	page = append(page, data)
-	return browserVerdict{page: append(page, g.takePendingPageLocked()...)}
+	return browserVerdict{send: send, page: append(page, g.takePendingPageLocked()...)}
 }
 
 func (g *guard) innerMessageEvent(m *message, data []byte) browserVerdict {
