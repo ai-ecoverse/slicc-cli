@@ -330,7 +330,6 @@ func esCommands() []esCommand {
 		{label: "Page.printToPDF", method: "Page.printToPDF", params: map[string]any{}},
 		{label: "Page.captureSnapshot", method: "Page.captureSnapshot", params: map[string]any{}},
 		{label: "Page.getResourceContent", method: "Page.getResourceContent", params: map[string]any{"frameId": esTarget, "url": esOrdinary}},
-		{label: "Page.getResourceTree", method: "Page.getResourceTree", params: map[string]any{}},
 		{label: "Accessibility.getFullAXTree", method: "Accessibility.getFullAXTree", params: map[string]any{}},
 		{label: "Accessibility.getPartialAXTree", method: "Accessibility.getPartialAXTree", params: map[string]any{"nodeId": json.Number("1")}},
 		{label: "Accessibility.queryAXTree", method: "Accessibility.queryAXTree", params: map[string]any{"nodeId": json.Number("1")}},
@@ -860,13 +859,45 @@ func TestExistingSessionWindowTaintEmptyToWrappedUnresolvableCutsDespiteOrdinary
 	})
 }
 
-func TestExistingSessionWindowTaintChromeErrorProtectedFailedURLCutsDespiteOrdinaryPostRead(t *testing.T) {
+func TestExistingSessionWindowTaintChromeErrorProtectedFailedURLDoesNotTaint(t *testing.T) {
 	g := esGuard(t)
 	_ = esAdmit(t, g)
-	esWindowTaintThenOrdinaryPostRead(t, g, func(o *esOutcome) {
-		failed := "https://seven.sliccy.ai/doc"
-		esDrain(g, o, g.fromBrowser(esFrameNavigatedUnreachable("chrome-error://chromewebdata/", "L-ERR", failed)), failed)
-	})
+	var o esOutcome
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
+	if pv.forward == nil {
+		t.Fatalf("admit must forward: reply=%s", pv.reply)
+	}
+	g.mu.Lock()
+	before := g.docIdentityTaint[esTarget]
+	g.mu.Unlock()
+	failed := "https://seven.sliccy.ai/doc"
+	held := g.fromBrowser(esContentReply(cmd, int64(esReadID), esOrdinary, true))
+	o.take(held)
+	var infoID int64
+	for _, raw := range held.send {
+		id, method, session := esOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			infoID = id
+		}
+	}
+	if infoID == 0 {
+		t.Fatal("expected identity post-read getTargetInfo while the trigger reply is held")
+	}
+	esDrain(g, &o, g.fromBrowser(esFrameNavigatedUnreachable("chrome-error://chromewebdata/", "L-ERR", failed)), failed)
+	g.mu.Lock()
+	after := g.docIdentityTaint[esTarget]
+	g.mu.Unlock()
+	if after != before {
+		t.Fatalf("chrome-error for a blocked protected URL must not bump identity taint (blocked≠document): before=%d after=%d", before, after)
+	}
+	esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(infoID, "chrome-error://chromewebdata/")), "chrome-error://chromewebdata/")
+	if esSessionCut(g) {
+		t.Fatalf("chrome-error protected unreachable must not cut via identity taint")
+	}
+	if esHasRetriable(o) || strings.Contains(strings.Join(o.payloads, ""), "slicc: refused:") {
+		t.Fatalf("trigger held across a protected error-page commit must stay OK: payloads=%v", o.payloads)
+	}
 }
 
 func TestExistingSessionWindowTaintChromeErrorOrdinaryFailedURLDoesNotTaint(t *testing.T) {
@@ -886,6 +917,107 @@ func TestExistingSessionWindowTaintChromeErrorOrdinaryFailedURLDoesNotTaint(t *t
 	}
 	if esHasRetriable(o) || strings.Contains(strings.Join(o.payloads, ""), "slicc: refused:") {
 		t.Fatalf("chrome-error ordinary failed URL must not refuse the held reply: payloads=%v", o.payloads)
+	}
+}
+
+func TestExistingSessionOutlivedProtectedErrorPageCommitKeepsTrigger(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	shot := esCommand{label: "Page.captureScreenshot", method: "Page.captureScreenshot", params: map[string]any{}}
+	trig := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	pvShot := g.fromCommand(&command{id: int64(esReadID2), method: shot.method, session: esSession, params: shot.params}, int64(esReadID2), true)
+	if pvShot.forward == nil {
+		t.Fatalf("screenshot admit must forward: reply=%s", pvShot.reply)
+	}
+	pvTrig := g.fromCommand(&command{id: int64(esReadID), method: trig.method, session: esSession, params: trig.params}, int64(esReadID), true)
+	if pvTrig.forward == nil {
+		t.Fatalf("trigger admit must forward: reply=%s", pvTrig.reply)
+	}
+	failed := "https://seven.sliccy.ai/doc"
+	held := g.fromBrowser(esContentReply(trig, int64(esReadID), esOrdinary, true))
+	o.take(held)
+	var infoID int64
+	for _, raw := range held.send {
+		id, method, session := esOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			infoID = id
+		}
+	}
+	if infoID == 0 {
+		t.Fatal("expected identity post-read getTargetInfo while the trigger reply is held")
+	}
+	esDrain(g, &o, g.fromBrowser(esFrameNavigatedUnreachable("chrome-error://chromewebdata/", "L-ERR", failed)), failed)
+	esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(infoID, "chrome-error://chromewebdata/")), "chrome-error://chromewebdata/")
+	trigSeen, trigRefused := false, false
+	for _, p := range o.payloads {
+		if !strings.Contains(p, fmt.Sprintf(`"id":%d`, esReadID)) {
+			continue
+		}
+		trigSeen = true
+		if strings.Contains(p, "slicc: refused:") {
+			trigRefused = true
+		}
+	}
+	if !trigSeen || trigRefused {
+		t.Fatalf("stock outlived fixture: trigger evaluate must stay OK after protected error-page commit: payloads=%v", o.payloads)
+	}
+	esDrain(g, &o, g.fromBrowser(esContentReply(shot, int64(esReadID2), esOrdinary, true)), esOrdinary)
+	shotOK, shotOutlived := false, false
+	for _, p := range o.payloads {
+		if !strings.Contains(p, fmt.Sprintf(`"id":%d`, esReadID2)) {
+			continue
+		}
+		if strings.Contains(p, "committed Chrome's error page for a protected URL while this command ran") {
+			shotOutlived = true
+		} else if !strings.Contains(p, "slicc: refused:") {
+			shotOK = true
+		}
+	}
+	if shotOK || !shotOutlived {
+		t.Fatalf("stock outlived fixture: delayed screenshot must be refused with outlived text: payloads=%v", o.payloads)
+	}
+}
+
+func TestExistingSessionHistoryQuarantinedTreesRedactNotRefuseResourceTree(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	g.mu.Lock()
+	if nt := g.navTargets[esTarget]; nt != nil {
+		nt.historyLocked = true
+		nt.protectedHistory = map[string]string{"1": refusedHistory}
+	}
+	g.mu.Unlock()
+	origin := "https://seven.sliccy.ai"
+	marker := origin + "/path-marker?query-marker"
+	framePV := g.fromCommand(&command{id: int64(esReadID), method: "Page.getFrameTree", session: esSession, params: map[string]any{}}, int64(esReadID), true)
+	if framePV.reply != nil || framePV.forward == nil {
+		t.Fatalf("getFrameTree must remain a navigation control under history quarantine: reply=%s", framePV.reply)
+	}
+	resPV := g.fromCommand(&command{id: int64(esReadID2), method: "Page.getResourceTree", session: esSession, params: map[string]any{}}, int64(esReadID2), true)
+	if resPV.reply != nil {
+		t.Fatalf("getResourceTree must not be history-refused (scrub-only; was removed from navigationControls in 4aab87ca): %s", resPV.reply)
+	}
+	if resPV.forward == nil {
+		t.Fatalf("getResourceTree must forward under history quarantine")
+	}
+	raw := esEncode(map[string]any{
+		"id": int64(esReadID2), "sessionId": esSession,
+		"result": map[string]any{"frameTree": map[string]any{
+			"frame":     map[string]any{"id": esTarget, "url": marker, "urlFragment": "#fragment-marker", "securityOrigin": origin},
+			"resources": []any{map[string]any{"url": origin + "/script-marker.js?query-marker#fragment-marker", "type": "Script"}},
+		}},
+	})
+	scrubbed := string(g.scrub(raw))
+	if strings.Contains(scrubbed, "marker") {
+		t.Fatalf("scrub must origin-redact protected tree URLs: %s", scrubbed)
+	}
+	if !strings.Contains(scrubbed, origin) {
+		t.Fatalf("scrub must keep origin: %s", scrubbed)
+	}
+	scriptPV := g.fromCommand(&command{id: int64(esReadID3), method: "Runtime.evaluate", session: esSession, params: map[string]any{"expression": "true"}}, int64(esReadID3), true)
+	if scriptPV.reply == nil || !strings.Contains(string(scriptPV.reply), refusedHistory) {
+		t.Fatalf("evaluate under history quarantine must refuse with history text: %s", scriptPV.reply)
 	}
 }
 

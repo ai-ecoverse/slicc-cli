@@ -64,7 +64,7 @@ func docIdentityCoveredMethod(method string) bool {
 		"DOM.getDocument", "DOM.getOuterHTML",
 		"DOMSnapshot.captureSnapshot",
 		"Page.captureScreenshot", "Page.printToPDF",
-		"Page.getResourceContent", "Page.getResourceTree",
+		"Page.getResourceContent",
 		"Accessibility.getFullAXTree", "Accessibility.getPartialAXTree", "Accessibility.queryAXTree":
 		return true
 	default:
@@ -137,30 +137,8 @@ func (g *guard) noteOrdinaryDocIdentityLocked(target, frameID, loaderID, url str
 	g.docBaselines[target] = docIdentity{frameID: frameID, loaderID: loaderID, url: url, full: full}
 }
 
-func (g *guard) docIdentityFailedLoadTaintsLocked(target, unreachable string) bool {
-	switch g.errorProofOfLocked(target) {
-	case errorProofOrdinary:
-		return false
-	case errorProofProtected, errorProofFailed:
-		return true
-	}
-	if unreachable == "" {
-		return true
-	}
-	if protect.Unparseable(unreachable) || g.o.Loaded(unreachable) {
-		return true
-	}
-	if ordinaryFailedUnreachable(g.o, unreachable) {
-		return false
-	}
-	return true
-}
-
-func (g *guard) docIdentityWatchBadLocked(target, url, unreachable string) bool {
-	if chromeErrorDocument(url) {
-		return g.docIdentityFailedLoadTaintsLocked(target, unreachable)
-	}
-	if url == "" {
+func (g *guard) docIdentityWatchBadLocked(url string) bool {
+	if url == "" || chromeErrorDocument(url) {
 		return false
 	}
 	if protect.Unparseable(url) || g.o.Loaded(url) {
@@ -179,8 +157,8 @@ func (g *guard) bumpDocIdentityTaintLocked(target string) {
 	g.docIdentityTaint[target]++
 }
 
-func (g *guard) noteDocIdentityWatchURLLocked(target, url, unreachable string) {
-	if target == "" || !g.docIdentityWatchBadLocked(target, url, unreachable) {
+func (g *guard) noteDocIdentityWatchURLLocked(target, url string) {
+	if target == "" || !g.docIdentityWatchBadLocked(url) {
 		return
 	}
 	g.bumpDocIdentityTaintLocked(target)
@@ -190,18 +168,14 @@ func (g *guard) noteOrdinaryDocIdentityFromTargetLocked(t *target) {
 	if t == nil || (t.typ != "page" && t.typ != "tab") {
 		return
 	}
-	unreachable := ""
-	if nt := g.navTargets[t.id]; nt != nil {
-		unreachable = nt.errorURL
-	}
-	g.noteDocIdentityWatchURLLocked(t.id, t.url, unreachable)
+	g.noteDocIdentityWatchURLLocked(t.id, t.url)
 }
 
 func (g *guard) noteOrdinaryDocIdentityFromNavLocked(nt *navTarget) {
 	if nt == nil {
 		return
 	}
-	g.noteDocIdentityWatchURLLocked(nt.target, nt.documentURL, nt.errorURL)
+	g.noteDocIdentityWatchURLLocked(nt.target, nt.documentURL)
 }
 
 func (g *guard) noteDocIdentityAdmitLocked(c *command) {
@@ -445,6 +419,8 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 	var send [][]byte
 	tainted := g.docIdentityTaint[h.target] != h.taint
 	switch {
+	case chromeErrorDocument(current.url):
+		g.pendingPage = append(g.pendingPage, h.data)
 	case g.docIdentityProtectedLocked(current):
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
 		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
