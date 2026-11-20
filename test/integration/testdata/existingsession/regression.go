@@ -1707,33 +1707,51 @@ func stringBytes(pages [][]byte) []string {
 }
 
 func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
+	inner := "https://vault.sliccy.ai/doc"
 	type row struct {
 		name       string
+		wrapper    string
 		origin     string
 		pin        string
+		seed       string
 		wantShow   bool
+		wantSecret bool
 		assumption string
 	}
 	rows := []row{
-		{name: "opaque-origin-://-contextId", origin: "://", pin: "contextId", wantShow: true, assumption: "Chrome often reports opaque/empty security origin for view-source documents; worldContextLocked shows when !Loaded(origin)"},
-		{name: "opaque-origin-null-uniqueContextId", origin: "null", pin: "uniqueContextId", wantShow: true, assumption: "opaque origin null is not Loaded; default main-frame context is shown"},
-		{name: "vault-origin-contextId", origin: "https://vault.sliccy.ai", pin: "contextId", wantShow: false, assumption: "if Chrome reports the inner protected origin, Loaded(origin) hides the context before pin"},
+		{name: "opaque-origin-://-contextId", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "opaque-origin shape: worldContextLocked shows when !Loaded(origin); pin skips identity"},
+		{name: "opaque-origin-null-uniqueContextId", wrapper: "view-source:" + inner, origin: "null", pin: "uniqueContextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "opaque origin null is not Loaded; default main-frame context is shown"},
+		{name: "context-origin-inner-protected", wrapper: "view-source:" + inner, origin: "https://vault.sliccy.ai", pin: "contextId", seed: "url-only", wantShow: false, wantSecret: false, assumption: "contextCreatedEvent suppresses default main-frame context when Loaded(origin)"},
+		{name: "measured-view-source-tree-then-opaque", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "measured shape after classify: target wrapper + frame/history inner protected → target.protected → frameUnderProtected hides opaque context"},
+		{name: "measured-view-source-opaque-before-tree", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "measured timing: opaque context before guard reads tree/observe; show+pin delivers"},
+		{name: "measured-view-source-context-origin-inner", wrapper: "view-source:" + inner, origin: "https://vault.sliccy.ai", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "measured: tree/history inner + context origin inner protected → suppress/hide"},
+		{name: "measured-blob-opaque-before-tree", wrapper: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "blob wrapper opaque-before-classify timing"},
+		{name: "measured-filesystem-opaque-before-tree", wrapper: "filesystem:https://vault.sliccy.ai/temporary/x.html", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: true, assumption: "filesystem wrapper opaque-before-classify timing"},
+		{name: "measured-blob-tree-then-opaque", wrapper: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "blob wrapper after classify hides opaque context"},
 	}
 	for _, tc := range rows {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			g := esGuard(t)
 			_ = esAdmit(t, g)
-			live := "view-source:https://vault.sliccy.ai/doc"
 			g.mu.Lock()
 			if t0 := g.targets[esTarget]; t0 != nil {
-				t0.url = live
+				t0.url = tc.wrapper
 			}
 			g.mu.Unlock()
 			var o esOutcome
+			if tc.seed == "tree-then-context" {
+				esDrain(g, &o, g.fromBrowser(esRelay("Target.targetInfoChanged", tc.wrapper)), tc.wrapper)
+				g.mu.Lock()
+				if nt := g.navTargets[esTarget]; nt != nil {
+					nt.documentURL = inner
+				}
+				g.noteFrameTreeResultLocked(esTarget, json.RawMessage(`{"frameTree":{"frame":{"id":"`+esTarget+`","url":"`+inner+`","securityOrigin":"https://vault.sliccy.ai"}}}`))
+				g.mu.Unlock()
+			}
 			ctxID := int64(42)
 			unique := "view-source-ctx-1"
-			esDrain(g, &o, g.fromBrowser(esExecutionContextCreated(ctxID, tc.origin, unique)), live)
+			esDrain(g, &o, g.fromBrowser(esExecutionContextCreated(ctxID, tc.origin, unique)), tc.wrapper)
 			g.mu.Lock()
 			shown := g.shown[esTarget] != nil && g.shown[esTarget].contexts[ctxID] != nil
 			hidden := g.contextHiddenLocked(esTarget, ctxID)
@@ -1752,7 +1770,7 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 			pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
 			if !tc.wantShow {
 				if pv.reply == nil {
-					t.Fatalf("hidden context must refuse pinned evaluate at admit")
+					t.Fatalf("hidden/suppressed context must refuse pinned evaluate at admit")
 				}
 				return
 			}
@@ -1772,10 +1790,14 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 				"id": int64(esReadID), "sessionId": esSession,
 				"result": map[string]any{"result": map[string]any{"type": "string", "value": "<html>" + esSecret + "</html>"}},
 			})
-			esDrain(g, &o, g.fromBrowser(reply), live)
+			esDrain(g, &o, g.fromBrowser(reply), tc.wrapper)
 			joined := strings.Join(o.payloads, "")
-			if strings.Contains(joined, esSecret) {
-				t.Fatalf("P1-3: pinned evaluate on a shown view-source context must not deliver protected source (%s); payloads=%v", tc.assumption, o.payloads)
+			gotSecret := strings.Contains(joined, esSecret)
+			if gotSecret != tc.wantSecret {
+				t.Fatalf("P1-3: secret want=%t got=%t (%s); payloads=%v", tc.wantSecret, gotSecret, tc.assumption, o.payloads)
+			}
+			if gotSecret {
+				t.Fatalf("P1-3: pinned evaluate must not deliver protected source (%s); payloads=%v", tc.assumption, o.payloads)
 			}
 		})
 	}
