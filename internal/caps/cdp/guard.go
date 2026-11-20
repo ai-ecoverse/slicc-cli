@@ -207,6 +207,10 @@ type guard struct {
 	blockedChildren          map[string]string
 	explicit                 map[string]int
 	attachCalls              map[callKey]string
+	docInflight              map[string]*docConfirm
+	docFailed                map[string]bool
+	docPassed                map[string]bool
+	flushAsync               func(send, page [][]byte)
 	patterns                 []any
 	heldExtras               map[requestKey][]heldExtra
 	heldExtraCount           int
@@ -329,6 +333,9 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		blockedChildren:          map[string]string{},
 		explicit:                 map[string]int{},
 		attachCalls:              map[callKey]string{},
+		docInflight:              map[string]*docConfirm{},
+		docFailed:                map[string]bool{},
+		docPassed:                map[string]bool{},
 		heldExtras:               map[requestKey][]heldExtra{},
 		seen:                     map[requestKey]reqLevel{},
 		handed:                   map[requestKey]int{},
@@ -1678,6 +1685,7 @@ func (g *guard) addRefusedLocked(id string) {
 }
 
 func (g *guard) destroyedLocked(id string) {
+	g.pruneDocConfirmTargetLocked(id)
 	g.clearBlockedChildrenLocked(id)
 	delete(g.frameProbeAttempts, id)
 	delete(g.frameProbed, id)
@@ -1711,6 +1719,7 @@ func (g *guard) destroyedLocked(id string) {
 }
 
 func (g *guard) forgetSessionLocked(id string) {
+	g.pruneDocConfirmSessionLocked(id)
 	g.goneLocked(id)
 	g.forgetWorldSessionLocked(id)
 	g.forgetCastLocked(id)

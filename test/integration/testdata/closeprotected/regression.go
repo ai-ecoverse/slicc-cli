@@ -16,8 +16,38 @@ func closeProtectedGuard(t *testing.T) *guard {
 		t.Fatal(err)
 	}
 	g := newGuard(o, nil)
+	g.relaySession = "RELAY"
 	g.targets["OPENER"] = &target{id: "OPENER", typ: "page", url: "https://ordinary.test/"}
 	return g
+}
+
+func closeDrain(g *guard, v browserVerdict) browserVerdict {
+	for _, raw := range v.send {
+		var m struct {
+			ID        *int64 `json:"id"`
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		if m.Method != "Target.getTargetInfo" || m.SessionID != "RELAY" || m.ID == nil {
+			continue
+		}
+		answer := encode(map[string]any{
+			"id":        *m.ID,
+			"sessionId": "RELAY",
+			"result": map[string]any{
+				"targetInfo": map[string]any{"targetId": "OPENER", "type": "page", "url": "https://ordinary.test/"},
+			},
+		})
+		more := g.fromBrowser(answer)
+		v.send = append(v.send, more.send...)
+		v.page = append(v.page, more.page...)
+		if more.forward != nil {
+			v.forward = more.forward
+			v.page = append(v.page, more.forward)
+		}
+	}
+	return v
 }
 
 func admitAttach(t *testing.T, g *guard, id int64, target string) {
@@ -62,13 +92,21 @@ func TestCloseProtectedOverlappingAttachKeepsReservation(t *testing.T) {
 	admitAttach(t, g, 1, "OPENER")
 	admitAttach(t, g, 2, "OPENER")
 	_ = g.fromBrowser(popupCreated())
-	fail := g.fromBrowser(attachReply(1, "", "Target closed"))
+	fail := closeDrain(g, g.fromBrowser(attachReply(1, "", "Target closed")))
 	if fail.forward == nil {
 		t.Fatal("failed attach reply dropped")
 	}
-	ok := g.fromBrowser(attachReply(2, "S-OPENER", ""))
+	ok := closeDrain(g, g.fromBrowser(attachReply(2, "S-OPENER", "")))
+	if len(ok.page) > 0 {
+		for _, p := range ok.page {
+			if strings.Contains(string(p), `"sessionId":"S-OPENER"`) || strings.Contains(string(p), `"result"`) {
+				ok.forward = p
+				break
+			}
+		}
+	}
 	if ok.forward == nil || strings.Contains(string(ok.forward), `"error"`) {
-		t.Fatalf("successful attach: %s", ok.forward)
+		t.Fatalf("successful attach: %s page=%v", ok.forward, ok.page)
 	}
 	g.mu.Lock()
 	closable := g.streamClosableLocked("POPUP")
@@ -96,7 +134,7 @@ func TestCloseProtectedGetTargetsPreservesFirstSight(t *testing.T) {
 	if list.forward == nil {
 		t.Fatal("getTargets reply dropped")
 	}
-	_ = g.fromBrowser(attachReply(1, "S-OPENER", ""))
+	_ = closeDrain(g, g.fromBrowser(attachReply(1, "S-OPENER", "")))
 	g.mu.Lock()
 	closable := g.streamClosableLocked("POPUP")
 	reason := g.closeTargetReasonLocked("POPUP")
