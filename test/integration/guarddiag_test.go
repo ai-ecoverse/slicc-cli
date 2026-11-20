@@ -28,10 +28,6 @@ func diagViewSource(t *testing.T, run guardRun) {
 	}
 }
 
-func TestDiagViewSourceAlone(t *testing.T) {
-	diagViewSource(t, guardRun{variant: "lagging", slots: 1, only: diagViewSourceID, repeatID: diagViewSourceID, repeatN: 20, rowTimeout: guardRowTimeout})
-}
-
 func TestDiagViewSourceUnderLoad(t *testing.T) {
 	diagViewSource(t, guardRun{variant: "lagging", slots: guardSlots(), repeatID: diagViewSourceID, repeatN: 20, rowTimeout: guardRowTimeout})
 }

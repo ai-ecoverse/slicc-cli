@@ -534,7 +534,6 @@
     "TestCDPExtensionFrameInnerMessageMarkerStripped": 8,
     "TestCDPExtensionFrameDetachReleasesHeldPaint": 10,
     "TestCDPDeliversOrdinaryIframeUnderTabAndPageAttachParents": 25.0,
-    "TestDiagViewSourceAlone": 240,
     "TestDiagViewSourceUnderLoad": 420
   }
 }
