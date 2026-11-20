@@ -212,6 +212,8 @@ type guard struct {
 	docPassed                map[string]bool
 	docBaselines             map[string]docIdentity
 	docIdentityTaint         map[string]uint64
+	docIdentitySeq           uint64
+	docChromeErrorSeq        map[string]uint64
 	docIdentityCalls         map[callKey]docIdentityAdmit
 	docIdentityHolds         map[callKey]*docIdentityHold
 	docIdentityAsks          map[string]*docIdentityAsk
@@ -343,6 +345,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		docPassed:                map[string]bool{},
 		docBaselines:             map[string]docIdentity{},
 		docIdentityTaint:         map[string]uint64{},
+		docChromeErrorSeq:        map[string]uint64{},
 		docIdentityCalls:         map[callKey]docIdentityAdmit{},
 		docIdentityHolds:         map[callKey]*docIdentityHold{},
 		docIdentityAsks:          map[string]*docIdentityAsk{},

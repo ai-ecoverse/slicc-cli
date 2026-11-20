@@ -38,6 +38,7 @@ type docIdentityHold struct {
 	baseline    docIdentity
 	known       bool
 	taint       uint64
+	seq         uint64
 	data        []byte
 	id          int64
 	session     string
@@ -88,18 +89,7 @@ func (g *guard) docIdentitySkipTargetLocked(target string) bool {
 	if target == "" {
 		return true
 	}
-	if g.errorProofOfLocked(target) != errorProofNone {
-		return true
-	}
-	t := g.targets[target]
-	if t != nil && chromeErrorDocument(t.url) {
-		return true
-	}
-	nt := g.navTargets[target]
-	if nt != nil && (chromeErrorDocument(nt.documentURL) || nt.errorURL != "" && g.o.Loaded(nt.errorURL)) {
-		return true
-	}
-	return false
+	return g.errorProofOfLocked(target) != errorProofNone
 }
 
 func (g *guard) currentDocIdentityLocked(target string) docIdentity {
@@ -164,10 +154,21 @@ func (g *guard) noteDocIdentityWatchURLLocked(target, url string) {
 	g.bumpDocIdentityTaintLocked(target)
 }
 
+func (g *guard) noteDocIdentityChromeErrorCommitLocked(target, url string) {
+	if target == "" || !chromeErrorDocument(url) {
+		return
+	}
+	if g.docChromeErrorSeq == nil {
+		g.docChromeErrorSeq = map[string]uint64{}
+	}
+	g.docChromeErrorSeq[target] = g.docIdentitySeq
+}
+
 func (g *guard) noteOrdinaryDocIdentityFromTargetLocked(t *target) {
 	if t == nil || (t.typ != "page" && t.typ != "tab") {
 		return
 	}
+	g.noteDocIdentityChromeErrorCommitLocked(t.id, t.url)
 	g.noteDocIdentityWatchURLLocked(t.id, t.url)
 }
 
@@ -175,6 +176,7 @@ func (g *guard) noteOrdinaryDocIdentityFromNavLocked(nt *navTarget) {
 	if nt == nil {
 		return
 	}
+	g.noteDocIdentityChromeErrorCommitLocked(nt.target, nt.documentURL)
 	g.noteDocIdentityWatchURLLocked(nt.target, nt.documentURL)
 }
 
@@ -253,6 +255,7 @@ func (g *guard) holdDocIdentityReplyLocked(k callKey, m *message, data []byte) (
 		baseline:    admit.baseline,
 		known:       admit.known,
 		taint:       admit.taint,
+		seq:         g.docIdentitySeq,
 		data:        append([]byte(nil), data...),
 		id:          *m.ID,
 		session:     m.SessionID,
@@ -420,7 +423,12 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 	tainted := g.docIdentityTaint[h.target] != h.taint
 	switch {
 	case chromeErrorDocument(current.url):
-		g.pendingPage = append(g.pendingPage, h.data)
+		eventSeq, saw := g.docChromeErrorSeq[h.target]
+		if saw && h.seq < eventSeq {
+			g.pendingPage = append(g.pendingPage, h.data)
+		} else {
+			g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
+		}
 	case g.docIdentityProtectedLocked(current):
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
 		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
@@ -573,6 +581,7 @@ func (g *guard) pruneDocIdentityTargetLocked(target string) {
 	}
 	delete(g.docBaselines, target)
 	delete(g.docIdentityTaint, target)
+	delete(g.docChromeErrorSeq, target)
 	delete(g.docIdentityAsks, target)
 	for k, h := range g.docIdentityHolds {
 		if h == nil || h.target != target {

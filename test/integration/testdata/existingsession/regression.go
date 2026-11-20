@@ -717,7 +717,7 @@ func esHasRetriable(o esOutcome) bool {
 		return true
 	}
 	for _, p := range o.payloads {
-		if esIsReadReply(p) && strings.Contains(p, esRetriableMark) {
+		if strings.Contains(p, esRetriableMark) {
 			return true
 		}
 	}
@@ -909,14 +909,19 @@ func TestExistingSessionWindowTaintChromeErrorOrdinaryFailedURLDoesNotTaint(t *t
 	if pv.forward == nil {
 		t.Fatalf("admit must forward: reply=%s", pv.reply)
 	}
+	g.mu.Lock()
+	before := g.docIdentityTaint[esTarget]
+	g.mu.Unlock()
 	failed := esOrdinary + "/missing"
 	esDrain(g, &o, g.fromBrowser(esFrameNavigatedUnreachable("chrome-error://chromewebdata/", "L-ERR", failed)), failed)
-	esDrain(g, &o, g.fromBrowser(esContentReply(cmd, int64(esReadID), esOrdinaryB, true)), esOrdinaryB)
-	if esSessionCut(g) {
-		t.Fatalf("chrome-error with an ordinary failed URL must not taint the window (stock recovery stays green)")
+	g.mu.Lock()
+	after := g.docIdentityTaint[esTarget]
+	g.mu.Unlock()
+	if after != before {
+		t.Fatalf("chrome-error ordinary failed URL must not bump identity taint: before=%d after=%d", before, after)
 	}
-	if esHasRetriable(o) || strings.Contains(strings.Join(o.payloads, ""), "slicc: refused:") {
-		t.Fatalf("chrome-error ordinary failed URL must not refuse the held reply: payloads=%v", o.payloads)
+	if esSessionCut(g) {
+		t.Fatalf("chrome-error with an ordinary failed URL must not cut the session")
 	}
 }
 
@@ -976,6 +981,122 @@ func TestExistingSessionOutlivedProtectedErrorPageCommitKeepsTrigger(t *testing.
 	}
 	if shotOK || !shotOutlived {
 		t.Fatalf("stock outlived fixture: delayed screenshot must be refused with outlived text: payloads=%v", o.payloads)
+	}
+}
+
+const esErrPageSecret = "ERRTOK9f3a2b"
+
+func esChromeErrorFailedURL() string {
+	return "https://seven.sliccy.ai/doc/" + esErrPageSecret + "/x?tok=" + esErrPageSecret
+}
+
+func esErrorPageContentReply(cmd esCommand, id int64, failed string) []byte {
+	switch cmd.method {
+	case "DOM.getDocument":
+		return esEncode(map[string]any{"id": id, "sessionId": esSession, "result": map[string]any{"root": map[string]any{"nodeId": 1, "documentURL": "chrome-error://chromewebdata/", "nodeName": "HTML", "children": []any{map[string]any{"nodeValue": failed}}}}})
+	case "DOM.getOuterHTML":
+		return esEncode(map[string]any{"id": id, "sessionId": esSession, "result": map[string]any{"outerHTML": "<html><body>This site can’t be reached " + failed + "</body></html>"}})
+	case "Page.captureScreenshot":
+		return esEncode(map[string]any{"id": id, "sessionId": esSession, "result": map[string]any{"data": "shot-" + failed}})
+	case "Accessibility.getFullAXTree":
+		return esEncode(map[string]any{"id": id, "sessionId": esSession, "result": map[string]any{"nodes": []any{map[string]any{"name": map[string]any{"value": failed}}}}})
+	default:
+		return esEncode(map[string]any{"id": id, "sessionId": esSession, "result": map[string]any{"value": failed}})
+	}
+}
+
+func esHoldThenSettleChromeError(t *testing.T, g *guard, o *esOutcome, cmd esCommand, id int64, reply []byte, eventBeforeReply bool, neverLearn bool) {
+	t.Helper()
+	pv := g.fromCommand(&command{id: id, method: cmd.method, session: esSession, params: cmd.params}, id, true)
+	if pv.forward == nil {
+		t.Fatalf("admit must forward: reply=%s", pv.reply)
+	}
+	failed := esChromeErrorFailedURL()
+	if eventBeforeReply {
+		esDrain(g, o, g.fromBrowser(esFrameNavigatedUnreachable("chrome-error://chromewebdata/", "L-ERR", failed)), failed)
+	}
+	held := g.fromBrowser(reply)
+	o.take(held)
+	var infoID int64
+	for _, raw := range held.send {
+		askID, method, session := esOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			infoID = askID
+		}
+	}
+	if infoID == 0 {
+		t.Fatal("expected identity post-read getTargetInfo while reply is held")
+	}
+	if !neverLearn && !eventBeforeReply {
+		esDrain(g, o, g.fromBrowser(esFrameNavigatedUnreachable("chrome-error://chromewebdata/", "L-ERR", failed)), failed)
+	}
+	esDrain(g, o, g.fromBrowser(esTargetInfoAnswer(infoID, "chrome-error://chromewebdata/")), "chrome-error://chromewebdata/")
+}
+
+func TestExistingSessionChromeErrorReplyBeforeEventDuringHoldDelivers(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	esHoldThenSettleChromeError(t, g, &o, cmd, int64(esReadID), esContentReply(cmd, int64(esReadID), esOrdinary, true), false, false)
+	if esSessionCut(g) {
+		t.Fatal("reply-before-event must not cut")
+	}
+	if esHasRetriable(o) || strings.Contains(strings.Join(o.payloads, ""), "slicc: refused:") {
+		t.Fatalf("reply-before-event with commit during hold must deliver: payloads=%v", o.payloads)
+	}
+	if !strings.Contains(strings.Join(o.payloads, ""), fmt.Sprintf(`"id":%d`, esReadID)) {
+		t.Fatalf("expected delivered trigger reply: payloads=%v", o.payloads)
+	}
+}
+
+func TestExistingSessionChromeErrorReplyAfterEventRefusesRetriable(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	cmd := esCommand{label: "Runtime.evaluate", method: "Runtime.evaluate", params: map[string]any{"expression": "1"}}
+	esHoldThenSettleChromeError(t, g, &o, cmd, int64(esReadID), esContentReply(cmd, int64(esReadID), esOrdinary, true), true, false)
+	if esSessionCut(g) {
+		t.Fatal("reply-after-event must not cut")
+	}
+	if !esHasRetriable(o) {
+		t.Fatalf("reply-after-event must retriable-refuse: payloads=%v", o.payloads)
+	}
+}
+
+func TestExistingSessionChromeErrorNeverLearnSecretRefused(t *testing.T) {
+	failed := esChromeErrorFailedURL()
+	if !strings.Contains(failed, esErrPageSecret) || strings.Count(failed, esErrPageSecret) < 2 {
+		t.Fatal("failed URL must carry the secret in both path and query")
+	}
+	cmds := []esCommand{
+		{label: "DOM.getDocument", method: "DOM.getDocument", params: map[string]any{}},
+		{label: "DOM.getOuterHTML", method: "DOM.getOuterHTML", params: map[string]any{"nodeId": json.Number("1")}},
+		{label: "Page.captureScreenshot", method: "Page.captureScreenshot", params: map[string]any{}},
+		{label: "Accessibility.getFullAXTree", method: "Accessibility.getFullAXTree", params: map[string]any{}},
+	}
+	for i, cmd := range cmds {
+		t.Run(cmd.label, func(t *testing.T) {
+			g := esGuard(t)
+			_ = esAdmit(t, g)
+			var o esOutcome
+			id := int64(esReadID + i)
+			reply := esErrorPageContentReply(cmd, id, failed)
+			if !strings.Contains(string(reply), esErrPageSecret) {
+				t.Fatal("fixture reply must carry the error-page secret")
+			}
+			esHoldThenSettleChromeError(t, g, &o, cmd, id, reply, false, true)
+			joined := strings.Join(o.payloads, "")
+			if esSessionCut(g) {
+				t.Fatal("never-learn chrome-error must not cut")
+			}
+			if !esHasRetriable(o) {
+				t.Fatalf("never-learn chrome-error must retriable-refuse: payloads=%v", o.payloads)
+			}
+			if strings.Contains(joined, esErrPageSecret) {
+				t.Fatalf("never-learn chrome-error must not deliver error-page secret bytes: payloads=%v", o.payloads)
+			}
+		})
 	}
 }
 
