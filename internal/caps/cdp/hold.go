@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -45,14 +46,71 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 	return [][]byte{g.resumeLocked(sid, info.TargetID)}
 }
 
-func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
-	var v browserVerdict
+func heldOpenerLocked(h *heldSession) string {
+	if h == nil || h.params == nil {
+		return ""
+	}
+	obj, _ := h.params["targetInfo"].(map[string]any)
+	if obj == nil {
+		return ""
+	}
+	s, _ := obj["openerId"].(string)
+	return s
+}
+
+func (g *guard) emptyURLPopupGroupLocked(h *heldSession) []*heldSession {
+	if h == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []*heldSession
+	add := func(x *heldSession) {
+		if x == nil || seen[x.id] {
+			return
+		}
+		seen[x.id] = true
+		out = append(out, x)
+	}
+	add(h)
+	if h.parent != "" {
+		add(g.held[h.parent])
+	}
+	for _, o := range g.held {
+		if o != nil && o.parent == h.id {
+			add(o)
+		}
+	}
+	if opener := heldOpenerLocked(h); opener != "" {
+		for _, o := range g.held {
+			if o == nil || (o.typ != "tab" && o.typ != "page") {
+				continue
+			}
+			if heldOpenerLocked(o) == opener {
+				add(o)
+			}
+		}
+	}
+	slices.SortStableFunc(out, func(a, b *heldSession) int {
+		rank := func(h *heldSession) int {
+			switch h.typ {
+			case "tab":
+				return 0
+			case "page":
+				return 1
+			default:
+				return 2
+			}
+		}
+		return rank(a) - rank(b)
+	})
+	return out
+}
+
+func (g *guard) releaseMatchHeldLocked(targetID string, info any, v *browserVerdict) []*heldSession {
+	var matched []*heldSession
 	for _, h := range g.held {
 		if h.target != targetID {
 			continue
-		}
-		if h.params != nil && info != nil {
-			h.params["targetInfo"] = info
 		}
 		if workerTypes[h.typ] && g.workerUnresolvedLocked(g.targets[targetID]) {
 			continue
@@ -64,9 +122,44 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 			v.send = append(v.send, g.armFailedLoadProofLocked(g.targets[targetID])...)
 			continue
 		}
-		part := g.deliverHeldLocked(h)
+		matched = append(matched, h)
+	}
+	return matched
+}
+
+func (g *guard) releasePopupGroupLocked(targetID string, info any, group []*heldSession, hide bool, released map[string]bool, v *browserVerdict) {
+	for _, gh := range group {
+		if gh == nil || released[gh.id] || g.held[gh.id] == nil {
+			continue
+		}
+		if gh.params != nil && info != nil && gh.target == targetID {
+			gh.params["targetInfo"] = info
+		}
+		delete(g.held, gh.id)
+		released[gh.id] = true
+		if hide {
+			v.send = append(v.send, g.hideLocked(gh)...)
+			continue
+		}
+		part := g.deliverHeldLocked(gh)
 		v.send = append(v.send, part.send...)
 		v.page = append(v.page, part.page...)
+	}
+}
+
+func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
+	var v browserVerdict
+	matched := g.releaseMatchHeldLocked(targetID, info, &v)
+	released := map[string]bool{}
+	hide := g.targetProtectedLocked(targetID)
+	for _, h := range matched {
+		if released[h.id] || g.held[h.id] == nil {
+			continue
+		}
+		if h.params != nil && info != nil && h.target == targetID {
+			h.params["targetInfo"] = info
+		}
+		g.releasePopupGroupLocked(targetID, info, g.emptyURLPopupGroupLocked(h), hide, released, &v)
 	}
 	return v
 }
@@ -240,6 +333,18 @@ func (g *guard) releaseHeldWorkersForSessionLocked(session, why string) [][]byte
 	return send
 }
 
+func (g *guard) expireDetachLocked(h *heldSession) [][]byte {
+	g.refuseHeldWaitLocked(h.target)
+	g.noteHiddenLocked(h.id, h.target)
+	g.logf("cdp: detached an auto-attached session that never got a URL target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
+	var send [][]byte
+	if h.waiting {
+		send = append(send, g.resumeLocked(h.id, h.target))
+	}
+	msg, _ := g.newCallLocked(h.parent, "Target.detachFromTarget", map[string]any{"sessionId": h.id}, false)
+	return append(send, msg)
+}
+
 func (g *guard) expireHold(sessionID string) [][]byte {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -247,9 +352,16 @@ func (g *guard) expireHold(sessionID string) [][]byte {
 	if !ok {
 		return nil
 	}
-	delete(g.held, sessionID)
+	group := g.emptyURLPopupGroupLocked(h)
 	g.logf("cdp: an auto-attached target never got a URL target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
-	send := g.hideLocked(h)
+	var send [][]byte
+	for _, gh := range group {
+		if gh == nil || g.held[gh.id] == nil {
+			continue
+		}
+		delete(g.held, gh.id)
+		send = append(send, g.expireDetachLocked(gh)...)
+	}
 	g.resolveUnknownLocked()
 	return send
 }

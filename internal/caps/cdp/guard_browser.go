@@ -79,7 +79,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		return v
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
-		if m.Method == "Target.attachedToTarget" && (g.attachedWorkerLocked(&m) || g.attachedIframeLocked(&m)) {
+		if m.Method == "Target.attachedToTarget" && (g.attachedWorkerLocked(&m) || g.attachedIframeLocked(&m) || g.held[m.SessionID] != nil) {
 			v := g.attachedEvent(&m, data)
 			v.forward = nil
 			v.page = nil
@@ -558,7 +558,7 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
 	}
-	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
+	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe" || info.Type == "tab") && g.explicit[info.TargetID] == 0 && params != nil {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, waiting)...), hold: []string{pSession}}, true
 	}
 	return browserVerdict{}, false
