@@ -344,6 +344,7 @@ func (g *guard) noteHiddenLocked(id, target string) {
 func (g *guard) hideLocked(h *heldSession) [][]byte {
 	g.refuseHeldWaitLocked(h.target)
 	g.noteHiddenLocked(h.id, h.target)
+	g.addRefusedLocked(h.id)
 	g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 	var send [][]byte
 	if h.waiting {
@@ -396,8 +397,18 @@ func (g *guard) releaseHeldWorkersForSessionLocked(session, why string) [][]byte
 		}
 		g.logf("cdp: releasing a held %s because %s target=%s session=%s parent=%s waiting=%t", kind, why, h.target, h.id, h.parent, h.waiting)
 		send = append(send, g.hideLocked(h)...)
+		if h.typ == "page" {
+			g.clearNeverSeenHeldPageLocked(h.id)
+		}
 	}
 	return send
+}
+
+func (g *guard) clearNeverSeenHeldPageLocked(id string) {
+	delete(g.refused, id)
+	delete(g.hidden, id)
+	delete(g.hiddenOwner, id)
+	g.goneLocked(id)
 }
 
 func (g *guard) expireDetachLocked(h *heldSession) [][]byte {

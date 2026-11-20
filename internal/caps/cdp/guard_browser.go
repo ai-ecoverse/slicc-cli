@@ -79,6 +79,9 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		v.page = append(v.page, g.takePendingPageLocked()...)
 		return v
 	}
+	if m.SessionID != "" && g.gone[m.SessionID] {
+		return browserVerdict{}
+	}
 	if g.sessionRefusedLocked(m.SessionID) {
 		if m.Method == "Target.attachedToTarget" && (g.attachedWorkerLocked(&m) || g.attachedIframeLocked(&m) || g.held[m.SessionID] != nil) {
 			return g.attachedUnderHeldLocked(&m, data)
