@@ -66,28 +66,17 @@ func (g *guard) heldIframeWaitLocked(c *command) <-chan struct{} {
 	if _, answered := g.parkedAnswers[k]; answered {
 		return nil
 	}
-	t := g.targets[id]
-	if t == nil || t.gone || t.typ != "iframe" || t.protected || !g.iframeHeldLocked(id) {
+	if !g.heldIframeParkableLocked(id) {
 		return nil
 	}
 	w := g.heldWaits[id]
 	if w != nil && w.calls[k] {
 		return w.ch
 	}
-	if w != nil && w.expired {
+	if w = g.heldWaitForLocked(id); w == nil {
 		return nil
 	}
-	if w == nil {
-		deadline := g.heldDeadlineLocked(id)
-		if !time.Now().Before(deadline) {
-			return nil
-		}
-		w = &heldWait{target: id, page: g.heldPageLocked(id), ch: make(chan struct{}), calls: map[callKey]bool{}}
-		g.heldWaits[id] = w
-		w.timer = time.AfterFunc(time.Until(deadline), func() { g.expireHeldWait(w) })
-	}
-	perPage, perStream := g.parkedCountsLocked(w.page)
-	if len(w.calls) >= maxParkedPerIframe || (w.page != "" && perPage >= maxParkedPerPage) || perStream >= maxParkedPerStream {
+	if g.heldWaitFullLocked(w) {
 		g.parkedAnswers[k] = false
 		g.logf("cdp: refused %s at once: too many calls wait for held iframes target=%s", c.method, id)
 		return nil
@@ -95,6 +84,104 @@ func (g *guard) heldIframeWaitLocked(c *command) <-chan struct{} {
 	w.calls[k] = true
 	g.logf("cdp: holding %s until the guard decides an auto-attached iframe target=%s", c.method, id)
 	return w.ch
+}
+
+func (g *guard) heldIframeParkableLocked(id string) bool {
+	t := g.targets[id]
+	return t != nil && !t.gone && t.typ == "iframe" && !t.protected && g.iframeHeldLocked(id)
+}
+
+func (g *guard) heldWaitForLocked(id string) *heldWait {
+	if w := g.heldWaits[id]; w != nil {
+		if w.expired {
+			return nil
+		}
+		return w
+	}
+	deadline := g.heldDeadlineLocked(id)
+	if !time.Now().Before(deadline) {
+		return nil
+	}
+	w := &heldWait{target: id, page: g.heldPageLocked(id), ch: make(chan struct{}), calls: map[callKey]bool{}}
+	g.heldWaits[id] = w
+	if heldLookupDeadline() {
+		w.timer = time.AfterFunc(time.Until(deadline), func() { g.expireHeldWait(w) })
+	}
+	return w
+}
+
+func (g *guard) heldWaitFullLocked(w *heldWait) bool {
+	perPage, perStream := g.parkedCountsLocked(w.page)
+	return len(w.calls) >= maxParkedPerIframe || (w.page != "" && perPage >= maxParkedPerPage) || perStream >= maxParkedPerStream
+}
+
+func (g *guard) hiddenResultLocked(kind callKind, m *message, res map[string]any, v browserVerdict) browserVerdict {
+	if kind == kindTargetInfo && g.parkTargetInfoReplyLocked(callKey{m.SessionID, *m.ID}, m, res) {
+		return v
+	}
+	v.forward = missingTarget(*m.ID, m.SessionID)
+	return v
+}
+
+func (g *guard) parkTargetInfoReplyLocked(k callKey, m *message, res map[string]any) bool {
+	if !heldLookupParkReply() || (k.session != "" && !g.browserSessions[k.session]) {
+		return false
+	}
+	info, _ := toInfo(res["targetInfo"])
+	id := info.TargetID
+	v := g.infoVerdictLocked(info)
+	if id == "" || info.Type != "iframe" || !g.heldIframeParkableLocked(id) || v.loaded() || v.extensionFrame || g.extensionFrameTargetLocked(g.targets[id]) {
+		return false
+	}
+	if w := g.heldWaits[id]; w != nil && w.calls[k] {
+		return false
+	}
+	w := g.heldWaitForLocked(id)
+	if w == nil {
+		return false
+	}
+	if g.heldWaitFullLocked(w) {
+		g.logf("cdp: refused the answer to Target.getTargetInfo at once: too many calls wait for held iframes target=%s", id)
+		return false
+	}
+	w.calls[k] = true
+	g.logf("cdp: holding the answer to Target.getTargetInfo until the guard decides an auto-attached iframe target=%s", id)
+	reply := *m
+	go g.answerParkedLookup(w.ch, k, reply, res)
+	return true
+}
+
+func (g *guard) answerParkedLookup(ch <-chan struct{}, k callKey, m message, res map[string]any) {
+	<-ch
+	g.mu.Lock()
+	answer := g.parkedLookupAnswerLocked(k, &m, res)
+	flush := g.flushAsync
+	g.mu.Unlock()
+	if flush != nil {
+		flush(nil, [][]byte{answer})
+	}
+}
+
+func (g *guard) parkedLookupAnswerLocked(k callKey, m *message, res map[string]any) []byte {
+	settled, ok := g.parkedAnswers[k]
+	delete(g.parkedAnswers, k)
+	if k.session != "" && !g.browserSessions[k.session] {
+		return missingSession(k.id, k.session)
+	}
+	if !ok || !settled {
+		return missingTarget(k.id, k.session)
+	}
+	if heldLookupClassifyAtSettle() {
+		info, obj := toInfo(res["targetInfo"])
+		if heldLookupHideAtSettle() && g.listingHiddenLocked(info) {
+			g.logf("cdp: refused a held answer to Target.getTargetInfo once the guard decided its iframe target=%s", info.TargetID)
+			return missingTarget(k.id, k.session)
+		}
+		g.redactInfoLocked(obj, info)
+		g.noteWorkerShownLocked(info)
+	}
+	m.Result = encode(res)
+	return encode(m)
 }
 
 func (g *guard) expireHeldWait(w *heldWait) {
@@ -119,7 +206,9 @@ func (g *guard) settleHeldWaitLocked(w *heldWait, settled bool) {
 	for k := range w.calls {
 		g.parkedAnswers[k] = settled
 	}
-	w.calls = map[callKey]bool{}
+	if heldLookupReleaseSlots() {
+		w.calls = map[callKey]bool{}
+	}
 	if w.timer != nil {
 		w.timer.Stop()
 	}
