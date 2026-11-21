@@ -1765,14 +1765,20 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 		wantIdent  bool
 		assumption string
 	}
+	blobURL := "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455"
+	fsURL := "filesystem:https://vault.sliccy.ai/temporary/x.html"
+	vaultOrigin := "https://vault.sliccy.ai"
 	rows := []row{
-		{name: "timing-blank-opaque-before-place", targetURL: esOrdinary, origin: "://", pin: "contextId", seed: "blank-before-place", wantShow: true, wantSecret: false, wantIdent: true, assumption: "DIAGSHAPE: initial about:blank context is opaque+shown; option (a) identity-holds until the document is placed"},
-		{name: "timing-error-page-opaque-shown", targetURL: "chrome-error://chromewebdata/", origin: "://", pin: "contextId", seed: "error-page", wantShow: true, wantSecret: false, wantErrPg: true, assumption: "DIAGSHAPE: blocked view-source:vault → chrome-error frame, opaque error-page context shown; pinned evaluate refused by the error-page rule (names the failed URL)"},
-		{name: "loaded-wrapper-inner-origin-hidden", targetURL: "view-source:" + inner, origin: "https://vault.sliccy.ai", pin: "contextId", seed: "url-only", wantShow: false, wantSecret: false, assumption: "DIAGSHAPE ordinary control + Loaded wrapper: final default context origin is the INNER origin → Loaded → contextCreatedEvent suppresses/hides"},
-		{name: "blob-opaque-before-place", targetURL: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "blob: unmeasured on link route; keep option (a) opaque-before-place stress"},
-		{name: "blob-opaque-null-uniqueContextId", targetURL: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "null", pin: "uniqueContextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "blob: uniqueContextId pin; option (a) still applies until DIAGSHAPE blob numbers arrive"},
-		{name: "filesystem-opaque-before-place", targetURL: "filesystem:https://vault.sliccy.ai/temporary/x.html", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "filesystem: unmeasured; keep option (a)"},
-		{name: "blob-after-classify-opaque-hidden", targetURL: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "blob after observe/classify: protected target → frameUnderProtected hides opaque context"},
+		{name: "timing-blank-opaque-before-place", targetURL: esOrdinary, origin: "://", pin: "contextId", seed: "blank-before-place", wantShow: true, wantSecret: false, wantIdent: true, assumption: "DIAGSHAPE measured: initial about:blank context is opaque+shown; option (a) identity-holds until the document is placed"},
+		{name: "timing-error-page-opaque-shown", targetURL: "chrome-error://chromewebdata/", origin: "://", pin: "contextId", seed: "error-page", wantShow: true, wantSecret: false, wantErrPg: true, assumption: "DIAGSHAPE measured: blocked view-source:vault → chrome-error frame, opaque error-page context shown; pinned evaluate refused by the error-page rule"},
+		{name: "loaded-wrapper-inner-origin-hidden", targetURL: "view-source:" + inner, origin: vaultOrigin, pin: "contextId", seed: "url-only", wantShow: false, wantSecret: false, assumption: "DIAGSHAPE measured (view-source control + blob/filesystem): final default context origin is the protected INNER origin → Loaded → contextCreatedEvent suppresses"},
+		{name: "blob-lagging-protected-origin-hidden", targetURL: blobURL, origin: vaultOrigin, pin: "contextId", seed: "lagging-origin", wantShow: false, wantSecret: false, assumption: "DIAGSHAPE Run2 shape in lagging order: cached URL still ordinary while frameNavigated/targetInfoChanged held; context origin is vault → Loaded(origin) hides even with stale URL"},
+		{name: "filesystem-lagging-protected-origin-hidden", targetURL: fsURL, origin: vaultOrigin, pin: "contextId", seed: "lagging-origin", wantShow: false, wantSecret: false, assumption: "DIAGSHAPE Run2 filesystem lagging: same as blob — protected-origin context hidden by Loaded while nav events held"},
+		{name: "blob-after-classify-origin-hidden", targetURL: blobURL, origin: vaultOrigin, pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "DIAGSHAPE Run2 unlagged: guard learned frame first → frame-under-protected / Loaded hides vault-origin context"},
+		{name: "sandboxed-null-origin-blob-residual", targetURL: blobURL, origin: "null", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "DIAGSHAPE residual (unmeasured): sandboxed/null-origin protected blob — Loaded(origin) does not hide; option (a) sizes the pin window"},
+		{name: "blob-opaque-before-place", targetURL: blobURL, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "SYNTHETIC: opaque blob context does not occur on measured wrappers; option (a) defence-in-depth stress"},
+		{name: "blob-opaque-null-uniqueContextId", targetURL: blobURL, origin: "null", pin: "uniqueContextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "SYNTHETIC: uniqueContextId pin path for option (a); real null-origin residual is sandboxed-null-origin-blob-residual"},
+		{name: "filesystem-opaque-before-place", targetURL: fsURL, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "SYNTHETIC: opaque filesystem context unmeasured; option (a) defence-in-depth"},
 	}
 	for _, tc := range rows {
 		tc := tc
@@ -1815,10 +1821,11 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 				esDrain(g, &o, g.fromBrowser(esRelay("Target.targetInfoChanged", tc.targetURL)), tc.targetURL)
 				g.mu.Lock()
 				if nt := g.navTargets[esTarget]; nt != nil {
-					nt.documentURL = inner
+					nt.documentURL = tc.targetURL
 				}
-				g.noteFrameTreeResultLocked(esTarget, json.RawMessage(`{"frameTree":{"frame":{"id":"`+esTarget+`","url":"`+inner+`","securityOrigin":"https://vault.sliccy.ai"}}}`))
+				g.noteFrameTreeResultLocked(esTarget, json.RawMessage(`{"frameTree":{"frame":{"id":"`+esTarget+`","url":"`+tc.targetURL+`","securityOrigin":"https://vault.sliccy.ai"}}}`))
 				g.mu.Unlock()
+			case "lagging-origin":
 			default:
 				g.mu.Lock()
 				if t0 := g.targets[esTarget]; t0 != nil {
@@ -1831,6 +1838,9 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 			live := tc.targetURL
 			if tc.seed == "error-page" {
 				live = "chrome-error://chromewebdata/"
+			}
+			if tc.seed == "lagging-origin" {
+				live = esOrdinary
 			}
 			esDrain(g, &o, g.fromBrowser(esExecutionContextCreated(ctxID, tc.origin, unique)), live)
 			if tc.seed == "blank-before-place" {
