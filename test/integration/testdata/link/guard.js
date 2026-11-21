@@ -1,7 +1,7 @@
 import { run } from '/vendor/slicc-browsers/guard-runner.mjs';
 import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
-import { foregroundMouseCall } from './foreground.js';
+import { failureEvidence, foregroundMouseCall } from './foreground.js';
 
 const CALL_TIMEOUT_MS = 10000;
 
@@ -187,7 +187,7 @@ function frameLeakFailure(evidence) {
   return '';
 }
 
-function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
+function sessionBound(c, name, { inject, gate, frameLeak, unfocusClick } = {}) {
   const calls = new Map();
   const events = [];
   const fake = new Set();
@@ -341,7 +341,9 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
         const set = calls.get(sessionId) ?? new Set();
         calls.set(sessionId, set);
         set.add(reject);
-        foregroundMouseCall(c, method, params, sessionId)
+        const unfocused = Boolean(unfocusClick?.pending && method === 'Input.dispatchMouseEvent' && params?.type === 'mousePressed' && params.x === 20 && params.y === 20);
+        if (unfocused) unfocusClick.pending = false;
+        foregroundMouseCall(c, method, params, sessionId, { unfocused })
           .then((result) => afterSend(before, result))
           .then(resolve, reject)
           .finally(() => set.delete(reject));
@@ -528,12 +530,14 @@ export function guardStart(getLink, opts) {
         client.callTimeout = callTimeout;
         const unguarded = await retried(() => SocketClient.open(b.ws));
         unguarded.callTimeout = callTimeout;
-        if (vector.id === 'C9.page-drivable') {
-          const evidence = { control: [], guarded: [] };
+        if (vector.id.startsWith('C9.')) {
+          const key = rowKey({ id: vector.id, target, variant });
+          const evidence = mouseDiagnostics.get(key) ?? { control: [], guarded: [] };
           client.mouseEvidence = evidence.guarded;
           unguarded.mouseEvidence = evidence.control;
-          mouseDiagnostics.set(rowKey({ id: vector.id, target, variant }), evidence);
+          mouseDiagnostics.set(key, evidence);
         }
+        const unfocusClick = opts.inject === 'unfocused_click' && vector.id.startsWith('C9.') ? { pending: true } : null;
         const frameLeak =
           vector.id === 'C3.tab-iframe-leak'
             ? {
@@ -553,7 +557,7 @@ export function guardStart(getLink, opts) {
         if (frameLeak) frameLeakByRow.set(rowKey({ id: vector.id, target, variant }), frameLeak);
         return {
           client: guarded,
-          unguarded: sessionBound(unguarded, 'unguarded', { frameLeak }),
+          unguarded: sessionBound(unguarded, 'unguarded', { frameLeak, unfocusClick }),
           close: async () => {
             unguarded.close();
             await client.close().catch(() => {});
@@ -569,8 +573,9 @@ export function guardStart(getLink, opts) {
       parallel: opts.parallel,
       fixture: fixtureLog(opts.log),
       log: (row) => {
-        const evidence = mouseDiagnostics.get(rowKey(row));
-        if (evidence) { row.diagnostics = evidence; mouseDiagnostics.delete(rowKey(row)); }
+        const evidence = failureEvidence(row, mouseDiagnostics.get(rowKey(row)));
+        if (evidence) row.diagnostics = evidence;
+        mouseDiagnostics.delete(rowKey(row));
         const frameLeak = frameLeakByRow.get(rowKey(row));
         if (frameLeak) {
           harvestFrameTargets(frameLeak);
