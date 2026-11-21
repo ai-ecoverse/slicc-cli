@@ -1755,48 +1755,95 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 	inner := "https://vault.sliccy.ai/doc"
 	type row struct {
 		name       string
-		wrapper    string
+		targetURL  string
 		origin     string
 		pin        string
 		seed       string
 		wantShow   bool
 		wantSecret bool
+		wantErrPg  bool
+		wantIdent  bool
 		assumption string
 	}
 	rows := []row{
-		{name: "opaque-origin-://-contextId", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "option (a): pinned evaluate on watch-bad document identity-holds"},
-		{name: "opaque-origin-null-uniqueContextId", wrapper: "view-source:" + inner, origin: "null", pin: "uniqueContextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "option (a): uniqueContextId pin on watch-bad document identity-holds"},
-		{name: "context-origin-inner-protected", wrapper: "view-source:" + inner, origin: "https://vault.sliccy.ai", pin: "contextId", seed: "url-only", wantShow: false, wantSecret: false, assumption: "contextCreatedEvent suppresses default main-frame context when Loaded(origin)"},
-		{name: "measured-view-source-tree-then-opaque", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "measured after classify: protected target hides opaque context"},
-		{name: "measured-view-source-opaque-before-tree", wrapper: "view-source:" + inner, origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "measured timing stress: opaque before tree; pin identity-holds on watch-bad URL"},
-		{name: "measured-view-source-context-origin-inner", wrapper: "view-source:" + inner, origin: "https://vault.sliccy.ai", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "measured: context origin inner protected → suppress/hide"},
-		{name: "measured-blob-opaque-before-tree", wrapper: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "blob wrapper: pin identity-holds"},
-		{name: "measured-filesystem-opaque-before-tree", wrapper: "filesystem:https://vault.sliccy.ai/temporary/x.html", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, assumption: "filesystem wrapper: pin identity-holds"},
-		{name: "measured-blob-tree-then-opaque", wrapper: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "blob after classify hides opaque context"},
+		{name: "timing-blank-opaque-before-place", targetURL: esOrdinary, origin: "://", pin: "contextId", seed: "blank-before-place", wantShow: true, wantSecret: false, wantIdent: true, assumption: "DIAGSHAPE: initial about:blank context is opaque+shown; option (a) identity-holds until the document is placed"},
+		{name: "timing-error-page-opaque-shown", targetURL: "chrome-error://chromewebdata/", origin: "://", pin: "contextId", seed: "error-page", wantShow: true, wantSecret: false, wantErrPg: true, assumption: "DIAGSHAPE: blocked view-source:vault → chrome-error frame, opaque error-page context shown; pinned evaluate refused by the error-page rule (names the failed URL)"},
+		{name: "loaded-wrapper-inner-origin-hidden", targetURL: "view-source:" + inner, origin: "https://vault.sliccy.ai", pin: "contextId", seed: "url-only", wantShow: false, wantSecret: false, assumption: "DIAGSHAPE ordinary control + Loaded wrapper: final default context origin is the INNER origin → Loaded → contextCreatedEvent suppresses/hides"},
+		{name: "blob-opaque-before-place", targetURL: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "blob: unmeasured on link route; keep option (a) opaque-before-place stress"},
+		{name: "blob-opaque-null-uniqueContextId", targetURL: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "null", pin: "uniqueContextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "blob: uniqueContextId pin; option (a) still applies until DIAGSHAPE blob numbers arrive"},
+		{name: "filesystem-opaque-before-place", targetURL: "filesystem:https://vault.sliccy.ai/temporary/x.html", origin: "://", pin: "contextId", seed: "url-only", wantShow: true, wantSecret: false, wantIdent: true, assumption: "filesystem: unmeasured; keep option (a)"},
+		{name: "blob-after-classify-opaque-hidden", targetURL: "blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455", origin: "://", pin: "contextId", seed: "tree-then-context", wantShow: false, wantSecret: false, assumption: "blob after observe/classify: protected target → frameUnderProtected hides opaque context"},
 	}
 	for _, tc := range rows {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			g := esGuard(t)
 			_ = esAdmit(t, g)
-			g.mu.Lock()
-			if t0 := g.targets[esTarget]; t0 != nil {
-				t0.url = tc.wrapper
-			}
-			g.mu.Unlock()
 			var o esOutcome
-			if tc.seed == "tree-then-context" {
-				esDrain(g, &o, g.fromBrowser(esRelay("Target.targetInfoChanged", tc.wrapper)), tc.wrapper)
+			switch tc.seed {
+			case "error-page":
+				failed := inner
+				announced := "chrome-error://chromewebdata/"
+				g.mu.Lock()
+				if t0 := g.targets[esTarget]; t0 != nil {
+					t0.url = announced
+				}
+				if nt := g.navTargets[esTarget]; nt != nil {
+					nt.documentURL = announced
+					nt.errorURL = failed
+				}
+				g.setErrorProofLocked(esTarget, errorProofProtected)
+				g.mu.Unlock()
+				esDrain(g, &o, g.fromBrowser(esFrameNavigatedUnreachable(announced, "L-ERR", failed)), failed)
+			case "blank-before-place":
+				g.mu.Lock()
+				g.docPlaceSeq[esTarget] = 0
+				g.docPlaceURL[esTarget] = ""
+				if t0 := g.targets[esTarget]; t0 != nil {
+					t0.url = "about:blank"
+				}
+				if nt := g.navTargets[esTarget]; nt != nil {
+					nt.documentURL = "about:blank"
+				}
+				g.mu.Unlock()
+			case "tree-then-context":
+				g.mu.Lock()
+				if t0 := g.targets[esTarget]; t0 != nil {
+					t0.url = tc.targetURL
+				}
+				g.mu.Unlock()
+				esDrain(g, &o, g.fromBrowser(esRelay("Target.targetInfoChanged", tc.targetURL)), tc.targetURL)
 				g.mu.Lock()
 				if nt := g.navTargets[esTarget]; nt != nil {
 					nt.documentURL = inner
 				}
 				g.noteFrameTreeResultLocked(esTarget, json.RawMessage(`{"frameTree":{"frame":{"id":"`+esTarget+`","url":"`+inner+`","securityOrigin":"https://vault.sliccy.ai"}}}`))
 				g.mu.Unlock()
+			default:
+				g.mu.Lock()
+				if t0 := g.targets[esTarget]; t0 != nil {
+					t0.url = tc.targetURL
+				}
+				g.mu.Unlock()
 			}
 			ctxID := int64(42)
 			unique := "view-source-ctx-1"
-			esDrain(g, &o, g.fromBrowser(esExecutionContextCreated(ctxID, tc.origin, unique)), tc.wrapper)
+			live := tc.targetURL
+			if tc.seed == "error-page" {
+				live = "chrome-error://chromewebdata/"
+			}
+			esDrain(g, &o, g.fromBrowser(esExecutionContextCreated(ctxID, tc.origin, unique)), live)
+			if tc.seed == "blank-before-place" {
+				g.mu.Lock()
+				g.noteDocIdentityPlaceLocked(esTarget, esOrdinary)
+				if t0 := g.targets[esTarget]; t0 != nil {
+					t0.url = esOrdinary
+				}
+				if nt := g.navTargets[esTarget]; nt != nil {
+					nt.documentURL = esOrdinary
+				}
+				g.mu.Unlock()
+			}
 			g.mu.Lock()
 			shown := g.shown[esTarget] != nil && g.shown[esTarget].contexts[ctxID] != nil
 			hidden := g.contextHiddenLocked(esTarget, ctxID)
@@ -1811,11 +1858,16 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 			case "uniqueContextId":
 				params["uniqueContextId"] = unique
 			}
-			cmd := esCommand{label: "Runtime.evaluate+pin", method: "Runtime.evaluate", params: params, pinned: true}
-			pv := g.fromCommand(&command{id: int64(esReadID), method: cmd.method, session: esSession, params: cmd.params}, int64(esReadID), true)
+			pv := g.fromCommand(&command{id: int64(esReadID), method: "Runtime.evaluate", session: esSession, params: params}, int64(esReadID), true)
 			if !tc.wantShow {
 				if pv.reply == nil {
 					t.Fatalf("hidden/suppressed context must refuse pinned evaluate at admit")
+				}
+				return
+			}
+			if tc.wantErrPg {
+				if pv.reply == nil || !strings.Contains(string(pv.reply), "error page for a protected URL") {
+					t.Fatalf("error-page opaque context must refuse pinned evaluate by the error-page rule: %s", pv.reply)
 				}
 				return
 			}
@@ -1828,12 +1880,21 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 			g.mu.Lock()
 			_, admitted := g.docIdentityCalls[callKey{esSession, esReadID}]
 			g.mu.Unlock()
-			if !admitted {
-				t.Fatal("P1-3 option (a): pinned evaluate on unplaced/watch-bad document must enter docIdentityCalls")
+			if tc.wantIdent && !admitted {
+				t.Fatal("P1-3 option (a): pinned evaluate must enter docIdentityCalls")
+			}
+			if !tc.wantIdent {
+				return
+			}
+			body := "<html>" + esSecret + "</html>"
+			settleURL := tc.targetURL
+			if tc.seed == "blank-before-place" {
+				body = "<html>ordinary-blank</html>"
+				settleURL = esOrdinary
 			}
 			reply := esEncode(map[string]any{
 				"id": int64(esReadID), "sessionId": esSession,
-				"result": map[string]any{"result": map[string]any{"type": "string", "value": "<html>" + esSecret + "</html>"}},
+				"result": map[string]any{"result": map[string]any{"type": "string", "value": body}},
 			})
 			held := g.fromBrowser(reply)
 			o.take(held)
@@ -1847,7 +1908,7 @@ func TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext(t *testing.T) {
 			if infoID == 0 {
 				t.Fatal("expected identity post-read for pinned evaluate")
 			}
-			esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(infoID, tc.wrapper)), tc.wrapper)
+			esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(infoID, settleURL)), settleURL)
 			joined := strings.Join(o.payloads, "")
 			gotSecret := strings.Contains(joined, esSecret)
 			if gotSecret != tc.wantSecret {

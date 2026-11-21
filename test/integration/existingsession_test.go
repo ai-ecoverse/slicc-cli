@@ -174,7 +174,7 @@ func esIdentityMutations() []esIdentityMutation {
 		},
 		{
 			name: "pinned-evaluate-window-off",
-			run:  "^TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext/opaque-origin-://-contextId$",
+			run:  "^TestExistingSessionP1PinnedEvaluateOnShownViewSourceContext/blob-opaque-before-place$",
 			replace: [][2]string{{
 				pinnedNeeds,
 				"func (g *guard) docIdentityPinnedNeedsHoldLocked(c *command) bool {\n\t_ = c\n\treturn false\n}\n",
