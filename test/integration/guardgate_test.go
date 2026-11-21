@@ -35,6 +35,7 @@ type gateConnection struct {
 	bufferBytes      int
 	session          string
 	controlOnly      bool
+	holdMethods      map[string]bool
 	protectedOrigins []string
 	sessions         map[string]string
 	attaches         map[string]string
@@ -47,6 +48,32 @@ type gateConnection struct {
 	first            int64
 	released         int64
 	events           int
+}
+
+func gateURLProtected(raw string, origins []string) bool {
+	if raw == "" || len(origins) == 0 {
+		return false
+	}
+	candidates := []string{raw}
+	if strings.HasPrefix(raw, "blob:") {
+		candidates = append(candidates, strings.TrimPrefix(raw, "blob:"))
+	}
+	if strings.HasPrefix(raw, "filesystem:") {
+		candidates = append(candidates, strings.TrimPrefix(raw, "filesystem:"))
+	}
+	for _, cand := range candidates {
+		u, err := url.Parse(cand)
+		if err != nil || u.Scheme == "" {
+			continue
+		}
+		origin := u.Scheme + "://" + u.Host
+		for _, o := range origins {
+			if origin == o {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type guardGate struct {
@@ -211,21 +238,28 @@ func (g *guardGate) socket(w http.ResponseWriter, r *http.Request) {
 		c.writeMu.Lock()
 		c.mu.Lock()
 		owned := m.Params.TargetID == c.target || m.Params.TargetInfo.ID == c.target || m.Params.FrameID == c.target || m.Params.Frame.ID == c.target
-		held := c.hold != nil && (!c.controlOnly || m.Session == c.session || (m.Session == "" && owned))
+		methodMatch := len(c.holdMethods) == 0 || (m.Method != "" && c.holdMethods[m.Method])
+		sessionMatch := !c.controlOnly || m.Session == c.session || (m.Session == "" && owned)
+		if len(c.holdMethods) > 0 {
+			sessionMatch = m.Session == c.session || (m.Session == "" && owned)
+		}
+		held := c.hold != nil && methodMatch && sessionMatch
 		if held {
 			c.buffer = append(c.buffer, gatePacket{kind: kind, data: data})
 			c.bufferBytes += len(data)
 			protected := false
 			for _, raw := range []string{m.Params.URL, m.Params.TargetInfo.URL, m.Params.Frame.URL} {
-				u, parseErr := url.Parse(raw)
-				if parseErr != nil {
-					continue
-				}
-				for _, origin := range c.protectedOrigins {
-					protected = protected || u.Scheme+"://"+u.Host == origin
+				protected = protected || gateURLProtected(raw, c.protectedOrigins)
+			}
+			count := false
+			if m.Method != "" && owned {
+				if len(c.holdMethods) > 0 {
+					count = c.holdMethods[m.Method]
+				} else {
+					count = protected
 				}
 			}
-			if m.Method != "" && owned && protected {
+			if count {
 				c.events++
 				if c.first == 0 {
 					c.first = time.Now().UnixMilli()
@@ -380,16 +414,17 @@ func (g *guardGate) control(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Action    string   `json:"action"`
-		Side      string   `json:"side"`
-		Session   string   `json:"sessionId"`
-		Target    string   `json:"targetId"`
-		MS        int      `json:"ms"`
-		WireID    int64    `json:"wireId"`
-		Method    string   `json:"method"`
-		Protected []string `json:"protectedOrigins"`
-		Ordinary  string   `json:"ordinaryOrigin"`
-		Probes    []struct {
+		Action      string   `json:"action"`
+		Side        string   `json:"side"`
+		Session     string   `json:"sessionId"`
+		Target      string   `json:"targetId"`
+		MS          int      `json:"ms"`
+		WireID      int64    `json:"wireId"`
+		Method      string   `json:"method"`
+		HoldMethods []string `json:"holdMethods"`
+		Protected   []string `json:"protectedOrigins"`
+		Ordinary    string   `json:"ordinaryOrigin"`
+		Probes      []struct {
 			ID     int   `json:"id"`
 			WireID int64 `json:"wireId"`
 		} `json:"probes"`
@@ -458,9 +493,16 @@ func (g *guardGate) control(w http.ResponseWriter, r *http.Request) {
 		}
 		c.hold, c.target, c.minimum = make(chan struct{}), req.Target, time.Duration(req.MS)*time.Millisecond
 		c.session, c.controlOnly = req.Session, req.Side == "control"
+		c.holdMethods = nil
+		if len(req.HoldMethods) > 0 {
+			c.holdMethods = make(map[string]bool, len(req.HoldMethods))
+			for _, method := range req.HoldMethods {
+				c.holdMethods[method] = true
+			}
+		}
 		c.protectedOrigins = append([]string(nil), req.Protected...)
 		c.first, c.released, c.events = 0, 0, 0
-		result = map[string]any{"gate": true, "targetId": req.Target, "sessionId": req.Session, "ms": req.MS, "protectedObserved": protected, "ordinaryObserved": ordinary}
+		result = map[string]any{"gate": true, "targetId": req.Target, "sessionId": req.Session, "ms": req.MS, "protectedObserved": protected, "ordinaryObserved": ordinary, "holdMethods": req.HoldMethods}
 	case "audit":
 		entries := make([]map[string]any, 0, len(req.Probes))
 		for _, p := range req.Probes {

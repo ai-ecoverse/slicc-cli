@@ -728,21 +728,34 @@ func (g *guard) forgetWorldsLocked(target string) {
 }
 
 func (g *guard) worldContextLocked(target, session string, c execContext) bool {
+	url := ""
+	if t := g.targets[target]; t != nil {
+		url = t.url
+	}
+	loaded := g.o.Loaded(c.Origin)
 	if g.extensionProbeWorldName(c.Name) {
+		g.logf("DIAGSHAPE worldContextLocked decision=hidden reason=extension-probe origin=%q Loaded=%t url=%q id=%d default=%t frame=%s t_ms=%d", c.Origin, loaded, url, c.ID, c.AuxData.IsDefault, c.AuxData.FrameID, time.Now().UnixMilli())
 		g.hideContextLocked(target, session, c)
 		return true
 	}
 	if g.frameUnderProtectedLocked(c.AuxData.FrameID) {
+		g.logf("DIAGSHAPE worldContextLocked decision=hidden reason=frame-under-protected origin=%q Loaded=%t url=%q id=%d default=%t frame=%s t_ms=%d", c.Origin, loaded, url, c.ID, c.AuxData.IsDefault, c.AuxData.FrameID, time.Now().UnixMilli())
 		g.hideContextLocked(target, session, c)
 		return true
 	}
-	if !g.o.Loaded(c.Origin) || (c.AuxData.IsDefault && c.AuxData.FrameID == target) {
+	if !loaded || (c.AuxData.IsDefault && c.AuxData.FrameID == target) {
+		reason := "not-loaded-origin"
+		if loaded {
+			reason = "default-main-frame-even-if-loaded"
+		}
+		g.logf("DIAGSHAPE worldContextLocked decision=shown reason=%s origin=%q Loaded=%t url=%q id=%d default=%t frame=%s t_ms=%d", reason, c.Origin, loaded, url, c.ID, c.AuxData.IsDefault, c.AuxData.FrameID, time.Now().UnixMilli())
 		if w := g.worlds[target]; w != nil {
 			g.forgetContextLocked(w, c.ID)
 		}
 		g.showContextLocked(target, session, c)
 		return false
 	}
+	g.logf("DIAGSHAPE worldContextLocked decision=hidden reason=loaded-origin origin=%q Loaded=%t url=%q id=%d default=%t frame=%s t_ms=%d", c.Origin, loaded, url, c.ID, c.AuxData.IsDefault, c.AuxData.FrameID, time.Now().UnixMilli())
 	g.hideContextLocked(target, session, c)
 	return true
 }

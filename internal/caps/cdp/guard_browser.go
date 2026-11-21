@@ -820,16 +820,20 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) (verdict browserVer
 	}()
 	switch {
 	case t == nil:
+		g.logf("DIAGSHAPE contextCreatedEvent decision=shown reason=no-session-target origin=%q id=%d default=%t frame=%s t_ms=%d", p.Context.Origin, p.Context.ID, p.Context.AuxData.IsDefault, p.Context.AuxData.FrameID, time.Now().UnixMilli())
 		verdict = browserVerdict{forward: data, send: append(decided, settleSend...), page: settle}
 		return
 	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.Loaded(p.Context.Origin):
+		g.logf("DIAGSHAPE contextCreatedEvent decision=hidden reason=default-main-loaded-origin origin=%q Loaded=true url=%q id=%d default=%t frame=%s t_ms=%d", p.Context.Origin, t.url, p.Context.ID, p.Context.AuxData.IsDefault, p.Context.AuxData.FrameID, time.Now().UnixMilli())
 		verdict = browserVerdict{send: append(append(decided, g.markLocked(t)...), settleSend...), page: settle}
 		return
 	case g.frameUnderProtectedLocked(p.Context.AuxData.FrameID):
+		g.logf("DIAGSHAPE contextCreatedEvent decision=hidden reason=frame-under-protected origin=%q Loaded=%t url=%q id=%d default=%t frame=%s t_ms=%d", p.Context.Origin, g.o.Loaded(p.Context.Origin), t.url, p.Context.ID, p.Context.AuxData.IsDefault, p.Context.AuxData.FrameID, time.Now().UnixMilli())
 		g.hideContextLocked(t.id, m.SessionID, p.Context)
 		verdict = browserVerdict{send: append(append(decided, g.cutCastsLocked(t.id)...), settleSend...), page: settle}
 		return
 	case p.Context.AuxData.FrameID != "" && p.Context.AuxData.FrameID != t.id && !g.frameContextAncestrySettledLocked(p.Context.AuxData.FrameID, t.id):
+		g.logf("DIAGSHAPE contextCreatedEvent decision=held reason=ancestry-unset origin=%q Loaded=%t url=%q id=%d default=%t frame=%s t_ms=%d", p.Context.Origin, g.o.Loaded(p.Context.Origin), t.url, p.Context.ID, p.Context.AuxData.IsDefault, p.Context.AuxData.FrameID, time.Now().UnixMilli())
 		g.holdContextLocked(t.id, m.SessionID, p.Context, data)
 		verdict = browserVerdict{send: append(append(decided, g.cutCastsLocked(t.id)...), settleSend...), page: settle}
 		return
@@ -837,6 +841,7 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) (verdict browserVer
 		verdict = browserVerdict{send: append(append(decided, g.cutCastsLocked(t.id)...), settleSend...), page: settle}
 		return
 	}
+	g.logf("DIAGSHAPE contextCreatedEvent decision=shown reason=worldContextLocked-show origin=%q Loaded=%t url=%q id=%d default=%t frame=%s t_ms=%d", p.Context.Origin, g.o.Loaded(p.Context.Origin), t.url, p.Context.ID, p.Context.AuxData.IsDefault, p.Context.AuxData.FrameID, time.Now().UnixMilli())
 	verdict = browserVerdict{forward: data, send: append(decided, settleSend...), page: settle}
 	return
 }

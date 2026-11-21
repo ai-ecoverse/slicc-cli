@@ -589,6 +589,7 @@ globalThis.linkTest = {
   compoundFrames: (opts) => import('./compoundframes.js').then((m) => m.measureCompoundFrames(() => state.link, opts)),
   paint: (opts) => import('./paint.js').then((m) => m.measurePaint(() => state.link, opts)),
   sticky: (opts) => import('./sticky.js').then((m) => m.measureSticky(() => state.link, opts)),
+  diagShape: (opts) => import('./diagshape.js').then((m) => m.measureDiagShape(() => state.link, opts)),
   persistent: (opts) => import('./persistent.js').then((m) => m.measurePersistent(() => state.link, opts)),
   protect: protectTest(() => state.link, describe),
   guard: {
