@@ -211,8 +211,8 @@ func TestCDPGuardC9EvidenceOnAFailedControlClick(t *testing.T) {
 		t.Logf("skipping the C9 evidence check: %s", row.Reason)
 		return
 	}
-	if row.ID != id || row.Target != "ordinary" || row.Control != "fail" || row.Guarded != "pass" || row.Live != "pass" || string(row.Why) != `"control click: got false, want true"` {
-		t.Fatalf("the unfocused control click should fail only the control click: %+v", row)
+	if row.ID != id || row.Target != "ordinary" || row.Control != "incomplete" || row.Guarded != "pass" || row.Live != "pass" || !strings.HasPrefix(string(row.Why), `"incomplete: control extensionFrame: click: mouse target did not reach two focused visible frames`) {
+		t.Fatalf("the unfocused control click should leave only the control leg incomplete: %+v", row)
 	}
 	line := c9EvidenceLine(row)
 	if line == "" {
@@ -232,7 +232,7 @@ func TestCDPGuardC9EvidenceOnAFailedControlClick(t *testing.T) {
 			}
 			forced = i
 		}
-		if c.Key == "Tab" && forced < 0 {
+		if c.Key == "Tab" && forced >= 0 && tab < 0 {
 			tab = i
 		}
 	}
@@ -247,9 +247,9 @@ func TestCDPGuardC9EvidenceOnAFailedControlClick(t *testing.T) {
 		t.Errorf("the unfocused press lacks ordered timestamps: %+v", f)
 	}
 	if tab < 0 {
-		t.Errorf("no Tab was recorded before the unfocused press: %s", row.Diagnostics)
-	} else if p := control[tab]; p.Type != "keyDown" || p.ReplyAt == nil || f.At == nil || *p.ReplyAt > *f.At || len(p.InputReply) == 0 {
-		t.Errorf("the Tab before the unfocused press lacks its reply or timestamps: %+v", p)
+		t.Errorf("no Tab was recorded after the unfocused press: %s", row.Diagnostics)
+	} else if p := control[tab]; p.Type != "keyDown" || p.At == nil || f.ReplyAt == nil || *p.At < *f.ReplyAt || p.ReplyAt == nil || len(p.InputReply) == 0 {
+		t.Errorf("the Tab after the unfocused press lacks its reply or timestamps: %+v", p)
 	}
 	if len(evidence["guarded"]) == 0 {
 		t.Errorf("no guarded mouse evidence: %s", row.Diagnostics)
