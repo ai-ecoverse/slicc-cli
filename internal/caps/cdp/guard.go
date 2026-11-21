@@ -224,6 +224,11 @@ type guard struct {
 	docIdentityCalls         map[callKey]docIdentityAdmit
 	docIdentityHolds         map[callKey]*docIdentityHold
 	docIdentityAsks          map[string]*docIdentityAsk
+	docObservePath           map[string]string
+	docObserveWant           map[string]bool
+	docObserveAnnounce       map[string]string
+	docObserveTyp            map[string]string
+	docObserveDone           map[string]bool
 	flushAsync               func(send, page [][]byte)
 	patterns                 []any
 	heldExtras               map[requestKey][]heldExtra
@@ -360,6 +365,11 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		docIdentityCalls:         map[callKey]docIdentityAdmit{},
 		docIdentityHolds:         map[callKey]*docIdentityHold{},
 		docIdentityAsks:          map[string]*docIdentityAsk{},
+		docObservePath:           map[string]string{},
+		docObserveWant:           map[string]bool{},
+		docObserveAnnounce:       map[string]string{},
+		docObserveTyp:            map[string]string{},
+		docObserveDone:           map[string]bool{},
 		heldExtras:               map[requestKey][]heldExtra{},
 		seen:                     map[requestKey]reqLevel{},
 		handed:                   map[requestKey]int{},
@@ -1713,6 +1723,7 @@ func (g *guard) addRefusedLocked(id string) {
 func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
 	g.pruneDocConfirmTargetLocked(id)
 	g.pruneDocIdentityTargetLocked(id)
+	g.pruneDocConfirmObserveTargetLocked(id)
 	g.clearBlockedChildrenLocked(id)
 	delete(g.frameProbeAttempts, id)
 	delete(g.frameProbed, id)

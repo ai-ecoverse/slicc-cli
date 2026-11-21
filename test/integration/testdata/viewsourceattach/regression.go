@@ -22,13 +22,32 @@ const (
 
 func vsGuard(t *testing.T) *guard {
 	t.Helper()
+	g, _ := vsGuardLogs(t)
+	return g
+}
+
+func vsGuardLogs(t *testing.T) (*guard, *[]string) {
+	t.Helper()
 	o, err := protect.New([]string{"https://seven.sliccy.ai", "https://vault.sliccy.ai"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := newGuard(o, nil)
+	logs := []string{}
+	g := newGuard(o, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
 	g.relaySession = "RELAY"
-	return g
+	return g, &logs
+}
+
+func vsDiagLines(logs []string) []string {
+	var out []string
+	for _, line := range logs {
+		if strings.Contains(line, "DIAG document-confirm") {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func vsRelay(method, url string) []byte {
@@ -877,5 +896,678 @@ func TestViewSourceAttachDocFailedClearedOnDestroy(t *testing.T) {
 	g.mu.Unlock()
 	if failed || hidden {
 		t.Errorf("docFailed/hidden must clear on target destroy when detach never arrives (failed=%t hidden=%t)", failed, hidden)
+	}
+}
+
+const vsObserveSession = "S-OBSERVE"
+const vsNavSession = "S-NAV"
+
+func vsNavFrameNavigated(url, origin string) []byte {
+	if origin == "" {
+		origin = "://"
+	}
+	return encode(map[string]any{
+		"sessionId": vsNavSession,
+		"method":    "Page.frameNavigated",
+		"params": map[string]any{
+			"frame": map[string]any{"id": vsTarget, "url": url, "securityOrigin": origin},
+		},
+	})
+}
+
+func vsDrainNav(g *guard, o *vsOutcome, v browserVerdict, live string) {
+	o.take(v)
+	for _, raw := range v.send {
+		id, method, session := vsOutbound(raw)
+		switch {
+		case method == "Target.getTargetInfo" && session == "RELAY":
+			vsDrainNav(g, o, g.fromBrowser(vsTargetInfoAnswer(id, live)), live)
+		case method == "Target.attachToTarget" && session == "RELAY":
+			reply := encode(map[string]any{"id": id, "sessionId": "RELAY", "result": map[string]any{"sessionId": vsNavSession}})
+			vsDrainNav(g, o, g.fromBrowser(reply), live)
+		case method == "Target.detachFromTarget":
+			vsDrainNav(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), live)
+		case method == "Fetch.enable" || method == "Network.enable" || method == "Network.setBypassServiceWorker" || method == "Runtime.enable" || method == "Page.enable" || method == "Page.getNavigationHistory":
+			vsDrainNav(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), live)
+		}
+	}
+}
+
+func TestDocConfirmObserveNeverChangesVerdict(t *testing.T) {
+	g, logs := vsGuardLogs(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	vsDrainNav(g, &o, v, "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsNavFrameNavigated("about:blank", "://")), "about:blank")
+	o.summarize()
+	detachSent := false
+	for _, raw := range v.send {
+		_, method, _ := vsOutbound(raw)
+		if method == "Target.detachFromTarget" {
+			detachSent = true
+		}
+	}
+	g.mu.Lock()
+	client := g.sessions[vsSession] != nil
+	observe := g.sessions[vsObserveSession] != nil
+	failed := g.docFailed[vsSession]
+	nSessions := len(g.sessions)
+	g.mu.Unlock()
+	t.Logf("observe-never-changes client=%t observeSession=%t sessions=%d failed=%t diag=%d detachSent=%t", client, observe, nSessions, failed, len(vsDiagLines(*logs)), detachSent)
+	if !client {
+		t.Fatal("client session must admit like main")
+	}
+	if observe {
+		t.Fatal("observe must not create a proof session")
+	}
+	if failed || o.attachRefused {
+		t.Fatal("observe must not refuse or latch the client attach")
+	}
+	if detachSent {
+		t.Fatal("source-2 observe must not emit Target.detachFromTarget")
+	}
+	if len(vsDiagLines(*logs)) != 0 {
+		t.Fatalf("production DIAG switch is off; got %v", vsDiagLines(*logs))
+	}
+}
+
+func TestDocConfirmObserveMustNotClaimNavguardSession(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	o.take(v)
+	var attachIDs []int64
+	for _, raw := range v.send {
+		id, method, session := vsOutbound(raw)
+		if method == "Target.attachToTarget" && session == "RELAY" {
+			attachIDs = append(attachIDs, id)
+		}
+	}
+	if len(attachIDs) == 0 {
+		t.Fatal("expected touchLocked attachToTarget")
+	}
+	if len(attachIDs) != 1 {
+		t.Fatalf("source-2 must dual-attach exactly once for navguard; got %d", len(attachIDs))
+	}
+	navSession := vsNavSession
+	o.take(g.fromBrowser(encode(map[string]any{"id": attachIDs[0], "sessionId": "RELAY", "result": map[string]any{"sessionId": navSession}})))
+	att := map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          navSession,
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": vsTarget, "type": "page", "url": "about:blank", "browserContextId": "CTX"},
+		},
+	}
+	o.take(g.fromBrowser(encode(att)))
+	g.mu.Lock()
+	navOK := g.navSessions[navSession] != nil
+	g.mu.Unlock()
+	if !navOK {
+		t.Fatal("navguard session must remain registered")
+	}
+}
+
+func TestDocConfirmObserveMustNotEmitProofDetach(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	o.take(v)
+	attachN := 0
+	var walk func(browserVerdict)
+	walk = func(ver browserVerdict) {
+		for _, raw := range ver.send {
+			id, method, session := vsOutbound(raw)
+			if method == "Target.detachFromTarget" {
+				t.Fatalf("proof must not emit Target.detachFromTarget session=%s", session)
+			}
+			if method == "Page.getFrameTree" && session == vsObserveSession {
+				t.Fatal("source-2 observe must not Page.getFrameTree on a proof session")
+			}
+			switch {
+			case method == "Target.attachToTarget" && session == "RELAY":
+				attachN++
+				sid := vsNavSession
+				if attachN > 1 {
+					sid = vsObserveSession
+				}
+				walk(g.fromBrowser(encode(map[string]any{"id": id, "sessionId": "RELAY", "result": map[string]any{"sessionId": sid}})))
+				if sid == vsObserveSession {
+					walk(g.fromBrowser(encode(map[string]any{
+						"method": "Target.attachedToTarget",
+						"params": map[string]any{
+							"sessionId":          sid,
+							"waitingForDebugger": false,
+							"targetInfo":         map[string]any{"targetId": vsTarget, "type": "page", "url": "about:blank", "browserContextId": "CTX"},
+						},
+					})))
+				}
+			case method == "Page.getFrameTree" && session != "":
+				origin := "://"
+				walk(g.fromBrowser(encode(map[string]any{
+					"id": id, "sessionId": session,
+					"result": map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": vsTarget, "url": "about:blank", "securityOrigin": origin}}},
+				})))
+			case method == "Fetch.enable" || method == "Network.enable" || method == "Network.setBypassServiceWorker" || method == "Runtime.enable" || method == "Page.enable" || method == "Page.getNavigationHistory":
+				walk(g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})))
+			}
+		}
+	}
+	walk(v)
+}
+
+func TestDocConfirmObserveTabAttachPopupHoldResume(t *testing.T) {
+	g := vsGuard(t)
+	g.targets["OPENER"] = &target{id: "OPENER", typ: "page", url: "https://ordinary.test/"}
+	g.sessions["S-OPENER"] = &session{id: "S-OPENER", target: "OPENER", typ: "page"}
+	_ = g.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-TAB-POP",
+			"waitingForDebugger": true,
+			"targetInfo":         map[string]any{"targetId": "TAB-POP", "type": "tab", "url": "", "openerId": "OPENER"},
+		},
+	}))
+	if g.sessions["S-TAB-POP"] == nil || g.held["S-TAB-POP"] != nil {
+		t.Fatal("popup tab must be announced so the client can arm tab-level setAutoAttach")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"sessionId": "S-TAB-POP",
+		"method":    "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-PAGE-POP",
+			"waitingForDebugger": true,
+			"targetInfo":         map[string]any{"targetId": "PAGE-POP", "type": "page", "url": "", "openerId": "OPENER"},
+		},
+	}))
+	var o vsOutcome
+	o.take(v)
+	if strings.Contains(strings.Join(o.clientPayloads, ""), "attachedToTarget") {
+		t.Fatalf("empty-URL page child must stay held: %v", o.clientPayloads)
+	}
+	h := g.held["S-PAGE-POP"]
+	if h == nil {
+		t.Fatal("empty-URL popup page child was not held")
+	}
+	if !h.resumed {
+		t.Fatal("held popup page child must be guard-resumed at hold time (#880)")
+	}
+	resume := 0
+	for _, raw := range v.send {
+		_, method, session := vsOutbound(raw)
+		if method == "Runtime.runIfWaitingForDebugger" && session == "S-PAGE-POP" {
+			resume++
+		}
+	}
+	if resume != 1 {
+		t.Fatalf("hold must resume page child exactly once; got %d", resume)
+	}
+	rel := g.fromBrowser(encode(map[string]any{
+		"sessionId": "RELAY",
+		"method":    "Target.targetInfoChanged",
+		"params":    map[string]any{"targetInfo": map[string]any{"targetId": "PAGE-POP", "type": "page", "url": "about:blank", "openerId": "OPENER"}},
+	}))
+	o.take(rel)
+	g.mu.Lock()
+	path := g.docObservePath["PAGE-POP"]
+	g.mu.Unlock()
+	if path != "F" {
+		t.Fatalf("held release must note observe path F; got %q", path)
+	}
+}
+
+func TestDocConfirmBlankProtectedLatch(t *testing.T) {
+	g, logs := vsGuardLogs(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	v := g.fromBrowser(vsNavFrameNavigated("about:blank", "https://vault.sliccy.ai"))
+	vsDrainNav(g, &o, v, "about:blank")
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	refused := g.sessions[vsSession] != nil && g.sessions[vsSession].refused
+	g.mu.Unlock()
+	detach := false
+	for _, raw := range v.send {
+		_, method, _ := vsOutbound(raw)
+		if method == "Target.detachFromTarget" {
+			detach = true
+		}
+	}
+	if !protected || !refused || !detach {
+		t.Fatalf("blank announce + protected-origin commit must latch (protected=%t refused=%t detach=%t)", protected, refused, detach)
+	}
+	if len(vsDiagLines(*logs)) != 0 {
+		t.Fatalf("latch must work with DIAG off; got %v", vsDiagLines(*logs))
+	}
+}
+
+func TestDocConfirmNewTabPageNeverRefuses(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	v := g.fromBrowser(vsNavFrameNavigated("chrome://new-tab-page/", "chrome://new-tab-page"))
+	vsDrainNav(g, &o, v, "chrome://new-tab-page/")
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	refused := g.sessions[vsSession] != nil && g.sessions[vsSession].refused
+	g.mu.Unlock()
+	for _, raw := range v.send {
+		_, method, _ := vsOutbound(raw)
+		if method == "Target.detachFromTarget" {
+			t.Fatal("new-tab-page commit must not detach")
+		}
+	}
+	if protected || refused {
+		t.Fatalf("new-tab-page must never refuse (protected=%t refused=%t)", protected, refused)
+	}
+}
+
+func TestDocConfirmEmptyHoldBoundFallthrough(t *testing.T) {
+	g := vsGuard(t)
+	g.targets["OPENER"] = &target{id: "OPENER", typ: "page", url: "https://ordinary.test/"}
+	_ = g.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-EMPTY",
+			"waitingForDebugger": true,
+			"targetInfo":         map[string]any{"targetId": "EMPTY", "type": "page", "url": "", "openerId": "OPENER"},
+		},
+	}))
+	if g.held["S-EMPTY"] == nil {
+		t.Fatal("empty-URL page must be held")
+	}
+	_, _ = g.expireHold("S-EMPTY")
+	g.mu.Lock()
+	protected := g.targets["EMPTY"] != nil && g.targets["EMPTY"].protected
+	g.mu.Unlock()
+	if protected {
+		t.Fatal("empty hold bound must fall through without latch")
+	}
+}
+
+func TestDocConfirmAnnounceClassMapper(t *testing.T) {
+	cases := map[string]string{
+		"view-source:https://vault.sliccy.ai/doc":                           "view-source",
+		"blob:https://vault.sliccy.ai/0c1d2e3f-4a5b-6c7d-8e9f-001122334455": "blob",
+		"filesystem:https://vault.sliccy.ai/temporary/x.html":               "filesystem",
+		"not a url at all !!!":                                              "unparseable",
+		"about:blank":                                                       "blank",
+		"chrome://new-tab-page/":                                            "chrome://new-tab-page",
+		"chrome-untrusted://new-tab-page/":                                  "chrome-untrusted://new-tab-page",
+		"https://ordinary.example/newtab":                                   "ordinary",
+		"https://ordinary.example/new-tab-page":                             "ordinary",
+	}
+	for url, want := range cases {
+		if got := docConfirmURLClass(url); got != want {
+			t.Errorf("docConfirmURLClass(%q)=%q want %q", url, got, want)
+		}
+	}
+}
+
+func TestDocConfirmExplicitPathObserve(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_DIAG") == "" {
+		t.Skip("explicit path DIAG capture needs diag-on overlay")
+	}
+	g, logs := vsGuardLogs(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsNavFrameNavigated("about:blank", "://")), "about:blank")
+	_ = g.fromCommand(&command{id: 9001, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, 9001, true)
+	_ = g.fromBrowser(encode(map[string]any{"id": int64(9001), "result": map[string]any{"sessionId": "S-EXPLICIT"}}))
+	joined := strings.Join(vsDiagLines(*logs), "\n")
+	if !strings.Contains(joined, "path=explicit") {
+		t.Fatalf("client attach reply must note path=explicit: %q", joined)
+	}
+	if strings.Contains(joined, "https://") || strings.Contains(joined, "vault.") || strings.Contains(joined, "seven.") {
+		t.Fatalf("DIAG lines must carry classes only: %q", joined)
+	}
+}
+
+func TestDocConfirmObserveStatePrunedOnDestroy(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	for i := 0; i < 20; i++ {
+		tid := fmt.Sprintf("T-%d", i)
+		sid := fmt.Sprintf("S-%d", i)
+		vsDrain(g, &o, g.fromBrowser(encode(map[string]any{
+			"sessionId": "RELAY",
+			"method":    "Target.targetCreated",
+			"params":    map[string]any{"targetInfo": map[string]any{"targetId": tid, "type": "page", "url": "about:blank", "browserContextId": "CTX"}},
+		})), "about:blank")
+		vsDrain(g, &o, g.fromBrowser(encode(map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{
+				"sessionId":          sid,
+				"waitingForDebugger": false,
+				"targetInfo":         map[string]any{"targetId": tid, "type": "page", "url": "about:blank", "browserContextId": "CTX"},
+			},
+		})), "about:blank")
+		_ = g.fromBrowser(encode(map[string]any{
+			"sessionId": "RELAY",
+			"method":    "Target.targetDestroyed",
+			"params":    map[string]any{"targetId": tid},
+		}))
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.docObserveAnnounce) != 0 || len(g.docObserveTyp) != 0 || len(g.docObservePath) != 0 || len(g.docObserveDone) != 0 || len(g.docObserveWant) != 0 {
+		t.Fatalf("observe maps must prune on destroy announce=%d typ=%d path=%d done=%d want=%d", len(g.docObserveAnnounce), len(g.docObserveTyp), len(g.docObservePath), len(g.docObserveDone), len(g.docObserveWant))
+	}
+}
+
+func TestDocConfirmObserveStatePruneMutant(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_OBSERVE_NOPRUNE") == "" {
+		t.Skip("observe noprune mutant only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrain(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	_ = g.fromBrowser(encode(map[string]any{
+		"sessionId": "RELAY",
+		"method":    "Target.targetDestroyed",
+		"params":    map[string]any{"targetId": vsTarget},
+	}))
+	g.mu.Lock()
+	left := len(g.docObserveAnnounce) + len(g.docObserveTyp) + len(g.docObservePath) + len(g.docObserveDone) + len(g.docObserveWant)
+	g.mu.Unlock()
+	if left == 0 {
+		t.Fatal("noprune mutant must leave observe state after destroy")
+	}
+}
+
+func TestDocConfirmLatchIndependentOfDiag(t *testing.T) {
+	if docConfirmObserveDiagEnabled() {
+		t.Fatal("production DIAG switch must be false for this head")
+	}
+	if !docConfirmBlankProtectedEnforceEnabled() {
+		t.Fatal("enforce switch must be on")
+	}
+	g, logs := vsGuardLogs(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	v := g.fromBrowser(vsNavFrameNavigated("about:blank", "https://vault.sliccy.ai"))
+	vsDrainNav(g, &o, v, "about:blank")
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	g.mu.Unlock()
+	if !protected {
+		t.Fatal("latch must run with DIAG off")
+	}
+	if len(vsDiagLines(*logs)) != 0 {
+		t.Fatalf("DIAG off must write no DIAG lines: %v", vsDiagLines(*logs))
+	}
+}
+
+func TestDocConfirmLatchGatedOnDiagMutant(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_LATCH_ON_DIAG") == "" {
+		t.Skip("latch-on-diag mutant only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsNavFrameNavigated("about:blank", "https://vault.sliccy.ai")), "about:blank")
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	g.mu.Unlock()
+	if protected {
+		t.Fatal("mutant that gates latch on DIAG must fail to latch while DIAG is off")
+	}
+}
+
+func TestDocConfirmLaterProtectedCommitUsesExistingPath(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsNavFrameNavigated("about:blank", "://")), "about:blank")
+	g.mu.Lock()
+	afterBlank := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	g.mu.Unlock()
+	if afterBlank {
+		t.Fatal("initial blank/opaque commit must not latch via blank-protected class")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"sessionId": vsSession,
+		"method":    "Page.frameNavigated",
+		"params": map[string]any{
+			"frame": map[string]any{"id": vsTarget, "url": "https://vault.sliccy.ai/doc", "securityOrigin": "https://vault.sliccy.ai"},
+		},
+	}))
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	refused := g.sessions[vsSession] != nil && g.sessions[vsSession].refused
+	g.mu.Unlock()
+	detach := false
+	for _, raw := range v.send {
+		_, method, _ := vsOutbound(raw)
+		if method == "Target.detachFromTarget" {
+			detach = true
+		}
+	}
+	if !protected || !refused || !detach {
+		t.Fatalf("later protected commit must latch via existing frameNavigated path (protected=%t refused=%t detach=%t)", protected, refused, detach)
+	}
+}
+
+func TestDocConfirmNewtabPathSubstringStillLatches(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	v := g.fromBrowser(vsNavFrameNavigated("https://ordinary.example/newtab", "https://vault.sliccy.ai"))
+	vsDrainNav(g, &o, v, "https://ordinary.example/newtab")
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	refused := g.sessions[vsSession] != nil && g.sessions[vsSession].refused
+	g.mu.Unlock()
+	if !protected || !refused {
+		t.Fatalf("https path containing newtab with protected origin must still latch (protected=%t refused=%t)", protected, refused)
+	}
+}
+
+func TestDocConfirmBlankProtectedCommitBeforeAnnounce(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", "about:blank")), "about:blank")
+	g.mu.Lock()
+	ready := make(chan struct{})
+	close(ready)
+	g.navTargets[vsTarget] = &navTarget{target: vsTarget, ready: ready, done: true, commits: 1, documentURL: "about:blank", securityOrigin: "https://vault.sliccy.ai"}
+	g.mu.Unlock()
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	refused := g.sessions[vsSession] != nil && g.sessions[vsSession].refused
+	g.mu.Unlock()
+	if !protected || !refused {
+		t.Fatalf("commit-before-announce with blank+protected evidence must latch (protected=%t refused=%t)", protected, refused)
+	}
+}
+
+func TestDocConfirmOrdinaryAnnounceProtectedTwin(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "https://ordinary.test/")), "https://ordinary.test/")
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("https://ordinary.test/")), "https://ordinary.test/")
+	vsDrainNav(g, &o, g.fromBrowser(vsNavFrameNavigated("about:blank", "https://vault.sliccy.ai")), "about:blank")
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	g.mu.Unlock()
+	if protected {
+		t.Fatal("ordinary announce twin must not latch via blank-protected class")
+	}
+}
+
+func TestDocConfirmUnparseableOriginFailClosedLatch(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	v := g.fromBrowser(vsNavFrameNavigated("about:blank", "%%%not-an-origin%%%"))
+	vsDrainNav(g, &o, v, "about:blank")
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	refused := g.sessions[vsSession] != nil && g.sessions[vsSession].refused
+	g.mu.Unlock()
+	if !protected || !refused {
+		t.Fatalf("blank announce + unparseable securityOrigin must fail-closed latch (protected=%t refused=%t)", protected, refused)
+	}
+}
+
+func TestDocConfirmExpireHoldWithProtectedEvidenceLatches(t *testing.T) {
+	g := vsGuard(t)
+	g.targets["OPENER"] = &target{id: "OPENER", typ: "page", url: "https://ordinary.test/"}
+	_ = g.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-EMPTY",
+			"waitingForDebugger": true,
+			"targetInfo":         map[string]any{"targetId": "EMPTY", "type": "page", "url": "", "openerId": "OPENER"},
+		},
+	}))
+	if g.held["S-EMPTY"] == nil {
+		t.Fatal("empty-URL page must be held")
+	}
+	g.mu.Lock()
+	ready := make(chan struct{})
+	close(ready)
+	g.navTargets["EMPTY"] = &navTarget{target: "EMPTY", ready: ready, done: true, commits: 1, documentURL: "about:blank", securityOrigin: "https://vault.sliccy.ai"}
+	g.mu.Unlock()
+	_, send := g.expireHold("S-EMPTY")
+	g.mu.Lock()
+	protected := g.targets["EMPTY"] != nil && g.targets["EMPTY"].protected
+	g.mu.Unlock()
+	detach := false
+	for _, raw := range send {
+		_, method, _ := vsOutbound(raw)
+		if method == "Target.detachFromTarget" {
+			detach = true
+		}
+	}
+	if !protected {
+		t.Fatal("expireHold with protected nav evidence present must latch (intentional)")
+	}
+	_ = detach
+}
+
+func vsDocObserveMapCount(g *guard) int {
+	return len(g.docObserveAnnounce) + len(g.docObserveTyp) + len(g.docObservePath) + len(g.docObserveDone) + len(g.docObserveWant)
+}
+
+func TestDocConfirmObserveNoUseAfterPrune(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrain(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	_ = g.fromBrowser(encode(map[string]any{
+		"sessionId": "RELAY",
+		"method":    "Target.targetDestroyed",
+		"params":    map[string]any{"targetId": vsTarget},
+	}))
+	_ = g.noteDocConfirmObserveLocked(vsTarget, "D")
+	_ = g.finishDocConfirmObserveLocked(vsTarget, "D", false)
+	_ = g.docConfirmObserveAfterCommitLocked(&navTarget{target: vsTarget, commits: 1, documentURL: "about:blank", securityOrigin: "https://vault.sliccy.ai"}, 0)
+	_ = g.noteExplicitDocConfirmObserveLocked(vsTarget)
+	_ = g.fromCommand(&command{id: 9101, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, 9101, true)
+	_ = g.fromBrowser(encode(map[string]any{"id": int64(9101), "result": map[string]any{"sessionId": "S-LATE"}}))
+	_ = g.noteDocConfirmObserveLocked(vsTarget, "D")
+	g.mu.Lock()
+	left := vsDocObserveMapCount(g)
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	g.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("late note/finish/afterCommit/explicit on destroyed target must leave maps empty; got %d", left)
+	}
+	if protected {
+		t.Fatal("late paths on destroyed target must not markLocked")
+	}
+}
+
+func TestDocConfirmObserveLiveTargetStillTracks(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrain(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	g.mu.Lock()
+	left := vsDocObserveMapCount(g)
+	g.mu.Unlock()
+	if left == 0 {
+		t.Fatal("ordinary twin: late note on a live target must still track")
+	}
+}
+
+func TestDocConfirmObserveNoteThenDestroyClears(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrain(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	_ = g.fromBrowser(encode(map[string]any{
+		"sessionId": "RELAY",
+		"method":    "Target.targetDestroyed",
+		"params":    map[string]any{"targetId": vsTarget},
+	}))
+	g.mu.Lock()
+	left := vsDocObserveMapCount(g)
+	g.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("destroy after note must prune maps; got %d", left)
+	}
+	_ = g.noteDocConfirmObserveLocked(vsTarget, "F")
+	g.mu.Lock()
+	left = vsDocObserveMapCount(g)
+	g.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("note after destroy must stay empty; got %d", left)
+	}
+}
+
+func TestDocConfirmObserveUseAfterPruneMutant(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_OBSERVE_LIVE_GONE") == "" {
+		t.Skip("observe live-gone mutant only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsDrain(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	_ = g.fromBrowser(encode(map[string]any{
+		"sessionId": "RELAY",
+		"method":    "Target.targetDestroyed",
+		"params":    map[string]any{"targetId": vsTarget},
+	}))
+	_ = g.noteDocConfirmObserveLocked(vsTarget, "D")
+	g.mu.Lock()
+	left := vsDocObserveMapCount(g)
+	g.mu.Unlock()
+	if left == 0 {
+		t.Fatal("live-gone mutant must re-create observe maps on late note after destroy")
+	}
+}
+
+func TestDocConfirmNoteAfterSeveralCommitsUsesFinishSnapshot(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	g.mu.Lock()
+	ready := make(chan struct{})
+	close(ready)
+	g.navTargets[vsTarget] = &navTarget{target: vsTarget, ready: ready, done: true, commits: 3, documentURL: "about:blank", securityOrigin: "https://vault.sliccy.ai"}
+	g.mu.Unlock()
+	vsDrainNav(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	g.mu.Lock()
+	protected := g.targets[vsTarget] != nil && g.targets[vsTarget].protected
+	refused := g.sessions[vsSession] != nil && g.sessions[vsSession].refused
+	g.mu.Unlock()
+	if !protected || !refused {
+		t.Fatalf("note after several commits must judge the finish-time nav snapshot (protected=%t refused=%t)", protected, refused)
 	}
 }

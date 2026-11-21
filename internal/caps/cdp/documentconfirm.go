@@ -327,6 +327,9 @@ func (g *guard) passDocConfirmLocked(dc *docConfirm) [][]byte {
 			}
 		}
 		send = append(send, g.touchLocked(dc.target, typ)...)
+		if typ == "page" {
+			send = append(send, g.scheduleDocConfirmObserveLocked(dc.target, g.docConfirmObservePathLocked(dc.target, typ))...)
+		}
 		if h.hasEvent && len(h.event) > 0 {
 			g.pendingPage = append(g.pendingPage, h.event)
 		}
