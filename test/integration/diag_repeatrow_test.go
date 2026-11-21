@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,7 +21,7 @@ import (
 const (
 	vsloopTree   = "main"
 	vsloopRowID  = "C8.close-protected.view-source"
-	vsloopBudget = 210 * time.Second
+	vsloopBudget = 170 * time.Second
 )
 
 type vsloopLine struct {
@@ -131,7 +132,112 @@ func (w *vsloopTee) Write(p []byte) (int, error) {
 	return w.a.Write(p)
 }
 
-func vsloopStageVectors(t *testing.T, pkg, target string, n int) {
+const vsloopShapeAttachOld = "async function attachClient(client, targetId) {\n  const attached = await outcome(client.send('Target.attachToTarget', { targetId, flatten: true }));\n  const session = attached.result?.sessionId;\n  if (session) {\n    await outcome(client.send('Page.enable', {}, session));\n    await outcome(client.send('Runtime.enable', {}, session));\n  }\n  return { session, attachRefused: refused(attached) };\n}\n"
+
+const vsloopShapeAttachNew = `const vsloopRecs = new Map();
+const vsloopClip = (s) => (s.length > 500 ? s.slice(0, 500) + '...' : s);
+const vsloopTimed = (arr) => {
+  if (!Array.isArray(arr)) return null;
+  if (!arr.__vsloopTimes) {
+    const times = new Array(arr.length).fill(0);
+    Object.defineProperty(arr, '__vsloopTimes', { value: times });
+    Object.defineProperty(arr, 'push', {
+      value: function (...items) {
+        for (let i = 0; i < items.length; i++) times.push(Date.now());
+        return Array.prototype.push.apply(this, items);
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+  return arr.__vsloopTimes;
+};
+const vsloopOut = (o) =>
+  o.ok
+    ? { ok: true, sessionId: o.result?.sessionId ?? '' }
+    : { ok: false, message: String(o.error?.message ?? o.error), code: o.error?.code ?? null };
+function vsloopFlush(rec) {
+  const mt = rec.messages?.__vsloopTimes ?? [];
+  const st = rec.sent?.__vsloopTimes ?? [];
+  const keys = [rec.targetId, rec.session].filter(Boolean);
+  const recv = [];
+  for (let i = rec.m0; i < (rec.messages?.length ?? 0) && recv.length < 40; i++) {
+    const text = String(rec.messages[i]);
+    let hit = keys.some((k) => text.includes(k));
+    if (!hit && rec.wireId != null) {
+      try {
+        const m = JSON.parse(text);
+        hit = m.id === rec.wireId && !m.sessionId;
+      } catch {}
+    }
+    if (hit) recv.push({ at: mt[i] ?? 0, text: vsloopClip(text) });
+  }
+  const sent = [];
+  for (let i = rec.s0; i < (rec.sent?.length ?? 0) && sent.length < 40; i++) {
+    const m = rec.sent[i];
+    sent.push({ at: st[i] ?? 0, id: m?.id ?? null, method: m?.method ?? '', sessionId: m?.sessionId ?? '', params: vsloopClip(JSON.stringify(m?.params ?? {})) });
+  }
+  rec.notes.push('vsloop.client: ' + JSON.stringify({ targetId: rec.targetId, t0: rec.t0, t1: rec.t1, wireId: rec.wireId, attach: rec.attach, session: rec.session, steps: rec.steps, close: rec.close, recv, sent }));
+}
+async function attachClient(client, targetId, notes) {
+  vsloopTimed(client.messages);
+  vsloopTimed(client.sent);
+  const rec = { targetId, notes, messages: client.messages, sent: client.sent, m0: client.messages?.length ?? 0, s0: client.sent?.length ?? 0, steps: [] };
+  rec.t0 = Date.now();
+  const attached = await outcome(client.send('Target.attachToTarget', { targetId, flatten: true }));
+  rec.t1 = Date.now();
+  rec.attach = vsloopOut(attached);
+  rec.wireId = client.sent?.[rec.s0]?.id ?? null;
+  vsloopRecs.set(targetId, rec);
+  const session = attached.result?.sessionId;
+  rec.session = session ?? '';
+  if (session) {
+    const pe = await outcome(client.send('Page.enable', {}, session));
+    rec.steps.push({ method: 'Page.enable', at: Date.now(), ...vsloopOut(pe) });
+    const re = await outcome(client.send('Runtime.enable', {}, session));
+    rec.steps.push({ method: 'Runtime.enable', at: Date.now(), ...vsloopOut(re) });
+  }
+  return { session, attachRefused: refused(attached) };
+}
+`
+
+const vsloopShapeCloseOld = "  result.closed = gone;\n  result.closeRefused = refused(close) && !gone;\n}\n"
+
+const vsloopShapeCloseNew = `  const rec = vsloopRecs.get(targetId);
+  if (rec?.notes) {
+    vsloopRecs.delete(targetId);
+    rec.close = { ...vsloopOut(close), gone, at: Date.now() };
+    vsloopFlush(rec);
+  }
+  result.closed = gone;
+  result.closeRefused = refused(close) && !gone;
+}
+`
+
+const vsloopShapeCallOld = "const { session, attachRefused } = await attachClient(client, targetId);"
+
+func vsloopStageShape(t *testing.T, pkg string) {
+	t.Helper()
+	path := filepath.Join(pkg, "close-protected-shape.mjs")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, needle := range []string{vsloopShapeAttachOld, vsloopShapeCloseOld, vsloopShapeCallOld} {
+		if strings.Count(text, needle) != 1 {
+			t.Fatalf("close-protected-shape.mjs changed shape; the client recorder can't be staged: %q", needle[:min(60, len(needle))])
+		}
+	}
+	text = strings.Replace(text, vsloopShapeAttachOld, vsloopShapeAttachNew, 1)
+	text = strings.Replace(text, vsloopShapeCloseOld, vsloopShapeCloseNew, 1)
+	text = strings.Replace(text, vsloopShapeCallOld, "const { session, attachRefused } = await attachClient(client, targetId, notes);", 1)
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func vsloopStageVectors(t *testing.T, pkg, target string, n, offset int) {
 	t.Helper()
 	path := filepath.Join(pkg, "guard-vectors.json")
 	raw, err := os.ReadFile(path)
@@ -159,7 +265,7 @@ func vsloopStageVectors(t *testing.T, pkg, target string, n int) {
 	for i := range copies {
 		var v map[string]any
 		_ = json.Unmarshal(row, &v)
-		v["id"] = fmt.Sprintf("%s#%03d", vsloopRowID, i+1)
+		v["id"] = fmt.Sprintf("%s#%03d", vsloopRowID, offset+i+1)
 		v["targets"] = []string{target}
 		copies[i] = v
 	}
@@ -174,12 +280,15 @@ type vsloopRun struct {
 	target   string
 	variants []string
 	n        int
+	offset   int
+	part     int
 }
 
 func vsloopExecute(t *testing.T, run vsloopRun) ([]guardRow, *vsloopRec, bool, time.Duration) {
 	t.Helper()
 	pkg := stageCredentialExportProbeNotes(t, guardPackage(t))
-	vsloopStageVectors(t, pkg, run.target, run.n)
+	vsloopStageVectors(t, pkg, run.target, run.n, run.offset)
+	vsloopStageShape(t, pkg)
 	ext := filepath.Join("..", "..", "node_modules", "@ai-ecoverse", "slicc-shared-web", "harness", "extension")
 	if _, err := os.Stat(filepath.Join(ext, "manifest.json")); err != nil {
 		t.Fatalf("slicc-shared-web's harness extension is missing; run npm ci: %v", err)
@@ -360,6 +469,9 @@ type vsloopTimeline struct {
 	guard    []vsloopLine
 	window   []vsloopLine
 	sessions []string
+	reached  []string
+	Client   string `json:"client"`
+	Decision string `json:"decision"`
 }
 
 func vsloopParse(line string) (bool, vsloopMsg, bool) {
@@ -378,7 +490,76 @@ func vsloopParse(line string) (bool, vsloopMsg, bool) {
 var vsloopTargetRe = regexp.MustCompile(`target=([0-9A-F]{32})`)
 var vsloopSessionRe = regexp.MustCompile(`session=([0-9A-F]{32})`)
 
-func vsloopBuild(target string, gate, guard []vsloopLine) vsloopTimeline {
+type vsloopOutcome struct {
+	OK        bool   `json:"ok"`
+	SessionID string `json:"sessionId,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Code      *int   `json:"code,omitempty"`
+	Method    string `json:"method,omitempty"`
+	At        int64  `json:"at,omitempty"`
+	Gone      *bool  `json:"gone,omitempty"`
+}
+
+type vsloopClient struct {
+	TargetID string          `json:"targetId"`
+	T0       int64           `json:"t0"`
+	T1       int64           `json:"t1"`
+	WireID   *int64          `json:"wireId"`
+	Attach   vsloopOutcome   `json:"attach"`
+	Session  string          `json:"session"`
+	Steps    []vsloopOutcome `json:"steps"`
+	Close    *vsloopOutcome  `json:"close"`
+	Recv     []struct {
+		At   int64  `json:"at"`
+		Text string `json:"text"`
+	} `json:"recv"`
+	Sent []struct {
+		At        int64  `json:"at"`
+		ID        *int64 `json:"id"`
+		Method    string `json:"method"`
+		SessionID string `json:"sessionId"`
+		Params    string `json:"params"`
+	} `json:"sent"`
+}
+
+func vsloopClientOf(r guardRow) *vsloopClient {
+	for _, note := range r.Notes {
+		rest, ok := strings.CutPrefix(note, "guarded vsloop.client: ")
+		if !ok {
+			continue
+		}
+		var c vsloopClient
+		if json.Unmarshal([]byte(rest), &c) == nil {
+			return &c
+		}
+	}
+	return nil
+}
+
+var vsloopHexRe = regexp.MustCompile(`[0-9A-F]{32}`)
+var vsloopNumRe = regexp.MustCompile(`[0-9]+`)
+var vsloopSidRe = regexp.MustCompile(`"sessionId":"([0-9A-F]{32})"`)
+
+func vsloopNorm(msg string) string {
+	return vsloopNumRe.ReplaceAllString(vsloopHexRe.ReplaceAllString(msg, "<id>"), "N")
+}
+
+func vsloopClientClass(c *vsloopClient) string {
+	switch {
+	case c == nil:
+		return "unrecorded"
+	case c.Attach.OK && c.Attach.SessionID != "":
+		return "session"
+	case c.Attach.OK:
+		return "ok-without-session"
+	case strings.HasPrefix(c.Attach.Message, "slicc: refused:"):
+		return "refused(" + vsloopNorm(c.Attach.Message) + ")"
+	default:
+		return "error(" + vsloopNorm(c.Attach.Message) + ")"
+	}
+}
+
+func vsloopBuild(target string, gate, guard []vsloopLine, start time.Time, cl *vsloopClient) vsloopTimeline {
 	tl := vsloopTimeline{Target: target}
 	if target == "" {
 		tl.Pattern = "no guarded target in the notes"
@@ -447,15 +628,27 @@ func vsloopBuild(target string, gate, guard []vsloopLine) vsloopTimeline {
 		tl.Pattern = "no gate or guard record for the guarded target"
 		return tl
 	}
+	wall := func(ms int64) time.Duration { return time.UnixMilli(ms).Sub(start) }
+	lo, hi := first-100*time.Millisecond, last+100*time.Millisecond
+	if cl != nil && cl.T0 > 0 {
+		lo = wall(cl.T0) - 20*time.Millisecond
+		hi = wall(cl.T1) + 20*time.Millisecond
+		if cl.Close != nil && cl.Close.At > 0 {
+			hi = wall(cl.Close.At) + 20*time.Millisecond
+		}
+	}
 	for _, l := range guard {
-		if l.at < first-100*time.Millisecond || l.at > last+100*time.Millisecond {
+		if l.at < lo || l.at > hi {
 			continue
 		}
 		if vsloopTargetRe.MatchString(l.text) {
 			continue
 		}
-		if strings.Contains(l.text, "confirm") || strings.Contains(l.text, "hold") || strings.Contains(l.text, "refused") || strings.Contains(l.text, "detach") {
-			tl.window = append(tl.window, l)
+		for _, k := range []string{"attach", "confirm", "hold", "refused", "detach", "release"} {
+			if strings.Contains(l.text, k) {
+				tl.window = append(tl.window, l)
+				break
+			}
 		}
 	}
 	zero := first
@@ -569,8 +762,46 @@ func vsloopBuild(target string, gate, guard []vsloopLine) vsloopTimeline {
 		tl.Marks = append(tl.Marks, rel(l.at)+" guard: "+text)
 	}
 	for _, l := range tl.window {
-		tl.Marks = append(tl.Marks, rel(l.at)+" guard (window, no target id): "+strings.TrimPrefix(l.text, "slicc debug: "))
+		tl.Marks = append(tl.Marks, rel(l.at)+" guard (no target id; another slot may have logged it): "+strings.TrimPrefix(l.text, "slicc debug: "))
 	}
+	reached := map[string]bool{}
+	if cl != nil {
+		if cl.T0 > 0 {
+			mark(wall(cl.T0), "client: sends Target.attachToTarget")
+		}
+		if cl.T1 > 0 {
+			mark(wall(cl.T1), "client: attach reply "+vsloopClientClass(cl)+" sessionId="+strconv.Quote(cl.Attach.SessionID)+" message="+strconv.Quote(cl.Attach.Message))
+		}
+		for _, st := range cl.Steps {
+			mark(wall(st.At), fmt.Sprintf("client: %s reply ok=%t message=%q", st.Method, st.OK, st.Message))
+		}
+		if cl.Close != nil {
+			gone := false
+			if cl.Close.Gone != nil {
+				gone = *cl.Close.Gone
+			}
+			mark(wall(cl.Close.At), fmt.Sprintf("client: closeTarget measured ok=%t message=%q gone=%t", cl.Close.OK, cl.Close.Message, gone))
+		}
+		for _, m := range cl.Recv {
+			mark(wall(m.At), "client received: "+m.Text)
+			for _, sm := range vsloopSidRe.FindAllStringSubmatch(m.Text, -1) {
+				reached[sm[1]] = true
+			}
+		}
+		for _, m := range cl.Sent {
+			if m.Method == "Target.attachToTarget" {
+				continue
+			}
+			mark(wall(m.At), fmt.Sprintf("client sent: %s session=%q %s", m.Method, m.SessionID, m.Params))
+		}
+		if cl.Attach.SessionID != "" {
+			reached[cl.Attach.SessionID] = true
+		}
+	}
+	for s := range reached {
+		tl.reached = append(tl.reached, s)
+	}
+	sort.Strings(tl.reached)
 	sort.SliceStable(tl.Marks, func(i, j int) bool {
 		a, _ := strconv.Atoi(strings.TrimSuffix(strings.Fields(tl.Marks[i])[0], "ms"))
 		b, _ := strconv.Atoi(strings.TrimSuffix(strings.Fields(tl.Marks[j])[0], "ms"))
@@ -623,7 +854,19 @@ func vsloopBuild(target string, gate, guard []vsloopLine) vsloopTimeline {
 	case enableAt >= 0:
 		order = "view-source targetInfo after the client's Page.enable"
 	}
-	tl.Shape = fmt.Sprintf("path=%s answer=%s order=%q", tl.Path, answerClass, order)
+	tl.Client = vsloopClientClass(cl)
+	sliccReached := sliccSession != "" && slices.Contains(tl.reached, sliccSession)
+	switch {
+	case sliccAttachAt < 0 && strings.HasPrefix(tl.Client, "refused"):
+		tl.Decision = "refused-without-forwarding"
+	case sliccAttachAt < 0:
+		tl.Decision = "not-forwarded,client-" + tl.Client
+	case askAt >= 0:
+		tl.Decision = "forwarded,doc-confirm-held,client-" + tl.Client
+	default:
+		tl.Decision = "forwarded,no-ask,client-" + tl.Client
+	}
+	tl.Shape = fmt.Sprintf("path=%s client=%s decision=%s sliccSessionReachedClient=%t answer=%s order=%q", tl.Path, tl.Client, tl.Decision, sliccReached, answerClass, order)
 	tl.Pattern = fmt.Sprintf("%s attachCmds=%d attachedEvents=%d vsInfo=%s attachAfterNavigate=%s (session %s) ask=%s answer=%s clientPageEnable=%s (session %s) protecting=%s moved=%s detach=%s",
 		tl.Shape, attachCmds, attachedEvents, opt(vsInfoAt), opt(sliccAttachAt), sliccSession, opt(askAt), opt(answerAt), opt(enableAt), enableSession, opt(protectAt), opt(movedAt), opt(detachAt))
 	return tl
@@ -642,6 +885,11 @@ type vsloopEntry struct {
 	TargetID     string          `json:"targetId,omitempty"`
 	Pattern      string          `json:"pattern,omitempty"`
 	Shape        string          `json:"shape,omitempty"`
+	Path         string          `json:"path,omitempty"`
+	Client       string          `json:"client,omitempty"`
+	Decision     string          `json:"decision,omitempty"`
+	AttachReply  string          `json:"attachReply,omitempty"`
+	Reached      []string        `json:"sessionsSeenByClient,omitempty"`
 	Log          string          `json:"log,omitempty"`
 }
 
@@ -681,7 +929,18 @@ func vsloopReport(t *testing.T, run vsloopRun) {
 		pass := r.Control == "pass" && r.Guarded == "pass" && r.Live == "pass"
 		target, _ := vsloopGuardedTarget(r)
 		e.TargetID = target
-		timeline := vsloopBuild(target, gate, guard)
+		cl := vsloopClientOf(r)
+		timeline := vsloopBuild(target, gate, guard, rec.start, cl)
+		e.Path = timeline.Path
+		e.Client = timeline.Client
+		e.Decision = timeline.Decision
+		e.Reached = timeline.reached
+		if cl != nil {
+			e.AttachReply = cl.Attach.Message
+			if cl.Attach.SessionID != "" {
+				e.AttachReply = "sessionId " + cl.Attach.SessionID
+			}
+		}
 		e.Pattern = timeline.Pattern
 		e.Shape = timeline.Shape
 		switch {
@@ -701,7 +960,7 @@ func vsloopReport(t *testing.T, run vsloopRun) {
 			e.Log = name
 			var b strings.Builder
 			row, _ := json.MarshalIndent(r, "", "  ")
-			fmt.Fprintf(&b, "tree %s row %s target %s variant %s n %d\ncontrol %s guarded %s live %s\nwhy %s\nobservations %s\nguarded target %s sessions %v\npattern %s\n\n== timeline (ms from the observer's view-source navigate) ==\n", vsloopTree, r.ID, r.Target, r.Variant, e.N, r.Control, r.Guarded, r.Live, r.Why, r.Observed, target, timeline.sessions, timeline.Pattern)
+			fmt.Fprintf(&b, "tree %s row %s target %s variant %s n %d\ncontrol %s guarded %s live %s\nwhy %s\nobservations %s\nguarded target %s sessions %v\nsessions seen by the client %v\nclient attach reply %s\npattern %s\n\n== timeline (ms from the observer's view-source navigate) ==\n", vsloopTree, r.ID, r.Target, r.Variant, e.N, r.Control, r.Guarded, r.Live, r.Why, r.Observed, target, timeline.sessions, timeline.reached, e.AttachReply, timeline.Pattern)
 			for _, m := range timeline.Marks {
 				b.WriteString(m + "\n")
 			}
@@ -717,6 +976,12 @@ func vsloopReport(t *testing.T, run vsloopRun) {
 			for _, l := range timeline.gate {
 				fmt.Fprintf(&b, "%9.3f %s\n", l.at.Seconds(), l.text)
 			}
+			if cl != nil {
+				raw, _ := json.MarshalIndent(cl, "", "  ")
+				b.WriteString("\n== client record (epoch ms) ==\n")
+				b.Write(raw)
+				b.WriteString("\n")
+			}
 			b.WriteString("\n== row ==\n")
 			b.Write(row)
 			b.WriteString("\n")
@@ -728,12 +993,22 @@ func vsloopReport(t *testing.T, run vsloopRun) {
 		entries = append(entries, e)
 	}
 	patterns := map[string]int{}
+	paths := map[string]int{}
 	for _, e := range entries {
+		verdict := "FAIL"
 		if e.Control == "pass" && e.Guarded == "pass" && e.Live == "pass" {
-			patterns[e.Target+" "+e.Variant+" pass: "+e.Shape]++
-		} else {
-			patterns[e.Target+" "+e.Variant+" FAIL: "+e.Shape]++
+			verdict = "pass"
 		}
+		patterns[e.Target+" "+e.Variant+" "+verdict+": "+e.Shape]++
+		paths[fmt.Sprintf("target=%s variant=%s verdict=%s path=%s client=%s", e.Target, e.Variant, verdict, e.Path, e.Client)]++
+	}
+	pkeys := make([]string, 0, len(paths))
+	for k := range paths {
+		pkeys = append(pkeys, k)
+	}
+	sort.Strings(pkeys)
+	for _, k := range pkeys {
+		t.Logf("VSLOOP-PATH tree=%s part=%d count=%d %s", vsloopTree, run.part, paths[k], k)
 	}
 	keys := make([]string, 0, len(patterns))
 	for k := range patterns {
@@ -743,9 +1018,9 @@ func vsloopReport(t *testing.T, run vsloopRun) {
 	for _, k := range keys {
 		t.Logf("VSLOOP-SHAPE tree=%s %d x %s", vsloopTree, patterns[k], k)
 	}
-	summary := map[string]any{"tree": vsloopTree, "sha": guardSHA(), "row": vsloopRowID, "target": run.target, "variants": run.variants, "n": run.n, "complete": complete, "seconds": took.Seconds(), "slots": guardSlots(), "rows": entries, "shapes": patterns}
+	summary := map[string]any{"tree": vsloopTree, "sha": guardSHA(), "row": vsloopRowID, "target": run.target, "variants": run.variants, "n": run.n, "complete": complete, "seconds": took.Seconds(), "slots": guardSlots(), "part": run.part, "offset": run.offset, "rows": entries, "shapes": patterns, "paths": paths}
 	out, _ := json.MarshalIndent(summary, "", "  ")
-	name := fmt.Sprintf("vsloop-%s-%s-%s-summary.json", vsloopTree, run.target, strings.Join(run.variants, "+"))
+	name := fmt.Sprintf("vsloop-%s-%s-%s-part%d-summary.json", vsloopTree, run.target, strings.Join(run.variants, "+"), run.part)
 	if err := os.WriteFile(filepath.Join(dir, name), out, 0o644); err != nil {
 		t.Logf("write %s: %v", name, err)
 	}
@@ -758,21 +1033,33 @@ func vsloopReport(t *testing.T, run vsloopRun) {
 		tl := tallies[k]
 		parts := strings.Fields(k)
 		failures := tl.n - tl.pass
-		t.Logf("VSLOOP-RATE tree=%s sha=%s target=%s variant=%s N=%d pass=%d guardedFail=%d incomplete=%d other=%d rate=%d/%d (%.1f%%) complete=%t took=%s", vsloopTree, guardSHA(), parts[0], parts[1], tl.n, tl.pass, tl.fail, tl.incomplete, tl.other, failures, tl.n, 100*float64(failures)/float64(max(1, tl.n)), complete, took.Round(time.Second))
+		t.Logf("VSLOOP-RATE tree=%s part=%d sha=%s target=%s variant=%s N=%d pass=%d guardedFail=%d incomplete=%d other=%d rate=%d/%d (%.1f%%) complete=%t took=%s", vsloopTree, run.part, guardSHA(), parts[0], parts[1], tl.n, tl.pass, tl.fail, tl.incomplete, tl.other, failures, tl.n, 100*float64(failures)/float64(max(1, tl.n)), complete, took.Round(time.Second))
 	}
 	if len(rows) == 0 {
 		t.Fatal("the repeated row run reported no rows")
 	}
 }
 
-func TestDiagRepeatGuardRowVaultPrompt(t *testing.T) {
-	vsloopReport(t, vsloopRun{target: "vault", variants: []string{"prompt"}, n: 100})
+func TestDiagRepeatGuardRowVaultPromptPart1(t *testing.T) {
+	vsloopReport(t, vsloopRun{target: "vault", variants: []string{"prompt"}, n: 167, offset: 0, part: 1})
 }
 
-func TestDiagRepeatGuardRowVaultLagging(t *testing.T) {
-	vsloopReport(t, vsloopRun{target: "vault", variants: []string{"lagging"}, n: 100})
+func TestDiagRepeatGuardRowVaultPromptPart2(t *testing.T) {
+	vsloopReport(t, vsloopRun{target: "vault", variants: []string{"prompt"}, n: 167, offset: 167, part: 2})
 }
 
-func TestDiagRepeatGuardRowSeven(t *testing.T) {
-	vsloopReport(t, vsloopRun{target: "seven", variants: []string{"prompt", "lagging"}, n: 60})
+func TestDiagRepeatGuardRowVaultPromptPart3(t *testing.T) {
+	vsloopReport(t, vsloopRun{target: "vault", variants: []string{"prompt"}, n: 166, offset: 334, part: 3})
+}
+
+func TestDiagRepeatGuardRowVaultLaggingPart1(t *testing.T) {
+	vsloopReport(t, vsloopRun{target: "vault", variants: []string{"lagging"}, n: 167, offset: 0, part: 1})
+}
+
+func TestDiagRepeatGuardRowVaultLaggingPart2(t *testing.T) {
+	vsloopReport(t, vsloopRun{target: "vault", variants: []string{"lagging"}, n: 167, offset: 167, part: 2})
+}
+
+func TestDiagRepeatGuardRowVaultLaggingPart3(t *testing.T) {
+	vsloopReport(t, vsloopRun{target: "vault", variants: []string{"lagging"}, n: 166, offset: 334, part: 3})
 }
