@@ -138,3 +138,36 @@ func TestProtectRefusalAndRedaction(t *testing.T) {
 		t.Fatal("New accepts a non-origin")
 	}
 }
+
+func TestProtectHostsTheParserRefusedStayUnparseable(t *testing.T) {
+	o := protect.MustNew([]string{"http://127.0.0.1:5710", "http://[::1]:9000"})
+	for _, raw := range []string{
+		"https://sliccy.ai\xff/",
+		"https://seven.sliccy.ai\xc0\xae/",
+		"https://vault.sliccy.ai\xc3/",
+		"https://seven\xff.sliccy.ai/",
+		"http://127.0.0.1\xc3:5710/",
+		"view-source:https://sliccy.ai\xff/",
+		"blob:https://sliccy.ai\xc3/x",
+		"http://[::1]]/os/",
+		"http://[[::1]]:9000/os/",
+		"https://seven.xn--sliccy-.ai/",
+		"https://xn--seven-.sliccy.ai/os/",
+		"https://sliccy.xn--ai/",
+		"https://xn--1ug.sliccy.ai/",
+		"https://seven.sliccy.ai!é/",
+		"https://é(.sliccy.ai/",
+		"http://127.0.0.1(é:5710/",
+		"https://xn--zca!.sliccy.ai/",
+		"http://Ã(/",
+		"https://xn--1ch.example/",
+		"https://seven.sliccy.ai𞛀/",
+	} {
+		if !protect.Unparseable(raw) || !o.Loaded(raw) {
+			t.Errorf("%q: Unparseable %v, Loaded %v, want both true", raw, protect.Unparseable(raw), o.Loaded(raw))
+		}
+		if can, ok := protect.Canonical(raw); ok && !strings.HasPrefix(raw, "view-source:") && !strings.HasPrefix(raw, "blob:") {
+			t.Errorf("%q: Canonical %q", raw, can)
+		}
+	}
+}

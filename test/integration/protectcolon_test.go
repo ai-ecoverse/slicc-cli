@@ -22,6 +22,8 @@ func TestCDPKeepsOrdinaryColonChainsAndScrubsProtectedSuffixes(t *testing.T) {
 		{"prefix:ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ:443/scrub-secret-fixture", "prefix:ｓｅｖｅｎ．ｓｌｉｃｃｙ．ａｉ:443"},
 		{"prefix:se\u200bven.sliccy.ai:443/scrub-secret-fixture", "prefix:se\u200bven.sliccy.ai:443"},
 		{"prefix:%73even.sliccy.ai:443/scrub-secret-fixture", "prefix:%73even.sliccy.ai:443"},
+		{"q=https%3A%2F%2Fvault.sliccy.ai%FF%2Fscrub-secret-fixture", "q="},
+		{"q=https%3A%2F%2Fseven.sliccy.ai%C0%AE%2Fscrub-secret-fixture", "q="},
 	}
 	env, _ := setupFakeProtect(t, func(seven, allowed string) fakeScript {
 		for _, alias := range []string{"2130706433", "0x7f.1"} {
