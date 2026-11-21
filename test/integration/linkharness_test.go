@@ -419,7 +419,7 @@ func startAttachEnv(t *testing.T, stdio bool, env []string, args ...string) *att
 	}
 	t.Cleanup(func() {
 		reap(t, cmd, "slicc attach")
-		if t.Failed() {
+		if t.Failed() || os.Getenv("SLICC_TEST_DUMP_ATTACH_STDERR") != "" {
 			t.Logf("slicc attach stderr:\n%s", a.stderr.String())
 		}
 	})

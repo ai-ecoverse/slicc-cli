@@ -79,7 +79,8 @@ func (r *Registry) serve(s *link.Stream) {
 		}
 		return
 	}
-	rl := &relay{s: s, conn: conn, logf: r.logf, id: req.Browser, g: newGuard(r.origins(), r.logf), reader: reader, parked: map[parkKey][]parkedMessage{}}
+	logf := wrapDiagE7Logf(r.logf)
+	rl := &relay{s: s, conn: conn, logf: logf, id: req.Browser, g: newGuard(r.origins(), logf), reader: reader, parked: map[parkKey][]parkedMessage{}}
 	rl.g.setHostTarget(r.hostTargetID)
 	rl.g.reserveBytes = func(n int) (*link.Reservation, bool) {
 		r := s.ReserveAllocation(n, false)
@@ -93,6 +94,7 @@ func (r *Registry) serve(s *link.Stream) {
 	rl.g.scheduleInitial = rl.scheduleInitial
 	rl.g.flushAsync = func(send, page [][]byte) {
 		for _, msg := range send {
+			rl.diagE7Wire("guard->chrome", msg)
 			_ = rl.conn.Write(context.Background(), websocket.MessageText, msg)
 		}
 		for _, msg := range page {
@@ -263,6 +265,7 @@ func (rl *relay) run() {
 
 func (rl *relay) sendGuardVerdict(ctx context.Context, v browserVerdict) bool {
 	for _, msg := range v.send {
+		rl.diagE7Wire("guard->chrome", msg)
 		var command struct {
 			Method string `json:"method"`
 		}
@@ -294,6 +297,7 @@ func (rl *relay) toPage() {
 		if typ != websocket.MessageText || filtered(data) {
 			continue
 		}
+		rl.diagE7Wire("chrome->guard", data)
 		v := rl.g.fromBrowser(data)
 		if v.lost {
 			time.AfterFunc(LostGrace, func() {
@@ -446,7 +450,16 @@ func pageFrame(data []byte) []byte {
 func (rl *relay) writePage(data []byte) error {
 	rl.pageMu.Lock()
 	defer rl.pageMu.Unlock()
+	before := data
 	data = rl.g.scrub(data)
+	if diagE7Enabled() && !bytes.Equal(before, data) {
+		rl.diagE7Wire("guard->client", data)
+		if rl.logf != nil {
+			rl.logf("disposition=REWRITTEN scrub t=%s %s", time.Now().UTC().Format(time.RFC3339Nano), diagE7ReplyShape(data))
+		}
+	} else {
+		rl.diagE7Wire("guard->client", data)
+	}
 	reservation := rl.s.ReserveAllocation(len(data)+4, false)
 	if reservation == nil {
 		rl.kill("ENOBUFS: shared HTTP/CDP allocation limit")
@@ -523,6 +536,7 @@ func (rl *relay) toBrowser() {
 		if rl.browserDone.Load() {
 			continue
 		}
+		rl.diagE7Wire("client->guard", buf)
 		if rl.park(buf) {
 			continue
 		}
@@ -536,6 +550,7 @@ func (rl *relay) toBrowser() {
 		if out == nil {
 			continue
 		}
+		rl.diagE7Wire("guard->chrome", out)
 		if err := rl.conn.Write(ctx, websocket.MessageText, out); err != nil {
 			if rl.browserDone.Load() {
 				continue

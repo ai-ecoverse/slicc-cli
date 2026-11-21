@@ -213,7 +213,9 @@ func (g *guard) answerIdentityOrExtensionLocked(k callKey, m *message, method, t
 		g.dropDocIdentityCallLocked(k)
 		return v
 	}
-	if send, page, held := g.holdDocIdentityReplyLocked(k, m, v.forward); held {
+	send, page, held := g.holdDocIdentityReplyLocked(k, m, v.forward)
+	g.diagE7NoteIdentityHold(method, m, page, held)
+	if held {
 		if method != "" && protect.ExtensionShownMethod(method) && g.extensionFramesPresentLocked(target) {
 			if h := g.docIdentityHolds[k]; h != nil {
 				h.method = method

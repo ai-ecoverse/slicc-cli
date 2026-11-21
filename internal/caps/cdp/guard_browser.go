@@ -149,6 +149,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		return v
 	}
 	if !g.ownsClientAnswerLocked(k) {
+		g.diagE7Disposition("DROPPED", "", m.SessionID, *m.ID, "responseLocked not-client-owned")
 		return browserVerdict{}
 	}
 	ownerFrame, ownerCall := g.extensionOwnerCalls[k]
@@ -178,10 +179,16 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget)}
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
+		extra := "responseLocked session-refused"
+		if treeCall {
+			extra = "responseLocked session-refused Page.getFrameTree"
+		}
+		g.diagE7Disposition("REWRITTEN", "", m.SessionID, *m.ID, extra)
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: g.closeStreamLocked(bc, m)}
 	}
 	if outlived {
 		g.logf("cdp: dropped an answer from before a protected error page committed")
+		g.diagE7Disposition("REWRITTEN", "", m.SessionID, *m.ID, "responseLocked outlived")
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedOutlived), send: g.closeStreamLocked(bc, m)}
 	}
 	data = g.plainErrorLocked(m, data)
@@ -200,6 +207,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		}
 		treePage = g.takeContextSettlePageLocked()
 		treeSend = g.takeContextSettleSendLocked()
+		g.diagE7Disposition("FORWARDED", "Page.getFrameTree", m.SessionID, *m.ID, "responseLocked treeCall "+diagE7ReplyShape(data))
 	}
 	if m.Error != nil || kind == kindPlain {
 		return browserVerdict{forward: data, send: treeSend, page: treePage}

@@ -128,6 +128,7 @@ func (g *guard) isolatedWorldWaitLocked(c *command) (<-chan struct{}, [][]byte) 
 	w = &frameWorldWait{frame: frame, page: t.id, ch: make(chan struct{}), at: time.Now()}
 	g.frameWorldWaits[frame] = w
 	g.logf("cdp: holding Page.createIsolatedWorld until frame ancestry settles frame=%s", frame)
+	g.diagE7Disposition("HELD", "Page.createIsolatedWorld", c.session, c.id, "frame-ancestry-settle frame="+frame)
 	return w.ch, send
 }
 
@@ -889,6 +890,7 @@ func (g *guard) frameContentCheckLocked(c *command, target string) string {
 	}
 	switch c.method {
 	case "Page.getFrameTree", "Page.getResourceTree", "Page.getResourceContent", "Page.captureSnapshot", "Page.printToPDF":
+		g.diagE7Disposition("REWRITTEN", c.method, c.session, c.id, "frameContentCheck framesProtected refusal")
 		return refusedTarget
 	}
 	if framePaintMethods[c.method] {

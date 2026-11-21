@@ -342,11 +342,13 @@ func (g *guard) holdDocIdentityReplyLocked(k callKey, m *message, data []byte) (
 	}
 	if g.sessionDocIdentityHoldCountLocked(m.SessionID) >= maxDocIdentityHolds {
 		g.logf("cdp: too many document identity holds on a session; dropping one")
+		g.diagE7Disposition("REWRITTEN", g.paintMethods[k], m.SessionID, *m.ID, "retriable too-many-holds")
 		return nil, [][]byte{retriableContextDestroyed(*m.ID, m.SessionID)}, true
 	}
 	reservation, reserved := g.holdReservation(data)
 	if !reserved {
 		g.logf("cdp: document identity hold exceeded the write budget; refusing the reply")
+		g.diagE7Disposition("REWRITTEN", g.paintMethods[k], m.SessionID, *m.ID, "retriable hold-budget")
 		return nil, [][]byte{retriableContextDestroyed(*m.ID, m.SessionID)}, true
 	}
 	now := time.Now()
@@ -538,6 +540,7 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 			send = append(send, g.deliverDocIdentityDataLocked(h)...)
 		} else {
 			g.dropDeferredExtensionPaintLocked(kPaint)
+			g.diagE7Disposition("REWRITTEN", h.method, h.session, h.id, "docIdentityHold release chrome-error-retriable")
 			g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
 		}
 	case g.docIdentityProtectedLocked(current):
@@ -563,9 +566,11 @@ func (g *guard) deliverDocIdentityDataLocked(h *docIdentityHold) [][]byte {
 		return nil
 	}
 	if h.extensionAfter && protect.ExtensionShownMethod(h.method) && g.extensionFramesPresentLocked(h.target) {
+		g.diagE7Disposition("HELD", h.method, h.session, h.id, "docIdentityHold defer-extension-paint")
 		return g.startDeferredExtensionPaintProbeLocked(callKey{h.session, h.id})
 	}
 	g.dropDeferredExtensionPaintLocked(callKey{h.session, h.id})
+	g.diagE7Disposition("FORWARDED", h.method, h.session, h.id, "docIdentityHold release deliver")
 	g.pendingPage = append(g.pendingPage, h.data)
 	return nil
 }
@@ -575,6 +580,7 @@ func (g *guard) refuseDocIdentityHoldPageLocked(h *docIdentityHold) {
 		return
 	}
 	g.dropDeferredExtensionPaintLocked(callKey{h.session, h.id})
+	g.diagE7Disposition("REWRITTEN", h.method, h.session, h.id, "docIdentityHold release refusal")
 	g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
 }
 
