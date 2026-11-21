@@ -6,9 +6,12 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
-	whatwg "github.com/nlnwa/whatwg-url/url"
+	whatwg "github.com/nationallibraryofnorway/whatwg-url/url"
+	"golang.org/x/net/idna"
 )
 
 type Opener int
@@ -130,12 +133,97 @@ func (o *Origins) Extra() []string {
 	return slices.Clone(o.extra)
 }
 
-func parse(raw string) *whatwg.Url {
-	u, err := whatwg.Parse(raw)
-	if err != nil {
+const notEqualRunes = "\u2260\u226e\u226f"
+
+var (
+	parser      = whatwg.NewParser()
+	hostBase, _ = parser.Parse("http://host.invalid/")
+	idnaProfile = idna.New(
+		idna.MapForLookup(),
+		idna.BidiRule(),
+		idna.VerifyDNSLength(false),
+		idna.StrictDomainName(true),
+		idna.ValidateLabels(true),
+		idna.CheckHyphens(false),
+		idna.CheckJoiners(true),
+		idna.Transitional(false),
+	)
+)
+
+func parseWith(raw string, hostname bool) *whatwg.Url {
+	if !utf8.ValidString(raw) {
+		raw = string([]rune(raw))
+	}
+	var u *whatwg.Url
+	var err error
+	if hostname {
+		u, err = parser.(whatwg.BasicParsing).BasicParse(raw, nil, hostBase.Clone(), whatwg.StateHostname)
+	} else {
+		u, err = parser.Parse(raw)
+	}
+	if err != nil || u == nil || !strictHost(raw, u) {
 		return nil
 	}
 	return u
+}
+
+func strictHost(raw string, u *whatwg.Url) bool {
+	if !u.IsSpecialScheme() || u.IsIPv4() || u.IsIPv6() {
+		return true
+	}
+	host := u.Hostname()
+	ace := false
+	for label := range strings.SplitSeq(host, ".") {
+		ace = ace || strings.HasPrefix(label, "xn--")
+	}
+	if !ace {
+		return true
+	}
+	if _, err := idnaProfile.ToASCII(host); err != nil {
+		return false
+	}
+	decoded, err := idna.Punycode.ToUnicode(host)
+	if err != nil || !hostRunes(decoded) {
+		return false
+	}
+	return !strings.ContainsAny(decoded, notEqualRunes) || asciiOrNotEqual(raw)
+}
+
+func hostRunes(decoded string) bool {
+	for _, r := range decoded {
+		if r >= utf8.RuneSelf && (noncharacter(r) || !unicode.Is(unicode15, r)) {
+			return false
+		}
+	}
+	return true
+}
+
+func noncharacter(r rune) bool {
+	return r >= 0xFDD0 && r <= 0xFDEF || r&0xFFFE == 0xFFFE
+}
+
+func asciiOrNotEqual(raw string) bool {
+	if strings.Contains(strings.ToLower(raw), "xn--") {
+		return false
+	}
+	for _, r := range raw {
+		if r >= utf8.RuneSelf && !strings.ContainsRune(notEqualRunes, r) {
+			return false
+		}
+	}
+	return true
+}
+
+func parse(raw string) *whatwg.Url {
+	return parseWith(raw, false)
+}
+
+func Hostname(host string) (string, bool) {
+	u := parseWith(host, true)
+	if u == nil {
+		return "", false
+	}
+	return u.Hostname(), true
 }
 
 func scheme(u *whatwg.Url) string {

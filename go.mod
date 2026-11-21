@@ -1,6 +1,6 @@
 module github.com/ai-ecoverse/slicc-cli
 
-go 1.26.7
+go 1.27.4
 
 require (
 	charm.land/bubbles/v2 v2.2.1
@@ -15,7 +15,7 @@ require (
 	github.com/ebitengine/purego v0.11.3
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gorilla/websocket v1.5.3
-	github.com/nlnwa/whatwg-url v0.6.2
+	github.com/nationallibraryofnorway/whatwg-url v0.9.1
 	github.com/pion/ice/v4 v4.4.9
 	github.com/pion/logging v0.2.4
 	github.com/pion/sdp/v3 v3.0.20
@@ -33,7 +33,6 @@ require (
 
 require (
 	github.com/atotto/clipboard v0.1.4 // indirect
-	github.com/bits-and-blooms/bitset v1.24.6 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4 // indirect
 	github.com/charmbracelet/x/ansi v0.11.9 // indirect
