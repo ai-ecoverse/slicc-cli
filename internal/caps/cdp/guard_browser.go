@@ -214,6 +214,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	if kind == kindAttach {
 		if held, holdSend, holdPage := g.holdDocConfirmReplyLocked(attached, m, res); held {
 			acceptedAttach = true
+			holdSend = append(holdSend, g.noteExplicitDocConfirmObserveLocked(attached)...)
 			return browserVerdict{send: append(treeSend, holdSend...), page: append(treePage, holdPage...)}
 		}
 	}
@@ -300,7 +301,9 @@ func (g *guard) applyAttachResultLocked(attached, session string, res map[string
 			t.shown = true
 		}
 		g.attachAnsweredLocked(session, res, t)
-		return g.touchLocked(attached, t.typ), false
+		send := g.touchLocked(attached, t.typ)
+		send = append(send, g.noteExplicitDocConfirmObserveLocked(attached)...)
+		return send, false
 	}
 	g.logf("cdp: attach counted as touch without a known target target=%s", attached)
 	return nil, false
@@ -643,6 +646,9 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		g.adoptHeldFlatPageLocked(p.SessionID, info.OpenerID)
 	}
 	send = append(send, g.touchLocked(info.TargetID, info.Type)...)
+	if info.Type == "page" {
+		send = append(send, g.scheduleDocConfirmObserveLocked(info.TargetID, g.docConfirmObservePathLocked(info.TargetID, info.Type))...)
+	}
 	if params := decodeParams(m.Params); params != nil {
 		if obj, _ := params["targetInfo"].(map[string]any); g.redactInfoLocked(obj, info) {
 			m.Params = encode(params)

@@ -399,6 +399,13 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 		ev["sessionId"] = h.parent
 	}
 	v.page = append(v.page, encode(ev))
+	path := "F"
+	if h.typ == "iframe" {
+		path = "nested"
+	} else if g.errorProofOfLocked(h.target) != errorProofNone {
+		path = "G"
+	}
+	v.send = append(v.send, g.noteDocConfirmObserveLocked(h.target, path)...)
 	return v
 }
 
@@ -559,9 +566,11 @@ func (g *guard) expireHold(sessionID string) (page, send [][]byte) {
 	}
 	delete(g.held, sessionID)
 	g.logf("cdp: an auto-attached target never got a URL target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
+	send = g.noteDocConfirmObserveLocked(h.target, "F")
+	g.fallthroughDocConfirmObserveLocked(h.target)
 	part := g.hideHeldPageAndTabsLocked(h, false, "unclassified expiry")
 	g.resolveUnknownLocked()
-	return part.page, part.send
+	return part.page, append(send, part.send...)
 }
 
 func (g *guard) dropHeldLocked(targetID string) (page, send [][]byte) {
