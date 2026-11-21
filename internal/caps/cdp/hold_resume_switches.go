@@ -19,3 +19,11 @@ func holdResumeRefusedEnabled() bool {
 func holdResumeChangesProtectedFateEnabled() bool {
 	return false
 }
+
+func holdResumeCapEnabled() bool {
+	return true
+}
+
+func holdResumeCapLimit() int {
+	return maxRefused
+}

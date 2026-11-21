@@ -9,3 +9,7 @@ func holdResumeTwiceEnabled() bool { return true }
 func holdResumeRefusedEnabled() bool { return false }
 
 func holdResumeChangesProtectedFateEnabled() bool { return false }
+
+func holdResumeCapEnabled() bool { return true }
+
+func holdResumeCapLimit() int { return maxRefused }

@@ -193,6 +193,61 @@ func emptyURLReview(g *guard, raw string) pageVerdict {
 	return g.fromCommand(c, id, ok)
 }
 
+func TestEmptyURLHoldResumedMapBoundedAndAckAfterPrune(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	limit := holdResumeCapLimit()
+	if !holdResumeCapEnabled() || limit <= 0 {
+		t.Fatal("named row requires a positive holdResumed cap")
+	}
+	for i := 0; i < 6; i++ {
+		tab := fmt.Sprintf("S-TAB-E%d", i)
+		page := fmt.Sprintf("S-PAGE-E%d", i)
+		_ = g.fromBrowser(emptyURLNamedTabAttach(tab, fmt.Sprintf("TAB-E%d", i), "OPENER", true))
+		_ = g.fromBrowser(emptyURLNamedPageAttach(tab, page, fmt.Sprintf("PAGE-E%d", i), "OPENER", false))
+		if g.held[page] == nil || !g.holdResumed[page] {
+			t.Fatalf("empty-URL hold %s must be resumed into holdResumed", page)
+		}
+	}
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-KEEP", "TAB-KEEP", "OPENER", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-KEEP", "S-PAGE-KEEP", "PAGE-KEEP", "OPENER", false))
+	_ = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-KEEP", "page", "https://ordinary.test/keep", "OPENER"))
+	if g.sessions["S-PAGE-KEEP"] == nil || g.held["S-PAGE-KEEP"] != nil || !g.holdResumed["S-PAGE-KEEP"] {
+		t.Fatal("expected delivered keep page still marked holdResumed")
+	}
+	g.mu.Lock()
+	for i := 0; i < limit+3; i++ {
+		g.noteHoldResumedLocked(fmt.Sprintf("S-PAD-%d", i))
+	}
+	if len(g.holdResumed) > limit || len(g.holdResumedOrder) > limit {
+		g.mu.Unlock()
+		t.Fatalf("holdResumed grew past cap: map=%d order=%d limit=%d", len(g.holdResumed), len(g.holdResumedOrder), limit)
+	}
+	latest := fmt.Sprintf("S-PAD-%d", limit+2)
+	if !g.holdResumed[latest] {
+		g.mu.Unlock()
+		t.Fatal("newest holdResumed entry must survive prune")
+	}
+	if g.holdResumed["S-PAGE-KEEP"] || g.holdResumed["S-PAGE-E0"] {
+		g.mu.Unlock()
+		t.Fatal("oldest holdResumed entries must be pruned once the cap is exceeded")
+	}
+	g.mu.Unlock()
+	ack := emptyURLReview(g, fmt.Sprintf(`{"id":80,"sessionId":"%s","method":"Runtime.runIfWaitingForDebugger","params":{}}`, latest))
+	if len(ack.forward) > 0 {
+		t.Fatalf("client resume after prune must ack without a second guard resume: %s", ack.forward)
+	}
+	if len(ack.reply) == 0 || strings.Contains(string(ack.reply), "Session with given id not found") {
+		t.Fatalf("client resume after prune must ack: %s", ack.reply)
+	}
+	g.mu.Lock()
+	g.forgetSessionLocked(latest)
+	if g.holdResumed[latest] {
+		g.mu.Unlock()
+		t.Fatal("forgetSessionLocked must delete the holdResumed entry")
+	}
+	g.mu.Unlock()
+}
+
 func TestEmptyURLHoldClientResumeAfterGuardResumeIsIdempotent(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))

@@ -194,6 +194,7 @@ type guard struct {
 	goneOrder                []string
 	held                     map[string]*heldSession
 	holdResumed              map[string]bool
+	holdResumedOrder         []string
 	heldContexts             map[heldContextKey]*heldContext
 	contextSettlePage        [][]byte
 	contextSettleSend        [][]byte
@@ -1726,6 +1727,7 @@ func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
 func (g *guard) forgetSessionLocked(id string) {
 	g.pruneDocConfirmSessionLocked(id)
 	g.goneLocked(id)
+	g.forgetHoldResumedLocked(id)
 	g.forgetWorldSessionLocked(id)
 	g.forgetCastLocked(id)
 	delete(g.domEnabled, id)

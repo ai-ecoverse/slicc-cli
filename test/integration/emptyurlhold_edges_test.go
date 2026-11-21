@@ -93,3 +93,11 @@ func TestCDPEmptyURLHoldMutationProtectedFate(t *testing.T) {
 		filepath.Join(root, "internal/caps/cdp/hold_resume_switches.go"):      filepath.Join(root, "test/integration/testdata/emptyurlhold/mutation_protected_fate.go"),
 	}, "^TestEmptyURLHoldResumeProtectedFateUnchanged$", true)
 }
+
+func TestCDPEmptyURLHoldMutationDropCap(t *testing.T) {
+	root := emptyURLHoldRoot(t)
+	emptyURLHoldOverlayRun(t, map[string]string{
+		filepath.Join(root, "internal/caps/cdp/empty_url_hold_edges_test.go"): filepath.Join(root, "test/integration/testdata/emptyurlhold/regression.go"),
+		filepath.Join(root, "internal/caps/cdp/hold_resume_switches.go"):      filepath.Join(root, "test/integration/testdata/emptyurlhold/mutation_drop_cap.go"),
+	}, "^TestEmptyURLHoldResumedMapBoundedAndAckAfterPrune$", true)
+}

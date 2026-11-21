@@ -67,7 +67,37 @@ func (g *guard) noteHoldResumedLocked(sid string) {
 	if g.holdResumed == nil {
 		g.holdResumed = map[string]bool{}
 	}
+	if g.holdResumed[sid] {
+		return
+	}
 	g.holdResumed[sid] = true
+	g.holdResumedOrder = append(g.holdResumedOrder, sid)
+	if !holdResumeCapEnabled() {
+		return
+	}
+	limit := holdResumeCapLimit()
+	if limit <= 0 {
+		return
+	}
+	for len(g.holdResumedOrder) > limit {
+		old := g.holdResumedOrder[0]
+		g.holdResumedOrder = g.holdResumedOrder[1:]
+		delete(g.holdResumed, old)
+	}
+}
+
+func (g *guard) forgetHoldResumedLocked(id string) {
+	if id == "" || !g.holdResumed[id] {
+		return
+	}
+	delete(g.holdResumed, id)
+	for i, sid := range g.holdResumedOrder {
+		if sid != id {
+			continue
+		}
+		g.holdResumedOrder = append(g.holdResumedOrder[:i], g.holdResumedOrder[i+1:]...)
+		return
+	}
 }
 
 func (g *guard) answerHoldResumeLocked(c *command) []byte {
