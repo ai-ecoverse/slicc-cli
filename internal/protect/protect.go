@@ -182,16 +182,24 @@ func strictHost(raw string, u *whatwg.Url) bool {
 	if _, err := idnaProfile.ToASCII(host); err != nil {
 		return false
 	}
-	decoded, err := idnaProfile.ToUnicode(host)
-	if err != nil {
+	decoded, err := idna.Punycode.ToUnicode(host)
+	if err != nil || !hostRunes(decoded) {
 		return false
 	}
+	return !strings.ContainsAny(decoded, notEqualRunes) || asciiOrNotEqual(raw)
+}
+
+func hostRunes(decoded string) bool {
 	for _, r := range decoded {
-		if r >= utf8.RuneSelf && !unicode.Is(unicode15, r) {
+		if r >= utf8.RuneSelf && (noncharacter(r) || !unicode.Is(unicode15, r)) {
 			return false
 		}
 	}
-	return !strings.ContainsAny(decoded, notEqualRunes) || asciiOrNotEqual(raw)
+	return true
+}
+
+func noncharacter(r rune) bool {
+	return r >= 0xFDD0 && r <= 0xFDEF || r&0xFFFE == 0xFFFE
 }
 
 func asciiOrNotEqual(raw string) bool {
