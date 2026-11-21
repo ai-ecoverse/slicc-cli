@@ -1,7 +1,6 @@
 package cdp
 
 import (
-	"encoding/json"
 	"strings"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
@@ -73,11 +72,11 @@ func docConfirmProvenanceLabel(created, opened, errorOrdinary bool) string {
 
 func (g *guard) docConfirmObserveWouldVerdictLocked(frameURL, frameOrigin string) string {
 	if frameURL == "" && frameOrigin == "" {
-		return "park-timeout"
+		return "admit"
 	}
 	url := frameURL
 	if url == "" {
-		return "park-timeout"
+		return "admit"
 	}
 	if g.o != nil && g.o.Loaded(url) {
 		return "refuse-latch"
@@ -98,7 +97,10 @@ func (g *guard) docConfirmObserveWouldVerdictLocked(frameURL, frameOrigin string
 			return "refuse-nonlatch"
 		}
 	}
-	if chromeErrorDocument(url) || protect.Unparseable(url) {
+	if chromeErrorDocument(url) {
+		return "admit"
+	}
+	if protect.Unparseable(url) {
 		return "refuse-nonlatch"
 	}
 	if strings.HasPrefix(lower, "view-source:") || strings.HasPrefix(lower, "blob:") || strings.HasPrefix(lower, "filesystem:") {
@@ -114,144 +116,8 @@ func (g *guard) docConfirmObserveWouldVerdictLocked(frameURL, frameOrigin string
 	return "refuse-nonlatch"
 }
 
-func (g *guard) docObserveSessionLocked(session string) bool {
-	return session != "" && g.docObserveSessions[session] != ""
-}
-
-func (g *guard) docObservePendingLocked(target string) bool {
-	return target != "" && g.docObservePending[target]
-}
-
 func (g *guard) docConfirmObserveFilterEventLocked(session, target string) bool {
-	if !docConfirmObserveEnabled() || !docConfirmObserveFilterEnabled() {
-		return false
-	}
-	if g.docObserveSessionLocked(session) {
-		return true
-	}
-	if session != "" && g.sessions[session] != nil {
-		return false
-	}
-	if target != "" && (g.docObservePendingLocked(target) || g.docObserveDone[target]) {
-		if session != "" {
-			if g.docObserveSessions == nil {
-				g.docObserveSessions = map[string]string{}
-			}
-			g.docObserveSessions[session] = target
-		}
-		return true
-	}
 	return false
-}
-
-func (g *guard) scheduleDocConfirmObserveLocked(target, clientSession, path string) [][]byte {
-	if !docConfirmObserveEnabled() || target == "" || g.relaySession == "" {
-		return nil
-	}
-	if g.docObservePending == nil {
-		g.docObservePending = map[string]bool{}
-	}
-	if g.docObservePending[target] || g.docObserveDone[target] {
-		return nil
-	}
-	g.docObservePending[target] = true
-	announced := ""
-	if t := g.targets[target]; t != nil {
-		announced = t.url
-	}
-	opened := g.opened[target]
-	errorOrdinary := g.errorProofOfLocked(target) == errorProofOrdinary
-	return [][]byte{g.callbackLocked(g.relaySession, "Target.attachToTarget", map[string]any{"targetId": target, "flatten": true}, func(m message) [][]byte {
-		return g.docConfirmObserveAttachedLocked(target, clientSession, path, announced, opened, errorOrdinary, m)
-	})}
-}
-
-func (g *guard) docConfirmObserveAttachedLocked(target, clientSession, path, announced string, opened, errorOrdinary bool, m message) [][]byte {
-	var res struct {
-		SessionID string `json:"sessionId"`
-	}
-	if m.Error != nil || json.Unmarshal(m.Result, &res) != nil || res.SessionID == "" {
-		delete(g.docObservePending, target)
-		g.logDocConfirmObserveLocked("would-refuse", docConfirmURLClass(announced), path, "other", "other", false, opened, errorOrdinary, "park-timeout")
-		return nil
-	}
-	if g.docObserveSessions == nil {
-		g.docObserveSessions = map[string]string{}
-	}
-	g.docObserveSessions[res.SessionID] = target
-	sid := res.SessionID
-	return [][]byte{g.callbackLocked(sid, "Page.getFrameTree", nil, func(tree message) [][]byte {
-		return g.docConfirmObserveTreeLocked(target, clientSession, path, announced, opened, errorOrdinary, sid, tree)
-	})}
-}
-
-func (g *guard) docConfirmObserveTreeLocked(target, clientSession, path, announced string, opened, errorOrdinary bool, proofSession string, m message) [][]byte {
-	delete(g.docObservePending, target)
-	if g.docObserveDone == nil {
-		g.docObserveDone = map[string]bool{}
-	}
-	g.docObserveDone[target] = true
-	frameURL := ""
-	frameOrigin := ""
-	if m.Error == nil {
-		var result struct {
-			FrameTree struct {
-				Frame struct {
-					URL            string `json:"url"`
-					SecurityOrigin string `json:"securityOrigin"`
-					UnreachableURL string `json:"unreachableUrl"`
-				} `json:"frame"`
-			} `json:"frameTree"`
-		}
-		if json.Unmarshal(m.Result, &result) == nil {
-			frameURL = result.FrameTree.Frame.URL
-			if frameURL == "" {
-				frameURL = result.FrameTree.Frame.UnreachableURL
-			}
-			frameOrigin = result.FrameTree.Frame.SecurityOrigin
-		}
-	}
-	announceClass := docConfirmURLClass(announced)
-	frameClass := docConfirmURLClass(frameURL)
-	if frameURL == "" && frameOrigin == "" && m.Error != nil {
-		frameClass = "other"
-	}
-	originClass := docConfirmOriginClass(frameOrigin, g.o)
-	verdict := g.docConfirmObserveWouldVerdictLocked(frameURL, frameOrigin)
-	if m.Error != nil {
-		verdict = "park-timeout"
-	}
-	kind := "would-refuse"
-	if verdict == "admit" {
-		kind = "would-admit"
-	}
-	g.logDocConfirmObserveLocked(kind, announceClass, path, frameClass, originClass, false, opened, errorOrdinary, verdict)
-	var send [][]byte
-	if proofSession != "" {
-		if g.docObserveSessions == nil {
-			g.docObserveSessions = map[string]string{}
-		}
-		g.docObserveSessions[proofSession] = target
-		msg, _ := g.newCallLocked(g.relaySession, "Target.detachFromTarget", map[string]any{"sessionId": proofSession}, false)
-		send = append(send, msg)
-	}
-	_ = clientSession
-	return send
-}
-
-func (g *guard) logDocConfirmObserveLocked(kind, announceClass, path, frameClass, originClass string, created, opened, errorOrdinary bool, verdict string) {
-	line := "cdp: DIAG document-confirm " + kind +
-		" class=" + announceClass +
-		" path=" + path +
-		" frame_class=" + frameClass +
-		" origin_class=" + originClass +
-		" provenance=" + docConfirmProvenanceLabel(created, opened, errorOrdinary) +
-		" verdict=" + verdict
-	g.logf("%s", line)
-	if g.docObserveLog == nil {
-		g.docObserveLog = []string{}
-	}
-	g.docObserveLog = append(g.docObserveLog, line)
 }
 
 func (g *guard) docConfirmObservePathLocked(target, typ string) string {
@@ -273,4 +139,125 @@ func (g *guard) docConfirmObservePathLocked(target, typ string) string {
 		return "provenance"
 	}
 	return "D"
+}
+
+func (g *guard) noteDocConfirmObserveLocked(target, path string) {
+	if !docConfirmObserveEnabled() || target == "" {
+		return
+	}
+	if g.docObserveDone[target] {
+		return
+	}
+	if g.docObservePath == nil {
+		g.docObservePath = map[string]string{}
+	}
+	if g.docObservePath[target] == "" {
+		g.docObservePath[target] = path
+	}
+	if g.docObserveAnnounce == nil {
+		g.docObserveAnnounce = map[string]string{}
+	}
+	if _, ok := g.docObserveAnnounce[target]; !ok {
+		announced := ""
+		if t := g.targets[target]; t != nil {
+			announced = t.url
+		}
+		g.docObserveAnnounce[target] = announced
+	}
+	g.tryLogDocConfirmObserveLocked(target, false)
+}
+
+func (g *guard) tryLogDocConfirmObserveLocked(target string, atBound bool) {
+	if !docConfirmObserveEnabled() || target == "" || g.docObserveDone[target] {
+		return
+	}
+	path := ""
+	if g.docObservePath != nil {
+		path = g.docObservePath[target]
+	}
+	if path == "" {
+		return
+	}
+	announced := ""
+	if g.docObserveAnnounce != nil {
+		announced = g.docObserveAnnounce[target]
+	}
+	frameURL := ""
+	frameOrigin := ""
+	nt := g.navTargets[target]
+	switch {
+	case nt != nil && nt.commits > 0:
+		frameURL = nt.documentURL
+		frameOrigin = nt.securityOrigin
+	case nt != nil && nt.errorRecorded && nt.documentURL != "":
+		frameURL = nt.documentURL
+		frameOrigin = nt.securityOrigin
+	case g.errorProofOfLocked(target) != errorProofNone:
+		if t := g.targets[target]; t != nil {
+			frameURL = t.url
+		}
+		if nt != nil {
+			frameOrigin = nt.securityOrigin
+			if frameURL == "" {
+				frameURL = nt.documentURL
+			}
+		}
+	case !atBound:
+		return
+	}
+	announceClass := docConfirmURLClass(announced)
+	frameClass := docConfirmURLClass(frameURL)
+	originClass := docConfirmOriginClass(frameOrigin, g.o)
+	verdict := g.docConfirmObserveWouldVerdictLocked(frameURL, frameOrigin)
+	if atBound && (nt == nil || nt.commits == 0) {
+		verdict = "admit"
+	}
+	if chromeErrorDocument(frameURL) && g.errorProofOfLocked(target) != errorProofNone {
+		path = "G"
+		verdict = "admit"
+	}
+	kind := "would-refuse"
+	if verdict == "admit" {
+		kind = "would-admit"
+	}
+	opened := g.opened[target]
+	errorOrdinary := g.errorProofOfLocked(target) == errorProofOrdinary
+	g.logDocConfirmObserveLocked(kind, announceClass, path, frameClass, originClass, false, opened, errorOrdinary, verdict)
+	if g.docObserveDone == nil {
+		g.docObserveDone = map[string]bool{}
+	}
+	g.docObserveDone[target] = true
+}
+
+func (g *guard) fallthroughDocConfirmObserveLocked(target string) {
+	g.tryLogDocConfirmObserveLocked(target, true)
+}
+
+func (g *guard) logDocConfirmObserveLocked(kind, announceClass, path, frameClass, originClass string, created, opened, errorOrdinary bool, verdict string) {
+	line := "cdp: DIAG document-confirm " + kind +
+		" class=" + announceClass +
+		" path=" + path +
+		" frame_class=" + frameClass +
+		" origin_class=" + originClass +
+		" provenance=" + docConfirmProvenanceLabel(created, opened, errorOrdinary) +
+		" verdict=" + verdict
+	g.logf("%s", line)
+	if g.docObserveLog == nil {
+		g.docObserveLog = []string{}
+	}
+	g.docObserveLog = append(g.docObserveLog, line)
+}
+
+func (g *guard) docConfirmObserveAfterCommitLocked(nt *navTarget, before int) {
+	if nt == nil || nt.commits == before {
+		return
+	}
+	g.tryLogDocConfirmObserveLocked(nt.target, false)
+}
+
+//nolint:unparam
+func (g *guard) scheduleDocConfirmObserveLocked(target, clientSession, path string) [][]byte {
+	_ = clientSession
+	g.noteDocConfirmObserveLocked(target, path)
+	return nil
 }

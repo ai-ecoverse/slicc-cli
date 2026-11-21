@@ -881,45 +881,35 @@ func TestViewSourceAttachDocFailedClearedOnDestroy(t *testing.T) {
 }
 
 const vsObserveSession = "S-OBSERVE"
+const vsNavSession = "S-NAV"
 
-func vsObserveAttachedEvent(url string) []byte {
+func vsNavFrameNavigated(url, origin string) []byte {
+	if origin == "" {
+		origin = "://"
+	}
 	return encode(map[string]any{
-		"method": "Target.attachedToTarget",
+		"sessionId": vsNavSession,
+		"method":    "Page.frameNavigated",
 		"params": map[string]any{
-			"sessionId":          vsObserveSession,
-			"waitingForDebugger": false,
-			"targetInfo":         map[string]any{"targetId": vsTarget, "type": "page", "url": url, "browserContextId": "CTX"},
+			"frame": map[string]any{"id": vsTarget, "url": url, "securityOrigin": origin},
 		},
 	})
 }
 
-func vsObserveFrameTree(id int64, url string) []byte {
-	origin := "://"
-	lower := strings.ToLower(url)
-	if url != "" && lower != "about:blank" && !strings.HasPrefix(lower, "about:blank") && !strings.HasPrefix(lower, "chrome-error:") {
-		origin = url
-	}
-	return encode(map[string]any{
-		"id": id, "sessionId": vsObserveSession,
-		"result": map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": vsTarget, "url": url, "securityOrigin": origin}}},
-	})
-}
-
-func vsDrainObserve(g *guard, o *vsOutcome, v browserVerdict, live string) {
+func vsDrainNav(g *guard, o *vsOutcome, v browserVerdict, live string) {
 	o.take(v)
 	for _, raw := range v.send {
 		id, method, session := vsOutbound(raw)
 		switch {
 		case method == "Target.getTargetInfo" && session == "RELAY":
-			vsDrainObserve(g, o, g.fromBrowser(vsTargetInfoAnswer(id, live)), live)
+			vsDrainNav(g, o, g.fromBrowser(vsTargetInfoAnswer(id, live)), live)
 		case method == "Target.attachToTarget" && session == "RELAY":
-			reply := encode(map[string]any{"id": id, "sessionId": "RELAY", "result": map[string]any{"sessionId": vsObserveSession}})
-			vsDrainObserve(g, o, g.fromBrowser(reply), live)
-			vsDrainObserve(g, o, g.fromBrowser(vsObserveAttachedEvent(live)), live)
-		case method == "Page.getFrameTree" && session == vsObserveSession:
-			vsDrainObserve(g, o, g.fromBrowser(vsObserveFrameTree(id, live)), live)
+			reply := encode(map[string]any{"id": id, "sessionId": "RELAY", "result": map[string]any{"sessionId": vsNavSession}})
+			vsDrainNav(g, o, g.fromBrowser(reply), live)
 		case method == "Target.detachFromTarget":
-			vsDrainObserve(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), live)
+			vsDrainNav(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), live)
+		case method == "Fetch.enable" || method == "Network.enable" || method == "Network.setBypassServiceWorker" || method == "Runtime.enable" || method == "Page.enable" || method == "Page.getNavigationHistory":
+			vsDrainNav(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), live)
 		}
 	}
 }
@@ -927,11 +917,18 @@ func vsDrainObserve(g *guard, o *vsOutcome, v browserVerdict, live string) {
 func TestDocConfirmObserveNeverChangesVerdict(t *testing.T) {
 	g := vsGuard(t)
 	var o vsOutcome
-	vsDrainObserve(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
-	vsWatchReady(g)
+	vsDrainNav(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
 	v := g.fromBrowser(vsAttachedEvent("about:blank"))
-	vsDrainObserve(g, &o, v, "about:blank")
+	vsDrainNav(g, &o, v, "about:blank")
+	vsDrainNav(g, &o, g.fromBrowser(vsNavFrameNavigated("about:blank", "://")), "about:blank")
 	o.summarize()
+	detachSent := false
+	for _, raw := range v.send {
+		_, method, _ := vsOutbound(raw)
+		if method == "Target.detachFromTarget" {
+			detachSent = true
+		}
+	}
 	g.mu.Lock()
 	client := g.sessions[vsSession] != nil
 	observe := g.sessions[vsObserveSession] != nil
@@ -939,18 +936,22 @@ func TestDocConfirmObserveNeverChangesVerdict(t *testing.T) {
 	nSessions := len(g.sessions)
 	logs := append([]string(nil), g.docObserveLog...)
 	g.mu.Unlock()
-	t.Logf("observe-never-changes client=%t observeSession=%t sessions=%d failed=%t logs=%d", client, observe, nSessions, failed, len(logs))
+	_ = nSessions
+	t.Logf("observe-never-changes client=%t observeSession=%t sessions=%d failed=%t logs=%d detachSent=%t", client, observe, nSessions, failed, len(logs), detachSent)
 	if !client {
 		t.Fatal("client session must admit like main")
 	}
-	if observe || nSessions != 1 {
-		t.Fatalf("observe session must not enter sessions map; sessions=%d observe=%t", nSessions, observe)
+	if observe {
+		t.Fatal("observe must not create a proof session")
 	}
 	if failed || o.attachRefused {
 		t.Fatal("observe must not refuse or latch the client attach")
 	}
+	if detachSent {
+		t.Fatal("source-2 observe must not emit Target.detachFromTarget")
+	}
 	if len(logs) == 0 {
-		t.Fatal("expected DIAG document-confirm would-admit|would-refuse log")
+		t.Fatal("expected DIAG document-confirm would-admit|would-refuse log after main-frame commit")
 	}
 	joined := strings.Join(logs, "\n")
 	if !strings.Contains(joined, "DIAG document-confirm would-") {
@@ -961,15 +962,188 @@ func TestDocConfirmObserveNeverChangesVerdict(t *testing.T) {
 	}
 }
 
+func TestDocConfirmObserveFilterMustNotClaimNavguardSession(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	o.take(v)
+	var attachIDs []int64
+	for _, raw := range v.send {
+		id, method, session := vsOutbound(raw)
+		if method == "Target.attachToTarget" && session == "RELAY" {
+			attachIDs = append(attachIDs, id)
+		}
+	}
+	if len(attachIDs) == 0 {
+		t.Fatal("expected touchLocked attachToTarget")
+	}
+	navSession := vsNavSession
+	o.take(g.fromBrowser(encode(map[string]any{"id": attachIDs[0], "sessionId": "RELAY", "result": map[string]any{"sessionId": navSession}})))
+	if len(attachIDs) > 1 {
+		o.take(g.fromBrowser(encode(map[string]any{"id": attachIDs[1], "sessionId": "RELAY", "result": map[string]any{"sessionId": vsObserveSession}})))
+	}
+	att := map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          navSession,
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": vsTarget, "type": "page", "url": "about:blank", "browserContextId": "CTX"},
+		},
+	}
+	o.take(g.fromBrowser(encode(att)))
+	g.mu.Lock()
+	claimed := g.docObserveSessions[navSession]
+	navOK := g.navSessions[navSession] != nil
+	filtered := g.docConfirmObserveFilterEventLocked(navSession, "")
+	g.mu.Unlock()
+	t.Logf("claimed=%q navSessions=%t filter=%t attaches=%d", claimed, navOK, filtered, len(attachIDs))
+	if !navOK {
+		t.Fatal("navguard session must remain registered")
+	}
+	if claimed != "" || filtered {
+		t.Fatalf("observe filter must not claim navguard session (claimed=%q filter=%t)", claimed, filtered)
+	}
+}
+
+func TestDocConfirmObserveMustNotEmitProofDetach(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	o.take(v)
+	attachN := 0
+	var walk func(browserVerdict)
+	walk = func(ver browserVerdict) {
+		for _, raw := range ver.send {
+			id, method, session := vsOutbound(raw)
+			if method == "Target.detachFromTarget" {
+				t.Fatalf("proof must not emit Target.detachFromTarget session=%s", session)
+			}
+			if method == "Page.getFrameTree" && session == vsObserveSession {
+				t.Fatal("source-2 observe must not Page.getFrameTree on a proof session")
+			}
+			switch {
+			case method == "Target.attachToTarget" && session == "RELAY":
+				attachN++
+				sid := vsNavSession
+				if attachN > 1 {
+					sid = vsObserveSession
+				}
+				walk(g.fromBrowser(encode(map[string]any{"id": id, "sessionId": "RELAY", "result": map[string]any{"sessionId": sid}})))
+				if sid == vsObserveSession {
+					walk(g.fromBrowser(encode(map[string]any{
+						"method": "Target.attachedToTarget",
+						"params": map[string]any{
+							"sessionId":          sid,
+							"waitingForDebugger": false,
+							"targetInfo":         map[string]any{"targetId": vsTarget, "type": "page", "url": "about:blank", "browserContextId": "CTX"},
+						},
+					})))
+				}
+			case method == "Page.getFrameTree" && session != "":
+				origin := "://"
+				walk(g.fromBrowser(encode(map[string]any{
+					"id": id, "sessionId": session,
+					"result": map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": vsTarget, "url": "about:blank", "securityOrigin": origin}}},
+				})))
+			case method == "Fetch.enable" || method == "Network.enable" || method == "Network.setBypassServiceWorker" || method == "Runtime.enable" || method == "Page.enable" || method == "Page.getNavigationHistory":
+				walk(g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})))
+			}
+		}
+	}
+	walk(v)
+}
+
+func TestDocConfirmObserveTabAttachPopupHoldResume(t *testing.T) {
+	g := vsGuard(t)
+	g.targets["OPENER"] = &target{id: "OPENER", typ: "page", url: "https://ordinary.test/"}
+	g.sessions["S-OPENER"] = &session{id: "S-OPENER", target: "OPENER", typ: "page"}
+	_ = g.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-TAB-POP",
+			"waitingForDebugger": true,
+			"targetInfo":         map[string]any{"targetId": "TAB-POP", "type": "tab", "url": "", "openerId": "OPENER"},
+		},
+	}))
+	if g.sessions["S-TAB-POP"] == nil || g.held["S-TAB-POP"] != nil {
+		t.Fatal("popup tab must be announced so the client can arm tab-level setAutoAttach")
+	}
+	v := g.fromBrowser(encode(map[string]any{
+		"sessionId": "S-TAB-POP",
+		"method":    "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-PAGE-POP",
+			"waitingForDebugger": true,
+			"targetInfo":         map[string]any{"targetId": "PAGE-POP", "type": "page", "url": "", "openerId": "OPENER"},
+		},
+	}))
+	var o vsOutcome
+	o.take(v)
+	if strings.Contains(strings.Join(o.clientPayloads, ""), "attachedToTarget") {
+		t.Fatalf("empty-URL page child must stay held: %v", o.clientPayloads)
+	}
+	h := g.held["S-PAGE-POP"]
+	if h == nil {
+		t.Fatal("empty-URL popup page child was not held")
+	}
+	if !h.resumed {
+		t.Fatal("held popup page child must be guard-resumed at hold time (#880)")
+	}
+	resume := 0
+	for _, raw := range v.send {
+		_, method, session := vsOutbound(raw)
+		if method == "Runtime.runIfWaitingForDebugger" && session == "S-PAGE-POP" {
+			resume++
+		}
+	}
+	if resume != 1 {
+		t.Fatalf("hold must resume page child exactly once; got %d", resume)
+	}
+	rel := g.fromBrowser(encode(map[string]any{
+		"sessionId": "RELAY",
+		"method":    "Target.targetInfoChanged",
+		"params":    map[string]any{"targetInfo": map[string]any{"targetId": "PAGE-POP", "type": "page", "url": "about:blank", "openerId": "OPENER"}},
+	}))
+	o.take(rel)
+	g.mu.Lock()
+	path := g.docObservePath["PAGE-POP"]
+	g.mu.Unlock()
+	if path != "F" {
+		t.Fatalf("held release must note observe path F; got %q", path)
+	}
+}
+
 func TestDocConfirmObserveFilterMutantLeaks(t *testing.T) {
 	if os.Getenv("SLICC_DOC_CONFIRM_OBSERVE_FILTER_MUTANT") == "" {
 		t.Skip("observe filter mutant only")
 	}
 	g := vsGuard(t)
 	var o vsOutcome
-	vsDrainObserve(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
-	vsWatchReady(g)
-	vsDrainObserve(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	o.take(v)
+	var attachIDs []int64
+	for _, raw := range v.send {
+		id, method, session := vsOutbound(raw)
+		if method == "Target.attachToTarget" && session == "RELAY" {
+			attachIDs = append(attachIDs, id)
+		}
+	}
+	if len(attachIDs) < 2 {
+		t.Fatal("sessionful mutant must dual-attach")
+	}
+	o.take(g.fromBrowser(encode(map[string]any{"id": attachIDs[0], "sessionId": "RELAY", "result": map[string]any{"sessionId": vsNavSession}})))
+	o.take(g.fromBrowser(encode(map[string]any{"id": attachIDs[1], "sessionId": "RELAY", "result": map[string]any{"sessionId": vsObserveSession}})))
+	o.take(g.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          vsObserveSession,
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": vsTarget, "type": "page", "url": "about:blank", "browserContextId": "CTX"},
+		},
+	})))
 	g.mu.Lock()
 	observe := g.sessions[vsObserveSession] != nil
 	nSessions := len(g.sessions)

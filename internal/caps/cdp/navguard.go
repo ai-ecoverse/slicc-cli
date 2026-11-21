@@ -264,6 +264,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if nt.commits != before && g.o.Loaded(nt.errorURL) {
 		nt.failCommit = nt.commits
 	}
+	g.docConfirmObserveAfterCommitLocked(nt, before)
 	send = append(send, g.commitFramesLocked(nt, m)...)
 	if g.o.Loaded(nt.errorURL) && !slices.Contains(nt.failedURLs, nt.errorURL) {
 		nt.failedURLs = append(nt.failedURLs, nt.errorURL)
