@@ -109,7 +109,34 @@ func TestCDPViewSourceAttachMutationForeignOrdinary(t *testing.T) {
 	viewSourceAttachRun(t, map[string]string{
 		filepath.Join(root, "internal/caps/cdp/view_source_attach_test.go"):  filepath.Join(root, "test/integration/testdata/viewsourceattach/regression.go"),
 		filepath.Join(root, "internal/caps/cdp/documentconfirm_switches.go"): filepath.Join(root, "test/integration/testdata/viewsourceattach/mutation_foreign_ordinary.go"),
-	}, "^TestViewSourceAttachMutationForeignOrdinary$", "SLICC_DOC_CONFIRM_FOREIGN_ORDINARY")
+	}, "^TestViewSourceAttachMutation(ForeignOrdinary|LighterResidualDocumentsHole)$", "SLICC_DOC_CONFIRM_FOREIGN_ORDINARY")
+}
+
+func TestCDPViewSourceAttachResidualLighterIsRed(t *testing.T) {
+	root := viewSourceAttachRoot(t)
+	scratch := t.TempDir()
+	replacements := map[string]string{
+		filepath.Join(root, "internal/caps/cdp/view_source_attach_test.go"):  filepath.Join(root, "test/integration/testdata/viewsourceattach/regression.go"),
+		filepath.Join(root, "internal/caps/cdp/documentconfirm_switches.go"): filepath.Join(root, "test/integration/testdata/viewsourceattach/mutation_foreign_ordinary.go"),
+	}
+	data, err := json.Marshal(map[string]any{"Replace": replacements})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlay, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-v", "-overlay", overlay, "-run", "^TestViewSourceAttachResidualOrdinaryAnnounceThenProtectedBeforeCommand$", "./internal/caps/cdp")
+	command.Dir = root
+	command.Env = append(os.Environ(), "SLICC_DOC_CONFIRM_FOREIGN_ORDINARY=1")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("residual row must be red with foreignOrdinaryProof=false and #863 absent:\n%s", output)
+	}
+	t.Logf("residual lighter red as required:\n%s", output)
 }
 
 func TestCDPViewSourceAttachMutationDropDK(t *testing.T) {

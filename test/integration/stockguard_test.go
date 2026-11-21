@@ -153,5 +153,6 @@ func TestStockClientsDriveThroughTheLinkGuard(t *testing.T) {
 				t.Log(line)
 			}
 		}
+		t.Logf("DOC_CONFIRM_PROOF_COST stock=%s popup=window.open+target=_blank scrape_guard_logs_for=\"DIAG document-confirm proof round took\" (foreign ordinary proof default on)", which)
 	}
 }

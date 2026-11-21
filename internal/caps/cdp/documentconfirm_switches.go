@@ -1,7 +1,7 @@
 package cdp
 
 func docConfirmForeignOrdinaryProofEnabled() bool {
-	return false
+	return true
 }
 
 func docConfirmDropProofEnabled() bool {

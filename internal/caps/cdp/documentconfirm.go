@@ -95,6 +95,10 @@ func (g *guard) docConfirmForeignNeedsProofLocked(url, target string) bool {
 	if g.docConfirmURLNeedsProofLocked(url) {
 		return true
 	}
+	lower := strings.ToLower(url)
+	if url == "" || lower == "about:blank" || strings.HasPrefix(lower, "about:blank") {
+		return false
+	}
 	return docConfirmForeignOrdinaryProofEnabled()
 }
 
@@ -303,7 +307,7 @@ func (g *guard) docConfirmFrameTreeLocked(target string, m message) [][]byte {
 	if dc == nil || dc.done {
 		return g.docConfirmDetachProofLocked(dc)
 	}
-	g.logf("cdp: confirming a target's current document took %s", time.Since(dc.start).Round(time.Millisecond))
+	g.logf("cdp: DIAG document-confirm proof round took %s", time.Since(dc.start).Round(time.Millisecond))
 	dc.asking = false
 	var result struct {
 		FrameTree struct {

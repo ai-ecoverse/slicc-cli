@@ -186,6 +186,25 @@ func vsRead(g *guard, o *vsOutcome, live string) {
 	}
 }
 
+func vsTitleRead(g *guard, o *vsOutcome, live string) (refused bool) {
+	const titleID = int64(52)
+	pv := g.fromCommand(&command{id: titleID, method: "Runtime.evaluate", session: vsSession, params: map[string]any{"expression": "document.title"}}, titleID, true)
+	if pv.reply != nil {
+		o.clientPayloads = append(o.clientPayloads, string(pv.reply))
+		return true
+	}
+	if pv.wait != nil {
+		return true
+	}
+	if pv.forward != nil {
+		vsDrain(g, o, g.fromBrowser(encode(map[string]any{
+			"id": titleID, "sessionId": vsSession,
+			"result": map[string]any{"result": map[string]any{"type": "string", "value": "vault-title"}},
+		})), live)
+	}
+	return false
+}
+
 type vsScenario struct {
 	announced string
 	watched   bool
@@ -892,7 +911,7 @@ func TestViewSourceAttachDocFailedClearedOnDestroy(t *testing.T) {
 		g.mu.Unlock()
 		t.Fatal("expected pending confirm")
 	}
-	_ = g.failDocConfirmLocked(dc)
+	_ = g.refuseDocConfirmLocked(dc, true)
 	if !g.docFailed[vsSession] {
 		g.mu.Unlock()
 		t.Fatal("expected docFailed after refuse")
@@ -1173,19 +1192,14 @@ func TestViewSourceAttachPathDAutoAttachNoConfirm(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
-		v := g.fromBrowser(vsAttachedEvent(vsOrdinary))
-		asked := vsConfirmAsked(v.send)
-		o.take(v)
-		for _, p := range v.page {
-			o.clientPayloads = append(o.clientPayloads, string(p))
-		}
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(vsOrdinary)), func(int64) string { return vsOrdinary })
 		o.summarize()
-		t.Logf("path-D ordinary announce confirmAsked=%t session=%t event=%t lighter=docConfirmForeignOrdinaryProofEnabled=false", asked, vsSessionPresent(g), o.sawAttachEvent)
-		if asked {
-			t.Fatalf("path-D: lighter option must not run document proof for live ordinary http(s) foreign announce")
+		t.Logf("path-D ordinary announce proofAsked=%d session=%t event=%t foreignOrdinaryProof=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent, docConfirmForeignOrdinaryProofEnabled())
+		if len(asked) == 0 {
+			t.Fatalf("path-D: stock foreignOrdinaryProof=true must run document proof for live ordinary http(s) foreign announce")
 		}
 		if !vsSessionPresent(g) && !o.sawAttachEvent {
-			t.Errorf("path-D ordinary control: live ordinary announce must admit without proof under the lighter option")
+			t.Errorf("path-D ordinary control: proof of ordinary must admit (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
 	t.Run("protected-announce-hidden", func(t *testing.T) {
@@ -1697,15 +1711,23 @@ func TestViewSourceAttachMutationForeignOrdinary(t *testing.T) {
 	if os.Getenv("SLICC_DOC_CONFIRM_FOREIGN_ORDINARY") == "" {
 		t.Skip("overlay mutation only")
 	}
+	if docConfirmForeignOrdinaryProofEnabled() {
+		t.Fatal("lighter mutant must flip docConfirmForeignOrdinaryProofEnabled to false")
+	}
 	g := vsGuard(t)
 	var o vsOutcome
 	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
 	v := g.fromBrowser(vsAttachedEvent(vsOrdinary))
-	if !vsProofAttachAsked(v.send) {
-		t.Fatal("foreign-ordinary mutant: covering ForeignOrdinaryProof switch must ask proof attach for live ordinary http(s)")
+	o.take(v)
+	for _, p := range v.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
 	}
-	if vsSessionPresent(g) {
-		t.Fatal("foreign-ordinary mutant: proof ask must hold the session until the frame tree returns")
+	o.summarize()
+	if vsConfirmAsked(v.send) {
+		t.Fatal("lighter mutant: covering ForeignOrdinaryProof=false must skip document proof for live ordinary http(s)")
+	}
+	if !vsSessionPresent(g) && !o.sawAttachEvent {
+		t.Fatal("lighter mutant: ordinary announce must admit without proof")
 	}
 }
 
@@ -1728,4 +1750,101 @@ func TestViewSourceAttachMutationDropDK(t *testing.T) {
 	if !vsSessionPresent(g) && !o.sawAttachEvent {
 		t.Fatal("drop-DK mutant: foreign blank must announce when D/K coverage is dropped")
 	}
+}
+
+func vsResidualOrdinaryThenProtected(t *testing.T, g *guard) (contentRefused, titleRefused bool, o vsOutcome) {
+	t.Helper()
+	protected := vsHTTPVault
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), protected)
+	if docConfirmForeignOrdinaryProofEnabled() {
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(vsOrdinary)), func(int64) string { return protected })
+		if len(asked) == 0 {
+			t.Fatal("residual: foreign ordinary announce must enter proof when foreignOrdinaryProof=true")
+		}
+	} else {
+		v := g.fromBrowser(vsAttachedEvent(vsOrdinary))
+		o.take(v)
+		for _, p := range v.page {
+			o.clientPayloads = append(o.clientPayloads, string(p))
+		}
+		_ = g.fromBrowser(vsRelay("Target.targetInfoChanged", protected))
+	}
+	o.summarize()
+	vsRead(g, &o, protected)
+	contentRefused = o.readRefused
+	titleRefused = vsTitleRead(g, &o, protected)
+	return contentRefused, titleRefused, o
+}
+
+func TestViewSourceAttachResidualOrdinaryAnnounceThenProtectedBeforeCommand(t *testing.T) {
+	g := vsGuard(t)
+	contentRefused, titleRefused, o := vsResidualOrdinaryThenProtected(t, g)
+	t.Logf("residual foreignOrdinaryProof=%t session=%t event=%t contentRefused=%t titleRefused=%t", docConfirmForeignOrdinaryProofEnabled(), vsSessionPresent(g), o.sawAttachEvent, contentRefused, titleRefused)
+	if !docConfirmForeignOrdinaryProofEnabled() {
+		t.Fatalf("stock residual row requires foreignOrdinaryProof=true (safe default); lighter residual is red under mutation overlay")
+	}
+	if vsSessionPresent(g) || o.sawAttachEvent {
+		t.Errorf("residual: proof of protected wrapper before first command must not leave a client page session")
+	}
+	if !contentRefused {
+		t.Errorf("residual: content read as first command must refuse after protected commit during proof")
+	}
+	if !titleRefused {
+		t.Errorf("residual: title read as first command must refuse after protected commit during proof")
+	}
+}
+
+func TestViewSourceAttachMutationLighterResidualDocumentsHole(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_FOREIGN_ORDINARY") == "" {
+		t.Skip("overlay mutation only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
+	v := g.fromBrowser(vsAttachedEvent(vsOrdinary))
+	o.take(v)
+	for _, p := range v.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
+	}
+	o.summarize()
+	if !vsSessionPresent(g) && !o.sawAttachEvent {
+		t.Fatal("lighter residual: ordinary announce without proof must admit")
+	}
+	vsWatchReady(g)
+	vsRead(g, &o, vsOrdinary)
+	titleRefused := vsTitleRead(g, &o, vsOrdinary)
+	t.Logf("lighter residual hole session=%t contentRefused=%t titleRefused=%t readForwarded=%t", vsSessionPresent(g), o.readRefused, titleRefused, o.readForwarded)
+	if o.readRefused || titleRefused {
+		t.Fatal("lighter residual without #863: content+title as first command after ordinary announce (lagging protected commit) must land — documents the hole the safe default closes")
+	}
+}
+
+func TestViewSourceAttachOrdinaryForeignProofCost(t *testing.T) {
+	const rounds = 11
+	samples := make([]time.Duration, 0, rounds)
+	for i := 0; i < rounds; i++ {
+		g := vsGuard(t)
+		var o vsOutcome
+		start := time.Now()
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(vsOrdinary)), func(int64) string { return vsOrdinary })
+		took := time.Since(start)
+		if len(asked) == 0 {
+			t.Fatalf("proof-cost round %d: expected ordinary foreign proof ask", i)
+		}
+		samples = append(samples, took)
+	}
+	sorted := append([]time.Duration(nil), samples...)
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j] < sorted[i] {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	median := sorted[len(sorted)/2]
+	p90 := sorted[(len(sorted)*9)/10]
+	max := sorted[len(sorted)-1]
+	t.Logf("DOC_CONFIRM_PROOF_COST kind=foreign-ordinary-announce n=%d median=%s p90=%s max=%s samples=%v", len(samples), median.Round(time.Microsecond), p90.Round(time.Microsecond), max.Round(time.Microsecond), samples)
+	t.Logf("DOC_CONFIRM_PROOF_COST note=unit-overlay wall time for attach+getFrameTree+detach callbacks; Chrome stock popup/tab lines scrape \"DIAG document-confirm proof round took\"")
 }

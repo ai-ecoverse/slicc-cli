@@ -83,6 +83,10 @@ func emptyURLHoldClassify(g *guard, changed []byte, live string) browserVerdict 
 	return emptyURLHoldDrain(g, g.fromBrowser(changed), live)
 }
 
+func emptyURLHoldAdmitPage(g *guard, attach []byte, live string) browserVerdict {
+	return emptyURLHoldDrain(g, g.fromBrowser(attach), live)
+}
+
 func emptyURLHoldGuard(t *testing.T) *guard {
 	t.Helper()
 	return emptyURLHoldGuardLog(t, nil)
@@ -992,7 +996,7 @@ func TestEmptyURLHoldWindowOpenFromAdmittedOrdinaryOpener(t *testing.T) {
 	var client []string
 	v := g.fromBrowser(emptyURLNamedTabAttach("S-TAB-WO", "TAB-WO", "OPENER", true))
 	client = append(client, emptyURLHoldPayloads(v)...)
-	v = g.fromBrowser(emptyURLNamedPageAttachURL("S-TAB-WO", "S-PAGE-WO", "PAGE-WO", "OPENER", "https://ordinary.test/popup", false))
+	v = emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("S-TAB-WO", "S-PAGE-WO", "PAGE-WO", "OPENER", "https://ordinary.test/popup", false), "https://ordinary.test/popup")
 	client = append(client, emptyURLHoldPayloads(v)...)
 	emptyURLAssertClientDrivesPage(t, g, client, "S-TAB-WO", "S-PAGE-WO")
 }
@@ -1014,7 +1018,7 @@ func emptyURLAnnounceFlatTabs(t *testing.T, g *guard, n int) (client []string) {
 func TestEmptyURLHoldFlatStockOrdinaryMatchesLoneUnmatchedTab(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	client := emptyURLAnnounceFlatTabs(t, g, 1)
-	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "OPENER", "https://ordinary.test/popup", false))
+	v := emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "OPENER", "https://ordinary.test/popup", false), "https://ordinary.test/popup")
 	client = append(client, emptyURLHoldPayloads(v)...)
 	emptyURLAssertClientDrivesPage(t, g, client, "S-TAB-1", "S-PAGE-1")
 }
@@ -1022,7 +1026,7 @@ func TestEmptyURLHoldFlatStockOrdinaryMatchesLoneUnmatchedTab(t *testing.T) {
 func TestEmptyURLHoldFlatOrdinaryAmbiguousTwoUnmatchedDoesNotMatch(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	_ = emptyURLAnnounceFlatTabs(t, g, 2)
-	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "OPENER", "https://ordinary.test/p1", false))
+	v := emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "OPENER", "https://ordinary.test/p1", false), "https://ordinary.test/p1")
 	ps := emptyURLHoldPayloads(v)
 	if g.sessions["S-PAGE-1"] == nil {
 		t.Fatal("ordinary flat page should still classify")
@@ -1132,7 +1136,7 @@ func TestEmptyURLHoldProtectedOpenerPageHeld(t *testing.T) {
 	if emptyURLHoldDetachIndex(tabSends, "S-TAB-P") < 0 && !g.hidden["S-TAB-P"] {
 		t.Fatalf("protected-opener empty tab was not hidden like main: sends=%v", tabSends)
 	}
-	v := g.fromBrowser(emptyURLNamedPageAttachURL("S-TAB-P", "S-PAGE-P", "PAGE-P", "PROT", "https://ordinary.test/from-prot", false))
+	v := emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("S-TAB-P", "S-PAGE-P", "PAGE-P", "PROT", "https://ordinary.test/from-prot", false), "https://ordinary.test/from-prot")
 	ps := emptyURLHoldPayloads(v)
 	if emptyURLHoldAttachIndex(ps, "S-PAGE-P") >= 0 || g.sessions["S-PAGE-P"] != nil {
 		t.Fatalf("protected-opener page reached the client: %v", ps)
@@ -1145,7 +1149,7 @@ func TestEmptyURLHoldNestedPageChildMatchesAnnouncedTab(t *testing.T) {
 	if g.sessions["S-TAB-OR"] == nil {
 		t.Fatal("expected announced tab before page child")
 	}
-	v := g.fromBrowser(emptyURLNamedPageAttachURL("S-TAB-OR", "S-PAGE-OR", "PAGE-OR", "", "https://ordinary.test/order", false))
+	v := emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("S-TAB-OR", "S-PAGE-OR", "PAGE-OR", "", "https://ordinary.test/order", false), "https://ordinary.test/order")
 	client := append(tabClient, emptyURLHoldPayloads(v)...)
 	emptyURLAssertClientDrivesPage(t, g, client, "S-TAB-OR", "S-PAGE-OR")
 }
@@ -1271,9 +1275,9 @@ func TestEmptyURLHoldOnlyEmptyURLTabIsFlatHideCandidate(t *testing.T) {
 func TestEmptyURLHoldStartupProtectedPageLeavesOrdinaryTabs(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	_ = g.fromBrowser(emptyURLNamedTabAttachURL("S-TAB-1", "TAB-1", "", "https://ordinary.test/one", false))
-	_ = g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "", "https://ordinary.test/one", false))
+	_ = emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "", "https://ordinary.test/one", false), "https://ordinary.test/one")
 	_ = g.fromBrowser(emptyURLNamedTabAttachURL("S-TAB-2", "TAB-2", "", "https://ordinary.test/two", false))
-	_ = g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-2", "PAGE-2", "", "https://ordinary.test/two", false))
+	_ = emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("", "S-PAGE-2", "PAGE-2", "", "https://ordinary.test/two", false), "https://ordinary.test/two")
 	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-P", "PAGE-P", "", "https://seven.sliccy.ai/startup", false))
 	sends := emptyURLHoldSends(v)
 	if g.sessions["S-PAGE-P"] != nil {
@@ -1481,7 +1485,7 @@ func TestEmptyURLHoldFlatMatchDoesNotShieldProtectedPopupTab(t *testing.T) {
 	if g.sessions["S-TAB-B"] == nil || g.held["S-PAGE-B"] == nil {
 		t.Fatal("expected TabB announced and page B held")
 	}
-	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-A", "PAGE-A", "OPENER", "https://ordinary.test/a", false))
+	v := emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("", "S-PAGE-A", "PAGE-A", "OPENER", "https://ordinary.test/a", false), "https://ordinary.test/a")
 	if g.sessions["S-PAGE-A"] == nil {
 		t.Fatalf("ordinary flat page A should classify: %v", emptyURLHoldPayloads(v))
 	}
@@ -1512,7 +1516,7 @@ func TestEmptyURLHoldStaleEmptyTabOutsideHoldWindowUntouched(t *testing.T) {
 func TestEmptyURLHoldStockOrdinaryFlatDoesNotDetachOwnTab(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	client := emptyURLAnnounceFlatTabs(t, g, 1)
-	v := g.fromBrowser(emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "OPENER", "https://ordinary.test/popup", false))
+	v := emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("", "S-PAGE-1", "PAGE-1", "OPENER", "https://ordinary.test/popup", false), "https://ordinary.test/popup")
 	client = append(client, emptyURLHoldPayloads(v)...)
 	emptyURLAssertClientDrivesPage(t, g, client, "S-TAB-1", "S-PAGE-1")
 	if emptyURLHoldClientDetachIndex(client, "S-TAB-1") >= 0 {
@@ -1846,7 +1850,7 @@ func TestEmptyURLHoldProtectTabCascadesHideNestedHeldPage(t *testing.T) {
 func TestEmptyURLHoldShownPageCascadeUnchanged(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-SH", "TAB-SH", "", true))
-	pv := g.fromBrowser(emptyURLNamedPageAttachURL("S-TAB-SH", "S-PAGE-SH", "PAGE-SH", "OPENER", "https://ordinary.test/shown", false))
+	pv := emptyURLHoldAdmitPage(g, emptyURLNamedPageAttachURL("S-TAB-SH", "S-PAGE-SH", "PAGE-SH", "OPENER", "https://ordinary.test/shown", false), "https://ordinary.test/shown")
 	if g.sessions["S-PAGE-SH"] == nil {
 		t.Fatalf("expected ordinary nested page shown under tab: payloads=%v held=%v", emptyURLHoldPayloads(pv), g.held["S-PAGE-SH"] != nil)
 	}

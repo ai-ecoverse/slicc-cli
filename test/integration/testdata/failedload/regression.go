@@ -666,10 +666,42 @@ func assertClientSeesOnlyFailedOrigin(t *testing.T, label string, raw []byte, fa
 	_ = failedFull
 }
 
+const failedLoadProofSession = "S-DOC-PROOF"
+
+func failedLoadProofDrain(g *guard, v browserVerdict, live string) browserVerdict {
+	out := v
+	for _, raw := range v.send {
+		var m struct {
+			ID        int64  `json:"id"`
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		var next browserVerdict
+		switch {
+		case m.Method == "Target.attachToTarget" && m.SessionID == "RELAY":
+			next = g.fromBrowser(encode(map[string]any{"id": m.ID, "sessionId": "RELAY", "result": map[string]any{"sessionId": failedLoadProofSession}}))
+		case m.Method == "Page.getFrameTree" && m.SessionID == failedLoadProofSession:
+			next = g.fromBrowser(encode(map[string]any{
+				"id": m.ID, "sessionId": m.SessionID,
+				"result": map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "FRAME", "url": live, "securityOrigin": live}}},
+			}))
+		case m.Method == "Target.detachFromTarget":
+			next = g.fromBrowser(encode(map[string]any{"id": m.ID, "sessionId": m.SessionID, "result": map[string]any{}}))
+		default:
+			continue
+		}
+		drained := failedLoadProofDrain(g, next, live)
+		out.page = append(out.page, drained.page...)
+		out.send = append(out.send, drained.send...)
+	}
+	return out
+}
+
 func attachedFailedLoadGuard(t *testing.T, failedFull string, protected bool) *guard {
 	t.Helper()
 	g := failedLoadGuard(t)
-	_ = g.fromBrowser(encode(map[string]any{
+	v := g.fromBrowser(encode(map[string]any{
 		"method": "Target.attachedToTarget",
 		"params": map[string]any{
 			"sessionId":          "S-POPUP",
@@ -677,6 +709,7 @@ func attachedFailedLoadGuard(t *testing.T, failedFull string, protected bool) *g
 			"waitingForDebugger": false,
 		},
 	}))
+	_ = failedLoadProofDrain(g, v, "https://ordinary.test/")
 	if g.sessions["S-POPUP"] == nil {
 		t.Fatal("ordinary attach missing")
 	}
@@ -901,36 +934,36 @@ func TestFailedLoadOrdinaryKeepsRealTitles(t *testing.T) {
 
 func TestFailedLoadOrdinaryShapeFieldsUntouched(t *testing.T) {
 	solo := failedLoadGuard(t)
-	_ = solo.fromBrowser(encode(map[string]any{
+	_ = failedLoadProofDrain(solo, solo.fromBrowser(encode(map[string]any{
 		"method": "Target.attachedToTarget",
 		"params": map[string]any{
 			"sessionId":          "S-ORD",
 			"targetInfo":         map[string]any{"targetId": "ORD", "type": "page", "url": "https://ordinary.test/docs", "title": "Docs"},
 			"waitingForDebugger": false,
 		},
-	}))
+	})), "https://ordinary.test/docs")
 	if solo.sessions["S-ORD"] == nil {
 		t.Fatal("ordinary session missing")
 	}
 	assertOrdinaryShapeUntouched(t, "solo", solo)
 
 	sib := failedLoadGuard(t)
-	_ = sib.fromBrowser(encode(map[string]any{
+	_ = failedLoadProofDrain(sib, sib.fromBrowser(encode(map[string]any{
 		"method": "Target.attachedToTarget",
 		"params": map[string]any{
 			"sessionId":          "S-ORD",
 			"targetInfo":         map[string]any{"targetId": "ORD", "type": "page", "url": "https://ordinary.test/docs", "title": "Docs"},
 			"waitingForDebugger": false,
 		},
-	}))
-	_ = sib.fromBrowser(encode(map[string]any{
+	})), "https://ordinary.test/docs")
+	_ = failedLoadProofDrain(sib, sib.fromBrowser(encode(map[string]any{
 		"method": "Target.attachedToTarget",
 		"params": map[string]any{
 			"sessionId":          "S-POPUP",
 			"targetInfo":         map[string]any{"targetId": "POPUP", "type": "page", "url": "https://ordinary.test/", "title": "ok", "openerId": "OPENER"},
 			"waitingForDebugger": false,
 		},
-	}))
+	})), "https://ordinary.test/")
 	if sib.navTargets["POPUP"] == nil {
 		nt := &navTarget{target: "POPUP", session: "GUARD", ready: make(chan struct{})}
 		sib.navTargets["POPUP"] = nt
