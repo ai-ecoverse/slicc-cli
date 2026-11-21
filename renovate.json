@@ -13,6 +13,15 @@
       "groupName": "slicc-browsers",
       "groupSlug": "slicc-browsers",
       "separateMajorMinor": false
+    },
+    {
+      "description": "whatwg-url parses the URLs the CDP guard classifies as protected or ordinary, so an update of it, under its old or its new module path, waits for approval on the Dependency Dashboard and never automerges: TestProtectURLDecisionTable has to pass and the owner has to approve the change before it merges.",
+      "matchPackageNames": [
+        "github.com/nlnwa/whatwg-url",
+        "github.com/nationallibraryofnorway/whatwg-url"
+      ],
+      "dependencyDashboardApproval": true,
+      "automerge": false
     }
   ]
 }
