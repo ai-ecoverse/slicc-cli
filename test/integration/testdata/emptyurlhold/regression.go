@@ -148,6 +148,35 @@ func TestEmptyURLHoldAnnounceEmptyTabHoldOnlyPage(t *testing.T) {
 	}
 }
 
+func TestEmptyURLHoldTabPopupPageChildResumedAtHold(t *testing.T) {
+	for _, waiting := range []bool{false, true} {
+		waiting := waiting
+		t.Run(fmt.Sprintf("waiting=%t", waiting), func(t *testing.T) {
+			g := emptyURLHoldGuard(t)
+			_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))
+			if g.sessions["S-TAB-POP"] == nil || g.held["S-TAB-POP"] != nil {
+				t.Fatal("popup tab must be announced so the client can arm tab-level setAutoAttach")
+			}
+			v := g.fromBrowser(emptyURLNamedPageAttach("S-TAB-POP", "S-PAGE-POP", "PAGE-POP", "OPENER", waiting))
+			ps := emptyURLHoldPayloads(v)
+			if emptyURLHoldContains(ps, "attachedToTarget") {
+				t.Fatalf("empty-URL popup page child announced before classification: %v", ps)
+			}
+			h := g.held["S-PAGE-POP"]
+			if h == nil {
+				t.Fatal("empty-URL popup page child was not held")
+			}
+			if !h.resumed {
+				t.Fatalf("held popup page child must be guard-resumed at hold time waiting=%t", waiting)
+			}
+			sends := emptyURLHoldSends(v)
+			if !emptyURLHoldContains(sends, "Runtime.runIfWaitingForDebugger") || !emptyURLHoldContains(sends, `"sessionId":"S-PAGE-POP"`) {
+				t.Fatalf("hold must send Runtime.runIfWaitingForDebugger on the held page child waiting=%t sends=%v", waiting, sends)
+			}
+		})
+	}
+}
+
 func TestEmptyURLHoldOrdinaryAnnouncesTabThenPage(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	tabClient := emptyURLHoldPayloads(g.fromBrowser(emptyURLTabAttach(true)))

@@ -41,7 +41,6 @@ const (
 
 var (
 	guardExactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	guardSettleToken  = regexp.MustCompile(`(?i)settle:\s*no request for .+ within \d+ms`)
 )
 
 func guardSetVersion(t testing.TB) string {
@@ -504,33 +503,6 @@ type guardSkip struct {
 
 const guardC9MacReason = "not-applicable: on macOS the C9 controls hang inside Chrome (#344)"
 
-var guardWaivers = map[string]string{
-	"C3.tab-attach": "guarded settle of window.open under main empty-URL hold; runner folds that into control=fail (#260); stock Playwright/Puppeteer popup through the link guard passes",
-}
-
-func waivedGuardRow(r guardRow) (string, bool) {
-	reason, ok := guardWaivers[r.ID]
-	if !ok {
-		return "", false
-	}
-	switch r.ID {
-	case "C3.tab-attach":
-		if r.Guarded != "fail" || (r.Control != "fail" && r.Control != "incomplete") {
-			return "", false
-		}
-		if !guardedSettleFailure(r) {
-			return "", false
-		}
-		return reason, true
-	default:
-		return "", false
-	}
-}
-
-func guardedSettleFailure(r guardRow) bool {
-	return guardSettleToken.MatchString(string(r.Why) + " " + strings.Join(r.Errors, " "))
-}
-
 func logTabIframeLeakEvidence(t testing.TB, r guardRow) {
 	t.Helper()
 	var obs struct {
@@ -878,11 +850,7 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 			logTabIframeLeakEvidence(t, r)
 		}
 		if len(r.Errors) != 0 {
-			if reason, ok := waivedGuardRow(r); ok {
-				t.Logf("%s: WAIVED (%s): unexpected errors kept: %v", name, reason, r.Errors)
-			} else {
-				t.Errorf("%s: unexpected errors: %v", name, r.Errors)
-			}
+			t.Errorf("%s: unexpected errors: %v", name, r.Errors)
 		}
 		switch {
 		case r.Control == "not-run":
@@ -896,10 +864,6 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 			}
 			t.Logf("%s: skip %s", name, r.Reason)
 		case r.Control != "pass" || r.Guarded != "pass" || r.Live != "pass":
-			if reason, ok := waivedGuardRow(r); ok {
-				t.Logf("%s: WAIVED (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, reason, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
-				continue
-			}
 			if r.ID == "C7.credential-export" {
 				for _, n := range r.Notes {
 					if strings.Contains(n, "diag.pageGetCookies") || strings.Contains(n, "diag.topTarget") || strings.Contains(n, "partitioned:") || strings.Contains(n, "result:") {
@@ -942,23 +906,6 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 	}
 	t.Logf("passed rows per vector: %s", strings.Join(ran, " "))
 	if !sum.Pass {
-		onlyWaived := true
-		for _, r := range sum.Results {
-			if r.Control == "pass" && r.Guarded == "pass" && r.Live == "pass" {
-				continue
-			}
-			if r.Control == "skip" || r.Control == "not-run" {
-				continue
-			}
-			if _, ok := waivedGuardRow(r); !ok {
-				onlyWaived = false
-				break
-			}
-		}
-		if !onlyWaived {
-			t.Errorf("the guard set did not pass: counts=%s", sum.Counts)
-		} else {
-			t.Logf("guard set Pass=false only from waived rows: counts=%s", sum.Counts)
-		}
+		t.Errorf("the guard set did not pass: counts=%s", sum.Counts)
 	}
 }
