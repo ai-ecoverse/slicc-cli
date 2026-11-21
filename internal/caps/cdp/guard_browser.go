@@ -41,6 +41,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	defer g.mu.Unlock()
 	g.docIdentitySeq++
 	defer func() { verdict.releases = g.takeReleasesLocked() }()
+	defer func() { verdict.page = append(verdict.page, g.takeAnsweredHeldLocked()...) }()
 	defer g.resolveUnknownLocked()
 	frameSend := g.frameEventLocked(&m)
 	defer func() {
@@ -212,6 +213,9 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		return browserVerdict{forward: data, send: treeSend, page: treePage}
 	}
 	if kind == kindAttach {
+		if refused, cutSend := g.attachReplyCutLocked(attached, m, res); refused {
+			return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: append(treeSend, cutSend...), page: append(treePage, g.takePendingPageLocked()...)}
+		}
 		if held, holdSend, holdPage := g.holdDocConfirmReplyLocked(attached, m, res); held {
 			acceptedAttach = true
 			holdSend = append(holdSend, g.noteExplicitDocConfirmObserveLocked(attached)...)
@@ -289,6 +293,38 @@ func (g *guard) applyTargetsResultLocked(res map[string]any) [][]byte {
 	}
 	res["targetInfos"] = kept
 	return send
+}
+
+func (g *guard) attachReplyCutLocked(attached string, m *message, res map[string]any) (bool, [][]byte) {
+	if !attachReplyRefuseProtected() {
+		return false, nil
+	}
+	sid, _ := res["sessionId"].(string)
+	t := g.targets[attached]
+	if sid == "" || sid == g.relaySession || t == nil || t.typ == "browser" || t.typ == "iframe" || workerTypes[t.typ] {
+		return false, nil
+	}
+	s := g.sessions[sid]
+	cut := g.hidden[sid] || g.refused[sid] || g.docFailed[sid] || (s != nil && s.refused)
+	if !cut && !t.protected {
+		return false, nil
+	}
+	g.logf("cdp: refused an attach answered after its target moved onto a protected origin target=%s session=%s", t.id, sid)
+	g.noteAttachCutLocked(sid)
+	if dc := g.docInflight[attached]; dc != nil && !dc.done && dc.holds[sid] != nil {
+		return true, g.failDocConfirmLocked(dc)
+	}
+	if cut || g.gone[sid] {
+		return true, nil
+	}
+	g.noteHiddenLocked(sid, t.id)
+	g.addRefusedLocked(sid)
+	if g.docFailed == nil {
+		g.docFailed = map[string]bool{}
+	}
+	g.docFailed[sid] = true
+	msg, _ := g.newCallLocked(m.SessionID, "Target.detachFromTarget", map[string]any{"sessionId": sid}, false)
+	return true, [][]byte{msg}
 }
 
 func (g *guard) applyAttachResultLocked(attached, session string, res map[string]any) ([][]byte, bool) {
@@ -628,6 +664,10 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		send = append(send, g.noteIframeAttachParentLocked(info)...)
 	}
 	send = append(send, g.observeLocked(info)...)
+	if s := g.sessions[p.SessionID]; attachAnnounceDropCut() && (g.docFailed[p.SessionID] || g.attachCut[p.SessionID] || (s != nil && s.refused)) {
+		g.attachParent = ""
+		return browserVerdict{send: send}
+	}
 	if v, handled := g.attachedHideOrHoldLocked(m, p.SessionID, p.WaitingForDebugger, info, send); handled {
 		g.attachParent = ""
 		return v

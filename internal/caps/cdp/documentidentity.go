@@ -783,6 +783,7 @@ func (g *guard) pruneDocIdentitySessionLocked(session string) {
 		}
 		g.releaseDocIdentityReservationLocked(h)
 		delete(g.docIdentityHolds, k)
+		g.answerPrunedDocIdentityLocked(h)
 	}
 	for k := range g.docIdentityCalls {
 		if k.session == session {
@@ -835,5 +836,18 @@ func (g *guard) pruneDocIdentityTargetLocked(target string) {
 		}
 		g.releaseDocIdentityReservationLocked(h)
 		delete(g.docIdentityHolds, k)
+		g.answerPrunedDocIdentityLocked(h)
 	}
+}
+
+func (g *guard) answerPrunedDocIdentityLocked(h *docIdentityHold) {
+	if !heldReplyAnswerDocIdentity() || h == nil {
+		return
+	}
+	g.dropDeferredExtensionPaintLocked(callKey{h.session, h.id})
+	if g.sessionRefusedLocked(h.session) || g.targetProtectedLocked(h.target) {
+		g.answerHeldLocked(refusal(h.id, h.session, refusedTarget))
+		return
+	}
+	g.answerHeldLocked(retriableContextDestroyed(h.id, h.session))
 }
