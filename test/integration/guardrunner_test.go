@@ -793,6 +793,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		"inject":         run.inject,
 		"errorPageVault": run.errorPageVault,
 		"settleScale":    guardSettleScale(),
+		"diagC3":         run.diagC3,
 	}
 	var started struct {
 		Started bool `json:"started"`

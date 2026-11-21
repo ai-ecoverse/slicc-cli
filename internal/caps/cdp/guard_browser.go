@@ -601,12 +601,52 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
 	}
 	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
-		if diagC3Enabled() {
-			g.logf("cdp: attach-decision hold-empty-url type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID, info.OpenerID)
-		}
-		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, waiting)...), hold: []string{pSession}}, true
+		return g.emptyURLHoldDecisionLocked(m, pSession, waiting, info, params, send)
 	}
 	return browserVerdict{}, false
+}
+
+func (g *guard) emptyURLHoldDecisionLocked(m *message, pSession string, waiting bool, info targetInfo, params map[string]any, send [][]byte) (browserVerdict, bool) {
+	underTab := info.Type == "page" && g.sessionIsTabLocked(m.SessionID)
+	variant := diagC3Variant()
+	if underTab && variant == "a" {
+		if diagC3Enabled() {
+			g.logf("cdp: attach-decision skip-empty-url-hold variant=a type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID, info.OpenerID)
+		}
+		return browserVerdict{}, false
+	}
+	if underTab && variant == "c" {
+		if diagC3Enabled() {
+			g.logf("cdp: attach-decision hold-empty-url-announce variant=c type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s chromeWaiting=%t", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID, info.OpenerID, waiting)
+		}
+		holdSend := g.holdLocked(m.SessionID, params, info, waiting)
+		announced := g.announceHeldAttachLocked(m.SessionID, params, waiting)
+		return browserVerdict{send: append(send, holdSend...), page: announced, hold: []string{pSession}}, true
+	}
+	if diagC3Enabled() {
+		g.logf("cdp: attach-decision hold-empty-url type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID, info.OpenerID)
+	}
+	return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, waiting)...), hold: []string{pSession}}, true
+}
+
+func (g *guard) announceHeldAttachLocked(parent string, params map[string]any, waiting bool) [][]byte {
+	if params == nil {
+		return nil
+	}
+	copied := map[string]any{}
+	for k, v := range params {
+		copied[k] = v
+	}
+	copied["waitingForDebugger"] = waiting
+	ev := map[string]any{"method": "Target.attachedToTarget", "params": copied}
+	if parent != "" {
+		ev["sessionId"] = parent
+	}
+	if diagC3Enabled() {
+		sid, _ := copied["sessionId"].(string)
+		g.logf("cdp: announce held attach to client session=%s parent=%s waiting=%t", sid, parent, waiting)
+	}
+	return [][]byte{encode(ev)}
 }
 
 func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {

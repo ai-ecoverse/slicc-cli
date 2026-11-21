@@ -450,7 +450,14 @@ func (g *guard) checkLocked(c *command) string {
 	if g.lost {
 		return refusedLost
 	}
-	if g.held[c.session] != nil {
+	if h := g.held[c.session]; h != nil {
+		if diagC3Variant() == "c" && c.method == "Runtime.runIfWaitingForDebugger" {
+			if diagC3Enabled() {
+				g.logf("cdp: DIAGC3 variant=c admit client resume on held session=%s target=%s", c.session, h.target)
+			}
+			h.resumed = true
+			return ""
+		}
 		return missingSessionMessage
 	}
 	if reason := g.unknownCheckLocked(c.session); reason != "" {

@@ -7,6 +7,8 @@ const CALL_TIMEOUT_MS = 10000;
 
 const seenSessions = new Map();
 
+const controlWireByRow = new Map();
+
 function noteSession(name, e) {
   if (e.method === 'Target.attachedToTarget') {
     const info = e.params.targetInfo ?? {};
@@ -23,6 +25,24 @@ function noteSession(name, e) {
   } else if (e.method === 'Target.detachedFromTarget' && seenSessions.has(e.params.sessionId)) {
     seenSessions.get(e.params.sessionId).detached = Date.now();
   }
+}
+
+function noteControlWire(rowKey, e) {
+  if (!rowKey) return;
+  if (
+    e.method !== 'Target.attachedToTarget' &&
+    e.method !== 'Target.targetInfoChanged' &&
+    e.method !== 'Target.targetCreated'
+  )
+    return;
+  const info = e.params?.targetInfo ?? {};
+  if (info.type !== 'page' && info.type !== 'tab') return;
+  const list = controlWireByRow.get(rowKey) ?? [];
+  list.push(
+    `DIAGC3 control ${e.method} t=${Date.now()} type=${info.type ?? ''} target=${info.targetId ?? ''} url=${info.url ?? ''} opener=${info.openerId ?? ''} waiting=${e.params?.waitingForDebugger ?? ''} parentSession=${e.sessionId ?? ''} childSession=${e.params?.sessionId ?? ''}`,
+  );
+  if (list.length > 80) list.shift();
+  controlWireByRow.set(rowKey, list);
 }
 
 function describeSessions(row) {
@@ -187,7 +207,7 @@ function frameLeakFailure(evidence) {
   return '';
 }
 
-function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
+function sessionBound(c, name, { inject, gate, frameLeak, controlKey } = {}) {
   const calls = new Map();
   const events = [];
   const fake = new Set();
@@ -195,6 +215,7 @@ function sessionBound(c, name, { inject, gate, frameLeak } = {}) {
   let probingAttach = false;
   const onEvent = (e) => {
     noteSession(name, e);
+    if (name === 'unguarded' && controlKey) noteControlWire(controlKey, e);
     const info = e.params?.targetInfo;
     if (frameLeak && (e.method === 'Target.attachedToTarget' || e.method === 'Target.targetCreated' || e.method === 'Target.targetInfoChanged')) {
       if (name === 'unguarded') noteFrameTarget(frameLeak, info, { attached: e.method === 'Target.attachedToTarget' });
@@ -528,11 +549,12 @@ export function guardStart(getLink, opts) {
         client.callTimeout = callTimeout;
         const unguarded = await retried(() => SocketClient.open(b.ws));
         unguarded.callTimeout = callTimeout;
+        const key = rowKey({ id: vector.id, target, variant });
         if (vector.id === 'C9.page-drivable') {
           const evidence = { control: [], guarded: [] };
           client.mouseEvidence = evidence.guarded;
           unguarded.mouseEvidence = evidence.control;
-          mouseDiagnostics.set(rowKey({ id: vector.id, target, variant }), evidence);
+          mouseDiagnostics.set(key, evidence);
         }
         const frameLeak =
           vector.id === 'C3.tab-iframe-leak'
@@ -550,10 +572,13 @@ export function guardStart(getLink, opts) {
         await unguarded.send('Target.setDiscoverTargets', { discover: true });
         const guarded = sessionBound(client, 'client', { inject: opts.inject, gate: b.gate, frameLeak });
         guarded.inboundDelay = delayedInbound(b.gate, opts);
-        if (frameLeak) frameLeakByRow.set(rowKey({ id: vector.id, target, variant }), frameLeak);
+        if (frameLeak) frameLeakByRow.set(key, frameLeak);
         return {
           client: guarded,
-          unguarded: sessionBound(unguarded, 'unguarded', { frameLeak }),
+          unguarded: sessionBound(unguarded, 'unguarded', {
+            frameLeak,
+            controlKey: opts.diagC3 ? key : undefined,
+          }),
           close: async () => {
             unguarded.close();
             await client.close().catch(() => {});
@@ -591,6 +616,11 @@ export function guardStart(getLink, opts) {
             row.errors = [...(row.errors ?? []), fail];
           }
           frameLeakByRow.delete(rowKey(row));
+        }
+        const controlWire = controlWireByRow.get(rowKey(row));
+        if (controlWire?.length) {
+          row.notes = [...(row.notes ?? []), ...controlWire];
+          controlWireByRow.delete(rowKey(row));
         }
         state.started.delete(rowKey(row));
         if (row.inFlight) row.errors = [...(row.errors ?? []), ...describeSessions(row)];

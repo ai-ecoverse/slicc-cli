@@ -39,11 +39,21 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 	} else {
 		g.logf("cdp: holding an auto-attached session until its target has a URL target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 	}
-	if !waiting {
+	resumeNow := waiting
+	if !resumeNow && diagC3Variant() == "b" && info.Type == "page" && g.sessionIsTabLocked(parent) {
+		g.logf("cdp: DIAGC3 variant=b resume held page child at hold time waiting=%t target=%s session=%s parent=%s", waiting, h.target, sid, parent)
+		resumeNow = true
+	}
+	if !resumeNow {
 		return nil
 	}
 	h.resumed = true
 	return [][]byte{g.resumeLocked(sid, info.TargetID)}
+}
+
+func (g *guard) sessionIsTabLocked(sessionID string) bool {
+	s := g.sessions[sessionID]
+	return s != nil && s.typ == "tab"
 }
 
 func heldOpenerLocked(h *heldSession) string {

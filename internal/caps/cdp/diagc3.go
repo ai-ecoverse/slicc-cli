@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const diagC3TraceEnv = "SLICC_TEST_DIAGC3_TRACE"
+const (
+	diagC3TraceEnv   = "SLICC_TEST_DIAGC3_TRACE"
+	diagC3VariantEnv = "SLICC_DIAGC3_VARIANT"
+)
 
 var diagC3On atomic.Bool
 
@@ -19,6 +22,15 @@ func init() {
 
 func diagC3Enabled() bool {
 	return diagC3On.Load() || os.Getenv(diagC3TraceEnv) != ""
+}
+
+func diagC3Variant() string {
+	switch v := strings.TrimSpace(strings.ToLower(os.Getenv(diagC3VariantEnv))); v {
+	case "a", "b", "c", "base":
+		return v
+	default:
+		return "base"
+	}
 }
 
 func wrapDiagC3Logf(base func(string, ...any)) func(string, ...any) {
@@ -40,7 +52,7 @@ func diagC3WireInteresting(method string) bool {
 		return true
 	case strings.HasPrefix(method, "Fetch."):
 		return true
-	case method == "Page.navigate" || method == "Page.frameNavigated" || method == "Page.lifecycleEvent":
+	case method == "Page.navigate" || method == "Page.frameNavigated" || method == "Page.lifecycleEvent" || method == "Page.enable":
 		return true
 	default:
 		return false
