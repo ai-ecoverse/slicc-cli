@@ -2159,3 +2159,33 @@ func TestViewSourceAttachHead1PageOnlyIframeNeverDocConfirm(t *testing.T) {
 		t.Fatal("head1 PAGE-only: iframe must not begin docInflight")
 	}
 }
+
+func TestViewSourceAttachPR2SettleRegisterFirstOrdering(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_SETTLE_RECONFIRM") == "" {
+		t.Skip("PR2 settle register-first only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsOrdinary)
+	_ = g.fromBrowser(vsAttachedEvent(""))
+	g.mu.Lock()
+	held := g.held[vsSession]
+	g.mu.Unlock()
+	if held == nil {
+		t.Fatal("PR2: empty announce must hold before settle")
+	}
+	rel := g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary))
+	g.mu.Lock()
+	sessionFirst := g.sessions[vsSession] != nil
+	inflight := g.docInflight[vsTarget] != nil && !g.docInflight[vsTarget].done
+	g.mu.Unlock()
+	o.take(rel)
+	for _, p := range rel.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
+	}
+	o.summarize()
+	t.Logf("PR2 settle register-first sessionFirst=%t inflight=%t event=%t", sessionFirst, inflight, o.sawAttachEvent)
+	if !sessionFirst {
+		t.Fatalf("PR2 ordering: register/resume held session FIRST, then confirm; session missing before/without proof race")
+	}
+}
