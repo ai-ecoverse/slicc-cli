@@ -39,6 +39,7 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.docIdentitySeq++
 	defer func() { verdict.releases = g.takeReleasesLocked() }()
 	defer g.resolveUnknownLocked()
 	frameSend := g.frameEventLocked(&m)

@@ -35,15 +35,53 @@ func nestTreeReply(id int64) []byte {
 	}}})
 }
 
+const nestOrdinaryURL = "http://localhost:7002/nest"
+
+func nestArmRelay(g *guard) {
+	g.relaySession = "RELAY"
+}
+
+func nestSettle(g *guard, v browserVerdict, url string) browserVerdict {
+	out := v
+	for _, raw := range v.send {
+		var call struct {
+			ID        int64  `json:"id"`
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+		}
+		if json.Unmarshal(raw, &call) != nil || call.Method != "Target.getTargetInfo" || call.SessionID != "RELAY" {
+			continue
+		}
+		info, _ := json.Marshal(map[string]any{
+			"id": call.ID, "sessionId": "RELAY",
+			"result": map[string]any{"targetInfo": map[string]any{"targetId": "PAGE", "type": "page", "url": url}},
+		})
+		settled := nestSettle(g, g.fromBrowser(info), url)
+		if settled.forward != nil {
+			out.forward = settled.forward
+		}
+		out.page = append(out.page, settled.page...)
+		out.send = append(out.send, settled.send...)
+	}
+	if out.forward == nil && len(out.page) == 0 {
+		g.mu.Lock()
+		page := g.takePendingPageLocked()
+		g.mu.Unlock()
+		out.page = append(out.page, page...)
+	}
+	return out
+}
+
 func ordinaryNestPage(t *testing.T, g *guard) {
 	t.Helper()
-	page := map[string]any{"targetId": "PAGE", "type": "page", "url": "http://localhost:7002/nest", "attached": true}
+	nestArmRelay(g)
+	page := map[string]any{"targetId": "PAGE", "type": "page", "url": nestOrdinaryURL, "attached": true}
 	g.fromBrowser(encode(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": page}}))
 	g.fromBrowser(encode(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "S", "waitingForDebugger": false, "targetInfo": page}}))
 	g.mu.Lock()
 	ready := make(chan struct{})
 	close(ready)
-	g.navTargets["PAGE"] = &navTarget{target: "PAGE", session: "S", ready: ready, done: true}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", session: "S", ready: ready, done: true, fetchArmed: true, documentURL: nestOrdinaryURL}
 	g.mu.Unlock()
 	v := g.fromCommand(&command{id: 1, method: "Page.getFrameTree", session: "S"}, 1, true)
 	if v.forward == nil {
@@ -194,7 +232,8 @@ func nestCommand(g *guard, session, method string, params map[string]any) pageVe
 
 func guardedNestPage(t *testing.T, g *guard, done bool) *navTarget {
 	t.Helper()
-	page := map[string]any{"targetId": "PAGE", "type": "page", "url": "http://localhost:7002/nest", "attached": true}
+	nestArmRelay(g)
+	page := map[string]any{"targetId": "PAGE", "type": "page", "url": nestOrdinaryURL, "attached": true}
 	g.fromBrowser(encode(map[string]any{"method": "Target.targetCreated", "params": map[string]any{"targetInfo": page}}))
 	g.fromBrowser(encode(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "S", "waitingForDebugger": false, "targetInfo": page}}))
 	g.mu.Lock()
@@ -203,7 +242,7 @@ func guardedNestPage(t *testing.T, g *guard, done bool) *navTarget {
 	if done {
 		close(ready)
 	}
-	nt := &navTarget{target: "PAGE", session: "N", ready: ready, done: done}
+	nt := &navTarget{target: "PAGE", session: "N", ready: ready, done: done, fetchArmed: true, documentURL: nestOrdinaryURL}
 	g.navTargets["PAGE"] = nt
 	g.navSessions["N"] = nt
 	return nt
@@ -522,6 +561,10 @@ func clientSees(v browserVerdict, text string) bool {
 	return false
 }
 
+func nestClientSeesDocument(g *guard, id int64, frame, text string) bool {
+	return clientSees(nestSettle(g, g.fromBrowser(delayedChildDocument(id, frame)), nestOrdinaryURL), text)
+}
+
 func TestExtensionDelayedDefaultProtectedChildCommandsRefused(t *testing.T) {
 	for _, kind := range []string{"blank", "srcdoc"} {
 		for _, session := range []string{"N", "S"} {
@@ -535,7 +578,7 @@ func TestExtensionDelayedDefaultProtectedChildCommandsRefused(t *testing.T) {
 				}
 				doc := nestCommand(g, "S", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true})
 				if doc.forward != nil {
-					if clientSees(g.fromBrowser(delayedChildDocument(nestCalls, frame)), delayedChildText) {
+					if nestClientSeesDocument(g, nestCalls, frame, delayedChildText) {
 						t.Errorf("DOM.getDocument pierce showed the child's text before its default context arrived")
 					}
 				} else if doc.reply == nil || !strings.Contains(string(doc.reply), "refused") {
@@ -689,7 +732,7 @@ func TestExtensionSoftLatchOrdinaryDefaultRebuildsDOM(t *testing.T) {
 				if doc.reply != nil || doc.forward == nil {
 					t.Fatalf("DOM.getDocument after ordinary release: forward=%v reply=%s", doc.forward != nil, doc.reply)
 				}
-				if !clientSees(g.fromBrowser(delayedChildDocument(nestCalls, frame)), delayedChildText) {
+				if !nestClientSeesDocument(g, nestCalls, frame, delayedChildText) {
 					t.Fatal("DOM.getDocument pierce after ordinary release did not show the child's text")
 				}
 			})

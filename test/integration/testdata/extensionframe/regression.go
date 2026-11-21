@@ -22,10 +22,11 @@ func extensionFrameFixGuard(t *testing.T) *guard {
 		t.Fatal(err)
 	}
 	g := newGuard(o, nil)
+	g.relaySession = "RELAY"
 	g.targets["PAGE"] = &target{id: "PAGE", typ: "page", url: "https://ordinary.test/", ctx: "default", document: "L1", documentRevision: 1}
 	g.targets["FRAME"] = &target{id: "FRAME", typ: "iframe", url: extensionFrameFixForeignURL, ctx: "default", parentFrame: "PAGE"}
 	g.sessions["S"] = &session{id: "S", target: "PAGE", typ: "page"}
-	g.navTargets["PAGE"] = &navTarget{target: "PAGE", session: "S", done: true}
+	g.navTargets["PAGE"] = &navTarget{target: "PAGE", session: "S", done: true, fetchArmed: true}
 	g.noteExtensionFrameURLLocked("PAGE", "FRAME", extensionFrameFixForeignURL)
 	return g
 }
@@ -51,10 +52,41 @@ func TestExtensionFrameDocumentReplyMarksOwnerNode(t *testing.T) {
 	}
 	reply := []byte(`{"id":3,"sessionId":"S","result":{"root":{"nodeName":"#document","children":[` + extensionFrameFixNode + `]}}}`)
 	v := g.fromBrowser(reply)
-	if v.forward == nil {
-		t.Fatal("getDocument reply dropped")
+	var infoID int64
+	for _, msg := range v.send {
+		var call struct {
+			ID        int64  `json:"id"`
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+		}
+		if json.Unmarshal(msg, &call) == nil && call.Method == "Target.getTargetInfo" && call.SessionID == "RELAY" {
+			infoID = call.ID
+		}
 	}
-	out := g.scrub(append([]byte(nil), v.forward...))
+	if infoID == 0 {
+		t.Fatalf("covered getDocument reply must identity-hold: forward=%s page=%d send=%d", v.forward, len(v.page), len(v.send))
+	}
+	info, _ := json.Marshal(map[string]any{
+		"id": infoID, "sessionId": "RELAY",
+		"result": map[string]any{"targetInfo": map[string]any{"targetId": "PAGE", "type": "page", "url": "https://ordinary.test/"}},
+	})
+	settled := g.fromBrowser(info)
+	delivered := settled.forward
+	if delivered == nil && len(settled.page) > 0 {
+		delivered = settled.page[0]
+	}
+	if delivered == nil {
+		g.mu.Lock()
+		page := g.takePendingPageLocked()
+		g.mu.Unlock()
+		if len(page) > 0 {
+			delivered = page[0]
+		}
+	}
+	if delivered == nil {
+		t.Fatal("getDocument reply dropped after identity settle")
+	}
+	out := g.scrub(append([]byte(nil), delivered...))
 	if !strings.Contains(string(out), `"sliccExtensionFrame"`) {
 		t.Fatalf("getDocument owner node unmarked: %s", out)
 	}
@@ -144,6 +176,48 @@ func TestExtensionProbeConcurrentFirstWorldShared(t *testing.T) {
 	}
 	if finished != 0 {
 		t.Fatalf("probes finished early: %d", finished)
+	}
+}
+
+func TestExtensionPaintDeadlineFiresWhileProbePending(t *testing.T) {
+	t.Setenv(extensionPaintHoldEnv, "40ms")
+	g := extensionFrameFixGuard(t)
+	g.reserveHold = func(data []byte) (*link.Reservation, bool) {
+		return nil, true
+	}
+	id := int64(21)
+	m := message{ID: &id, SessionID: "S"}
+	data := []byte(`{"id":21,"sessionId":"S","result":{"data":"YWFh"}}`)
+	g.mu.Lock()
+	v := g.holdExtensionPaintLocked(&m, data, "PAGE", []string{"FRAME"})
+	gen := uint64(0)
+	deadline := time.Time{}
+	if h := g.heldExtensionPaints[callKey{"S", 21}]; h != nil {
+		gen = h.generation
+		deadline = h.deadline
+	}
+	g.mu.Unlock()
+	if len(v.extensionPaints) != 1 || gen == 0 {
+		t.Fatalf("expected armed paint deadline: paints=%d gen=%d", len(v.extensionPaints), gen)
+	}
+	time.Sleep(time.Until(deadline) + 30*time.Millisecond)
+	g.mu.Lock()
+	page := g.takePendingPageLocked()
+	_, still := g.heldExtensionPaints[callKey{"S", 21}]
+	g.mu.Unlock()
+	if still {
+		extra, _ := g.expireExtensionPaint(callKey{"S", 21}, gen)
+		page = append(page, extra...)
+	}
+	joined := ""
+	for _, p := range page {
+		joined += string(p)
+	}
+	if !strings.Contains(joined, `"error"`) {
+		t.Fatalf("deadline must refuse a stuck probe: %v", page)
+	}
+	if _, ok := g.heldExtensionPaints[callKey{"S", 21}]; ok {
+		t.Fatal("held paint survived deadline")
 	}
 }
 

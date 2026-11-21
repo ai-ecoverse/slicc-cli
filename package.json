@@ -27,7 +27,7 @@
   },
   "scripts": {
     "prepare": "slicc-install-hooks",
-    "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && GOOS=darwin go vet ./... && GOOS=windows go vet ./... && golangci-lint run",
+    "lint": "slicc-lint-comments && slicc-no-unit-tests && slicc-agents-md && test -z \"$(gofmt -l .)\" && go mod tidy -diff && go vet ./... && GOOS=darwin go vet ./... && GOOS=windows go vet ./... && golangci-lint run && sh scripts/vet-overlay-stubs.sh",
     "lint:sh": "shellcheck -s sh install.sh test/integration/testdata/install/check.sh && shellcheck scripts/*.sh",
     "format": "gofmt -w .",
     "test": "node scripts/test-shard.mjs ci/6 -race -count=1 -timeout 15m -v ./test/integration/...",

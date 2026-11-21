@@ -45,6 +45,7 @@ func TestCDPViewSourceAttachMutationConfirmDisabled(t *testing.T) {
 	replacements := map[string]string{
 		filepath.Join(root, "internal/caps/cdp/view_source_attach_test.go"): filepath.Join(root, "test/integration/testdata/viewsourceattach/regression.go"),
 		filepath.Join(root, "internal/caps/cdp/documentconfirm.go"):         filepath.Join(root, "test/integration/testdata/viewsourceattach/mutation_documentconfirm.go"),
+		filepath.Join(root, "internal/caps/cdp/documentidentity.go"):        filepath.Join(root, "test/integration/testdata/viewsourceattach/mutation_documentidentity.go"),
 	}
 	data, err := json.Marshal(map[string]any{"Replace": replacements})
 	if err != nil {
