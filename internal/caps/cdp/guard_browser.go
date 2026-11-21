@@ -253,6 +253,12 @@ func (g *guard) applyResultKindLocked(kind callKind, attached, session string, r
 		}
 	case kindCreate:
 		id, _ := res["targetId"].(string)
+		if id != "" {
+			if g.created == nil {
+				g.created = map[string]bool{}
+			}
+			g.created[id] = true
+		}
 		return g.touchLocked(id, "page"), false
 	case kindAttach:
 		return g.applyAttachResultLocked(attached, session, res)
@@ -610,6 +616,13 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	info := p.TargetInfo
 	if t, ok := g.targets[info.TargetID]; ok && info.URL == "" && t.url != "" {
 		info.URL = t.url
+	}
+	if g.docConfirmProofPendingLocked(info.TargetID) || g.docConfirmProofSessionLocked(p.SessionID) {
+		if g.docProofSessions == nil {
+			g.docProofSessions = map[string]string{}
+		}
+		g.docProofSessions[p.SessionID] = info.TargetID
+		return browserVerdict{}
 	}
 	g.noteStreamOpenedLocked(info)
 	g.attachParent = m.SessionID

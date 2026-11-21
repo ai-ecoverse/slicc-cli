@@ -10,6 +10,79 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
 )
 
+const emptyURLProofSession = "S-DOC-PROOF"
+
+func emptyURLOutbound(raw []byte) (id int64, method, session string) {
+	var m struct {
+		ID        int64  `json:"id"`
+		Method    string `json:"method"`
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.Unmarshal(raw, &m)
+	return m.ID, m.Method, m.SessionID
+}
+
+func emptyURLProofAttachAnswer(id int64) []byte {
+	return encode(map[string]any{"id": id, "sessionId": "RELAY", "result": map[string]any{"sessionId": emptyURLProofSession}})
+}
+
+func emptyURLFrameTreeAnswer(id int64, session, url string) []byte {
+	return encode(map[string]any{
+		"id":        id,
+		"sessionId": session,
+		"result": map[string]any{
+			"frameTree": map[string]any{
+				"frame": map[string]any{"id": "FRAME", "url": url, "securityOrigin": url},
+			},
+		},
+	})
+}
+
+func emptyURLTargetInfoAnswer(id int64, url string) []byte {
+	return encode(map[string]any{
+		"id":        id,
+		"sessionId": "RELAY",
+		"result": map[string]any{
+			"targetInfo": map[string]any{"targetId": "PAGE", "type": "page", "url": url},
+		},
+	})
+}
+
+func emptyURLHoldMerge(a, b browserVerdict) browserVerdict {
+	a.page = append(a.page, b.page...)
+	a.send = append(a.send, b.send...)
+	if b.forward != nil {
+		a.forward = b.forward
+	}
+	return a
+}
+
+func emptyURLHoldDrain(g *guard, v browserVerdict, live string) browserVerdict {
+	out := v
+	for _, raw := range v.send {
+		id, method, session := emptyURLOutbound(raw)
+		var next browserVerdict
+		switch {
+		case method == "Target.getTargetInfo" && session == "RELAY":
+			next = g.fromBrowser(emptyURLTargetInfoAnswer(id, live))
+		case method == "Target.attachToTarget" && session == "RELAY":
+			next = g.fromBrowser(emptyURLProofAttachAnswer(id))
+		case method == "Page.getFrameTree" && session == emptyURLProofSession:
+			next = g.fromBrowser(emptyURLFrameTreeAnswer(id, session, live))
+		case method == "Target.detachFromTarget":
+			next = g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}}))
+		default:
+			continue
+		}
+		out = emptyURLHoldMerge(out, emptyURLHoldDrain(g, next, live))
+	}
+	return out
+}
+
+func emptyURLHoldClassify(g *guard, changed []byte, live string) browserVerdict {
+	return emptyURLHoldDrain(g, g.fromBrowser(changed), live)
+}
+
 func emptyURLHoldGuard(t *testing.T) *guard {
 	t.Helper()
 	return emptyURLHoldGuardLog(t, nil)
@@ -367,7 +440,7 @@ func TestEmptyURLHoldOrdinaryAnnouncesTabThenPage(t *testing.T) {
 	if g.sessions["S-TAB"] == nil || g.held["S-PAGE"] == nil {
 		t.Fatal("expected announced tab and held page before classification")
 	}
-	v := g.fromBrowser(emptyURLRelayChanged("PAGE", "page", "https://ordinary.test/popup"))
+	v := emptyURLHoldClassify(g, emptyURLRelayChanged("PAGE", "page", "https://ordinary.test/popup"), "https://ordinary.test/popup")
 	ps := append(tabClient, emptyURLHoldPayloads(v)...)
 	tabAt := emptyURLHoldAttachIndex(ps, "S-TAB")
 	pageAt := emptyURLHoldAttachIndex(ps, "S-PAGE")
@@ -444,7 +517,7 @@ func TestEmptyURLHoldPageBeforeTabOrdinaryOrder(t *testing.T) {
 	if g.sessions["S-TAB"] == nil || g.held["S-PAGE"] == nil {
 		t.Fatal("expected announced tab and held page in page-before-tab order")
 	}
-	v := g.fromBrowser(emptyURLRelayChanged("PAGE", "page", "https://ordinary.test/popup"))
+	v := emptyURLHoldClassify(g, emptyURLRelayChanged("PAGE", "page", "https://ordinary.test/popup"), "https://ordinary.test/popup")
 	ps := append(tabClient, emptyURLHoldPayloads(v)...)
 	tabAt := emptyURLHoldAttachIndex(ps, "S-TAB")
 	pageAt := emptyURLHoldAttachIndex(ps, "S-PAGE")
@@ -681,7 +754,7 @@ func TestEmptyURLHoldSiblingOpenerOrdinaryLeavesOtherHeldThenProtected(t *testin
 		logs = append(logs, strings.TrimSpace(fmt.Sprintf(format, args...)))
 	})
 	emptyURLAttachSiblingPairs(t, g, true)
-	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "SHARED"))
+	v := emptyURLHoldClassify(g, emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "SHARED"), "https://ordinary.test/a")
 	ps := emptyURLHoldPayloads(v)
 	if emptyURLHoldAttachIndex(ps, "S-PAGE-A") < 0 || g.sessions["S-PAGE-A"] == nil {
 		t.Fatalf("A ordinary missing page release: %v", ps)
@@ -721,9 +794,9 @@ func TestEmptyURLHoldSiblingOpenerOrdinaryLeavesOtherHeldThenProtected(t *testin
 func TestEmptyURLHoldSiblingOpenerOrdinaryLeavesOtherHeldThenOrdinary(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	emptyURLAttachSiblingPairs(t, g, true)
-	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "SHARED"))
+	v := emptyURLHoldClassify(g, emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "SHARED"), "https://ordinary.test/a")
 	emptyURLAssertPairStillHeld(t, g, "S-TAB-B", "S-PAGE-B", emptyURLHoldPayloads(v))
-	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://ordinary.test/b", "SHARED"))
+	v = emptyURLHoldClassify(g, emptyURLNamedRelayChanged("PAGE-B", "page", "https://ordinary.test/b", "SHARED"), "https://ordinary.test/b")
 	ps := emptyURLHoldPayloads(v)
 	if emptyURLHoldAttachIndex(ps, "S-PAGE-B") < 0 || emptyURLHoldAttachCount(ps, "S-PAGE-B") != 1 {
 		t.Fatalf("B ordinary missing single page release: %v", ps)
@@ -755,7 +828,7 @@ func TestEmptyURLHoldSiblingOpenerProtectedLeavesOtherHeldBothOutcomes(t *testin
 		t.Fatalf("A protected detached unclassified B: %v", sends)
 	}
 	emptyURLAssertPairStillHeld(t, g, "S-TAB-B", "S-PAGE-B", append(ps, sends...))
-	v = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-B", "page", "https://ordinary.test/b", "SHARED"))
+	v = emptyURLHoldClassify(g, emptyURLNamedRelayChanged("PAGE-B", "page", "https://ordinary.test/b", "SHARED"), "https://ordinary.test/b")
 	ps = emptyURLHoldPayloads(v)
 	if emptyURLHoldAttachIndex(ps, "S-PAGE-B") < 0 || g.sessions["S-PAGE-B"] == nil || g.sessions["S-TAB-B"] == nil {
 		t.Fatalf("B ordinary after A protected missing page release: %v", ps)
@@ -818,7 +891,7 @@ func TestEmptyURLHoldSiblingOpenerPageBeforeTabIndependent(t *testing.T) {
 	if heldOpenerLocked(g.held["S-PAGE-A"]) != "SHARED" {
 		t.Fatal("page-before-tab pair A missing shared opener link")
 	}
-	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "SHARED"))
+	v := emptyURLHoldClassify(g, emptyURLNamedRelayChanged("PAGE-A", "page", "https://ordinary.test/a", "SHARED"), "https://ordinary.test/a")
 	ps := emptyURLHoldPayloads(v)
 	if emptyURLHoldAttachIndex(ps, "S-PAGE-A") < 0 || g.sessions["S-PAGE-A"] == nil || g.sessions["S-TAB-A"] == nil {
 		t.Fatalf("page-before-tab A ordinary missing release: %v", ps)
@@ -1033,7 +1106,7 @@ func TestEmptyURLHoldWindowOpenEmptyPageFromOrdinaryOpenerThenClassifies(t *test
 	if g.sessions["S-TAB-WO"] == nil || g.held["S-PAGE-WO"] == nil {
 		t.Fatal("expected announced tab and held page before classification")
 	}
-	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-WO", "page", "https://ordinary.test/popup", "OPENER"))
+	v := emptyURLHoldClassify(g, emptyURLNamedRelayChanged("PAGE-WO", "page", "https://ordinary.test/popup", "OPENER"), "https://ordinary.test/popup")
 	emptyURLAssertClientDrivesPage(t, g, append(tabClient, emptyURLHoldPayloads(v)...), "S-TAB-WO", "S-PAGE-WO")
 }
 
@@ -1938,7 +2011,7 @@ func TestEmptyURLHoldBrowserEnvelopeOrdinaryDeliversUnchanged(t *testing.T) {
 			"params": map[string]any{"sessionId": "S-TAB-BRO", "waitingForDebugger": true, "targetInfo": map[string]any{"targetId": "TAB-BRO", "type": "tab", "url": ""}},
 		})))
 	}
-	v := g.fromBrowser(emptyURLNamedRelayChanged("PAGE-BRO", "page", "https://ordinary.test/br", "OPENER"))
+	v := emptyURLHoldClassify(g, emptyURLNamedRelayChanged("PAGE-BRO", "page", "https://ordinary.test/br", "OPENER"), "https://ordinary.test/br")
 	ps := append(tabClient, emptyURLHoldPayloads(v)...)
 	if g.sessions["S-TAB-BRO"] == nil || g.sessions["S-PAGE-BRO"] == nil || emptyURLHoldAttachIndex(emptyURLHoldPayloads(v), "S-PAGE-BRO") < 0 {
 		t.Fatalf("browser-envelope ordinary deliver must keep tab and announce page: sessions tab=%v page=%v payloads=%v", g.sessions["S-TAB-BRO"] != nil, g.sessions["S-PAGE-BRO"] != nil, ps)
@@ -2198,9 +2271,12 @@ func TestEmptyURLHoldExplicitAttachEmptyURLUsesDocConfirmNotPageHold(t *testing.
 		if m.Method == "Target.getTargetInfo" && m.SessionID == "RELAY" {
 			asked = true
 		}
+		if m.Method == "Target.attachToTarget" && m.SessionID == "RELAY" {
+			asked = true
+		}
 	}
 	if !asked {
-		t.Fatalf("expected document-confirm Target.getTargetInfo, payloads=%v sends=%v", emptyURLHoldPayloads(v), emptyURLHoldSends(v))
+		t.Fatalf("expected document-confirm proof ask (relay getTargetInfo or attachToTarget), payloads=%v sends=%v", emptyURLHoldPayloads(v), emptyURLHoldSends(v))
 	}
 	if g.docInflight["PAGE-EX"] == nil || g.docInflight["PAGE-EX"].done {
 		t.Fatal("expected an in-flight document confirmation for the explicit empty-URL attach")

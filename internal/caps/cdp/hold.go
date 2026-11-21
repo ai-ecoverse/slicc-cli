@@ -353,53 +353,14 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 }
 
 func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
-	var v browserVerdict
 	delete(g.held, h.id)
 	if g.targetProtectedLocked(h.target) {
 		return g.hideHeldPageAndTabsLocked(h, true, "protected hide")
 	}
-	waiting := false
-	switch {
-	case workerTypes[h.typ]:
-		waiting = h.waiting
-		g.logf("cdp: released an auto-attached worker after its URL or creator frame was known target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, waiting)
-	case h.typ == "iframe":
-		waiting = h.waiting && !h.resumed
-		g.logf("cdp: released an auto-attached iframe after its URL and parent target were known target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, waiting)
-	default:
-		g.logf("cdp: released an auto-attached session after its target got a URL target=%s session=%s parent=%s", h.target, h.id, h.parent)
+	if h.typ == "page" {
+		return g.settleDocConfirmHeldLocked(h)
 	}
-	if t := g.targets[h.target]; t != nil && (workerTypes[t.typ] || t.typ == "iframe") {
-		t.shown = true
-	}
-	g.sessions[h.id] = &session{id: h.id, target: h.target, parent: h.parent, typ: h.typ, waiting: waiting, at: time.Now()}
-	v.send = append(v.send, g.touchLocked(h.target, h.typ)...)
-	if h.params == nil {
-		h.params = map[string]any{}
-	}
-	if t := g.targets[h.target]; t != nil {
-		if obj, _ := h.params["targetInfo"].(map[string]any); obj != nil {
-			obj["url"] = t.url
-			obj["type"] = t.typ
-			obj["targetId"] = t.id
-			if t.parentFrame != "" {
-				obj["parentFrameId"] = t.parentFrame
-			}
-		} else {
-			h.params["targetInfo"] = map[string]any{"targetId": t.id, "type": t.typ, "url": t.url, "parentFrameId": t.parentFrame}
-		}
-	}
-	if obj, _ := h.params["targetInfo"].(map[string]any); obj != nil {
-		ti, _ := toInfo(obj)
-		g.redactInfoLocked(obj, ti)
-	}
-	h.params["waitingForDebugger"] = waiting
-	ev := map[string]any{"method": "Target.attachedToTarget", "params": h.params}
-	if h.parent != "" {
-		ev["sessionId"] = h.parent
-	}
-	v.page = append(v.page, encode(ev))
-	return v
+	return g.admitHeldLocked(h)
 }
 
 func (g *guard) settleHeldWorkersLocked() browserVerdict {

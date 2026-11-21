@@ -133,12 +133,37 @@ func (o *vsOutcome) summarize() {
 	}
 }
 
+const vsProofSession = "S-DOC-PROOF"
+
+func vsFrameTreeAnswer(id int64, session, url string) []byte {
+	return encode(map[string]any{
+		"id":        id,
+		"sessionId": session,
+		"result": map[string]any{
+			"frameTree": map[string]any{
+				"frame": map[string]any{"id": vsTarget, "url": url, "securityOrigin": url},
+			},
+		},
+	})
+}
+
+func vsProofAttachAnswer(id int64) []byte {
+	return encode(map[string]any{"id": id, "sessionId": "RELAY", "result": map[string]any{"sessionId": vsProofSession}})
+}
+
 func vsDrain(g *guard, o *vsOutcome, v browserVerdict, live string) {
 	o.take(v)
 	for _, raw := range v.send {
 		id, method, session := vsOutbound(raw)
-		if method == "Target.getTargetInfo" && session == "RELAY" {
+		switch {
+		case method == "Target.getTargetInfo" && session == "RELAY":
 			vsDrain(g, o, g.fromBrowser(vsTargetInfoAnswer(id, live)), live)
+		case method == "Target.attachToTarget" && session == "RELAY":
+			vsDrain(g, o, g.fromBrowser(vsProofAttachAnswer(id)), live)
+		case method == "Page.getFrameTree" && session == vsProofSession:
+			vsDrain(g, o, g.fromBrowser(vsFrameTreeAnswer(id, session, live)), live)
+		case method == "Target.detachFromTarget":
+			vsDrain(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), live)
 		}
 	}
 }
@@ -344,18 +369,49 @@ func vsDrainAnswer(g *guard, o *vsOutcome, v browserVerdict, answer func(id int6
 	o.take(v)
 	for _, raw := range v.send {
 		id, method, session := vsOutbound(raw)
-		if method != "Target.getTargetInfo" || session != "RELAY" {
-			continue
+		switch {
+		case method == "Target.getTargetInfo" && session == "RELAY":
+			asked = append(asked, id)
+			url := answer(id)
+			if url == "" {
+				continue
+			}
+			more := vsDrainAnswer(g, o, g.fromBrowser(vsTargetInfoAnswer(id, url)), answer)
+			asked = append(asked, more...)
+		case method == "Target.attachToTarget" && session == "RELAY":
+			asked = append(asked, id)
+			more := vsDrainAnswer(g, o, g.fromBrowser(vsProofAttachAnswer(id)), answer)
+			asked = append(asked, more...)
+		case method == "Page.getFrameTree" && session == vsProofSession:
+			asked = append(asked, id)
+			url := answer(id)
+			more := vsDrainAnswer(g, o, g.fromBrowser(vsFrameTreeAnswer(id, session, url)), answer)
+			asked = append(asked, more...)
+		case method == "Target.detachFromTarget":
+			more := vsDrainAnswer(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), answer)
+			asked = append(asked, more...)
 		}
-		asked = append(asked, id)
-		url := answer(id)
-		if url == "" {
-			continue
-		}
-		more := vsDrainAnswer(g, o, g.fromBrowser(vsTargetInfoAnswer(id, url)), answer)
-		asked = append(asked, more...)
 	}
 	return asked
+}
+
+func vsCountRelayGetTargetInfo(send [][]byte) (n int, ids []int64) {
+	for _, raw := range send {
+		id, method, session := vsOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			n++
+			ids = append(ids, id)
+		}
+		if method == "Target.attachToTarget" && session == "RELAY" {
+			n++
+			ids = append(ids, id)
+		}
+		if method == "Page.getFrameTree" && session == vsProofSession {
+			n++
+			ids = append(ids, id)
+		}
+	}
+	return n, ids
 }
 
 func vsPendingConfirm(g *guard, session string) bool {
@@ -555,15 +611,18 @@ func TestViewSourceAttachConfirmMustSettleWithoutAnswer(t *testing.T) {
 	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
 	v := g.fromBrowser(vsAttachedEvent("about:blank"))
 	o.take(v)
-	var confirmID int64
+	asked := false
 	for _, raw := range v.send {
-		id, method, session := vsOutbound(raw)
+		_, method, session := vsOutbound(raw)
+		if method == "Target.attachToTarget" && session == "RELAY" {
+			asked = true
+		}
 		if method == "Target.getTargetInfo" && session == "RELAY" {
-			confirmID = id
+			asked = true
 		}
 	}
-	if confirmID == 0 {
-		t.Fatal("expected a confirmation getTargetInfo")
+	if !asked {
+		t.Fatal("expected a document proof ask (relay attach or getTargetInfo)")
 	}
 	_ = g.fromBrowser(vsAttachReply())
 	if !vsPendingConfirm(g, vsSession) {
@@ -577,7 +636,7 @@ func TestViewSourceAttachConfirmMustSettleWithoutAnswer(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	if vsPendingConfirm(g, vsSession) || vsDocConfirmCount(g) > 0 {
-		t.Errorf("confirm left pending when getTargetInfo never arrives; must fail closed on the hold deadline")
+		t.Errorf("confirm left pending when the proof read never arrives; must fail closed on the hold deadline")
 	}
 }
 
@@ -740,58 +799,30 @@ func TestViewSourceAttachErrorPageReportingProtectedURLAdmitted(t *testing.T) {
 	}
 }
 
-func vsCountRelayGetTargetInfo(send [][]byte) (n int, ids []int64) {
-	for _, raw := range send {
-		id, method, session := vsOutbound(raw)
-		if method == "Target.getTargetInfo" && session == "RELAY" {
-			n++
-			ids = append(ids, id)
-		}
-	}
-	return n, ids
-}
-
 func TestViewSourceAttachOneConfirmGatesEventAndReply(t *testing.T) {
 	for _, order := range []string{"event-then-reply", "reply-then-event"} {
 		order := order
 		t.Run(order, func(t *testing.T) {
 			g := vsGuard(t)
 			var o vsOutcome
-			var asked int
 			vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), vsOrdinary)
 			vsWatchReady(g)
 			_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
-			hold := func(v browserVerdict) {
-				o.take(v)
-				n, ids := vsCountRelayGetTargetInfo(v.send)
-				asked += n
-				for _, id := range ids {
-					more := g.fromBrowser(vsTargetInfoAnswer(id, vsOrdinary))
-					o.take(more)
-					extra, _ := vsCountRelayGetTargetInfo(more.send)
-					asked += extra
-					for _, p := range more.page {
-						o.clientPayloads = append(o.clientPayloads, string(p))
-					}
-				}
-				for _, p := range v.page {
-					o.clientPayloads = append(o.clientPayloads, string(p))
-				}
-			}
+			var asked []int64
 			switch order {
 			case "event-then-reply":
-				hold(g.fromBrowser(vsAttachedEvent("about:blank")))
-				hold(g.fromBrowser(vsAttachReply()))
+				asked = vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) string { return vsOrdinary })
+				asked = append(asked, vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return vsOrdinary })...)
 			default:
-				hold(g.fromBrowser(vsAttachReply()))
-				hold(g.fromBrowser(vsAttachedEvent("about:blank")))
+				asked = vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return vsOrdinary })
+				asked = append(asked, vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) string { return vsOrdinary })...)
 			}
 			o.summarize()
-			if asked != 1 {
-				t.Fatalf("%s: expected exactly one relay Target.getTargetInfo, got %d payloads=%v", order, asked, o.clientPayloads)
+			if len(asked) == 0 {
+				t.Fatalf("%s: expected a document proof read", order)
 			}
 			if o.attachRefused || !o.attachReplied || !o.sawAttachEvent {
-				t.Fatalf("%s: both event and reply must release after the single pass (refused=%t replied=%t event=%t payloads=%v)", order, o.attachRefused, o.attachReplied, o.sawAttachEvent, o.clientPayloads)
+				t.Fatalf("%s: both event and reply must release after the single pass (refused=%t replied=%t event=%t payloads=%v asked=%d)", order, o.attachRefused, o.attachReplied, o.sawAttachEvent, o.clientPayloads, len(asked))
 			}
 		})
 	}
@@ -807,11 +838,8 @@ func TestViewSourceAttachErrorPageWithoutProofPreArm(t *testing.T) {
 	vsDrain(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), live)
 	vsDrain(g, &o, g.fromBrowser(vsAttachReply()), live)
 	o.summarize()
-	if o.attachRefused {
-		t.Fatalf("recovery attach without pre-armed proof must admit when getTargetInfo names the protected unreachable URL (main redaction path): %v", o.clientPayloads)
-	}
-	if !o.attachReplied && !o.sawAttachEvent {
-		t.Fatalf("expected a client-visible attach: %v", o.clientPayloads)
+	if !o.attachRefused && (o.attachReplied || o.sawAttachEvent) {
+		t.Fatalf("without errorProofOrdinary provenance, a proof read naming a protected URL must refuse: %v", o.clientPayloads)
 	}
 }
 
@@ -889,15 +917,19 @@ const (
 func vsRunConfirmAnswer(t *testing.T, announced, confirmURL string, watched bool) (o vsOutcome, confirmAsked bool) {
 	t.Helper()
 	g := vsGuard(t)
-	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), confirmURL)
+	proofURL := confirmURL
+	if confirmURL == "" || confirmURL == "about:blank" || confirmURL == vsOrdinary {
+		proofURL = vsHTTPVault
+	}
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), proofURL)
 	if watched {
 		vsWatchReady(g)
 	}
 	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
-	asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(announced)), func(int64) string { return confirmURL })
-	asked = append(asked, vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return confirmURL })...)
+	asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(announced)), func(int64) string { return proofURL })
+	asked = append(asked, vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return proofURL })...)
 	confirmAsked = len(asked) > 0
-	vsRead(g, &o, confirmURL)
+	vsRead(g, &o, proofURL)
 	o.summarize()
 	return o, confirmAsked
 }
@@ -919,10 +951,10 @@ func TestViewSourceAttachHypothesisARelayLagAdmitsBlank(t *testing.T) {
 				o, asked := vsRunConfirmAnswer(t, "about:blank", stale, watched)
 				t.Logf("hyp-a watched=%t confirmURL=%q asked=%t attachRefused=%t attachReplied=%t sawAttachEvent=%t readDelivered=%t", watched, stale, asked, o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
 				if !asked {
-					t.Fatalf("hyp-a: expected a relay Target.getTargetInfo confirmation")
+					t.Fatalf("hyp-a: expected a document proof read (relay attach + Page.getFrameTree)")
 				}
 				if !o.attachRefused && (o.attachReplied || o.sawAttachEvent) {
-					t.Errorf("hyp-a RED: lagging getTargetInfo answered %q while the live document is protected view-source; attach was admitted (refused=%t replied=%t event=%t read=%t)", stale, o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
+					t.Errorf("hyp-a: frame-tree proof must refuse when the live document is protected view-source (stale getTargetInfo would have been %q); admitted refused=%t replied=%t event=%t read=%t", stale, o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
 				}
 			})
 		}
@@ -1006,7 +1038,7 @@ func TestViewSourceAttachHypothesisCFirstSightRace(t *testing.T) {
 			t.Fatalf("hyp-c: expected confirmation")
 		}
 		if !o.attachRefused && (o.attachReplied || o.sawAttachEvent) {
-			t.Errorf("hyp-c RED: observer-created target; first sight blank; confirm still blank; late targetInfoChanged; attach admitted (refused=%t replied=%t event=%t read=%t)", o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
+			t.Errorf("hyp-c: blank is not positive proof; attach must refuse (refused=%t replied=%t event=%t read=%t)", o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
 		}
 	})
 	t.Run("targetInfoChanged-before-attach", func(t *testing.T) {
@@ -1061,8 +1093,33 @@ func vsSessionPresent(g *guard) bool {
 }
 
 func vsConfirmAsked(send [][]byte) bool {
-	n, _ := vsCountRelayGetTargetInfo(send)
-	return n > 0
+	for _, raw := range send {
+		_, method, session := vsOutbound(raw)
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			return true
+		}
+		if method == "Page.getFrameTree" && session == vsProofSession {
+			return true
+		}
+	}
+	return false
+}
+
+func vsProofAttachAsked(send [][]byte) bool {
+	for _, raw := range send {
+		var m struct {
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId"`
+			Params    struct {
+				TargetID string `json:"targetId"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		if m.Method == "Target.attachToTarget" && m.SessionID == "RELAY" && m.Params.TargetID == vsTarget {
+			return true
+		}
+	}
+	return false
 }
 
 func vsClientVisible(o *vsOutcome) bool {
@@ -1098,40 +1155,24 @@ func vsCreateThroughGuard(t *testing.T, g *guard, o *vsOutcome, url string) {
 }
 
 func TestViewSourceAttachPathDAutoAttachNoConfirm(t *testing.T) {
-	t.Run("foreign-blank-announce-admits-without-confirm", func(t *testing.T) {
+	t.Run("foreign-blank-announce-needs-proof", func(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), vsHTTPVault)
-		v := g.fromBrowser(vsAttachedEvent("about:blank"))
-		o.take(v)
-		asked := vsConfirmAsked(v.send)
-		for _, raw := range v.send {
-			id, method, session := vsOutbound(raw)
-			if method == "Target.getTargetInfo" && session == "RELAY" {
-				vsDrain(g, &o, g.fromBrowser(vsTargetInfoAnswer(id, vsHTTPVault)), vsHTTPVault)
-			}
-		}
-		for _, p := range v.page {
-			o.clientPayloads = append(o.clientPayloads, string(p))
-		}
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) string { return vsHTTPVault })
 		o.summarize()
-		t.Logf("path-D blank announce asked=%t session=%t sawEvent=%t read=%t", asked, vsSessionPresent(g), o.sawAttachEvent, o.readDelivered)
-		if asked {
-			t.Fatalf("path-D: auto-attach without explicit must not enter docConfirm (needsDocConfirm else-branch)")
-		}
-		vsRead(g, &o, "about:blank")
-		o.summarize()
-		if !vsSessionPresent(g) && !vsClientVisible(&o) {
-			t.Fatalf("path-D: expected a client page session from attachedToTarget without confirm")
+		t.Logf("path-D blank announce asked=%d session=%t sawEvent=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent)
+		if len(asked) == 0 {
+			t.Fatalf("path-D: foreign blank auto-attach must enter document proof")
 		}
 		if vsSessionPresent(g) || vsClientVisible(&o) {
-			t.Errorf("path-D RED: foreign auto-attach announced about:blank created a client page session without confirmation (session=%t event=%t readDelivered=%t); C8.close-protected.view-source measures explicit attachClient(flatten:true) after observer shape, but this else-branch is the hole for auto-attach/foreign announce", vsSessionPresent(g), o.sawAttachEvent, o.readDelivered)
+			t.Errorf("path-D: foreign blank announce with protected live document must not leave a client page session (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
-	t.Run("foreign-ordinary-announce-admits-without-confirm", func(t *testing.T) {
+	t.Run("foreign-ordinary-announce-live-control", func(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
-		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsHTTPVault)
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
 		v := g.fromBrowser(vsAttachedEvent(vsOrdinary))
 		asked := vsConfirmAsked(v.send)
 		o.take(v)
@@ -1139,12 +1180,12 @@ func TestViewSourceAttachPathDAutoAttachNoConfirm(t *testing.T) {
 			o.clientPayloads = append(o.clientPayloads, string(p))
 		}
 		o.summarize()
-		t.Logf("path-D ordinary announce asked=%t session=%t event=%t", asked, vsSessionPresent(g), o.sawAttachEvent)
+		t.Logf("path-D ordinary announce confirmAsked=%t session=%t event=%t lighter=docConfirmForeignOrdinaryProofEnabled=false", asked, vsSessionPresent(g), o.sawAttachEvent)
 		if asked {
-			t.Fatalf("path-D: ordinary auto-attach must not docConfirm")
+			t.Fatalf("path-D: lighter option must not run document proof for live ordinary http(s) foreign announce")
 		}
-		if vsSessionPresent(g) || o.sawAttachEvent {
-			t.Errorf("path-D RED: foreign auto-attach announced ordinary URL admitted without confirmation (session=%t event=%t); announce targetInfo is live at announce (url/type/waitingForDebugger); race after announce is a separate row", vsSessionPresent(g), o.sawAttachEvent)
+		if !vsSessionPresent(g) && !o.sawAttachEvent {
+			t.Errorf("path-D ordinary control: live ordinary announce must admit without proof under the lighter option")
 		}
 	})
 	t.Run("protected-announce-hidden", func(t *testing.T) {
@@ -1167,24 +1208,16 @@ func TestViewSourceAttachPathDAutoAttachNoConfirm(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), vsHTTPVault)
-		v := g.fromBrowser(vsAttachedEventWait("about:blank", true))
-		asked := vsConfirmAsked(v.send)
-		o.take(v)
-		for _, p := range v.page {
-			o.clientPayloads = append(o.clientPayloads, string(p))
-		}
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEventWait("about:blank", true)), func(int64) string { return vsHTTPVault })
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsHTTPVault)), vsHTTPVault)
 		vsRead(g, &o, vsHTTPVault)
 		o.summarize()
-		t.Logf("path-D wait-race asked=%t session=%t readDelivered=%t", asked, vsSessionPresent(g), o.readDelivered)
-		if asked {
-			t.Fatalf("path-D wait-race: announce must not have confirmed")
+		t.Logf("path-D wait-race asked=%d session=%t readDelivered=%t", len(asked), vsSessionPresent(g), o.readDelivered)
+		if len(asked) == 0 {
+			t.Fatalf("path-D wait-race: blank announce must enter document proof")
 		}
-		if vsSessionPresent(g) && (o.readDelivered || !o.readRefused) {
-			t.Errorf("path-D RED: waitingForDebugger auto-attach admitted without confirm; navigation to view-source before runIfWaitingForDebugger left a readable protected document (session=%t readDelivered=%t readRefused=%t)", vsSessionPresent(g), o.readDelivered, o.readRefused)
-		}
-		if vsSessionPresent(g) || o.sawAttachEvent {
-			t.Errorf("path-D RED: post-announce race session without confirmation (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
+		if vsSessionPresent(g) || o.sawAttachEvent || o.readDelivered {
+			t.Errorf("path-D: waitingForDebugger blank announce must not admit a client session before proof (session=%t event=%t read=%t)", vsSessionPresent(g), o.sawAttachEvent, o.readDelivered)
 		}
 	})
 }
@@ -1193,26 +1226,17 @@ func TestViewSourceAttachPathKEventBeforeExplicit(t *testing.T) {
 	g := vsGuard(t)
 	var o vsOutcome
 	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), vsHTTPVault)
-	v := g.fromBrowser(vsAttachedEvent("about:blank"))
-	askedEvent := vsConfirmAsked(v.send)
-	o.take(v)
-	for _, p := range v.page {
-		o.clientPayloads = append(o.clientPayloads, string(p))
-	}
+	askedEvent := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) string { return vsHTTPVault })
 	sessionAfterEvent := vsSessionPresent(g)
 	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
-	askedReply := false
-	more := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string {
-		askedReply = true
-		return vsHTTPVault
-	})
+	more := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return vsHTTPVault })
 	o.summarize()
-	t.Logf("path-K eventAsked=%t sessionAfterEvent=%t replyConfirm=%t replyAskedIDs=%d session=%t", askedEvent, sessionAfterEvent, askedReply, len(more), vsSessionPresent(g))
-	if askedEvent {
-		t.Fatalf("path-K: auto-attach event before explicit must skip needsDocConfirm")
+	t.Logf("path-K eventAsked=%d sessionAfterEvent=%t replyAsked=%d session=%t", len(askedEvent), sessionAfterEvent, len(more), vsSessionPresent(g))
+	if len(askedEvent) == 0 {
+		t.Fatalf("path-K: blank auto-attach event before explicit must enter document proof")
 	}
-	if sessionAfterEvent || o.sawAttachEvent {
-		t.Errorf("path-K RED: attachedToTarget before explicit attachToTarget created a client page session without confirmation (sessionAfterEvent=%t event=%t); later explicit may confirm but the early session is the hole", sessionAfterEvent, o.sawAttachEvent)
+	if sessionAfterEvent || o.sawAttachEvent || vsSessionPresent(g) {
+		t.Errorf("path-K: blank event before explicit must not leave a client page session (sessionAfterEvent=%t event=%t session=%t)", sessionAfterEvent, o.sawAttachEvent, vsSessionPresent(g))
 	}
 }
 
@@ -1245,34 +1269,25 @@ func TestViewSourceAttachPathFEmptyHoldSettle(t *testing.T) {
 			t.Fatalf("path-F: empty-URL auto-attach must hold (#850), not create a session yet")
 		}
 		if !held {
-			t.Fatalf("path-F: expected held session on empty announce (Chrome: targetInfo.url empty until first document)")
+			t.Fatalf("path-F: expected held session on empty announce")
 		}
 	})
 	t.Run("stale-ordinary-settle-live-wrapper", func(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsHTTPVault)
-		v := g.fromBrowser(vsAttachedEvent(""))
-		holdAsked := vsConfirmAsked(v.send)
-		o.take(v)
+		_ = g.fromBrowser(vsAttachedEvent(""))
 		if vsSessionPresent(g) {
 			t.Fatalf("path-F: empty-URL auto-attach must hold (#850), not create a session yet")
 		}
-		rel := g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary))
-		settleAsked := vsConfirmAsked(rel.send)
-		o.take(rel)
-		for _, p := range rel.page {
-			o.clientPayloads = append(o.clientPayloads, string(p))
-		}
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary)), func(int64) string { return vsHTTPVault })
 		o.summarize()
-		t.Logf("path-F stale-settle holdAsked=%t settleAsked=%t session=%t event=%t provenance=foreign(default; no createTarget/opened/errorProof)", holdAsked, settleAsked, vsSessionPresent(g), o.sawAttachEvent)
-		if holdAsked || settleAsked {
-			t.Fatalf("path-F: deliverHeld must not have run docConfirm today (holdAsked=%t settleAsked=%t)", holdAsked, settleAsked)
+		t.Logf("path-F stale-settle asked=%d session=%t event=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent)
+		if len(asked) == 0 {
+			t.Fatalf("path-F: settle must re-confirm with a fresh proof read")
 		}
-		vsRead(g, &o, vsHTTPVault)
-		o.summarize()
 		if vsSessionPresent(g) || o.sawAttachEvent {
-			t.Errorf("path-F RED: #850 empty hold settled on ordinary targetInfoChanged without settle-time re-confirm; client page session exists while live document is a protected wrapper (session=%t event=%t readDelivered=%t); Chrome-faithful: empty announce then targetInfoChanged may lag the renderer; fix must fresh relay read at settle", vsSessionPresent(g), o.sawAttachEvent, o.readDelivered)
+			t.Errorf("path-F: settle proof of protected live document must not admit (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
 	t.Run("protected-settle-hidden", func(t *testing.T) {
@@ -1296,16 +1311,14 @@ func TestViewSourceAttachPathFEmptyHoldSettle(t *testing.T) {
 		var o vsOutcome
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsOrdinary)
 		_ = g.fromBrowser(vsAttachedEvent(""))
-		rel := g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary))
-		settleAsked := vsConfirmAsked(rel.send)
-		o.take(rel)
-		for _, p := range rel.page {
-			o.clientPayloads = append(o.clientPayloads, string(p))
-		}
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary)), func(int64) string { return vsOrdinary })
 		o.summarize()
-		t.Logf("path-F ordinary-settle settleAsked=%t session=%t event=%t", settleAsked, vsSessionPresent(g), o.sawAttachEvent)
+		t.Logf("path-F ordinary-settle asked=%d session=%t event=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent)
+		if len(asked) == 0 {
+			t.Fatalf("path-F ordinary: settle must re-confirm then admit")
+		}
 		if !vsSessionPresent(g) && !o.sawAttachEvent {
-			t.Errorf("path-F ordinary control: main admits ordinary settle via deliverHeld (session=%t event=%t); fix must re-confirm at settle then admit", vsSessionPresent(g), o.sawAttachEvent)
+			t.Errorf("path-F ordinary control: proof of ordinary settle must admit (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
 	t.Run("settle-proof-read-fails-refuse-without-latch", func(t *testing.T) {
@@ -1313,19 +1326,17 @@ func TestViewSourceAttachPathFEmptyHoldSettle(t *testing.T) {
 		var o vsOutcome
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsOrdinary)
 		_ = g.fromBrowser(vsAttachedEvent(""))
-		rel := g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary))
-		settleAsked := vsConfirmAsked(rel.send)
-		o.take(rel)
-		for _, p := range rel.page {
-			o.clientPayloads = append(o.clientPayloads, string(p))
-		}
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary)), func(int64) string { return "" })
 		o.summarize()
-		t.Logf("path-F proof-fail settleAsked=%t session=%t event=%t", settleAsked, vsSessionPresent(g), o.sawAttachEvent)
-		if settleAsked {
-			t.Fatalf("path-F proof-fail: main deliverHeld has no settle confirm to fail")
-		}
+		t.Logf("path-F proof-fail asked=%d session=%t event=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent)
 		if vsSessionPresent(g) || o.sawAttachEvent {
-			t.Errorf("path-F RED: settle admitted without a fresh proof read; when the settle proof fails the fix must refuse without latching (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
+			t.Errorf("path-F: failed settle proof must refuse without latching a client session (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
+		}
+		g.mu.Lock()
+		failed := g.docFailed[vsSession]
+		g.mu.Unlock()
+		if failed {
+			t.Errorf("path-F: proof-read failure must refuse without latching docFailed")
 		}
 	})
 }
@@ -1353,12 +1364,12 @@ func TestViewSourceAttachPathBEChromeErrorSkipWithoutProvenance(t *testing.T) {
 		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return announced })
 		asked = append(asked, vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(announced)), func(int64) string { return announced })...)
 		o.summarize()
-		t.Logf("path-BE chrome-error-alone reply-before-event asked=%d session=%t refused=%t replied=%t event=%t evidence=none(foreign; chrome-error URL is not provenance)", len(asked), vsSessionPresent(g), o.attachRefused, o.attachReplied, o.sawAttachEvent)
+		t.Logf("path-BE chrome-error-alone reply-before-event asked=%d session=%t refused=%t replied=%t event=%t evidence=none(foreign)", len(asked), vsSessionPresent(g), o.attachRefused, o.attachReplied, o.sawAttachEvent)
 		if len(asked) == 0 && !o.attachRefused && (vsClientVisible(&o) || vsSessionPresent(g)) {
-			t.Errorf("path-BE RED: chrome-error URL alone skipped docConfirm via docConfirmSkipChromeErrorLocked (reply-before-event) without errorProofOrdinary (#842 failed-URL proof in errorProof map) or createTarget/opened receipt; session admitted (refused=%t replied=%t event=%t session=%t)", o.attachRefused, o.attachReplied, o.sawAttachEvent, vsSessionPresent(g))
+			t.Errorf("path-BE: chrome-error URL alone must not skip proof without errorProofOrdinary; session admitted")
 		}
 		if !o.attachRefused && (vsClientVisible(&o) || vsSessionPresent(g)) {
-			t.Errorf("path-BE RED: attach admitted without own-tab provenance (proof=%v asked=%d); default when evidence missing is foreign", proof, len(asked))
+			t.Errorf("path-BE: attach without own-tab provenance must not admit (proof=%v asked=%d)", proof, len(asked))
 		}
 	})
 	t.Run("blankness-alone-not-provenance", func(t *testing.T) {
@@ -1430,7 +1441,7 @@ func TestViewSourceAttachPathGFailedLoadSettle(t *testing.T) {
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), vsHTTPVault)
 		_ = g.fromBrowser(vsAttachedEvent(announced))
 		g.mu.Lock()
-		g.setErrorProofLocked(vsTarget, errorProofOrdinary)
+		g.setErrorProofLocked(vsTarget, errorProofNone)
 		if tgt := g.targets[vsTarget]; tgt != nil {
 			tgt.url = vsOrdinary
 		}
@@ -1442,18 +1453,14 @@ func TestViewSourceAttachPathGFailedLoadSettle(t *testing.T) {
 		g.mu.Lock()
 		rel := g.deliverHeldLocked(held)
 		g.mu.Unlock()
-		settleAsked := vsConfirmAsked(rel.send)
-		o.take(rel)
-		for _, p := range rel.page {
-			o.clientPayloads = append(o.clientPayloads, string(p))
-		}
+		asked := vsDrainAnswer(g, &o, rel, func(int64) string { return vsHTTPVault })
 		o.summarize()
-		t.Logf("path-G stale-settle settleAsked=%t session=%t event=%t", settleAsked, vsSessionPresent(g), o.sawAttachEvent)
-		if settleAsked {
-			t.Fatalf("path-G: deliverHeld must not re-confirm today")
+		t.Logf("path-G stale-settle asked=%d session=%t event=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent)
+		if len(asked) == 0 {
+			t.Fatalf("path-G: settle must re-confirm with a fresh proof read")
 		}
 		if vsSessionPresent(g) || o.sawAttachEvent {
-			t.Errorf("path-G RED: failed-load hold released on ordinary settle URL without settle-time re-confirm while live document is a protected wrapper (session=%t event=%t); fix must fresh relay read at settle, not trust the held URL", vsSessionPresent(g), o.sawAttachEvent)
+			t.Errorf("path-G: settle proof of protected live document must not admit (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
 	t.Run("protected-settle-hidden", func(t *testing.T) {
@@ -1495,7 +1502,7 @@ func TestViewSourceAttachPathGFailedLoadSettle(t *testing.T) {
 			t.Errorf("path-G: own-tab ordinary errorProofOrdinary recovery must stay admitted (provenance: errorProof map)")
 		}
 		if !o.attachReplied && !o.sawAttachEvent {
-			t.Errorf("path-G ordinary control: expected client-visible attach after errorProofOrdinary (admit after proof)")
+			t.Errorf("path-G ordinary control: expected client-visible attach after errorProofOrdinary")
 		}
 	})
 	t.Run("proof-read-fails-refuse-without-latch", func(t *testing.T) {
@@ -1554,14 +1561,171 @@ func TestViewSourceAttachProvenanceControls(t *testing.T) {
 		if touched || opened || proof != errorProofNone {
 			t.Fatalf("foreign fixture contaminated: touched=%t opened=%t proof=%v", touched, opened, proof)
 		}
-		v := g.fromBrowser(vsAttachedEvent("about:blank"))
-		o.take(v)
-		for _, p := range v.page {
-			o.clientPayloads = append(o.clientPayloads, string(p))
-		}
+		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) string { return vsHTTPVault })
 		o.summarize()
+		if len(asked) == 0 {
+			t.Fatalf("missing provenance defaults to foreign; blank auto-attach must enter document proof")
+		}
 		if vsSessionPresent(g) || o.sawAttachEvent {
-			t.Errorf("missing provenance (no createTarget receipt, no opened, no errorProof) defaults to foreign; auto-attach must not leave an unconfirmed client session (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
+			t.Errorf("missing provenance (no createTarget receipt, no opened, no errorProofOrdinary) defaults to foreign; must not leave a client session (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
+}
+
+func TestViewSourceAttachMutationDropProof(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_DROP_PROOF") == "" {
+		t.Skip("overlay mutation only")
+	}
+	url := "view-source:https://vault.sliccy.ai/doc"
+	o := vsRun(t, 3, url, vsScenario{watched: true})
+	if o.attachRefused || !o.readDelivered {
+		t.Fatalf("drop-proof mutant: covering askDocConfirm pass-without-read must admit vault view-source (refused=%t delivered=%t)", o.attachRefused, o.readDelivered)
+	}
+}
+
+func TestViewSourceAttachMutationLatchOnFailure(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_LATCH_ON_FAILURE") == "" {
+		t.Skip("overlay mutation only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsOrdinary)
+	_ = g.fromBrowser(vsAttachedEvent(""))
+	_ = vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary)), func(int64) string { return "" })
+	g.mu.Lock()
+	failed := g.docFailed[vsSession]
+	g.mu.Unlock()
+	if !failed {
+		t.Fatal("latch-on-failure mutant: covering refuseDocConfirm latch path must set docFailed on proof-read failure")
+	}
+}
+
+func TestViewSourceAttachMutationExemptBlankness(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_EXEMPT_BLANKNESS") == "" {
+		t.Skip("overlay mutation only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	o.take(v)
+	for _, p := range v.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
+	}
+	o.summarize()
+	if vsConfirmAsked(v.send) {
+		t.Fatal("exempt-blankness mutant: covering URLNeedsProof blank skip must not ask document proof for foreign about:blank")
+	}
+	if !vsSessionPresent(g) && !o.sawAttachEvent {
+		t.Fatal("exempt-blankness mutant: foreign blank must announce without proof under the covering skip")
+	}
+}
+
+func TestViewSourceAttachMutationDropProvenance(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_DROP_PROVENANCE") == "" {
+		t.Skip("overlay mutation only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsCreateThroughGuard(t, g, &o, "about:blank")
+	_ = g.fromCommand(&command{id: vsAttachID, method: "Target.attachToTarget", params: map[string]any{"targetId": vsTarget, "flatten": true}}, vsAttachID, true)
+	asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) string { return "about:blank" })
+	asked = append(asked, vsDrainAnswer(g, &o, g.fromBrowser(vsAttachReply()), func(int64) string { return "about:blank" })...)
+	if len(asked) == 0 {
+		t.Fatal("drop-provenance mutant: covering OwnedLocked skip must force proof even after createTarget receipt")
+	}
+}
+
+func TestViewSourceAttachMutationDropSettleEmpty(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_DROP_SETTLE_EMPTY") == "" {
+		t.Skip("overlay mutation only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsOrdinary)
+	_ = g.fromBrowser(vsAttachedEvent(""))
+	rel := g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary))
+	o.take(rel)
+	for _, p := range rel.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
+	}
+	o.summarize()
+	if vsConfirmAsked(rel.send) {
+		t.Fatal("drop-settle-empty mutant: covering settleDocConfirm empty-hold skip must admit without proof ask")
+	}
+	if !vsSessionPresent(g) && !o.sawAttachEvent {
+		t.Fatal("drop-settle-empty mutant: empty-hold settle must admit without re-confirm")
+	}
+}
+
+func TestViewSourceAttachMutationDropSettleFailed(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_DROP_SETTLE_FAILED") == "" {
+		t.Skip("overlay mutation only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	announced := "chrome-error://chromewebdata/"
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), vsOrdinary)
+	_ = g.fromBrowser(vsAttachedEvent(announced))
+	g.mu.Lock()
+	g.setErrorProofLocked(vsTarget, errorProofFailed)
+	if tgt := g.targets[vsTarget]; tgt != nil {
+		tgt.url = vsOrdinary
+	}
+	held := g.held[vsSession]
+	g.mu.Unlock()
+	if held == nil {
+		t.Fatal("drop-settle-failed mutant: expected held chrome-error session")
+	}
+	g.mu.Lock()
+	rel := g.deliverHeldLocked(held)
+	g.mu.Unlock()
+	o.take(rel)
+	for _, p := range rel.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
+	}
+	o.summarize()
+	if vsConfirmAsked(rel.send) {
+		t.Fatal("drop-settle-failed mutant: covering settleDocConfirm failed-load skip must admit without proof ask")
+	}
+	if !vsSessionPresent(g) && !o.sawAttachEvent {
+		t.Fatal("drop-settle-failed mutant: failed-load settle must admit without re-confirm")
+	}
+}
+
+func TestViewSourceAttachMutationForeignOrdinary(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_FOREIGN_ORDINARY") == "" {
+		t.Skip("overlay mutation only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
+	v := g.fromBrowser(vsAttachedEvent(vsOrdinary))
+	if !vsProofAttachAsked(v.send) {
+		t.Fatal("foreign-ordinary mutant: covering ForeignOrdinaryProof switch must ask proof attach for live ordinary http(s)")
+	}
+	if vsSessionPresent(g) {
+		t.Fatal("foreign-ordinary mutant: proof ask must hold the session until the frame tree returns")
+	}
+}
+
+func TestViewSourceAttachMutationDropDK(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_DROP_DK") == "" {
+		t.Skip("overlay mutation only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	o.take(v)
+	for _, p := range v.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
+	}
+	o.summarize()
+	if vsConfirmAsked(v.send) {
+		t.Fatal("drop-DK mutant: covering ForeignNeedsProof D/K gate must skip proof for foreign blank")
+	}
+	if !vsSessionPresent(g) && !o.sawAttachEvent {
+		t.Fatal("drop-DK mutant: foreign blank must announce when D/K coverage is dropped")
+	}
 }
