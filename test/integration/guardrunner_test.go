@@ -877,6 +877,9 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 		if r.ID == "C3.tab-iframe-leak" {
 			logTabIframeLeakEvidence(t, r)
 		}
+		if c9FailureEvidenceRow(r) && r.Control == "pass" && r.Guarded == "pass" && r.Live == "pass" && len(r.Diagnostics) != 0 {
+			t.Errorf("%s: passed but carries mouse and focus evidence, which is kept only for failed rows: %s", name, r.Diagnostics)
+		}
 		if len(r.Errors) != 0 {
 			if reason, ok := waivedGuardRow(r); ok {
 				t.Logf("%s: WAIVED (%s): unexpected errors kept: %v", name, reason, r.Errors)
@@ -907,7 +910,7 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 					}
 				}
 			}
-			t.Errorf("%s: control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s\n  notes %v", name, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed, r.Notes)
+			t.Errorf("%s: control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s\n  notes %v%s", name, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed, r.Notes, c9EvidenceLine(r))
 		}
 	}
 	t.Logf("counts %s; not run %v", sum.Counts, sum.NotRun)
