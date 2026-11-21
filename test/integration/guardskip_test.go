@@ -16,11 +16,21 @@ const (
 )
 
 func guardSkipClass(r guardRow) string {
+	return guardSkipClassFor(r, guardCapabilities())
+}
+
+func guardSkipClassFor(r guardRow, declared map[string]bool) string {
 	if r.Control != "skip" || r.Guarded != "skip" || r.Live != "skip" {
 		return guardSkipUnexplained
 	}
 	if slices.Contains(signInHoldRowIDs, r.ID) {
 		if r.Reason == "not-supported:signInHold" {
+			return guardSkipUnsupported
+		}
+		return guardSkipUnexplained
+	}
+	if slices.Contains(explicitAttachRowIDs, r.ID) {
+		if r.Reason == "not-supported:explicitAttach" && !declared["explicitAttach"] {
 			return guardSkipUnsupported
 		}
 		return guardSkipUnexplained
@@ -119,6 +129,11 @@ var signInHoldRowIDs = []string{
 	"C7.sign-in-hold.ordinary-authorize",
 }
 
+var explicitAttachRowIDs = []string{
+	"C3.tab-attach.explicit",
+	"C3.tab-protected.explicit",
+}
+
 func skippedGuardRow(id, reason string) guardRow {
 	return guardRow{ID: id, Target: "seven", Variant: "prompt", Control: "skip", Guarded: "skip", Live: "skip", Reason: reason}
 }
@@ -208,5 +223,81 @@ func TestGuardSkipSignInHoldOnlyOnTheSignInHoldRows(t *testing.T) {
 	g := tallyGuardRows(mixed)
 	if !g.proven("C7.sign-in-hold.callback") || g.proven("C3.protected-parent-iframes.page") || !g.proven("C1.href") {
 		t.Errorf("mixed run tally %+v", g)
+	}
+}
+
+func TestGuardSkipExplicitAttachOnlyOnTheExplicitAttachRows(t *testing.T) {
+	var set struct {
+		Vectors []struct {
+			ID       string   `json:"id"`
+			Kind     string   `json:"kind"`
+			Requires []string `json:"requires"`
+		} `json:"vectors"`
+	}
+	if err := json.Unmarshal(sliccbrowsers.GuardVectorsJSON(), &set); err != nil {
+		t.Fatal(err)
+	}
+	var gated []string
+	for _, v := range set.Vectors {
+		if v.Kind == "cdp" && slices.Contains(v.Requires, "explicitAttach") {
+			gated = append(gated, v.ID)
+		}
+	}
+	if want := slices.Sorted(slices.Values(explicitAttachRowIDs)); !slices.Equal(slices.Sorted(slices.Values(gated)), want) {
+		t.Errorf("the set gates %v on explicitAttach, the test knows %v", gated, want)
+	}
+	if declared, present := guardCapabilities()["explicitAttach"]; declared || !present {
+		t.Errorf("explicitAttach must be declared false in guardCapabilities, got declared %v present %v", declared, present)
+	}
+	for _, id := range explicitAttachRowIDs {
+		r := skippedGuardRow(id, "not-supported:explicitAttach")
+		for _, caps := range []map[string]bool{{"explicitAttach": true}, {"explicitAttach": true, "signInHold": false}} {
+			if got := guardSkipClassFor(r, caps); got != guardSkipUnexplained {
+				t.Errorf("%s skipped not-supported:explicitAttach while declared: class %q, want unexplained", id, got)
+			}
+		}
+		for _, caps := range []map[string]bool{nil, {}, {"explicitAttach": false}} {
+			if got := guardSkipClassFor(r, caps); got != guardSkipUnsupported {
+				t.Errorf("%s skipped not-supported:explicitAttach while undeclared (%v): class %q, want %q", id, caps, got, guardSkipUnsupported)
+			}
+		}
+		if got := guardSkipClass(r); got != guardSkipUnsupported {
+			t.Errorf("%s skipped not-supported:explicitAttach: class %q, want %q", id, got, guardSkipUnsupported)
+		}
+		if g := tallyGuardRows([]guardRow{r}); !g.proven(id) || !g.any() {
+			t.Errorf("%s: skipped not-supported:explicitAttach, yet the vector counts as unproven: %+v", id, g)
+		}
+		for _, reason := range []string{"", "skip", "not-applicable", "not-applicable: elsewhere", "not-supported:explicitattach", "not-supported:explicitAttach ", "not-supported:signInHold", "not-supported:syntheticAutoAttach", "not-supported:unguarded-observer"} {
+			r := skippedGuardRow(id, reason)
+			if got := guardSkipClass(r); got != guardSkipUnexplained {
+				t.Errorf("%s skipped %q: class %q, want unexplained", id, reason, got)
+			}
+			if g := tallyGuardRows([]guardRow{r}); g.proven(id) {
+				t.Errorf("%s skipped %q counts as proven", id, reason)
+			}
+		}
+		for _, field := range []string{"control", "guarded", "live"} {
+			r := skippedGuardRow(id, "not-supported:explicitAttach")
+			switch field {
+			case "control":
+				r.Control = "pass"
+			case "guarded":
+				r.Guarded = "fail"
+			case "live":
+				r.Live = "incomplete"
+			}
+			if got := guardSkipClass(r); got != guardSkipUnexplained {
+				t.Errorf("%s with %s not skipped: class %q, want unexplained", id, field, got)
+			}
+		}
+	}
+	for _, id := range []string{"C3.tab-attach", "C3.tab-protected", "C3.tab-attach.explicit.synthetic", "c3.tab-attach.explicit", "C3.tab-attach.synthetic", "C1.href", "C7.sign-in-hold.held-popup"} {
+		r := skippedGuardRow(id, "not-supported:explicitAttach")
+		if got := guardSkipClass(r); got != guardSkipUnexplained {
+			t.Errorf("%s skipped not-supported:explicitAttach: class %q, want unexplained", id, got)
+		}
+		if g := tallyGuardRows([]guardRow{r}); g.proven(id) || g.any() {
+			t.Errorf("%s skipped not-supported:explicitAttach counts as proven: %+v", id, g)
+		}
 	}
 }
