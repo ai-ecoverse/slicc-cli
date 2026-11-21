@@ -884,6 +884,16 @@ export function protectTest(getLink, describe) {
         const script = await outcome(c.send('Runtime.evaluate', { expression: 'true' }, sessionId));
         return { frame, resource, script };
       }),
+    historyTreesLatch: (browser, targetId) =>
+      run(browser, async (c) => {
+        if (!targetId) ({ targetId } = await c.send('Target.createTarget', { url: 'about:blank' }));
+        const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+        const frame = await outcome(c.send('Page.getFrameTree', {}, sessionId));
+        const resource = await outcome(c.send('Page.getResourceTree', {}, sessionId));
+        const history = await outcome(c.send('Page.getNavigationHistory', {}, sessionId));
+        const close = await outcome(c.send('Target.closeTarget', { targetId }));
+        return { frame, resource, history, close };
+      }),
     initialHistory: (browser) =>
       run(browser, async (c) => {
         const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
