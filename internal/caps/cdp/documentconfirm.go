@@ -34,6 +34,9 @@ type docConfirm struct {
 	proofSession string
 	settle       bool
 	failedLoad   bool
+	lastURL      string
+	lastOrigin   string
+	transition   bool
 }
 
 func (g *guard) docConfirmWaitLocked(session string) <-chan struct{} {
@@ -170,6 +173,54 @@ func (g *guard) docConfirmOrdinaryDocumentLocked(url string) bool {
 	return false
 }
 
+func (g *guard) docConfirmBlankURLLocked(url string) bool {
+	if url == "" {
+		return false
+	}
+	lower := strings.ToLower(url)
+	return lower == "about:blank" || strings.HasPrefix(lower, "about:blank")
+}
+
+func (g *guard) docConfirmOpaqueOriginLocked(origin string) bool {
+	return origin == "" || origin == "://" || origin == "null"
+}
+
+func (g *guard) docConfirmProtectedOriginLocked(origin string) bool {
+	if g.docConfirmOpaqueOriginLocked(origin) {
+		return false
+	}
+	return g.o != nil && g.o.Loaded(origin)
+}
+
+func (g *guard) docConfirmBlankOrdinaryOriginLocked(origin string) bool {
+	if !docConfirmAdmitBlankOrdinaryEnabled() {
+		return false
+	}
+	return !g.docConfirmProtectedOriginLocked(origin)
+}
+
+func (g *guard) docConfirmTransitionFrameLocked(frame confirmFrame) bool {
+	return frame.URL == "" && frame.UnreachableURL == ""
+}
+
+func (g *guard) logDocConfirmAvailabilityLocked() {
+	g.logf("cdp: DIAG document-confirm availability refused-ordinary=%d refused-blank=%d", g.docRefusedOrdinary, g.docRefusedBlank)
+}
+
+func (g *guard) noteDocConfirmAvailabilityRefuseLocked(url, origin string, latch bool) {
+	if latch {
+		g.logDocConfirmAvailabilityLocked()
+		return
+	}
+	if g.docConfirmOrdinaryDocumentLocked(url) {
+		g.docRefusedOrdinary++
+	}
+	if g.docConfirmBlankURLLocked(url) && !g.docConfirmProtectedOriginLocked(origin) {
+		g.docRefusedBlank++
+	}
+	g.logDocConfirmAvailabilityLocked()
+}
+
 func (g *guard) docConfirmRefuseLocked(id string, info targetInfo) bool {
 	if g.workerConcealedLocked(id) || g.iframeConcealedLocked(id) {
 		return true
@@ -246,7 +297,7 @@ func (g *guard) expireDocConfirm(target string) {
 		return
 	}
 	g.logf("cdp: confirming a target's current document hit the hold bound")
-	send := g.refuseDocConfirmLocked(dc, docConfirmLatchOnFailureEnabled())
+	send := g.refuseDocConfirmLocked(dc, false)
 	page := g.takePendingPageLocked()
 	flush := g.flushAsync
 	g.mu.Unlock()
@@ -319,10 +370,22 @@ func (g *guard) docConfirmFrameTreeLocked(target string, m message) [][]byte {
 		return append(g.docConfirmDetachProofLocked(dc), send...)
 	}
 	frame := result.FrameTree.Frame
+	if g.docConfirmTransitionFrameLocked(frame) {
+		dc.transition = true
+		dc.lastURL = ""
+		dc.lastOrigin = frame.SecurityOrigin
+		g.logf("cdp: DIAG document-confirm transition park target=%s", target)
+		g.logDocConfirmAvailabilityLocked()
+		return g.docConfirmDetachProofLocked(dc)
+	}
 	url := frame.URL
 	if url == "" {
 		url = frame.UnreachableURL
 	}
+	origin := frame.SecurityOrigin
+	dc.lastURL = url
+	dc.lastOrigin = origin
+	dc.transition = false
 	info := targetInfo{TargetID: target, URL: url, Type: "page"}
 	if t := g.targets[target]; t != nil {
 		info.Type = t.typ
@@ -339,13 +402,34 @@ func (g *guard) docConfirmFrameTreeLocked(target string, m message) [][]byte {
 	}
 	send = append(send, g.docConfirmDetachProofLocked(dc)...)
 	protectedEvidence := g.docConfirmRefuseLocked(dc.target, info) || g.docConfirmLiveProtectedDocumentLocked(url) || (g.o != nil && g.o.Loaded(url))
+	if g.docConfirmBlankURLLocked(url) && g.docConfirmProtectedOriginLocked(origin) {
+		protectedEvidence = true
+	}
 	if protectedEvidence {
 		return append(send, g.refuseDocConfirmLocked(dc, true)...)
+	}
+	if g.docConfirmBlankURLLocked(url) {
+		if g.docConfirmBlankOrdinaryOriginLocked(origin) {
+			out := g.passDocConfirmLocked(dc)
+			g.logDocConfirmAvailabilityLocked()
+			return append(send, out...)
+		}
+		return append(send, g.refuseDocConfirmLocked(dc, docConfirmLatchOnFailureEnabled())...)
 	}
 	if !g.docConfirmOrdinaryDocumentLocked(url) {
 		return append(send, g.refuseDocConfirmLocked(dc, docConfirmLatchOnFailureEnabled())...)
 	}
-	return append(send, g.passDocConfirmLocked(dc)...)
+	out := g.passDocConfirmLocked(dc)
+	g.logDocConfirmAvailabilityLocked()
+	return append(send, out...)
+}
+
+func (g *guard) docConfirmMaybeReproofLocked(target string) [][]byte {
+	dc := g.docInflight[target]
+	if dc == nil || dc.done || dc.asking || !dc.transition {
+		return nil
+	}
+	return g.askDocConfirmLocked(dc)
 }
 
 func (g *guard) docConfirmDetachProofLocked(dc *docConfirm) [][]byte {
@@ -449,6 +533,7 @@ func (g *guard) refuseDocConfirmLocked(dc *docConfirm, latch bool) [][]byte {
 			g.pendingPage = append(g.pendingPage, refusal(h.replyID, h.replySid, refusedTarget))
 		}
 	}
+	g.noteDocConfirmAvailabilityRefuseLocked(dc.lastURL, dc.lastOrigin, latch)
 	if latch {
 		g.scheduleDocFailedClearLocked(failed)
 		g.logf("cdp: refused an attach after confirming a protected document")

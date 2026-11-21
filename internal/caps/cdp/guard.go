@@ -214,6 +214,8 @@ type guard struct {
 	docInflight              map[string]*docConfirm
 	docFailed                map[string]bool
 	docPassed                map[string]bool
+	docRefusedOrdinary       int
+	docRefusedBlank          int
 	created                  map[string]bool
 	docProofSessions         map[string]string
 	docProofPending          map[string]bool
@@ -1604,6 +1606,9 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	}
 	if chromeErrorDocument(t.url) && (t.typ == "page" || t.typ == "tab") {
 		send = append(send, g.armFailedLoadProofLocked(t)...)
+	}
+	if prevURL != t.url {
+		send = append(send, g.docConfirmMaybeReproofLocked(t.id)...)
 	}
 	send = append(send, g.redecideWorkersLocked(t.id)...)
 	if g.extensionFrameTargetLocked(t) {

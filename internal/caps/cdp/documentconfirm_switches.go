@@ -1,6 +1,10 @@
 package cdp
 
 func docConfirmForeignOrdinaryProofEnabled() bool {
+	return false
+}
+
+func docConfirmAdmitBlankOrdinaryEnabled() bool {
 	return true
 }
 

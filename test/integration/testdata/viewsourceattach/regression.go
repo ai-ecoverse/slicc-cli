@@ -136,12 +136,28 @@ func (o *vsOutcome) summarize() {
 const vsProofSession = "S-DOC-PROOF"
 
 func vsFrameTreeAnswer(id int64, session, url string) []byte {
+	return vsFrameTreeAnswerOrigin(id, session, url, "")
+}
+
+func vsFrameTreeAnswerOrigin(id int64, session, url, origin string) []byte {
+	if origin == "" {
+		lower := strings.ToLower(url)
+		switch {
+		case url == "" || lower == "about:blank" || strings.HasPrefix(lower, "about:blank"):
+			origin = "://"
+		case strings.HasPrefix(lower, "chrome-error:"):
+			origin = "://"
+		default:
+			origin = url
+		}
+	}
+	frame := map[string]any{"id": vsTarget, "url": url, "securityOrigin": origin}
 	return encode(map[string]any{
 		"id":        id,
 		"sessionId": session,
 		"result": map[string]any{
 			"frameTree": map[string]any{
-				"frame": map[string]any{"id": vsTarget, "url": url, "securityOrigin": url},
+				"frame": frame,
 			},
 		},
 	})
@@ -385,29 +401,35 @@ func vsReadOn(g *guard, o *vsOutcome, live string, id int64, session string) {
 }
 
 func vsDrainAnswer(g *guard, o *vsOutcome, v browserVerdict, answer func(id int64) string) (asked []int64) {
+	return vsDrainAnswerOrigin(g, o, v, func(id int64) (string, string) {
+		return answer(id), ""
+	})
+}
+
+func vsDrainAnswerOrigin(g *guard, o *vsOutcome, v browserVerdict, answer func(id int64) (url, origin string)) (asked []int64) {
 	o.take(v)
 	for _, raw := range v.send {
 		id, method, session := vsOutbound(raw)
 		switch {
 		case method == "Target.getTargetInfo" && session == "RELAY":
 			asked = append(asked, id)
-			url := answer(id)
+			url, _ := answer(id)
 			if url == "" {
 				continue
 			}
-			more := vsDrainAnswer(g, o, g.fromBrowser(vsTargetInfoAnswer(id, url)), answer)
+			more := vsDrainAnswerOrigin(g, o, g.fromBrowser(vsTargetInfoAnswer(id, url)), answer)
 			asked = append(asked, more...)
 		case method == "Target.attachToTarget" && session == "RELAY":
 			asked = append(asked, id)
-			more := vsDrainAnswer(g, o, g.fromBrowser(vsProofAttachAnswer(id)), answer)
+			more := vsDrainAnswerOrigin(g, o, g.fromBrowser(vsProofAttachAnswer(id)), answer)
 			asked = append(asked, more...)
 		case method == "Page.getFrameTree" && session == vsProofSession:
 			asked = append(asked, id)
-			url := answer(id)
-			more := vsDrainAnswer(g, o, g.fromBrowser(vsFrameTreeAnswer(id, session, url)), answer)
+			url, origin := answer(id)
+			more := vsDrainAnswerOrigin(g, o, g.fromBrowser(vsFrameTreeAnswerOrigin(id, session, url, origin)), answer)
 			asked = append(asked, more...)
 		case method == "Target.detachFromTarget":
-			more := vsDrainAnswer(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), answer)
+			more := vsDrainAnswerOrigin(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), answer)
 			asked = append(asked, more...)
 		}
 	}
@@ -1056,9 +1078,7 @@ func TestViewSourceAttachHypothesisCFirstSightRace(t *testing.T) {
 		if len(asked) == 0 {
 			t.Fatalf("hyp-c: expected confirmation")
 		}
-		if !o.attachRefused && (o.attachReplied || o.sawAttachEvent) {
-			t.Errorf("hyp-c: blank is not positive proof; attach must refuse (refused=%t replied=%t event=%t read=%t)", o.attachRefused, o.attachReplied, o.sawAttachEvent, o.readDelivered)
-		}
+		vsExpectAdmittedAttach(t, "hyp-c-stale-blank-ordinary-opaque", o)
 	})
 	t.Run("targetInfoChanged-before-attach", func(t *testing.T) {
 		g := vsGuard(t)
@@ -1192,14 +1212,23 @@ func TestViewSourceAttachPathDAutoAttachNoConfirm(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
-		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(vsOrdinary)), func(int64) string { return vsOrdinary })
+		v := g.fromBrowser(vsAttachedEvent(vsOrdinary))
+		g.mu.Lock()
+		needs := g.needsDocConfirmLocked(vsTarget, vsSession, "page", vsOrdinary)
+		inflight := len(g.docInflight)
+		g.mu.Unlock()
+		asked := vsDrainAnswer(g, &o, v, func(int64) string { return vsOrdinary })
 		o.summarize()
-		t.Logf("path-D ordinary announce proofAsked=%d session=%t event=%t foreignOrdinaryProof=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent, docConfirmForeignOrdinaryProofEnabled())
-		if len(asked) == 0 {
-			t.Fatalf("path-D: stock foreignOrdinaryProof=true must run document proof for live ordinary http(s) foreign announce")
+		t.Logf("path-D ordinary announce needs=%t inflight=%d drainAsked=%d session=%t event=%t foreignOrdinaryProof=%t", needs, inflight, len(asked), vsSessionPresent(g), o.sawAttachEvent, docConfirmForeignOrdinaryProofEnabled())
+		if docConfirmForeignOrdinaryProofEnabled() {
+			if !needs && inflight == 0 && len(asked) == 0 {
+				t.Fatalf("path-D: foreignOrdinaryProof=true must run document proof for live ordinary http(s) foreign announce")
+			}
+		} else if needs || inflight != 0 {
+			t.Fatalf("path-D: stock foreignOrdinaryProof=false must skip document proof for live ordinary http(s) foreign announce")
 		}
 		if !vsSessionPresent(g) && !o.sawAttachEvent {
-			t.Errorf("path-D ordinary control: proof of ordinary must admit (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
+			t.Errorf("path-D ordinary control: live ordinary announce must admit (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
 	t.Run("protected-announce-hidden", func(t *testing.T) {
@@ -1603,14 +1632,17 @@ func TestViewSourceAttachMutationLatchOnFailure(t *testing.T) {
 	}
 	g := vsGuard(t)
 	var o vsOutcome
-	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsOrdinary)
-	_ = g.fromBrowser(vsAttachedEvent(""))
-	_ = vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary)), func(int64) string { return "" })
+	announced := "view-source:https://ordinary.test/x"
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), announced)
+	asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(announced)), func(int64) string { return announced })
+	if len(asked) == 0 {
+		t.Fatal("latch-on-failure mutant: expected document proof ask")
+	}
 	g.mu.Lock()
 	failed := g.docFailed[vsSession]
 	g.mu.Unlock()
 	if !failed {
-		t.Fatal("latch-on-failure mutant: covering refuseDocConfirm latch path must set docFailed on proof-read failure")
+		t.Fatal("latch-on-failure mutant: covering refuseDocConfirm latch path must set docFailed on non-ordinary proof")
 	}
 }
 
@@ -1711,23 +1743,19 @@ func TestViewSourceAttachMutationForeignOrdinary(t *testing.T) {
 	if os.Getenv("SLICC_DOC_CONFIRM_FOREIGN_ORDINARY") == "" {
 		t.Skip("overlay mutation only")
 	}
-	if docConfirmForeignOrdinaryProofEnabled() {
-		t.Fatal("lighter mutant must flip docConfirmForeignOrdinaryProofEnabled to false")
+	if !docConfirmForeignOrdinaryProofEnabled() {
+		t.Fatal("proof-on mutant must flip docConfirmForeignOrdinaryProofEnabled to true")
 	}
 	g := vsGuard(t)
 	var o vsOutcome
 	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
-	v := g.fromBrowser(vsAttachedEvent(vsOrdinary))
-	o.take(v)
-	for _, p := range v.page {
-		o.clientPayloads = append(o.clientPayloads, string(p))
-	}
+	asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(vsOrdinary)), func(int64) string { return vsOrdinary })
 	o.summarize()
-	if vsConfirmAsked(v.send) {
-		t.Fatal("lighter mutant: covering ForeignOrdinaryProof=false must skip document proof for live ordinary http(s)")
+	if len(asked) == 0 {
+		t.Fatal("proof-on mutant: covering ForeignOrdinaryProof=true must run document proof for live ordinary http(s)")
 	}
 	if !vsSessionPresent(g) && !o.sawAttachEvent {
-		t.Fatal("lighter mutant: ordinary announce must admit without proof")
+		t.Fatal("proof-on mutant: proof of ordinary must admit")
 	}
 }
 
@@ -1778,25 +1806,64 @@ func vsResidualOrdinaryThenProtected(t *testing.T, g *guard) (contentRefused, ti
 
 func TestViewSourceAttachResidualOrdinaryAnnounceThenProtectedBeforeCommand(t *testing.T) {
 	g := vsGuard(t)
-	contentRefused, titleRefused, o := vsResidualOrdinaryThenProtected(t, g)
-	t.Logf("residual foreignOrdinaryProof=%t session=%t event=%t contentRefused=%t titleRefused=%t", docConfirmForeignOrdinaryProofEnabled(), vsSessionPresent(g), o.sawAttachEvent, contentRefused, titleRefused)
+	if docConfirmForeignOrdinaryProofEnabled() {
+		contentRefused, titleRefused, o := vsResidualOrdinaryThenProtected(t, g)
+		t.Logf("residual proof-on session=%t event=%t contentRefused=%t titleRefused=%t", vsSessionPresent(g), o.sawAttachEvent, contentRefused, titleRefused)
+		if vsSessionPresent(g) || o.sawAttachEvent {
+			t.Errorf("residual proof-on: proof of protected wrapper before first command must not leave a client page session")
+		}
+		if !contentRefused {
+			t.Errorf("residual proof-on: content read as first command must refuse after protected commit during proof")
+		}
+		if !titleRefused {
+			t.Errorf("residual proof-on: title read as first command must refuse after protected commit during proof")
+		}
+		return
+	}
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
+	v := g.fromBrowser(vsAttachedEvent(vsOrdinary))
+	o.take(v)
+	for _, p := range v.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
+	}
+	o.summarize()
+	t.Logf("stock residual lighter session=%t event=%t", vsSessionPresent(g), o.sawAttachEvent)
+	if !vsSessionPresent(g) && !o.sawAttachEvent {
+		t.Fatal("stock residual (lighter): ordinary announce without proof must admit — documents the #863 hole")
+	}
+	vsWatchReady(g)
+	vsRead(g, &o, vsOrdinary)
+	titleRefused := vsTitleRead(g, &o, vsOrdinary)
+	if o.readRefused || titleRefused {
+		t.Fatal("stock residual (lighter) without #863: content+title as first command after ordinary announce must land — hole the proof-on mutant closes")
+	}
+}
+
+func TestViewSourceAttachMutationProofOnResidualClosesHole(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_FOREIGN_ORDINARY") == "" {
+		t.Skip("overlay mutation only")
+	}
 	if !docConfirmForeignOrdinaryProofEnabled() {
-		t.Fatalf("stock residual row requires foreignOrdinaryProof=true (safe default); lighter residual is red under mutation overlay")
+		t.Fatal("proof-on residual mutant requires foreignOrdinaryProof=true")
 	}
+	g := vsGuard(t)
+	contentRefused, titleRefused, o := vsResidualOrdinaryThenProtected(t, g)
+	t.Logf("proof-on residual session=%t event=%t contentRefused=%t titleRefused=%t", vsSessionPresent(g), o.sawAttachEvent, contentRefused, titleRefused)
 	if vsSessionPresent(g) || o.sawAttachEvent {
-		t.Errorf("residual: proof of protected wrapper before first command must not leave a client page session")
+		t.Fatal("proof-on residual: must not leave a client page session")
 	}
-	if !contentRefused {
-		t.Errorf("residual: content read as first command must refuse after protected commit during proof")
-	}
-	if !titleRefused {
-		t.Errorf("residual: title read as first command must refuse after protected commit during proof")
+	if !contentRefused || !titleRefused {
+		t.Fatal("proof-on residual: content+title must refuse after protected commit during proof")
 	}
 }
 
 func TestViewSourceAttachMutationLighterResidualDocumentsHole(t *testing.T) {
-	if os.Getenv("SLICC_DOC_CONFIRM_FOREIGN_ORDINARY") == "" {
+	if os.Getenv("SLICC_DOC_CONFIRM_LIGHTER_ORDINARY") == "" {
 		t.Skip("overlay mutation only")
+	}
+	if docConfirmForeignOrdinaryProofEnabled() {
+		t.Fatal("lighter residual mutant requires foreignOrdinaryProof=false")
 	}
 	g := vsGuard(t)
 	var o vsOutcome
@@ -1815,7 +1882,149 @@ func TestViewSourceAttachMutationLighterResidualDocumentsHole(t *testing.T) {
 	titleRefused := vsTitleRead(g, &o, vsOrdinary)
 	t.Logf("lighter residual hole session=%t contentRefused=%t titleRefused=%t readForwarded=%t", vsSessionPresent(g), o.readRefused, titleRefused, o.readForwarded)
 	if o.readRefused || titleRefused {
-		t.Fatal("lighter residual without #863: content+title as first command after ordinary announce (lagging protected commit) must land — documents the hole the safe default closes")
+		t.Fatal("lighter residual without #863: content+title as first command after ordinary announce must land")
+	}
+}
+
+func TestViewSourceAttachBlankForeignThreeWay(t *testing.T) {
+	t.Run("a-blank-ordinary-opaque-origin-admits", func(t *testing.T) {
+		g := vsGuard(t)
+		var o vsOutcome
+		var logs []string
+		g.logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+		asked := vsDrainAnswerOrigin(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) (string, string) { return "about:blank", "://" })
+		o.summarize()
+		t.Logf("blank-a asked=%d session=%t event=%t refusedOrdinary=%d refusedBlank=%d", len(asked), vsSessionPresent(g), o.sawAttachEvent, g.docRefusedOrdinary, g.docRefusedBlank)
+		if len(asked) == 0 {
+			t.Fatal("blank-a: foreign blank announce must enter document proof")
+		}
+		if !vsSessionPresent(g) && !o.sawAttachEvent {
+			t.Fatal("blank-a: about:blank + opaque origin must admit")
+		}
+		if g.docRefusedOrdinary != 0 || g.docRefusedBlank != 0 {
+			t.Fatalf("blank-a availability: refused-ordinary=%d refused-blank=%d", g.docRefusedOrdinary, g.docRefusedBlank)
+		}
+	})
+	t.Run("b-blank-protected-origin-latches", func(t *testing.T) {
+		g := vsGuard(t)
+		var o vsOutcome
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+		asked := vsDrainAnswerOrigin(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) (string, string) {
+			return "about:blank", "https://vault.sliccy.ai"
+		})
+		o.summarize()
+		g.mu.Lock()
+		failed := g.docFailed[vsSession]
+		g.mu.Unlock()
+		t.Logf("blank-b asked=%d session=%t event=%t latched=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent, failed)
+		if len(asked) == 0 {
+			t.Fatal("blank-b: foreign blank announce must enter document proof")
+		}
+		if vsSessionPresent(g) || o.sawAttachEvent {
+			t.Fatal("blank-b: blank + protected origin must not admit")
+		}
+		if !failed {
+			t.Fatal("blank-b: protected origin must latch refuse")
+		}
+	})
+	t.Run("c-transition-park-then-refuse-without-latch", func(t *testing.T) {
+		t.Setenv("SLICC_CDP_HOLD_TIMEOUT", "30ms")
+		g := vsGuard(t)
+		var o vsOutcome
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+		asked := vsDrainAnswerOrigin(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) (string, string) { return "", "" })
+		if len(asked) == 0 {
+			t.Fatal("blank-c: foreign blank announce must enter document proof")
+		}
+		g.mu.Lock()
+		pending := g.docInflight[vsTarget] != nil && !g.docInflight[vsTarget].done
+		transition := pending && g.docInflight[vsTarget].transition
+		g.mu.Unlock()
+		if !pending || !transition {
+			t.Fatalf("blank-c: empty frame tree must park transition (pending=%t transition=%t)", pending, transition)
+		}
+		if vsSessionPresent(g) || o.sawAttachEvent {
+			t.Fatal("blank-c: transition park must not admit")
+		}
+		deadline := time.Now().Add(200 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			g.mu.Lock()
+			pending = g.docInflight[vsTarget] != nil && !g.docInflight[vsTarget].done
+			failed := g.docFailed[vsSession]
+			g.mu.Unlock()
+			if !pending {
+				if failed {
+					t.Fatal("blank-c: hold-bound refuse must not latch")
+				}
+				if vsSessionPresent(g) {
+					t.Fatal("blank-c: hold-bound refuse must never admit")
+				}
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatal("blank-c: expected hold-bound refuse without latch")
+	})
+}
+
+func TestViewSourceAttachMutationRefuseBlankOrdinary(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_REFUSE_BLANK_ORDINARY") == "" {
+		t.Skip("overlay mutation only")
+	}
+	if docConfirmAdmitBlankOrdinaryEnabled() {
+		t.Fatal("refuse-blank-ordinary mutant must flip admitBlankOrdinary to false")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	asked := vsDrainAnswerOrigin(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) (string, string) { return "about:blank", "://" })
+	o.summarize()
+	if len(asked) == 0 {
+		t.Fatal("refuse-blank mutant: expected proof ask")
+	}
+	if vsSessionPresent(g) || o.sawAttachEvent {
+		t.Fatal("refuse-blank mutant: covering admitBlankOrdinary=false must refuse blank+opaque")
+	}
+	if g.docRefusedBlank == 0 {
+		t.Fatal("refuse-blank mutant: availability refused-blank must increment")
+	}
+}
+
+func TestViewSourceAttachAvailabilityGate(t *testing.T) {
+	var logs []string
+	logf := func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	gOrd := vsGuard(t)
+	gOrd.logf = logf
+	var oOrd vsOutcome
+	vsDrain(gOrd, &oOrd, gOrd.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
+	v := gOrd.fromBrowser(vsAttachedEvent(vsOrdinary))
+	oOrd.take(v)
+	for _, p := range v.page {
+		oOrd.clientPayloads = append(oOrd.clientPayloads, string(p))
+	}
+	oOrd.summarize()
+	if !vsSessionPresent(gOrd) && !oOrd.sawAttachEvent {
+		t.Fatal("availability: ordinary lighter admit required")
+	}
+	gBlank := vsGuard(t)
+	gBlank.logf = logf
+	var oBlank vsOutcome
+	vsDrain(gBlank, &oBlank, gBlank.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	asked := vsDrainAnswerOrigin(gBlank, &oBlank, gBlank.fromBrowser(vsAttachedEvent("about:blank")), func(int64) (string, string) { return "about:blank", "://" })
+	if len(asked) == 0 {
+		t.Fatal("availability: blank ordinary must proof")
+	}
+	if !vsSessionPresent(gBlank) && !oBlank.sawAttachEvent {
+		t.Fatal("availability: blank ordinary admit required")
+	}
+	t.Logf("DOC_CONFIRM_AVAILABILITY refused-ordinary=%d refused-blank=%d", gOrd.docRefusedOrdinary+gBlank.docRefusedOrdinary, gOrd.docRefusedBlank+gBlank.docRefusedBlank)
+	if gOrd.docRefusedOrdinary != 0 || gBlank.docRefusedOrdinary != 0 || gOrd.docRefusedBlank != 0 || gBlank.docRefusedBlank != 0 {
+		t.Fatalf("availability gate must stay 0 on ordinary+blank admits; ordinary=%d/%d blank=%d/%d", gOrd.docRefusedOrdinary, gBlank.docRefusedOrdinary, gOrd.docRefusedBlank, gBlank.docRefusedBlank)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "refused-ordinary=0") || !strings.Contains(joined, "refused-blank=0") {
+		t.Fatalf("availability permanent log missing: %q", joined)
 	}
 }
 
@@ -1826,11 +2035,11 @@ func TestViewSourceAttachOrdinaryForeignProofCost(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
 		start := time.Now()
-		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
-		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsAttachedEvent(vsOrdinary)), func(int64) string { return vsOrdinary })
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+		asked := vsDrainAnswerOrigin(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), func(int64) (string, string) { return "about:blank", "://" })
 		took := time.Since(start)
 		if len(asked) == 0 {
-			t.Fatalf("proof-cost round %d: expected ordinary foreign proof ask", i)
+			t.Fatalf("proof-cost round %d: expected blank foreign proof ask", i)
 		}
 		samples = append(samples, took)
 	}
@@ -1845,6 +2054,7 @@ func TestViewSourceAttachOrdinaryForeignProofCost(t *testing.T) {
 	median := sorted[len(sorted)/2]
 	p90 := sorted[(len(sorted)*9)/10]
 	max := sorted[len(sorted)-1]
-	t.Logf("DOC_CONFIRM_PROOF_COST kind=foreign-ordinary-announce n=%d median=%s p90=%s max=%s samples=%v", len(samples), median.Round(time.Microsecond), p90.Round(time.Microsecond), max.Round(time.Microsecond), samples)
-	t.Logf("DOC_CONFIRM_PROOF_COST note=unit-overlay wall time for attach+getFrameTree+detach callbacks; Chrome stock popup/tab lines scrape \"DIAG document-confirm proof round took\"")
+	t.Logf("DOC_CONFIRM_PROOF_COST kind=foreign-blank-announce n=%d median=%s p90=%s max=%s samples=%v", len(samples), median.Round(time.Microsecond), p90.Round(time.Microsecond), max.Round(time.Microsecond), samples)
+	t.Logf("DOC_CONFIRM_PROOF_COST kind=foreign-ordinary-announce note=lighter-default-off stock skips proof; proof-on mutant covers residual; Chrome stock popup/tab scrape \"DIAG document-confirm proof round took\"")
+	t.Logf("DOC_CONFIRM_PROOF_COST table blank-min-set median=%s p90=%s max=%s ordinary=lighter-default", median.Round(time.Microsecond), p90.Round(time.Microsecond), max.Round(time.Microsecond))
 }

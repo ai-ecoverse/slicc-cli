@@ -14,6 +14,9 @@ type docConfirm struct {
 	proofSession string
 	settle       bool
 	failedLoad   bool
+	lastURL      string
+	lastOrigin   string
+	transition   bool
 }
 
 type docHold struct {
@@ -59,6 +62,14 @@ func (g *guard) docConfirmProofSessionLocked(session string) bool {
 }
 
 func (g *guard) docConfirmProofPendingLocked(target string) bool {
+	return false
+}
+
+func (g *guard) docConfirmMaybeReproofLocked(target string) [][]byte {
+	return nil
+}
+
+func (g *guard) needsDocConfirmLocked(target, session, typ, url string) bool {
 	return false
 }
 
