@@ -144,8 +144,14 @@ func TestStockClientsDriveThroughTheLinkGuard(t *testing.T) {
 	for _, which := range []string{"playwright", "puppeteer"} {
 		cmd := exec.CommandContext(ctx, requireNode(t), "testdata/stockguard.mjs", upstream, ordinary, protected, which)
 		out, err := cmd.CombinedOutput()
-		if err != nil || !strings.Contains(string(out), which+" ok") {
-			t.Fatalf("%s through the link guard: %v\n%s", which, err, out)
+		text := string(out)
+		if err != nil || !strings.Contains(text, which+" ok") {
+			t.Fatalf("%s through the link guard: %v\n%s", which, err, text)
+		}
+		for _, line := range strings.Split(text, "\n") {
+			if strings.Contains(line, "STOCKPOPUP") {
+				t.Log(line)
+			}
 		}
 	}
 }

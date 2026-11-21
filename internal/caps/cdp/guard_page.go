@@ -104,6 +104,9 @@ func (g *guard) fromCommand(c *command, id int64, ok bool) pageVerdict {
 	if wait, send := g.isolatedWorldWaitLocked(c); wait != nil {
 		return pageVerdict{wait: wait, send: send}
 	}
+	if reply := g.answerHoldResumeLocked(c); reply != nil {
+		return pageVerdict{reply: reply}
+	}
 	if reason := g.checkLocked(c); reason != "" {
 		if reason == extensionShownPending {
 			return pageVerdict{extension: c}
