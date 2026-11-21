@@ -10,7 +10,6 @@ import (
 
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
-	whatwg "github.com/nationallibraryofnorway/whatwg-url/url"
 	"golang.org/x/net/idna"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -19,9 +18,6 @@ import (
 var opaque = map[string]bool{"value": true, "preview": true, "customPreview": true, "arguments": true, "returnValue": true}
 
 var headerLists = map[string]bool{"headers": true, "requestHeaders": true, "responseHeaders": true}
-
-var hostParser = whatwg.NewParser()
-var hostBase, _ = hostParser.Parse("http://host.invalid/")
 
 func scrubKind(headers, urls bool) string {
 	if headers {
@@ -717,11 +713,8 @@ func canonicalAuthority(host string) (string, bool) {
 		}
 		host = host[:colon]
 	}
-	u, err := hostParser.(whatwg.BasicParsing).BasicParse(host, nil, hostBase.Clone(), whatwg.StateHostname)
-	if err != nil || u == nil {
-		return "", true
-	}
-	return u.Hostname(), true
+	canonical, _ := protect.Hostname(host)
+	return canonical, true
 }
 
 func (g *guard) mayNameAuthority(host string) bool {
