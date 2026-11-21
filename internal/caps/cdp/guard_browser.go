@@ -196,6 +196,9 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	var treePage, treeSend [][]byte
 	if treeCall && m.Error == nil {
 		if t := g.sessionTargetLocked(m.SessionID); t != nil {
+			if g.treeMainProtectedLocked(t, m.Result) {
+				return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: g.markLocked(t)}
+			}
 			g.noteFrameTreeResultLocked(t.id, m.Result)
 		}
 		treePage = g.takeContextSettlePageLocked()
@@ -336,9 +339,11 @@ func (g *guard) redactInfoLocked(obj map[string]any, info targetInfo) bool {
 	if !g.targetProtectedLocked(info.TargetID) && !g.infoVerdictLocked(info).protected {
 		return false
 	}
-	redacted := redactURL(info.URL)
-	obj["url"] = redacted
-	obj["title"] = redacted
+	if frameCarrierListingRedactEnabled() {
+		redacted := redactURL(info.URL)
+		obj["url"] = redacted
+		obj["title"] = redacted
+	}
 	return true
 }
 
@@ -381,6 +386,7 @@ var eventHandlers = map[string]eventHandler{
 	"Target.receivedMessageFromTarget":           (*guard).innerMessageEvent,
 	"Page.frameNavigated":                        (*guard).frameNavigatedEvent,
 	"Page.frameStartedNavigating":                (*guard).frameStartedNavigatingEvent,
+	"Page.documentOpened":                        (*guard).documentOpenedEvent,
 	"Page.screencastFrame":                       (*guard).screencastFrameEvent,
 	"Runtime.executionContextCreated":            (*guard).contextCreatedEvent,
 	"Runtime.executionContextDestroyed":          (*guard).contextGoneEvent,
@@ -774,7 +780,7 @@ func (g *guard) frameNavigatedEvent(m *message, data []byte) browserVerdict {
 	if t == nil || (p.Frame.ParentID != "" && t.typ != "iframe") || p.Frame.ID != t.id {
 		return browserVerdict{forward: data, send: append(append(decided, cut...), settleSend...), page: settle}
 	}
-	if g.o.Loaded(p.Frame.SecurityOrigin) {
+	if g.o.Loaded(p.Frame.SecurityOrigin) || g.o.Loaded(p.Frame.URL) {
 		return browserVerdict{send: append(append(decided, g.markLocked(t)...), settleSend...), page: settle}
 	}
 	send := append(append(decided, cut...), settleSend...)

@@ -50,15 +50,19 @@ func (g *guard) scrub(data []byte) []byte {
 	if !ok {
 		return data
 	}
+	carriers := frameCarrierClassifyFirst() && g.scrubFrameCarriers(m)
 	stripped := stripExtensionFrameMarkers(m)
 	worlds := g.scrubWorlds(m)
 	assets := g.scrubAssets(m)
 	failed := g.scrubFailed(m)
 	frames := g.scrubExtensionFrames(m)
 	value := g.scrubValue(m)
+	if !frameCarrierClassifyFirst() {
+		carriers = g.scrubFrameCarriers(m)
+	}
 	marked := g.markExtensionFramePlacement(m)
 	routed := g.markSliccRoute(m)
-	if !stripped && !worlds && !assets && !failed && !frames && !value && !marked && !routed {
+	if !carriers && !stripped && !worlds && !assets && !failed && !frames && !value && !marked && !routed {
 		return data
 	}
 	return encode(m)
