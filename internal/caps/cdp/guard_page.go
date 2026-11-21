@@ -464,7 +464,9 @@ func (g *guard) checkLocked(c *command) string {
 		return refusedTarget
 	}
 	if reason := g.navCheckLocked(c.session); reason != "" && !g.startsUnheldLocked(c) {
-		return reason
+		if !g.errorPageSessionLocked(c.session) || g.errorPageCheckLocked(c) != "" {
+			return reason
+		}
 	}
 	if reason := g.errorPageCheckLocked(c); reason != "" {
 		return reason
