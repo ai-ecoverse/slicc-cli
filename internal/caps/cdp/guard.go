@@ -214,6 +214,16 @@ type guard struct {
 	docInflight              map[string]*docConfirm
 	docFailed                map[string]bool
 	docPassed                map[string]bool
+	docIdentityTaint         map[string]uint64
+	docIdentitySeq           uint64
+	docChromeErrorSeq        map[string]uint64
+	docChromeErrorPlace      map[string]uint64
+	docChromeErrorFailed     map[string]string
+	docPlaceSeq              map[string]uint64
+	docPlaceURL              map[string]string
+	docIdentityCalls         map[callKey]docIdentityAdmit
+	docIdentityHolds         map[callKey]*docIdentityHold
+	docIdentityAsks          map[string]*docIdentityAsk
 	flushAsync               func(send, page [][]byte)
 	patterns                 []any
 	heldExtras               map[requestKey][]heldExtra
@@ -341,6 +351,15 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		docInflight:              map[string]*docConfirm{},
 		docFailed:                map[string]bool{},
 		docPassed:                map[string]bool{},
+		docIdentityTaint:         map[string]uint64{},
+		docChromeErrorSeq:        map[string]uint64{},
+		docChromeErrorPlace:      map[string]uint64{},
+		docChromeErrorFailed:     map[string]string{},
+		docPlaceSeq:              map[string]uint64{},
+		docPlaceURL:              map[string]string{},
+		docIdentityCalls:         map[callKey]docIdentityAdmit{},
+		docIdentityHolds:         map[callKey]*docIdentityHold{},
+		docIdentityAsks:          map[string]*docIdentityAsk{},
 		heldExtras:               map[requestKey][]heldExtra{},
 		seen:                     map[requestKey]reqLevel{},
 		handed:                   map[requestKey]int{},
@@ -1587,12 +1606,14 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && v.protected && !v.unparseable {
 		nt.historyLocked = true
 		g.beginConfirmLocked(nt)
+		g.noteOrdinaryDocIdentityFromTargetLocked(t)
 		return append(send, g.confirmTargetLocked(nt)...)
 	}
 	t.protected = g.decide(t, prev)
 	if t.protected && !prev {
 		send = append(send, g.protectLocked(t)...)
 	}
+	g.noteOrdinaryDocIdentityFromTargetLocked(t)
 	if (t.typ == "page" || t.typ == "tab") && prevURL != "" && prevURL != t.url && g.errorProofOfLocked(t.id) != errorProofNone {
 		g.resetFailedLoadProofLocked(t.id)
 	}
@@ -1691,6 +1712,7 @@ func (g *guard) addRefusedLocked(id string) {
 
 func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
 	g.pruneDocConfirmTargetLocked(id)
+	g.pruneDocIdentityTargetLocked(id)
 	g.clearBlockedChildrenLocked(id)
 	delete(g.frameProbeAttempts, id)
 	delete(g.frameProbed, id)
@@ -1726,6 +1748,7 @@ func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
 
 func (g *guard) forgetSessionLocked(id string) {
 	g.pruneDocConfirmSessionLocked(id)
+	g.pruneDocIdentitySessionLocked(id)
 	g.goneLocked(id)
 	g.forgetHoldResumedLocked(id)
 	g.forgetWorldSessionLocked(id)
@@ -1884,8 +1907,18 @@ func (g *guard) releaseAllocations() {
 		g.dropDebuggerLocked(s)
 	}
 	g.releaseHeldExtensionPaintLocked()
+	for _, h := range g.docIdentityHolds {
+		if h != nil && h.timer != nil {
+			h.timer.Stop()
+			h.timer = nil
+		}
+		g.releaseDocIdentityReservationLocked(h)
+	}
 	clear(g.heldExtras)
 	clear(g.heldAnswers)
 	clear(g.heldPauses)
+	clear(g.docIdentityHolds)
+	clear(g.docIdentityAsks)
+	clear(g.docIdentityCalls)
 	releaseReservations(g.takeReleasesLocked())
 }

@@ -82,6 +82,7 @@ type navTarget struct {
 	unsure            bool
 	errorURL          string
 	documentURL       string
+	loaderID          string
 	navigationURL     string
 	securityOrigin    string
 	keptOrigin        string
@@ -105,6 +106,7 @@ type navTarget struct {
 	revision          int
 	documentsOnly     bool
 	documentsAsked    bool
+	fetchArmed        bool
 	framesGate        chan struct{}
 	framesReads       int
 	wake              *time.Timer
@@ -112,6 +114,7 @@ type navTarget struct {
 
 func (nt *navTarget) settle(failed bool) {
 	if failed {
+		nt.fetchArmed = false
 		if nt.confirm != nil {
 			if !nt.confirm.done && nt.confirm.reason == "" {
 				nt.confirm.reason = nt.reason
@@ -241,6 +244,26 @@ func (nt *navTarget) stepLocked(g *guard, m message) [][]byte {
 	return nil
 }
 
+func (g *guard) noteDocIdentityNavEventLocked(nt *navTarget, m *message) {
+	if nt == nil || m == nil {
+		return
+	}
+	switch m.Method {
+	case "Page.frameNavigated":
+		g.noteKeptLatchLocked(nt)
+		g.noteOrdinaryDocIdentityFromNavLocked(nt)
+	case "Page.frameStartedNavigating":
+		var started struct {
+			FrameID        string `json:"frameId"`
+			URL            string `json:"url"`
+			NavigationType string `json:"navigationType"`
+		}
+		if json.Unmarshal(m.Params, &started) == nil && started.FrameID == nt.target && !sameDocument[started.NavigationType] {
+			g.noteDocIdentityStartedNavigatingLocked(nt.target, started.URL)
+		}
+	}
+}
+
 func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if nt.shared && m.Method == "Inspector.targetCrashed" {
 		return g.navReleaseLocked(nt)
@@ -248,9 +271,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	send := g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
-	if m.Method == "Page.frameNavigated" {
-		g.noteKeptLatchLocked(nt)
-	}
+	g.noteDocIdentityNavEventLocked(nt, m)
 	g.resetFailedLoadProofOnNavLocked(nt, m.Method)
 	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {
 		nt.revision++
@@ -311,6 +332,7 @@ func (g *guard) navDetachedLocked(sessionID string) {
 		g.logf("cdp: lost the session guarding a target's navigations before it was ready")
 	}
 	nt.session = ""
+	nt.fetchArmed = false
 	nt.settle(true)
 	nt.failed = true
 	nt.openFramesGate()
@@ -467,6 +489,7 @@ func (nt *navTarget) commitFrameNavigatedLocked(p navCommitParams) {
 	}
 	nt.errorURL = p.Frame.UnreachableURL
 	nt.documentURL = p.Frame.URL
+	nt.loaderID = p.Frame.LoaderID
 	if p.Frame.SecurityOrigin != "" {
 		nt.securityOrigin = p.Frame.SecurityOrigin
 	}

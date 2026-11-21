@@ -235,8 +235,10 @@ func (g *guard) documentRequestPatterns() []any {
 func (g *guard) fetchStepLocked(nt *navTarget, session string, step func(m message) [][]byte) func(m message) [][]byte {
 	return func(m message) [][]byte {
 		if m.Error == nil || !documentsOnlyRefusal(m.Error) {
+			nt.fetchArmed = m.Error == nil
 			return step(m)
 		}
+		nt.fetchArmed = false
 		nt.documentsAsked = true
 		g.logf("cdp: the browser pauses only documents here: %s", m.Error)
 		return [][]byte{g.callbackLocked(session, "Fetch.enable", map[string]any{"patterns": g.documentRequestPatterns()}, func(res message) [][]byte {
@@ -245,6 +247,7 @@ func (g *guard) fetchStepLocked(nt *navTarget, session string, step func(m messa
 			}
 			nt.documentsOnly = res.Error == nil
 			g.documentsOnly = g.documentsOnly || nt.documentsOnly
+			nt.fetchArmed = res.Error == nil
 			return step(res)
 		})}
 	}
