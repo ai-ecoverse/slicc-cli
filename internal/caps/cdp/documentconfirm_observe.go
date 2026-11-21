@@ -164,7 +164,43 @@ func (g *guard) noteDocConfirmObserveLocked(target, path string) {
 		}
 		g.docObserveAnnounce[target] = announced
 	}
+	if g.docObserveTyp == nil {
+		g.docObserveTyp = map[string]string{}
+	}
+	if g.docObserveTyp[target] == "" {
+		typ := ""
+		if t := g.targets[target]; t != nil {
+			typ = t.typ
+		}
+		if typ == "" {
+			typ = "page"
+		}
+		g.docObserveTyp[target] = typ
+	}
 	g.tryLogDocConfirmObserveLocked(target, false)
+}
+
+func (g *guard) docConfirmObserveEvidenceLocked(target string) (frameURL, frameOrigin string, ok bool) {
+	nt := g.navTargets[target]
+	switch {
+	case nt != nil && nt.commits > 0:
+		return nt.documentURL, nt.securityOrigin, true
+	case nt != nil && nt.errorRecorded && nt.documentURL != "":
+		return nt.documentURL, nt.securityOrigin, true
+	case g.errorProofOfLocked(target) != errorProofNone:
+		if t := g.targets[target]; t != nil {
+			frameURL = t.url
+		}
+		if nt != nil {
+			frameOrigin = nt.securityOrigin
+			if frameURL == "" {
+				frameURL = nt.documentURL
+			}
+		}
+		return frameURL, frameOrigin, true
+	default:
+		return "", "", false
+	}
 }
 
 func (g *guard) tryLogDocConfirmObserveLocked(target string, atBound bool) {
@@ -182,29 +218,11 @@ func (g *guard) tryLogDocConfirmObserveLocked(target string, atBound bool) {
 	if g.docObserveAnnounce != nil {
 		announced = g.docObserveAnnounce[target]
 	}
-	frameURL := ""
-	frameOrigin := ""
-	nt := g.navTargets[target]
-	switch {
-	case nt != nil && nt.commits > 0:
-		frameURL = nt.documentURL
-		frameOrigin = nt.securityOrigin
-	case nt != nil && nt.errorRecorded && nt.documentURL != "":
-		frameURL = nt.documentURL
-		frameOrigin = nt.securityOrigin
-	case g.errorProofOfLocked(target) != errorProofNone:
-		if t := g.targets[target]; t != nil {
-			frameURL = t.url
-		}
-		if nt != nil {
-			frameOrigin = nt.securityOrigin
-			if frameURL == "" {
-				frameURL = nt.documentURL
-			}
-		}
-	case !atBound:
+	frameURL, frameOrigin, ok := g.docConfirmObserveEvidenceLocked(target)
+	if !ok && !atBound {
 		return
 	}
+	nt := g.navTargets[target]
 	announceClass := docConfirmURLClass(announced)
 	frameClass := docConfirmURLClass(frameURL)
 	originClass := docConfirmOriginClass(frameOrigin, g.o)
@@ -220,9 +238,13 @@ func (g *guard) tryLogDocConfirmObserveLocked(target string, atBound bool) {
 	if verdict == "admit" {
 		kind = "would-admit"
 	}
-	opened := g.opened[target]
-	errorOrdinary := g.errorProofOfLocked(target) == errorProofOrdinary
-	g.logDocConfirmObserveLocked(kind, announceClass, path, frameClass, originClass, false, opened, errorOrdinary, verdict)
+	typ := "page"
+	if g.docObserveTyp != nil && g.docObserveTyp[target] != "" {
+		typ = g.docObserveTyp[target]
+	} else if t := g.targets[target]; t != nil && t.typ != "" {
+		typ = t.typ
+	}
+	g.logDocConfirmObserveLocked(kind, announceClass, path, frameClass, originClass, typ, false, g.opened[target], g.errorProofOfLocked(target) == errorProofOrdinary, verdict)
 	if g.docObserveDone == nil {
 		g.docObserveDone = map[string]bool{}
 	}
@@ -233,13 +255,17 @@ func (g *guard) fallthroughDocConfirmObserveLocked(target string) {
 	g.tryLogDocConfirmObserveLocked(target, true)
 }
 
-func (g *guard) logDocConfirmObserveLocked(kind, announceClass, path, frameClass, originClass string, created, opened, errorOrdinary bool, verdict string) {
+func (g *guard) logDocConfirmObserveLocked(kind, announceClass, path, frameClass, originClass, typ string, created, opened, errorOrdinary bool, verdict string) {
+	if typ == "" {
+		typ = "page"
+	}
 	line := "cdp: DIAG document-confirm " + kind +
 		" class=" + announceClass +
 		" path=" + path +
 		" frame_class=" + frameClass +
 		" origin_class=" + originClass +
 		" provenance=" + docConfirmProvenanceLabel(created, opened, errorOrdinary) +
+		" type=" + typ +
 		" verdict=" + verdict
 	g.logf("%s", line)
 	if g.docObserveLog == nil {

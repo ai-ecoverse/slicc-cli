@@ -282,3 +282,7 @@ func (g *guard) tryLogDocConfirmObserveLocked(target string, atBound bool) {}
 func (g *guard) fallthroughDocConfirmObserveLocked(target string) {}
 
 func (g *guard) docConfirmObserveAfterCommitLocked(nt *navTarget, before int) {}
+
+func (g *guard) docConfirmObserveEvidenceLocked(target string) (string, string, bool) {
+	return "", "", false
+}

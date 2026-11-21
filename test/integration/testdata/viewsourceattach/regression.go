@@ -957,6 +957,9 @@ func TestDocConfirmObserveNeverChangesVerdict(t *testing.T) {
 	if !strings.Contains(joined, "DIAG document-confirm would-") {
 		t.Fatalf("missing greppable observe log: %q", joined)
 	}
+	if !strings.Contains(joined, " type=") {
+		t.Fatalf("observe log must carry target type=: %q", joined)
+	}
 	if strings.Contains(joined, "https://") || strings.Contains(joined, "vault.") || strings.Contains(joined, "seven.") {
 		t.Fatalf("observe log must not carry URLs or hosts: %q", joined)
 	}
