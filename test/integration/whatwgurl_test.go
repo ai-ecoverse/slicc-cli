@@ -3,7 +3,11 @@ package integration
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +18,9 @@ import (
 	"time"
 )
 
-func whatwgURLTableRun(t *testing.T, mutant map[string]string) (string, error) {
+const unicode15TableSHA256 = "3f6d2d8efe2ca082a5d9a089bbba190b1c07d45cbfd408be3a282938707ec3a8"
+
+func whatwgURLTableRun(t *testing.T, mutant map[string]string, files map[string]string) (string, error) {
 	t.Helper()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -42,6 +48,17 @@ func whatwgURLTableRun(t *testing.T, mutant map[string]string) (string, error) {
 			t.Fatal(err)
 		}
 		replacements[source] = mutated
+	}
+	for name, body := range files {
+		target := filepath.Join(root, name)
+		if _, err := os.Stat(target); err != nil {
+			t.Fatalf("mutant replaces %s: %v", name, err)
+		}
+		mutated := filepath.Join(scratch, filepath.Base(name))
+		if err := os.WriteFile(mutated, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		replacements[target] = mutated
 	}
 	data, err := json.Marshal(map[string]any{"Replace": replacements})
 	if err != nil {
@@ -85,12 +102,12 @@ func whatwgURLTableRows(t *testing.T) map[string][]string {
 
 func TestProtectURLDecisionTable(t *testing.T) {
 	rows := whatwgURLTableRows(t)
-	for _, cat := range []string{"ace", "std3", "unicode15", "utf8", "bracket", "canonical"} {
+	for _, cat := range []string{"ace", "std3", "unicode15", "notequal", "utf8", "bracket", "canonical"} {
 		if len(rows[cat]) == 0 {
 			t.Fatalf("decision table has no %s rows", cat)
 		}
 	}
-	if output, err := whatwgURLTableRun(t, nil); err != nil {
+	if output, err := whatwgURLTableRun(t, nil, nil); err != nil {
 		t.Fatalf("URL decision table: %v\n%s", err, output)
 	}
 }
@@ -101,13 +118,15 @@ func TestProtectURLDecisionTableCatchesHostCheckMutants(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		mutant map[string]string
+		files  map[string]string
 		cats   []string
 	}{
-		{"strict host check removed", map[string]string{" || !strictHost(raw, u)": ""}, []string{"ace", "std3", "unicode15"}},
-		{"invalid UTF-8 kept", map[string]string{"\tif !utf8.ValidString(raw) {\n\t\traw = string([]rune(raw))\n\t}\n": ""}, []string{"utf8"}},
+		{"strict host check removed", map[string]string{" || !strictHost(raw, u)": ""}, nil, []string{"ace", "std3", "unicode15", "notequal"}},
+		{"invalid UTF-8 kept", map[string]string{"\tif !utf8.ValidString(raw) {\n\t\traw = string([]rune(raw))\n\t}\n": ""}, nil, []string{"utf8"}},
+		{"Unicode 15 table replaced by the toolchain's", nil, map[string]string{"internal/protect/unicode15.go": "package protect\n\nimport (\n\t\"unicode\"\n\n\t\"golang.org/x/text/unicode/rangetable\"\n)\n\nvar unicode15 = rangetable.Assigned(unicode.Version)\n"}, []string{"unicode15"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			output, err := whatwgURLTableRun(t, c.mutant)
+			output, err := whatwgURLTableRun(t, c.mutant, c.files)
 			if err == nil {
 				t.Fatalf("the decision table passes with the mutant\n%s", output)
 			}
@@ -131,5 +150,28 @@ func TestProtectURLDecisionTableCatchesHostCheckMutants(t *testing.T) {
 				t.Errorf("%d rows fail with the mutant, want exactly the %d rows of %v", len(got), want, c.cats)
 			}
 		})
+	}
+}
+
+func TestProtectUnicode15TableIsFrozen(t *testing.T) {
+	data, err := os.ReadFile("../../internal/protect/unicode15.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	if got := hex.EncodeToString(sum[:]); got != unicode15TableSHA256 {
+		t.Fatalf("internal/protect/unicode15.go changed (sha256 %s): the Unicode 15.0 table is frozen, and moving it is a reviewed change that updates this hash and the decision table", got)
+	}
+	fset := token.NewFileSet()
+	for _, name := range []string{"protect.go", "credential.go", "unicode15.go"} {
+		f, err := parser.ParseFile(fset, filepath.Join("../../internal/protect", name), nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, imp := range f.Imports {
+			if path := strings.Trim(imp.Path.Value, `"`); strings.HasPrefix(path, "golang.org/x/text/unicode") {
+				t.Errorf("internal/protect/%s imports %s: the host check's Unicode table must not follow x/text", name, path)
+			}
+		}
 	}
 }
