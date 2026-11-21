@@ -419,11 +419,70 @@ func startAttachEnv(t *testing.T, stdio bool, env []string, args ...string) *att
 	}
 	t.Cleanup(func() {
 		reap(t, cmd, "slicc attach")
+		flushDocConfirmObserveDiag(t, a.stderr.String())
 		if t.Failed() {
 			t.Logf("slicc attach stderr:\n%s", a.stderr.String())
 		}
 	})
 	return a
+}
+
+func flushDocConfirmObserveDiag(t *testing.T, stderr string) {
+	t.Helper()
+	var lines []string
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "DIAG document-confirm would-") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		return
+	}
+	dir := filepath.Join("..", "..", "artifacts", "guard")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Logf("docconfirm observe diag: mkdir %s: %v", dir, err)
+		return
+	}
+	base := os.Getenv("SLICC_DOCCONFIRM_DIAG_NAME")
+	if base == "" {
+		base = "docconfirm-" + strings.Map(func(r rune) rune {
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+				return r
+			case r == '/' || r == '\\':
+				return '-'
+			default:
+				return '_'
+			}
+		}, t.Name())
+	}
+	if base == "" || base == "docconfirm-" {
+		base = "docconfirm-unknown"
+	}
+	if !strings.HasPrefix(base, "docconfirm-") {
+		base = "docconfirm-" + base
+	}
+	path := filepath.Join(dir, base+".log")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Logf("docconfirm observe diag: open %s: %v", path, err)
+		return
+	}
+	var writeErr error
+	for _, line := range lines {
+		if _, err := io.WriteString(f, line+"\n"); err != nil {
+			writeErr = err
+			break
+		}
+	}
+	if err := f.Close(); err != nil && writeErr == nil {
+		writeErr = err
+	}
+	if writeErr != nil {
+		t.Logf("docconfirm observe diag: write %s: %v", path, writeErr)
+		return
+	}
+	t.Logf("docconfirm observe diag: %d lines -> %s", len(lines), path)
 }
 
 func (a *attachProc) waitStderr(t *testing.T, want string, timeout time.Duration) {

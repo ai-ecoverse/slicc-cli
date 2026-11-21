@@ -64,33 +64,40 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		verdict.send = append(verdict.send, frameSend...)
 	}()
 	g.progressLocked(&m)
+	return g.fromBrowserBodyLocked(&m, data)
+}
+
+func (g *guard) fromBrowserBodyLocked(m *message, data []byte) browserVerdict {
 	if m.ID != nil {
-		return g.answerLocked(&m, data)
+		return g.answerLocked(m, data)
 	}
-	if v, handled := g.debuggerEventLocked(&m, data); handled {
+	if m.SessionID != "" && g.docConfirmObserveFilterEventLocked(m.SessionID, "") {
+		return browserVerdict{}
+	}
+	if v, handled := g.debuggerEventLocked(m, data); handled {
 		return v
 	}
 	if m.SessionID != "" && m.SessionID == g.relaySession {
-		return g.relayEventLocked(&m)
+		return g.relayEventLocked(m)
 	}
 	if nt, ok := g.navSessions[m.SessionID]; ok && m.SessionID != "" {
-		v := g.navRequestLocked(nt, &m)
-		v.send = append(v.send, g.navEventLocked(nt, &m)...)
+		v := g.navRequestLocked(nt, m)
+		v.send = append(v.send, g.navEventLocked(nt, m)...)
 		return g.withPendingPageLocked(v)
 	}
 	if m.SessionID != "" && g.gone[m.SessionID] {
 		return browserVerdict{}
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
-		if m.Method == "Target.attachedToTarget" && (g.attachedWorkerLocked(&m) || g.attachedIframeLocked(&m) || g.held[m.SessionID] != nil) {
-			return g.attachedUnderHeldLocked(&m, data)
+		if m.Method == "Target.attachedToTarget" && (g.attachedWorkerLocked(m) || g.attachedIframeLocked(m) || g.held[m.SessionID] != nil) {
+			return g.attachedUnderHeldLocked(m, data)
 		}
 		return browserVerdict{}
 	}
 	if !errorPageEvent(m.Method) && (g.errorPageSessionLocked(m.SessionID) || g.sessionUnconfirmedLocked(m.SessionID)) {
 		switch m.Method {
 		case "Debugger.scriptParsed", "Debugger.scriptFailedToParse":
-			g.scriptEvent(&m, data)
+			g.scriptEvent(m, data)
 		case "Debugger.paused":
 			msg, _ := g.newCallLocked(m.SessionID, "Debugger.resume", nil, false)
 			return browserVerdict{send: [][]byte{msg}}
@@ -98,12 +105,12 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		return browserVerdict{}
 	}
 	if h, ok := eventHandlers[m.Method]; ok {
-		return h(g, &m, data)
+		return h(g, m, data)
 	}
-	if g.storageEventDropped(&m) {
+	if g.storageEventDropped(m) {
 		return browserVerdict{}
 	}
-	if g.frameContentEventDropped(&m) {
+	if g.frameContentEventDropped(m) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}
@@ -611,6 +618,9 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if t, ok := g.targets[info.TargetID]; ok && info.URL == "" && t.url != "" {
 		info.URL = t.url
 	}
+	if g.docConfirmObserveFilterEventLocked(p.SessionID, info.TargetID) {
+		return browserVerdict{}
+	}
 	g.noteStreamOpenedLocked(info)
 	g.attachParent = m.SessionID
 	var send [][]byte
@@ -636,6 +646,9 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		g.adoptHeldFlatPageLocked(p.SessionID, info.OpenerID)
 	}
 	send = append(send, g.touchLocked(info.TargetID, info.Type)...)
+	if info.Type == "page" {
+		send = append(send, g.scheduleDocConfirmObserveLocked(info.TargetID, p.SessionID, g.docConfirmObservePathLocked(info.TargetID, info.Type))...)
+	}
 	if params := decodeParams(m.Params); params != nil {
 		if obj, _ := params["targetInfo"].(map[string]any); g.redactInfoLocked(obj, info) {
 			m.Params = encode(params)

@@ -729,6 +729,7 @@ type guardRun struct {
 }
 
 func runGuardVectors(t *testing.T, variant string) {
+	t.Setenv("SLICC_DOCCONFIRM_DIAG_NAME", "docconfirm-"+variant)
 	sum := runGuard(t, guardRun{variant: variant, slots: guardSlots(), rowTimeout: guardRowTimeout})
 	if path, err := writeGuardReport(filepath.Join("..", "..", "artifacts", "guard"), variant, sum); err != nil {
 		t.Logf("the guard report wasn't written: %v", err)

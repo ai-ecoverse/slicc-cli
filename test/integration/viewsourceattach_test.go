@@ -63,3 +63,110 @@ func TestCDPViewSourceAttachMutationConfirmDisabled(t *testing.T) {
 		t.Fatalf("view-source attach mutation (confirm stubbed): %v\n%s", err, output)
 	}
 }
+
+func TestCDPDocConfirmObserveNeverChangesVerdict(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := t.TempDir()
+	replacements := map[string]string{
+		filepath.Join(root, "internal/caps/cdp/view_source_attach_test.go"): filepath.Join(root, "test/integration/testdata/viewsourceattach/regression.go"),
+	}
+	data, err := json.Marshal(map[string]any{"Replace": replacements})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlay, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-v", "-overlay", overlay, "-run", "^TestDocConfirmObserveNeverChangesVerdict$", "./internal/caps/cdp")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("doc-confirm observe never-changes: %v\n%s", err, output)
+	}
+}
+
+func TestCDPDocConfirmObserveFilterMustNotClaimNavguardSession(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := t.TempDir()
+	replacements := map[string]string{
+		filepath.Join(root, "internal/caps/cdp/view_source_attach_test.go"): filepath.Join(root, "test/integration/testdata/viewsourceattach/regression.go"),
+	}
+	data, err := json.Marshal(map[string]any{"Replace": replacements})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlay, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-v", "-overlay", overlay, "-run", "^TestDocConfirmObserveFilterMustNotClaimNavguardSession$", "./internal/caps/cdp")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("observe must not claim navguard: %v\n%s", err, output)
+	}
+}
+
+func TestCDPDocConfirmObserveMustNotEmitProofDetach(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := t.TempDir()
+	replacements := map[string]string{
+		filepath.Join(root, "internal/caps/cdp/view_source_attach_test.go"): filepath.Join(root, "test/integration/testdata/viewsourceattach/regression.go"),
+	}
+	data, err := json.Marshal(map[string]any{"Replace": replacements})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlay, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-v", "-overlay", overlay, "-run", "^TestDocConfirmObserveMustNotEmitProofDetach$", "./internal/caps/cdp")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("observe must not emit proof detach: %v\n%s", err, output)
+	}
+}
+
+func TestCDPDocConfirmObserveFilterMutantLeaks(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := t.TempDir()
+	replacements := map[string]string{
+		filepath.Join(root, "internal/caps/cdp/view_source_attach_test.go"):          filepath.Join(root, "test/integration/testdata/viewsourceattach/regression.go"),
+		filepath.Join(root, "internal/caps/cdp/documentconfirm_observe.go"):          filepath.Join(root, "test/integration/testdata/viewsourceattach/mutation_observe_sessionful.go"),
+		filepath.Join(root, "internal/caps/cdp/documentconfirm_observe_switches.go"): filepath.Join(root, "test/integration/testdata/viewsourceattach/mutation_observe_filter.go"),
+	}
+	data, err := json.Marshal(map[string]any{"Replace": replacements})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlay, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-v", "-overlay", overlay, "-run", "^TestDocConfirmObserveFilterMutantLeaks$", "./internal/caps/cdp")
+	command.Dir = root
+	command.Env = append(os.Environ(), "SLICC_DOC_CONFIRM_OBSERVE_FILTER_MUTANT=1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("doc-confirm observe filter mutant: %v\n%s", err, output)
+	}
+}

@@ -306,10 +306,12 @@ func (g *guard) finishFailedLoadHeldLocked(targetID string, hide bool) [][]byte 
 			continue
 		}
 		delete(g.held, sid)
+		g.noteDocConfirmObserveLocked(targetID, "G")
 		if hide {
 			part := g.hideHeldPageAndTabsLocked(h, true, "failed-load protected")
 			send = append(send, part.send...)
 			g.pendingPage = append(g.pendingPage, part.page...)
+			g.tryLogDocConfirmObserveLocked(targetID, false)
 			continue
 		}
 		part := g.deliverHeldLocked(h)
