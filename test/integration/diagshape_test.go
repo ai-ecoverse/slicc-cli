@@ -74,14 +74,15 @@ func TestDiagShapeViewSourceDocumentForms(t *testing.T) {
 			p.t = t
 			stderrBefore := env.a.stderr.String()
 			opts := map[string]any{
-				"form":     form.name,
-				"marker":   marker,
-				"browser":  hello.Browsers[0].ID,
-				"ws":       ws,
-				"wrapper":  form.wrapper,
-				"seed":     form.seed,
-				"vaultDoc": vault + "/doc?n=diagshape-blob&marker=" + marker,
-				"settleMs": 10000,
+				"form":        form.name,
+				"marker":      marker,
+				"browser":     hello.Browsers[0].ID,
+				"ws":          ws,
+				"wrapper":     form.wrapper,
+				"seed":        form.seed,
+				"vaultDoc":    vault + "/doc?n=diagshape-blob&marker=" + marker,
+				"ordinaryDoc": ordinary + "/doc?n=diagshape-ordinary&marker=" + marker,
+				"settleMs":    10000,
 			}
 			var raw json.RawMessage
 			p.evalWithin("linkTest.diagShape("+jsArgs(opts)+")", &raw, 2*time.Minute)
