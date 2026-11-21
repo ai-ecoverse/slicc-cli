@@ -570,6 +570,9 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 		}
 	}
 	if g.attachedShouldHideLocked(info, m.SessionID) {
+		if diagC3Enabled() {
+			g.logf("cdp: attach-decision hide type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID, info.OpenerID)
+		}
 		h := &heldSession{id: pSession, parent: m.SessionID, target: info.TargetID, typ: info.Type, waiting: waiting, at: time.Now()}
 		send = append(send, g.hideLocked(h)...)
 		var page [][]byte
@@ -586,12 +589,21 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 		return browserVerdict{send: send, page: page}, true
 	}
 	if v, handled := g.holdFailedLoadAttachLocked(m, pSession, waiting, info, send); handled {
+		if diagC3Enabled() {
+			g.logf("cdp: attach-decision hold-failed-load type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID, info.OpenerID)
+		}
 		return v, true
 	}
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
+		if diagC3Enabled() {
+			g.logf("cdp: attach-decision hold-unresolved type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID, info.OpenerID)
+		}
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
 	}
 	if params := decodeParams(m.Params); info.URL == "" && (info.Type == "page" || info.Type == "iframe") && g.explicit[info.TargetID] == 0 && params != nil {
+		if diagC3Enabled() {
+			g.logf("cdp: attach-decision hold-empty-url type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), waiting, info.TargetID, pSession, m.SessionID, info.OpenerID)
+		}
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, params, info, waiting)...), hold: []string{pSession}}, true
 	}
 	return browserVerdict{}, false
@@ -611,6 +623,9 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 	if t, ok := g.targets[info.TargetID]; ok && info.URL == "" && t.url != "" {
 		info.URL = t.url
 	}
+	if diagC3Enabled() {
+		g.logf("cdp: attach type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), p.WaitingForDebugger, info.TargetID, p.SessionID, m.SessionID, info.OpenerID)
+	}
 	g.noteStreamOpenedLocked(info)
 	g.attachParent = m.SessionID
 	var send [][]byte
@@ -623,10 +638,16 @@ func (g *guard) attachedEvent(m *message, data []byte) browserVerdict {
 		return v
 	}
 	if v, handled := g.docConfirmAttachEventLocked(m, data, p.SessionID, p.WaitingForDebugger, info, send); handled {
+		if diagC3Enabled() {
+			g.logf("cdp: attach-decision doc-confirm type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), p.WaitingForDebugger, info.TargetID, p.SessionID, m.SessionID, info.OpenerID)
+		}
 		g.attachParent = ""
 		return v
 	}
 	g.attachParent = ""
+	if diagC3Enabled() {
+		g.logf("cdp: attach-decision forward type=%s url=%s waiting=%t target=%s session=%s parent=%s opener=%s", info.Type, attachURLKind(info.URL), p.WaitingForDebugger, info.TargetID, p.SessionID, m.SessionID, info.OpenerID)
+	}
 	g.noteWorkerShownLocked(info)
 	g.sessions[p.SessionID] = &session{id: p.SessionID, target: info.TargetID, parent: m.SessionID, typ: info.Type, waiting: p.WaitingForDebugger, emptyAtAnnounce: info.Type == "tab" && info.URL == "", at: time.Now()}
 	if info.Type == "browser" {

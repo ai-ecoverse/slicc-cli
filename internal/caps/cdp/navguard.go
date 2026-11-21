@@ -274,6 +274,10 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if m.Method != "Fetch.requestPaused" {
 		return send
 	}
+	return append(send, g.navFetchPausedLocked(nt, m)...)
+}
+
+func (g *guard) navFetchPausedLocked(nt *navTarget, m *message) [][]byte {
 	var p struct {
 		NetworkID    string `json:"networkId"`
 		RequestID    string `json:"requestId"`
@@ -284,9 +288,10 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		} `json:"request"`
 	}
 	if json.Unmarshal(m.Params, &p) != nil || p.RequestID == "" {
-		return send
+		return nil
 	}
 	if g.o.Loaded(p.Request.URL) && (p.ResourceType == "Document" || g.clientOwnedLocked(nt.target, p.NetworkID)) {
+		var send [][]byte
 		if p.ResourceType == "Document" {
 			if nt.documentLocks(p.FrameID) {
 				nt.historyLocked = true
@@ -294,11 +299,20 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 			send = append(send, g.blockChildLocked(nt.target, p.FrameID)...)
 		}
 		g.logf("cdp: failed a protected document or client-issued request in a target this stream touched target=%s session=%s frame=%s", nt.target, nt.session, p.FrameID)
+		g.diagC3Fetch("Fetch.failRequest", nt, p.FrameID, p.ResourceType, p.Request.URL)
 		msg, _ := g.newCallLocked(nt.session, "Fetch.failRequest", map[string]any{"requestId": p.RequestID, "errorReason": "BlockedByClient"}, false)
 		return append(send, msg)
 	}
+	g.diagC3Fetch("Fetch.continueRequest", nt, p.FrameID, p.ResourceType, p.Request.URL)
 	msg, _ := g.newCallLocked(nt.session, "Fetch.continueRequest", map[string]any{"requestId": p.RequestID}, false)
-	return append(send, msg)
+	return [][]byte{msg}
+}
+
+func (g *guard) diagC3Fetch(op string, nt *navTarget, frame, resourceType, url string) {
+	if !diagC3Enabled() {
+		return
+	}
+	g.logf("cdp: %s target=%s session=%s frame=%s resourceType=%s url=%s", op, nt.target, nt.session, frame, resourceType, url)
 }
 
 func (g *guard) navDetachedLocked(sessionID string) {

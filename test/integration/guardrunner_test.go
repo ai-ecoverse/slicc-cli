@@ -666,6 +666,7 @@ type guardRun struct {
 	inject         string
 	rowTimeout     time.Duration
 	errorPageVault bool
+	diagC3         bool
 }
 
 func runGuardVectors(t *testing.T, variant string) {
@@ -777,13 +778,14 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 	if run.errorPageVault {
 		targets["seven"] = targets["vault"]
 	}
+	logURL := "http://127.0.0.1:" + strconv.Itoa(fix.log)
 	opts := map[string]any{
 		"browsers":       slots,
 		"targets":        targets,
 		"capabilities":   map[string]bool{"autoAttach": true, "iframeAutoAttach": true, "errorFrameClass": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "extensionFrame": true, "inboundDelay": true, "forwardAudit": true, "stockSetup": true, "closeProtected": true, "secureOrigin": true, "signInHold": false},
 		"variants":       []string{run.variant},
 		"parallel":       n,
-		"log":            "http://127.0.0.1:" + strconv.Itoa(fix.log),
+		"log":            logURL,
 		"sha":            sha,
 		"rowTimeoutMs":   run.rowTimeout.Milliseconds(),
 		"only":           run.only,
@@ -832,7 +834,38 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		}
 	}
 	t.Logf("%d rows in %s with %d slots on %s", len(sum.Results), time.Since(begin).Round(time.Second), n, runtime.GOOS)
+	if run.diagC3 {
+		dumpDiagC3FixtureLog(t, logURL)
+	}
 	return sum
+}
+
+func dumpDiagC3FixtureLog(t *testing.T, logURL string) {
+	t.Helper()
+	resp, err := http.Get(logURL + "?since=0")
+	if err != nil {
+		t.Logf("DIAGC3 fixture log fetch failed: %v", err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		From    int              `json:"from"`
+		Entries []map[string]any `json:"entries"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Logf("DIAGC3 fixture log decode failed: %v", err)
+		return
+	}
+	t.Logf("DIAGC3 fixture requests count=%d", len(body.Entries))
+	for i, e := range body.Entries {
+		u, _ := e["url"].(string)
+		method, _ := e["method"].(string)
+		at := ""
+		if ms, ok := e["time"].(float64); ok {
+			at = strconv.FormatInt(int64(ms), 10)
+		}
+		t.Logf("DIAGC3 fixture[%d] time=%s method=%s url=%s", i, at, method, u)
+	}
 }
 
 func TestCDPProtectVectorsIgnoreChromeUITargets(t *testing.T) {
