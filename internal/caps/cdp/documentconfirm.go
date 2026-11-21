@@ -109,7 +109,7 @@ func (g *guard) needsDocConfirmLocked(target, session, typ, url string) bool {
 	if target == "" || typ == "browser" {
 		return false
 	}
-	if workerTypes[typ] || typ == "iframe" {
+	if typ != "page" {
 		return false
 	}
 	if g.docPassed[session] {
@@ -128,9 +128,6 @@ func (g *guard) needsDocConfirmLocked(target, session, typ, url string) bool {
 		if t == target {
 			return true
 		}
-	}
-	if typ != "page" {
-		return false
 	}
 	if url == "" {
 		if t := g.targets[target]; t != nil {

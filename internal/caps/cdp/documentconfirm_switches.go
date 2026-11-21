@@ -4,6 +4,10 @@ func docConfirmForeignOrdinaryProofEnabled() bool {
 	return false
 }
 
+func docConfirmSettleReconfirmEnabled() bool {
+	return false
+}
+
 func docConfirmAdmitBlankOrdinaryEnabled() bool {
 	return true
 }

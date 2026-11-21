@@ -2,6 +2,8 @@ package cdp
 
 func docConfirmForeignOrdinaryProofEnabled() bool { return true }
 
+func docConfirmSettleReconfirmEnabled() bool { return false }
+
 func docConfirmAdmitBlankOrdinaryEnabled() bool { return true }
 
 func docConfirmDropProofEnabled() bool { return true }

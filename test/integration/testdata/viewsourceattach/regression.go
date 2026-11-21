@@ -1131,6 +1131,22 @@ func vsSessionPresent(g *guard) bool {
 	return g.sessions[vsSession] != nil
 }
 
+func vsDocConfirmAskOutbound(send [][]byte) bool {
+	for _, raw := range send {
+		_, method, session := vsOutbound(raw)
+		if method == "Target.attachToTarget" && session == "RELAY" {
+			return true
+		}
+		if method == "Target.getTargetInfo" && session == "RELAY" {
+			return true
+		}
+		if method == "Page.getFrameTree" && session == vsProofSession {
+			return true
+		}
+	}
+	return false
+}
+
 func vsConfirmAsked(send [][]byte) bool {
 	for _, raw := range send {
 		_, method, session := vsOutbound(raw)
@@ -1315,24 +1331,6 @@ func TestViewSourceAttachPathFEmptyHoldSettle(t *testing.T) {
 			t.Fatalf("path-F: expected held session on empty announce")
 		}
 	})
-	t.Run("stale-ordinary-settle-live-wrapper", func(t *testing.T) {
-		g := vsGuard(t)
-		var o vsOutcome
-		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsHTTPVault)
-		_ = g.fromBrowser(vsAttachedEvent(""))
-		if vsSessionPresent(g) {
-			t.Fatalf("path-F: empty-URL auto-attach must hold (#850), not create a session yet")
-		}
-		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary)), func(int64) string { return vsHTTPVault })
-		o.summarize()
-		t.Logf("path-F stale-settle asked=%d session=%t event=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent)
-		if len(asked) == 0 {
-			t.Fatalf("path-F: settle must re-confirm with a fresh proof read")
-		}
-		if vsSessionPresent(g) || o.sawAttachEvent {
-			t.Errorf("path-F: settle proof of protected live document must not admit (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
-		}
-	})
 	t.Run("protected-settle-hidden", func(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
@@ -1349,37 +1347,26 @@ func TestViewSourceAttachPathFEmptyHoldSettle(t *testing.T) {
 			t.Errorf("path-F: protected settle must hide (no client session); session=%t event=%t", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
-	t.Run("ordinary-settle-control", func(t *testing.T) {
+	t.Run("ordinary-settle-admits-without-doc-confirm", func(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
 		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsOrdinary)
 		_ = g.fromBrowser(vsAttachedEvent(""))
-		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary)), func(int64) string { return vsOrdinary })
+		rel := g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary))
+		g.mu.Lock()
+		inflight := g.docInflight[vsTarget] != nil && !g.docInflight[vsTarget].done
+		g.mu.Unlock()
+		o.take(rel)
+		for _, p := range rel.page {
+			o.clientPayloads = append(o.clientPayloads, string(p))
+		}
 		o.summarize()
-		t.Logf("path-F ordinary-settle asked=%d session=%t event=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent)
-		if len(asked) == 0 {
-			t.Fatalf("path-F ordinary: settle must re-confirm then admit")
+		t.Logf("path-F ordinary-settle inflight=%t session=%t event=%t", inflight, vsSessionPresent(g), o.sawAttachEvent)
+		if inflight {
+			t.Fatalf("path-F head1: empty-hold settle must NOT re-confirm (F deferred); inflight=%t", inflight)
 		}
 		if !vsSessionPresent(g) && !o.sawAttachEvent {
-			t.Errorf("path-F ordinary control: proof of ordinary settle must admit (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
-		}
-	})
-	t.Run("settle-proof-read-fails-refuse-without-latch", func(t *testing.T) {
-		g := vsGuard(t)
-		var o vsOutcome
-		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsOrdinary)
-		_ = g.fromBrowser(vsAttachedEvent(""))
-		asked := vsDrainAnswer(g, &o, g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary)), func(int64) string { return "" })
-		o.summarize()
-		t.Logf("path-F proof-fail asked=%d session=%t event=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent)
-		if vsSessionPresent(g) || o.sawAttachEvent {
-			t.Errorf("path-F: failed settle proof must refuse without latching a client session (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
-		}
-		g.mu.Lock()
-		failed := g.docFailed[vsSession]
-		g.mu.Unlock()
-		if failed {
-			t.Errorf("path-F: proof-read failure must refuse without latching docFailed")
+			t.Errorf("path-F ordinary: admit at deliver without settle proof (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
 }
@@ -1477,33 +1464,35 @@ func TestViewSourceAttachPathGFailedLoadSettle(t *testing.T) {
 			t.Fatalf("path-G: expected failed-load hold or pending proof on chrome-error announce")
 		}
 	})
-	t.Run("stale-ordinary-settle-live-wrapper", func(t *testing.T) {
+	t.Run("ordinary-errorProof-deliver-without-settle-reconfirm", func(t *testing.T) {
 		g := vsGuard(t)
 		var o vsOutcome
 		announced := "chrome-error://chromewebdata/"
-		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), vsHTTPVault)
+		vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), vsOrdinary)
 		_ = g.fromBrowser(vsAttachedEvent(announced))
 		g.mu.Lock()
-		g.setErrorProofLocked(vsTarget, errorProofNone)
-		if tgt := g.targets[vsTarget]; tgt != nil {
-			tgt.url = vsOrdinary
-		}
+		g.setErrorProofLocked(vsTarget, errorProofOrdinary)
 		held := g.held[vsSession]
 		g.mu.Unlock()
 		if held == nil {
-			t.Fatalf("path-G stale: expected held session before settle release")
+			t.Fatalf("path-G: expected held chrome-error session before errorProofOrdinary deliver")
 		}
 		g.mu.Lock()
 		rel := g.deliverHeldLocked(held)
+		inflight := g.docInflight[vsTarget] != nil && !g.docInflight[vsTarget].done
 		g.mu.Unlock()
-		asked := vsDrainAnswer(g, &o, rel, func(int64) string { return vsHTTPVault })
-		o.summarize()
-		t.Logf("path-G stale-settle asked=%d session=%t event=%t", len(asked), vsSessionPresent(g), o.sawAttachEvent)
-		if len(asked) == 0 {
-			t.Fatalf("path-G: settle must re-confirm with a fresh proof read")
+		docProof := vsDocConfirmAskOutbound(rel.send)
+		o.take(rel)
+		for _, p := range rel.page {
+			o.clientPayloads = append(o.clientPayloads, string(p))
 		}
-		if vsSessionPresent(g) || o.sawAttachEvent {
-			t.Errorf("path-G: settle proof of protected live document must not admit (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
+		o.summarize()
+		t.Logf("path-G errorProofOrdinary deliver docProof=%t inflight=%t session=%t event=%t", docProof, inflight, vsSessionPresent(g), o.sawAttachEvent)
+		if docProof || inflight {
+			t.Fatalf("path-G head1: errorProofOrdinary deliver must NOT re-confirm (G deferred / #842 errorProof owns the verdict); docProof=%t inflight=%t", docProof, inflight)
+		}
+		if !vsSessionPresent(g) && !o.sawAttachEvent {
+			t.Errorf("path-G: errorProofOrdinary must admit at deliver (session=%t event=%t)", vsSessionPresent(g), o.sawAttachEvent)
 		}
 	})
 	t.Run("protected-settle-hidden", func(t *testing.T) {
@@ -2057,4 +2046,116 @@ func TestViewSourceAttachOrdinaryForeignProofCost(t *testing.T) {
 	t.Logf("DOC_CONFIRM_PROOF_COST kind=foreign-blank-announce n=%d median=%s p90=%s max=%s samples=%v", len(samples), median.Round(time.Microsecond), p90.Round(time.Microsecond), max.Round(time.Microsecond), samples)
 	t.Logf("DOC_CONFIRM_PROOF_COST kind=foreign-ordinary-announce note=lighter-default-off stock skips proof; proof-on mutant covers residual; Chrome stock popup/tab scrape \"DIAG document-confirm proof round took\"")
 	t.Logf("DOC_CONFIRM_PROOF_COST table blank-min-set median=%s p90=%s max=%s ordinary=lighter-default", median.Round(time.Microsecond), p90.Round(time.Microsecond), max.Round(time.Microsecond))
+}
+
+func TestViewSourceAttachHead1LateRegisterEmptyHoldAdmitsWithoutSettleProof(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "")), vsOrdinary)
+	_ = g.fromBrowser(vsAttachedEvent(""))
+	g.mu.Lock()
+	held := g.held[vsSession] != nil
+	g.mu.Unlock()
+	if !held {
+		t.Fatal("head1 late-register: empty announce must hold")
+	}
+	rel := g.fromBrowser(vsRelay("Target.targetInfoChanged", vsOrdinary))
+	g.mu.Lock()
+	inflight := g.docInflight[vsTarget] != nil && !g.docInflight[vsTarget].done
+	g.mu.Unlock()
+	o.take(rel)
+	for _, p := range rel.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
+	}
+	o.summarize()
+	t.Logf("head1 late-register inflight=%t session=%t event=%t", inflight, vsSessionPresent(g), o.sawAttachEvent)
+	if inflight {
+		t.Fatalf("head1 late-register: empty-hold release must register/resume without settle document proof (F not in head1); inflight=%t", inflight)
+	}
+	if !vsSessionPresent(g) && !o.sawAttachEvent {
+		t.Fatal("head1 late-register: session must be registered at deliver so unknown-session deadline cannot beat it")
+	}
+}
+
+func TestViewSourceAttachHead1ErrorProofOrdinaryDeliver(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	announced := "chrome-error://chromewebdata/"
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), vsOrdinary)
+	_ = g.fromBrowser(vsAttachedEvent(announced))
+	g.mu.Lock()
+	g.setErrorProofLocked(vsTarget, errorProofOrdinary)
+	held := g.held[vsSession]
+	g.mu.Unlock()
+	if held == nil {
+		t.Fatal("head1 errorProof: expected held chrome-error session")
+	}
+	g.mu.Lock()
+	rel := g.deliverHeldLocked(held)
+	inflight := g.docInflight[vsTarget] != nil && !g.docInflight[vsTarget].done
+	g.mu.Unlock()
+	if vsDocConfirmAskOutbound(rel.send) || inflight {
+		t.Fatalf("head1 errorProof: #842 errorProofOrdinary owns the verdict; deliver must not start document-confirm; ask=%t inflight=%t", vsDocConfirmAskOutbound(rel.send), inflight)
+	}
+	o.take(rel)
+	for _, p := range rel.page {
+		o.clientPayloads = append(o.clientPayloads, string(p))
+	}
+	o.summarize()
+	if !vsSessionPresent(g) && !o.sawAttachEvent {
+		t.Fatal("head1 errorProof: ordinary failed-load must admit at deliver")
+	}
+}
+
+func TestViewSourceAttachHead1ErrorProofProtectedLatches(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	announced := "chrome-error://chromewebdata/"
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", announced)), vsHTTPVault)
+	_ = g.fromBrowser(vsAttachedEvent(announced))
+	g.mu.Lock()
+	g.setErrorProofLocked(vsTarget, errorProofProtected)
+	held := g.held[vsSession]
+	g.mu.Unlock()
+	if held == nil {
+		t.Fatal("head1 errorProof protected: expected held session")
+	}
+	g.mu.Lock()
+	part := g.hideHeldPageAndTabsLocked(held, true, "failed-load protected")
+	delete(g.held, vsSession)
+	g.mu.Unlock()
+	o.take(part)
+	o.summarize()
+	if vsSessionPresent(g) || o.sawAttachEvent {
+		t.Fatal("head1 errorProof: protected failed URL must latch/hide via errorProof, not admit")
+	}
+}
+
+func TestViewSourceAttachHead1PageOnlyIframeNeverDocConfirm(t *testing.T) {
+	g := vsGuard(t)
+	const iframe = "IFRAME-1"
+	const iframeSession = "S-IFRAME"
+	var o vsOutcome
+	vsDrain(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", vsOrdinary)), vsOrdinary)
+	g.mu.Lock()
+	g.targets[iframe] = &target{id: iframe, typ: "iframe", url: "about:blank", parentFrame: vsTarget}
+	g.mu.Unlock()
+	ev := encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          iframeSession,
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": iframe, "type": "iframe", "url": "about:blank", "browserContextId": "CTX"},
+		},
+	})
+	v := g.fromBrowser(ev)
+	if vsConfirmAsked(v.send) {
+		t.Fatal("head1 PAGE-only: iframe attach must never enter document proof")
+	}
+	g.mu.Lock()
+	_, inflight := g.docInflight[iframe]
+	g.mu.Unlock()
+	if inflight {
+		t.Fatal("head1 PAGE-only: iframe must not begin docInflight")
+	}
 }

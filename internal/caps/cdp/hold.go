@@ -357,7 +357,7 @@ func (g *guard) deliverHeldLocked(h *heldSession) browserVerdict {
 	if g.targetProtectedLocked(h.target) {
 		return g.hideHeldPageAndTabsLocked(h, true, "protected hide")
 	}
-	if h.typ == "page" {
+	if h.typ == "page" && docConfirmSettleReconfirmEnabled() {
 		return g.settleDocConfirmHeldLocked(h)
 	}
 	return g.admitHeldLocked(h)
