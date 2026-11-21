@@ -193,6 +193,8 @@ type guard struct {
 	gone                     map[string]bool
 	goneOrder                []string
 	held                     map[string]*heldSession
+	holdResumed              map[string]bool
+	holdResumedOrder         []string
 	heldContexts             map[heldContextKey]*heldContext
 	contextSettlePage        [][]byte
 	contextSettleSend        [][]byte
@@ -323,6 +325,7 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		errorTitles:              map[string]string{},
 		gone:                     map[string]bool{},
 		held:                     map[string]*heldSession{},
+		holdResumed:              map[string]bool{},
 		heldContexts:             map[heldContextKey]*heldContext{},
 		frameWorldWaits:          map[string]*frameWorldWait{},
 		worldEpochs:              map[string]*worldEpoch{},
@@ -1724,6 +1727,7 @@ func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
 func (g *guard) forgetSessionLocked(id string) {
 	g.pruneDocConfirmSessionLocked(id)
 	g.goneLocked(id)
+	g.forgetHoldResumedLocked(id)
 	g.forgetWorldSessionLocked(id)
 	g.forgetCastLocked(id)
 	delete(g.domEnabled, id)

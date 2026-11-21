@@ -144,10 +144,12 @@ async function viaPlaywright(url, expectProtected) {
     await context.addCookies([{ name: 's', value: '1', url }]);
     const cookies = await context.cookies();
     if (!cookies.some((c) => c.name === 's')) throw new Error('cookies missing');
+    const popupOpened = Date.now();
     const popupPromise = page.waitForEvent('popup');
     await page.click('#pop');
     const popup = await popupPromise;
     await popup.waitForLoadState('domcontentloaded');
+    console.log(`STOCKPOPUP playwright open-to-URL ms=${Date.now() - popupOpened} url=${popup.url()}`);
     await popup.close();
     await page.goto(new URL('/frame', url).href, { waitUntil: 'domcontentloaded' });
     const frame = page.frameLocator('#f');
@@ -187,10 +189,21 @@ async function viaPuppeteer(url, expectProtected) {
     await page.setCookie({ name: 's', value: '1', url });
     const cookies = await page.cookies();
     if (!cookies.some((c) => c.name === 's')) throw new Error('cookies missing');
+    const popupOpened = Date.now();
     const popupPromise = new Promise((resolve) => page.once('popup', resolve));
     await page.click('#pop');
     const popup = await popupPromise;
-    await popup.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    const wantPopup = new URL('/popup', url).href;
+    const popupDeadline = Date.now() + 10000;
+    for (;;) {
+      const got = popup.url();
+      if (got === wantPopup || got.startsWith(wantPopup)) break;
+      if (Date.now() > popupDeadline) {
+        throw new Error(`STOCKPOPUP puppeteer never reached ${wantPopup} within 10s: url=${got}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    console.log(`STOCKPOPUP puppeteer open-to-URL ms=${Date.now() - popupOpened} url=${popup.url()}`);
     await popup.close();
     await page.goto(new URL('/frame', url).href, { waitUntil: 'domcontentloaded' });
     const frame = page.frames().find((f) => f.url().includes('/inner'));

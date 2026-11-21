@@ -41,7 +41,6 @@ const (
 
 var (
 	guardExactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	guardSettleToken  = regexp.MustCompile(`(?i)settle:\s*no request for .+ within \d+ms`)
 )
 
 func guardSetVersion(t testing.TB) string {
@@ -504,33 +503,6 @@ type guardSkip struct {
 
 const guardC9MacReason = "not-applicable: on macOS the C9 controls hang inside Chrome (#344)"
 
-var guardWaivers = map[string]string{
-	"C3.tab-attach": "guarded settle of window.open under main empty-URL hold; runner folds that into control=fail (#260); stock Playwright/Puppeteer popup through the link guard passes",
-}
-
-func waivedGuardRow(r guardRow) (string, bool) {
-	reason, ok := guardWaivers[r.ID]
-	if !ok {
-		return "", false
-	}
-	switch r.ID {
-	case "C3.tab-attach":
-		if r.Guarded != "fail" || (r.Control != "fail" && r.Control != "incomplete") {
-			return "", false
-		}
-		if !guardedSettleFailure(r) {
-			return "", false
-		}
-		return reason, true
-	default:
-		return "", false
-	}
-}
-
-func guardedSettleFailure(r guardRow) bool {
-	return guardSettleToken.MatchString(string(r.Why) + " " + strings.Join(r.Errors, " "))
-}
-
 func logTabIframeLeakEvidence(t testing.TB, r guardRow) {
 	t.Helper()
 	var obs struct {
@@ -627,6 +599,94 @@ func guardSkipsOn(goos string, vectors []guardVector) map[string]guardSkip {
 }
 
 var guardSkips = guardSkipsOn(runtime.GOOS, guardVectorSet())
+
+const guardNotRunReason = "the route does not run it"
+
+type guardNotRunExpect struct {
+	ID     string
+	Reason string
+}
+
+var guardNotRunExpected = []guardNotRunExpect{
+	{ID: "E1", Reason: guardNotRunReason},
+	{ID: "E2", Reason: guardNotRunReason},
+	{ID: "E3", Reason: guardNotRunReason},
+	{ID: "E5", Reason: guardNotRunReason},
+	{ID: "B1", Reason: guardNotRunReason},
+	{ID: "B2", Reason: guardNotRunReason},
+	{ID: "B3", Reason: guardNotRunReason},
+	{ID: "B4", Reason: guardNotRunReason},
+	{ID: "B5", Reason: guardNotRunReason},
+	{ID: "B6", Reason: guardNotRunReason},
+	{ID: "B7", Reason: guardNotRunReason},
+}
+
+func guardNotRunExpectedIDs() []string {
+	out := make([]string, len(guardNotRunExpected))
+	for i, e := range guardNotRunExpected {
+		out[i] = e.ID
+	}
+	return out
+}
+
+func guardNotRunDiff(got, want []string) (unexpected, vanished []string) {
+	wantSet := map[string]bool{}
+	gotSet := map[string]bool{}
+	for _, id := range want {
+		wantSet[id] = true
+	}
+	for _, id := range got {
+		gotSet[id] = true
+		if !wantSet[id] {
+			unexpected = append(unexpected, id)
+		}
+	}
+	for _, id := range want {
+		if !gotSet[id] {
+			vanished = append(vanished, id)
+		}
+	}
+	slices.Sort(unexpected)
+	slices.Sort(vanished)
+	return unexpected, vanished
+}
+
+func guardRowStatuses(r guardRow) []string {
+	return []string{r.Control, r.Guarded, r.Live}
+}
+
+func guardSetPassDespiteNotRun(sum *guardSummary) (ok bool, detail string) {
+	if sum == nil {
+		return false, " missing summary"
+	}
+	var bad []string
+	for _, r := range sum.Results {
+		for i, status := range guardRowStatuses(r) {
+			leg := []string{"control", "guarded", "live"}[i]
+			switch status {
+			case "pass", "skip", "not-run":
+			case "fail", "incomplete":
+				bad = append(bad, fmt.Sprintf("%s %s=%s", r.ID, leg, status))
+			default:
+				bad = append(bad, fmt.Sprintf("%s %s=%s", r.ID, leg, status))
+			}
+		}
+	}
+	if len(bad) > 0 {
+		slices.Sort(bad)
+		bad = slices.Compact(bad)
+		return false, fmt.Sprintf("; rows not only pass/skip/not-run: %s", strings.Join(bad, ", "))
+	}
+	got := append([]string{}, sum.NotRun...)
+	slices.Sort(got)
+	got = slices.Compact(got)
+	want := guardNotRunExpectedIDs()
+	unexpected, vanished := guardNotRunDiff(got, want)
+	if len(unexpected) > 0 || len(vanished) > 0 {
+		return false, fmt.Sprintf("; not-run unexpected %v vanished %v (got %v want %v)", unexpected, vanished, got, want)
+	}
+	return true, fmt.Sprintf("; tolerated not-run %v (%s)", want, guardNotRunReason)
+}
 
 func TestCDPGuardVectorsSkipC9OnlyOnMacOS(t *testing.T) {
 	vectors := guardVectorSet()
@@ -881,11 +941,7 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 			t.Errorf("%s: passed but carries mouse and focus evidence, which is kept only for failed rows: %s", name, r.Diagnostics)
 		}
 		if len(r.Errors) != 0 {
-			if reason, ok := waivedGuardRow(r); ok {
-				t.Logf("%s: WAIVED (%s): unexpected errors kept: %v", name, reason, r.Errors)
-			} else {
-				t.Errorf("%s: unexpected errors: %v", name, r.Errors)
-			}
+			t.Errorf("%s: unexpected errors: %v", name, r.Errors)
 		}
 		switch {
 		case r.Control == "not-run":
@@ -899,10 +955,6 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 			}
 			t.Logf("%s: skip %s", name, r.Reason)
 		case r.Control != "pass" || r.Guarded != "pass" || r.Live != "pass":
-			if reason, ok := waivedGuardRow(r); ok {
-				t.Logf("%s: WAIVED (%s): control %s, guarded %s, live %s\n  why %s\n  errors %v\n  observed %s", name, reason, r.Control, r.Guarded, r.Live, r.Why, r.Errors, r.Observed)
-				continue
-			}
 			if r.ID == "C7.credential-export" {
 				for _, n := range r.Notes {
 					if strings.Contains(n, "diag.pageGetCookies") || strings.Contains(n, "diag.topTarget") || strings.Contains(n, "partitioned:") || strings.Contains(n, "result:") {
@@ -945,23 +997,94 @@ func checkGuardSummary(t testing.TB, sum *guardSummary) {
 	}
 	t.Logf("passed rows per vector: %s", strings.Join(ran, " "))
 	if !sum.Pass {
-		onlyWaived := true
-		for _, r := range sum.Results {
-			if r.Control == "pass" && r.Guarded == "pass" && r.Live == "pass" {
-				continue
-			}
-			if r.Control == "skip" || r.Control == "not-run" {
-				continue
-			}
-			if _, ok := waivedGuardRow(r); !ok {
-				onlyWaived = false
-				break
-			}
-		}
-		if !onlyWaived {
-			t.Errorf("the guard set did not pass: counts=%s", sum.Counts)
+		if ok, detail := guardSetPassDespiteNotRun(sum); ok {
+			t.Logf("Pass=false only from expected not-run vectors%s", detail)
+			return
 		} else {
-			t.Logf("guard set Pass=false only from waived rows: counts=%s", sum.Counts)
+			t.Errorf("the guard set did not pass: counts=%s%s", sum.Counts, detail)
 		}
+	}
+}
+
+func TestCDPGuardNotRunExpectReasons(t *testing.T) {
+	kinds := map[string]string{}
+	for _, v := range guardVectorSet() {
+		kinds[v.ID] = v.Kind
+	}
+	seen := map[string]bool{}
+	for _, e := range guardNotRunExpected {
+		if e.ID == "" || e.Reason != guardNotRunReason {
+			t.Errorf("%q: want reason %q, got %q", e.ID, guardNotRunReason, e.Reason)
+		}
+		if seen[e.ID] {
+			t.Errorf("%s: duplicate expected not-run id", e.ID)
+		}
+		seen[e.ID] = true
+		if kinds[e.ID] != "text" {
+			t.Errorf("%s: expected not-run must be kind text in the pinned vector set, got %q", e.ID, kinds[e.ID])
+		}
+	}
+	for id, kind := range kinds {
+		if kind == "text" && !seen[id] {
+			t.Errorf("%s: text vector missing from expected not-run list", id)
+		}
+	}
+}
+
+func TestCDPGuardNotRunCheckToleratesExpected(t *testing.T) {
+	sum := &guardSummary{
+		Pass:   false,
+		NotRun: guardNotRunExpectedIDs(),
+		Results: []guardRow{
+			{ID: "C3.tab-attach", Control: "pass", Guarded: "pass", Live: "pass"},
+			{ID: "E1", Control: "not-run", Guarded: "not-run", Live: "not-run"},
+		},
+	}
+	ok, detail := guardSetPassDespiteNotRun(sum)
+	if !ok {
+		t.Fatalf("expected not-run set must be tolerated%s", detail)
+	}
+}
+
+func TestCDPGuardNotRunCheckFailsOnInjectedFail(t *testing.T) {
+	sum := &guardSummary{
+		Pass:   false,
+		NotRun: guardNotRunExpectedIDs(),
+		Results: []guardRow{
+			{ID: "C3.tab-attach", Control: "fail", Guarded: "pass", Live: "pass"},
+			{ID: "E1", Control: "not-run", Guarded: "not-run", Live: "not-run"},
+		},
+	}
+	ok, detail := guardSetPassDespiteNotRun(sum)
+	if ok || !strings.Contains(detail, "C3.tab-attach control=fail") {
+		t.Fatalf("injected fail must fail the set, got ok=%v detail=%s", ok, detail)
+	}
+}
+
+func TestCDPGuardNotRunCheckFailsOnUnexpected(t *testing.T) {
+	sum := &guardSummary{
+		Pass:   false,
+		NotRun: append(guardNotRunExpectedIDs(), "Z9"),
+		Results: []guardRow{
+			{ID: "C3.tab-attach", Control: "pass", Guarded: "pass", Live: "pass"},
+			{ID: "Z9", Control: "not-run", Guarded: "not-run", Live: "not-run"},
+		},
+	}
+	ok, detail := guardSetPassDespiteNotRun(sum)
+	if ok || !strings.Contains(detail, "unexpected [Z9]") {
+		t.Fatalf("unexpected not-run must fail, got ok=%v detail=%s", ok, detail)
+	}
+}
+
+func TestCDPGuardNotRunCheckFailsOnVanished(t *testing.T) {
+	want := guardNotRunExpectedIDs()
+	sum := &guardSummary{
+		Pass:    false,
+		NotRun:  want[:len(want)-1],
+		Results: []guardRow{{ID: "C3.tab-attach", Control: "pass", Guarded: "pass", Live: "pass"}},
+	}
+	ok, detail := guardSetPassDespiteNotRun(sum)
+	if ok || !strings.Contains(detail, "vanished [B7]") {
+		t.Fatalf("vanished expected not-run must fail, got ok=%v detail=%s", ok, detail)
 	}
 }

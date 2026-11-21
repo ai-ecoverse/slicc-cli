@@ -29,7 +29,9 @@ type heldSession struct {
 func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo, waiting bool) [][]byte {
 	sid, _ := params["sessionId"].(string)
 	h := &heldSession{id: sid, parent: parent, target: info.TargetID, typ: info.Type, params: params, waiting: waiting, at: time.Now()}
-	g.held[sid] = h
+	if !holdResumeUnheldEnabled() {
+		g.held[sid] = h
+	}
 	if workerTypes[info.Type] {
 		g.logf("cdp: holding an auto-attached worker until its URL or creator frame is known target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 		return nil
@@ -39,11 +41,79 @@ func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo
 	} else {
 		g.logf("cdp: holding an auto-attached session until its target has a URL target=%s session=%s parent=%s waiting=%t", h.target, sid, parent, waiting)
 	}
-	if !waiting {
+	shouldResume := waiting
+	if info.Type == "page" && holdResumeRegardlessEnabled() {
+		shouldResume = true
+	}
+	if !shouldResume {
+		return nil
+	}
+	if h.resumed {
 		return nil
 	}
 	h.resumed = true
-	return [][]byte{g.resumeLocked(sid, info.TargetID)}
+	g.noteHoldResumedLocked(sid)
+	out := [][]byte{g.resumeLocked(sid, info.TargetID)}
+	if holdResumeTwiceEnabled() {
+		out = append(out, g.resumeLocked(sid, info.TargetID))
+	}
+	return out
+}
+
+func (g *guard) noteHoldResumedLocked(sid string) {
+	if sid == "" {
+		return
+	}
+	if g.holdResumed == nil {
+		g.holdResumed = map[string]bool{}
+	}
+	if g.holdResumed[sid] {
+		return
+	}
+	g.holdResumed[sid] = true
+	g.holdResumedOrder = append(g.holdResumedOrder, sid)
+	if !holdResumeCapEnabled() {
+		return
+	}
+	limit := holdResumeCapLimit()
+	if limit <= 0 {
+		return
+	}
+	for len(g.holdResumedOrder) > limit {
+		old := g.holdResumedOrder[0]
+		g.holdResumedOrder = g.holdResumedOrder[1:]
+		delete(g.holdResumed, old)
+	}
+}
+
+func (g *guard) forgetHoldResumedLocked(id string) {
+	if id == "" || !g.holdResumed[id] {
+		return
+	}
+	delete(g.holdResumed, id)
+	for i, sid := range g.holdResumedOrder {
+		if sid != id {
+			continue
+		}
+		g.holdResumedOrder = append(g.holdResumedOrder[:i], g.holdResumedOrder[i+1:]...)
+		return
+	}
+}
+
+func (g *guard) answerHoldResumeLocked(c *command) []byte {
+	if c == nil || c.method != "Runtime.runIfWaitingForDebugger" {
+		return nil
+	}
+	if h := g.held[c.session]; h != nil {
+		if h.resumed {
+			return acknowledgement(c.id, c.session)
+		}
+		return nil
+	}
+	if g.holdResumed[c.session] {
+		return acknowledgement(c.id, c.session)
+	}
+	return nil
 }
 
 func heldOpenerLocked(h *heldSession) string {
@@ -213,10 +283,27 @@ func (g *guard) hideHeldPageAndTabsLocked(h *heldSession, protected bool, why st
 	if h == nil {
 		return v
 	}
+	if protected && holdResumeChangesProtectedFateEnabled() {
+		var was bool
+		if t := g.targets[h.target]; t != nil {
+			was = t.protected
+			t.protected = false
+		}
+		part := g.deliverHeldLocked(h)
+		if t := g.targets[h.target]; t != nil {
+			t.protected = was
+		}
+		v.send = append(v.send, part.send...)
+		v.page = append(v.page, part.page...)
+		return v
+	}
 	if protected {
 		v.send = append(v.send, g.hideLocked(h)...)
 	} else {
 		v.send = append(v.send, g.expireDetachLocked(h)...)
+	}
+	if holdResumeRefusedEnabled() && protected {
+		v.send = append(v.send, g.resumeLocked(h.id, h.target))
 	}
 	part := g.detachAnnouncedTabsForPageLocked(h, protected, why)
 	v.send = append(v.send, part.send...)
@@ -383,7 +470,9 @@ func (g *guard) hideLocked(h *heldSession) [][]byte {
 	g.addRefusedLocked(h.id)
 	g.logf("cdp: detached an auto-attached session on a protected origin target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 	var send [][]byte
-	if h.waiting {
+	if h.waiting && !h.resumed {
+		h.resumed = true
+		g.noteHoldResumedLocked(h.id)
 		send = append(send, g.resumeLocked(h.id, h.target))
 	}
 	msg, _ := g.newCallLocked(h.parent, "Target.detachFromTarget", map[string]any{"sessionId": h.id}, false)
@@ -452,7 +541,9 @@ func (g *guard) expireDetachLocked(h *heldSession) [][]byte {
 	g.noteHiddenLocked(h.id, h.target)
 	g.logf("cdp: detached an auto-attached session that never got a URL target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 	var send [][]byte
-	if h.waiting {
+	if h.waiting && !h.resumed {
+		h.resumed = true
+		g.noteHoldResumedLocked(h.id)
 		send = append(send, g.resumeLocked(h.id, h.target))
 	}
 	msg, _ := g.newCallLocked(h.parent, "Target.detachFromTarget", map[string]any{"sessionId": h.id}, false)

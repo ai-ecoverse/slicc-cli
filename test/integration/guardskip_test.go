@@ -48,32 +48,27 @@ func documentedGuardSkip(r guardRow) bool {
 type guardTally struct {
 	passed      map[string]int
 	unsupported map[string]int
-	waivedFail  map[string]bool
 }
 
 func tallyGuardRows(results []guardRow) guardTally {
-	g := guardTally{passed: map[string]int{}, unsupported: map[string]int{}, waivedFail: map[string]bool{}}
+	g := guardTally{passed: map[string]int{}, unsupported: map[string]int{}}
 	for _, r := range results {
 		switch {
 		case r.Control == "pass" && r.Guarded == "pass" && r.Live == "pass":
 			g.passed[r.ID]++
 		case r.Control == "skip" && guardSkipClass(r) == guardSkipUnsupported:
 			g.unsupported[r.ID]++
-		default:
-			if _, ok := waivedGuardRow(r); ok {
-				g.waivedFail[r.ID] = true
-			}
 		}
 	}
 	return g
 }
 
 func (g guardTally) proven(id string) bool {
-	return g.passed[id] > 0 || g.unsupported[id] > 0 || g.waivedFail[id]
+	return g.passed[id] > 0 || g.unsupported[id] > 0
 }
 
 func (g guardTally) any() bool {
-	return len(g.passed) > 0 || len(g.unsupported) > 0 || len(g.waivedFail) > 0
+	return len(g.passed) > 0 || len(g.unsupported) > 0
 }
 
 func TestGuardSkipsRequireExplicitConsistentReasons(t *testing.T) {

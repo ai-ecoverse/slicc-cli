@@ -2,8 +2,30 @@ package integration
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
+
+type recordTB struct {
+	testing.TB
+	errs []string
+}
+
+func (r *recordTB) Helper()             {}
+func (r *recordTB) Logf(string, ...any) {}
+func (r *recordTB) Error(args ...any) {
+	r.errs = append(r.errs, fmt.Sprint(args...))
+}
+func (r *recordTB) Errorf(format string, args ...any) {
+	r.errs = append(r.errs, fmt.Sprintf(format, args...))
+}
+func (r *recordTB) Fatal(args ...any) {
+	r.Error(args...)
+}
+func (r *recordTB) Fatalf(format string, args ...any) {
+	r.Errorf(format, args...)
+}
+func (r *recordTB) Failed() bool { return len(r.errs) > 0 }
 
 func TestCDPTabIframeLeakIsCrossSite(t *testing.T) {
 	for _, variant := range []string{"prompt", "lagging"} {
@@ -68,9 +90,6 @@ func TestTabIframeLeakFailsWhenGuardedLeaks(t *testing.T) {
 	miss := guardRow{
 		ID: "C3.tab-iframe-leak", Control: "incomplete", Guarded: "incomplete", Live: "incomplete",
 		Why: json.RawMessage(`"incomplete: unguarded observer never saw the framed target"`),
-	}
-	if _, ok := waivedGuardRow(miss); ok {
-		t.Fatal("observer-miss incomplete must never be waived", miss)
 	}
 	rec := &recordTB{TB: t}
 	checkGuardSummary(rec, &guardSummary{

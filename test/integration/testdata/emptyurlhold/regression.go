@@ -148,6 +148,218 @@ func TestEmptyURLHoldAnnounceEmptyTabHoldOnlyPage(t *testing.T) {
 	}
 }
 
+func TestEmptyURLHoldTabPopupPageChildResumedAtHold(t *testing.T) {
+	for _, waiting := range []bool{false, true} {
+		waiting := waiting
+		t.Run(fmt.Sprintf("waiting=%t", waiting), func(t *testing.T) {
+			g := emptyURLHoldGuard(t)
+			_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))
+			if g.sessions["S-TAB-POP"] == nil || g.held["S-TAB-POP"] != nil {
+				t.Fatal("popup tab must be announced so the client can arm tab-level setAutoAttach")
+			}
+			v := g.fromBrowser(emptyURLNamedPageAttach("S-TAB-POP", "S-PAGE-POP", "PAGE-POP", "OPENER", waiting))
+			ps := emptyURLHoldPayloads(v)
+			if emptyURLHoldContains(ps, "attachedToTarget") {
+				t.Fatalf("empty-URL popup page child announced before classification: %v", ps)
+			}
+			h := g.held["S-PAGE-POP"]
+			if h == nil {
+				t.Fatal("empty-URL popup page child was not held")
+			}
+			if !h.resumed {
+				t.Fatalf("held popup page child must be guard-resumed at hold time waiting=%t", waiting)
+			}
+			sends := emptyURLHoldSends(v)
+			if n := emptyURLHoldResumeCount(sends, "S-PAGE-POP"); n != 1 {
+				t.Fatalf("hold must send Runtime.runIfWaitingForDebugger exactly once on the held page child waiting=%t count=%d sends=%v", waiting, n, sends)
+			}
+		})
+	}
+}
+
+func emptyURLHoldResumeCount(ss []string, sessionID string) int {
+	n := 0
+	needle := `"sessionId":"` + sessionID + `"`
+	for _, s := range ss {
+		if strings.Contains(s, "Runtime.runIfWaitingForDebugger") && strings.Contains(s, needle) {
+			n++
+		}
+	}
+	return n
+}
+
+func emptyURLReview(g *guard, raw string) pageVerdict {
+	c, id, ok := parseCommand([]byte(raw))
+	return g.fromCommand(c, id, ok)
+}
+
+func TestEmptyURLHoldResumedMapBoundedAndAckAfterPrune(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	limit := holdResumeCapLimit()
+	if !holdResumeCapEnabled() || limit <= 0 {
+		t.Fatal("named row requires a positive holdResumed cap")
+	}
+	for i := 0; i < 6; i++ {
+		tab := fmt.Sprintf("S-TAB-E%d", i)
+		page := fmt.Sprintf("S-PAGE-E%d", i)
+		_ = g.fromBrowser(emptyURLNamedTabAttach(tab, fmt.Sprintf("TAB-E%d", i), "OPENER", true))
+		_ = g.fromBrowser(emptyURLNamedPageAttach(tab, page, fmt.Sprintf("PAGE-E%d", i), "OPENER", false))
+		if g.held[page] == nil || !g.holdResumed[page] {
+			t.Fatalf("empty-URL hold %s must be resumed into holdResumed", page)
+		}
+	}
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-KEEP", "TAB-KEEP", "OPENER", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-KEEP", "S-PAGE-KEEP", "PAGE-KEEP", "OPENER", false))
+	_ = g.fromBrowser(emptyURLNamedRelayChanged("PAGE-KEEP", "page", "https://ordinary.test/keep", "OPENER"))
+	if g.sessions["S-PAGE-KEEP"] == nil || g.held["S-PAGE-KEEP"] != nil || !g.holdResumed["S-PAGE-KEEP"] {
+		t.Fatal("expected delivered keep page still marked holdResumed")
+	}
+	g.mu.Lock()
+	for i := 0; i < limit+3; i++ {
+		g.noteHoldResumedLocked(fmt.Sprintf("S-PAD-%d", i))
+	}
+	if len(g.holdResumed) > limit || len(g.holdResumedOrder) > limit {
+		g.mu.Unlock()
+		t.Fatalf("holdResumed grew past cap: map=%d order=%d limit=%d", len(g.holdResumed), len(g.holdResumedOrder), limit)
+	}
+	latest := fmt.Sprintf("S-PAD-%d", limit+2)
+	if !g.holdResumed[latest] {
+		g.mu.Unlock()
+		t.Fatal("newest holdResumed entry must survive prune")
+	}
+	if g.holdResumed["S-PAGE-KEEP"] || g.holdResumed["S-PAGE-E0"] {
+		g.mu.Unlock()
+		t.Fatal("oldest holdResumed entries must be pruned once the cap is exceeded")
+	}
+	g.mu.Unlock()
+	ack := emptyURLReview(g, fmt.Sprintf(`{"id":80,"sessionId":"%s","method":"Runtime.runIfWaitingForDebugger","params":{}}`, latest))
+	if len(ack.forward) > 0 {
+		t.Fatalf("client resume after prune must ack without a second guard resume: %s", ack.forward)
+	}
+	if len(ack.reply) == 0 || strings.Contains(string(ack.reply), "Session with given id not found") {
+		t.Fatalf("client resume after prune must ack: %s", ack.reply)
+	}
+	g.mu.Lock()
+	g.forgetSessionLocked(latest)
+	if g.holdResumed[latest] {
+		g.mu.Unlock()
+		t.Fatal("forgetSessionLocked must delete the holdResumed entry")
+	}
+	g.mu.Unlock()
+}
+
+func TestEmptyURLHoldClientResumeAfterGuardResumeIsIdempotent(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))
+	v := g.fromBrowser(emptyURLNamedPageAttach("S-TAB-POP", "S-PAGE-POP", "PAGE-POP", "OPENER", false))
+	if g.held["S-PAGE-POP"] == nil || !g.held["S-PAGE-POP"].resumed {
+		t.Fatal("expected held resumed page child")
+	}
+	heldAck := emptyURLReview(g, `{"id":20,"sessionId":"S-PAGE-POP","method":"Runtime.runIfWaitingForDebugger","params":{}}`)
+	if len(heldAck.forward) > 0 {
+		t.Fatalf("client resume while held was forwarded: %s", heldAck.forward)
+	}
+	if len(heldAck.reply) == 0 || strings.Contains(string(heldAck.reply), "Session with given id not found") {
+		t.Fatalf("client resume while held must ack without missing session: %s", heldAck.reply)
+	}
+	_ = g.fromBrowser(emptyURLRelayChanged("PAGE-POP", "page", "https://ordinary.test/popup"))
+	if g.held["S-PAGE-POP"] != nil || g.sessions["S-PAGE-POP"] == nil {
+		t.Fatal("ordinary classification must deliver the page child")
+	}
+	after := emptyURLReview(g, `{"id":21,"sessionId":"S-PAGE-POP","method":"Runtime.runIfWaitingForDebugger","params":{}}`)
+	if len(after.forward) > 0 {
+		t.Fatalf("client resume after deliver was a second guard resume: %s", after.forward)
+	}
+	if len(after.reply) == 0 || strings.Contains(string(after.reply), "Session with given id not found") {
+		t.Fatalf("client resume after deliver must ack without missing session: %s", after.reply)
+	}
+	_ = emptyURLHoldSends(v)
+}
+
+func TestEmptyURLHoldClientResumeAfterExpiryIsIdempotent(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-POP", "S-PAGE-POP", "PAGE-POP", "OPENER", false))
+	_, _ = g.expireHold("S-PAGE-POP")
+	v := emptyURLReview(g, `{"id":22,"sessionId":"S-PAGE-POP","method":"Runtime.runIfWaitingForDebugger","params":{}}`)
+	if len(v.forward) > 0 {
+		t.Fatalf("client resume after expiry was forwarded: %s", v.forward)
+	}
+	if len(v.reply) == 0 || strings.Contains(string(v.reply), "Session with given id not found") {
+		t.Fatalf("client resume after expiry must ack without missing session: %s", v.reply)
+	}
+}
+
+func TestEmptyURLHoldClientResumeAfterRefuseIsIdempotent(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-POP", "S-PAGE-POP", "PAGE-POP", "OPENER", false))
+	_ = g.fromBrowser(emptyURLRelayChanged("PAGE-POP", "page", "https://seven.sliccy.ai/popup"))
+	v := emptyURLReview(g, `{"id":23,"sessionId":"S-PAGE-POP","method":"Runtime.runIfWaitingForDebugger","params":{}}`)
+	if len(v.forward) > 0 {
+		t.Fatalf("client resume after refuse was forwarded: %s", v.forward)
+	}
+	if len(v.reply) == 0 || strings.Contains(string(v.reply), "Session with given id not found") {
+		t.Fatalf("client resume after refuse must ack without missing session: %s", v.reply)
+	}
+}
+
+func TestEmptyURLHoldResumeUnheldChild(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))
+	v := g.fromBrowser(emptyURLNamedPageAttach("S-TAB-POP", "S-PAGE-POP", "PAGE-POP", "OPENER", false))
+	if g.held["S-PAGE-POP"] == nil {
+		t.Fatal("named row: page child must stay held and tracked")
+	}
+	if emptyURLHoldResumeCount(emptyURLHoldSends(v), "S-PAGE-POP") != 1 {
+		t.Fatal("named row: held child must be resumed exactly once")
+	}
+}
+
+func TestEmptyURLHoldResumeTwice(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))
+	v := g.fromBrowser(emptyURLNamedPageAttach("S-TAB-POP", "S-PAGE-POP", "PAGE-POP", "OPENER", false))
+	if n := emptyURLHoldResumeCount(emptyURLHoldSends(v), "S-PAGE-POP"); n != 1 {
+		t.Fatalf("named row: resume exactly once, got %d", n)
+	}
+}
+
+func TestEmptyURLHoldResumeRefusedChild(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))
+	hold := g.fromBrowser(emptyURLNamedPageAttach("S-TAB-POP", "S-PAGE-POP", "PAGE-POP", "OPENER", false))
+	before := emptyURLHoldResumeCount(emptyURLHoldSends(hold), "S-PAGE-POP")
+	v := g.fromBrowser(emptyURLRelayChanged("PAGE-POP", "page", "https://seven.sliccy.ai/popup"))
+	after := emptyURLHoldResumeCount(emptyURLHoldSends(v), "S-PAGE-POP")
+	if before != 1 || after != 0 {
+		t.Fatalf("named row: refused child must not get another guard resume (hold=%d refuse=%d)", before, after)
+	}
+	if g.sessions["S-PAGE-POP"] != nil || emptyURLHoldContains(emptyURLHoldPayloads(v), "attachedToTarget") {
+		t.Fatal("named row: refused child must stay detached from the client")
+	}
+}
+
+func TestEmptyURLHoldResumeProtectedFateUnchanged(t *testing.T) {
+	g := emptyURLHoldGuard(t)
+	_ = g.fromBrowser(emptyURLNamedTabAttach("S-TAB-POP", "TAB-POP", "OPENER", true))
+	_ = g.fromBrowser(emptyURLNamedPageAttach("S-TAB-POP", "S-PAGE-POP", "PAGE-POP", "OPENER", false))
+	if g.held["S-PAGE-POP"] == nil || !g.held["S-PAGE-POP"].resumed {
+		t.Fatal("expected resumed held page before protected classification")
+	}
+	v := g.fromBrowser(emptyURLRelayChanged("PAGE-POP", "page", "https://seven.sliccy.ai/popup"))
+	ps := emptyURLHoldPayloads(v)
+	if emptyURLHoldContains(ps, "attachedToTarget") {
+		t.Fatalf("named row: protected fate must stay detached (no client attach): %v", ps)
+	}
+	if g.sessions["S-PAGE-POP"] != nil || g.held["S-PAGE-POP"] != nil {
+		t.Fatal("named row: protected fate must latch/detach the page child")
+	}
+	if g.sessions["S-TAB-POP"] != nil {
+		t.Fatal("named row: protected fate must detach the announced tab")
+	}
+}
+
 func TestEmptyURLHoldOrdinaryAnnouncesTabThenPage(t *testing.T) {
 	g := emptyURLHoldGuard(t)
 	tabClient := emptyURLHoldPayloads(g.fromBrowser(emptyURLTabAttach(true)))
