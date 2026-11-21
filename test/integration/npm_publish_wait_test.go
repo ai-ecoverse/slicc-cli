@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -250,6 +252,14 @@ func lastLine(s string) string {
 	return lines[len(lines)-1]
 }
 
+func depList() string {
+	var parts []string
+	for _, d := range waitDeps {
+		parts = append(parts, regexp.QuoteMeta(d+"@"+waitVersion))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func requirePosixNPM(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -267,7 +277,7 @@ func TestSliccyNextPublishesWhenItsPlatformPackagesAppearInTime(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.stdout, "every optional dependency of sliccy@"+waitNext+" is on the registry") {
 		t.Fatalf("publish: %+v", r)
 	}
-	if lastLine(r.stdout) != "npm-publish: PASS next: published 1, 0 already published of 1 packages" || strings.Contains(r.stdout+r.stderr, "PARTIAL") || strings.Contains(r.stdout+r.stderr, "WARN") {
+	if !regexp.MustCompile(`^npm-publish: PASS next: published 1, 0 already published of 1 packages; registry wait [0-9]+ s of 3 s, last to appear `+depList()+`$`).MatchString(lastLine(r.stdout)) || strings.Contains(r.stdout+r.stderr, "PARTIAL") || strings.Contains(r.stdout+r.stderr, "WARN") {
 		t.Fatalf("verdict: %+v", r)
 	}
 	want := "publish " + filepath.Join(dir, "slicc") + " --access public --tag next --provenance"
@@ -281,6 +291,67 @@ func TestSliccyNextPublishesWhenItsPlatformPackagesAppearInTime(t *testing.T) {
 	}
 	if n := strings.Count(r.stdout, "waiting for "); n < 2 {
 		t.Fatalf("%d waiting lines, want at least 2 with SLICC_REGISTRY_POLL_SECONDS=1: %+v", n, r)
+	}
+}
+
+func TestSliccyNextVerdictIsUnchangedWhenNothingWaited(t *testing.T) {
+	node := requirePosixNPM(t)
+	f := newFakeNPM(t, node)
+	reg := newWaitRegistry(t, 0, false)
+	r := publish(t, node, nextDir(t, waitNext), waitEnv(t, f, reg), "--tag", "next")
+	if r.code != 0 || lastLine(r.stdout) != "npm-publish: PASS next: published 1, 0 already published of 1 packages" {
+		t.Fatalf("verdict: %+v", r)
+	}
+	if out := r.stdout + r.stderr; strings.Contains(out, "registry wait") || strings.Contains(out, "waiting for ") || strings.Contains(out, "WARN") {
+		t.Fatalf("a publish that never waited: %+v", r)
+	}
+	if n := reg.asked(); n != len(waitDeps) {
+		t.Fatalf("asked the registry %d times, want one request per platform package (%d)", n, len(waitDeps))
+	}
+}
+
+func TestSliccyNextWaitsUpTo5400SecondsByDefault(t *testing.T) {
+	node := requirePosixNPM(t)
+	for _, wait := range []string{"", "SLICC_REGISTRY_WAIT_SECONDS=soon"} {
+		f := newFakeNPM(t, node)
+		reg := newWaitRegistry(t, time.Second, false)
+		var env []string
+		for _, kv := range waitEnv(t, f, reg) {
+			if !strings.HasPrefix(kv, "SLICC_REGISTRY_WAIT_SECONDS=") {
+				env = append(env, kv)
+			}
+		}
+		if wait != "" {
+			env = append(env, wait)
+		}
+		r := publish(t, node, nextDir(t, waitNext), env, "--tag", "next")
+		if r.code != 0 || !regexp.MustCompile(`^npm-publish: PASS next: published 1, 0 already published of 1 packages; registry wait [0-9]+ s of 5400 s, last to appear `+depList()+`$`).MatchString(lastLine(r.stdout)) {
+			t.Fatalf("%q: %+v", wait, r)
+		}
+	}
+}
+
+func TestReleaseJobOutlastsTheRegistryWait(t *testing.T) {
+	m := regexp.MustCompile(`seconds\('SLICC_REGISTRY_WAIT_SECONDS', ([0-9]+), 0\)`).FindStringSubmatch(readRepo(t, "scripts/npm-publish.mjs"))
+	if m == nil {
+		t.Fatal("npm-publish.mjs has no default SLICC_REGISTRY_WAIT_SECONDS")
+	}
+	wait, _ := strconv.Atoi(m[1])
+	job, err := strconv.Atoi(ciInput(t, "timeout-minutes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := ciInput(t, "release-timeout-minutes"); v != "" {
+		release, err := strconv.Atoi(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if release > 0 {
+			job = release
+		}
+	}
+	if job*60 < wait+10*60 {
+		t.Errorf("the release job's %d-minute timeout ends it before the %d s registry wait and 10 minutes for the release build", job, wait)
 	}
 }
 
@@ -320,6 +391,9 @@ func TestSliccyNextIsSkippedWhenItsPlatformPackagesNeverAppear(t *testing.T) {
 	}
 	if !strings.HasPrefix(lastLine(r.stdout), "npm-publish: PARTIAL next: ") || strings.Contains(r.stdout, "npm-publish: PASS") {
 		t.Fatalf("verdict: %+v", r)
+	}
+	if !regexp.MustCompile(`^npm-publish: PARTIAL next: published 0, 0 already published, skipped sliccy@` + regexp.QuoteMeta(waitNext) + ` of 1 packages; registry wait [0-9]+ s of 3 s, still missing ` + depList() + `$`).MatchString(lastLine(r.stdout)) {
+		t.Fatalf("the verdict doesn't name the wait: %+v", r)
 	}
 	if got := f.publishes(t); len(got) != 0 {
 		t.Fatalf("published %q after the registry wait ran out", got)
