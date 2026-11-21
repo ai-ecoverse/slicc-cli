@@ -193,7 +193,16 @@ async function viaPuppeteer(url, expectProtected) {
     const popupPromise = new Promise((resolve) => page.once('popup', resolve));
     await page.click('#pop');
     const popup = await popupPromise;
-    await popup.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    const wantPopup = new URL('/popup', url).href;
+    const popupDeadline = Date.now() + 10000;
+    for (;;) {
+      const got = popup.url();
+      if (got === wantPopup || got.startsWith(wantPopup)) break;
+      if (Date.now() > popupDeadline) {
+        throw new Error(`STOCKPOPUP puppeteer never reached ${wantPopup} within 10s: url=${got}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     console.log(`STOCKPOPUP puppeteer open-to-URL ms=${Date.now() - popupOpened} url=${popup.url()}`);
     await popup.close();
     await page.goto(new URL('/frame', url).href, { waitUntil: 'domcontentloaded' });
