@@ -10,7 +10,7 @@ import (
 
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 	"github.com/ai-ecoverse/slicc-cli/internal/protect"
-	whatwg "github.com/nlnwa/whatwg-url/url"
+	whatwg "github.com/nationallibraryofnorway/whatwg-url/url"
 	"golang.org/x/net/idna"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -717,7 +717,7 @@ func canonicalAuthority(host string) (string, bool) {
 		}
 		host = host[:colon]
 	}
-	u, err := hostParser.BasicParser(host, nil, hostBase.Clone(), whatwg.StateHostname)
+	u, err := hostParser.(whatwg.BasicParsing).BasicParse(host, nil, hostBase.Clone(), whatwg.StateHostname)
 	if err != nil || u == nil {
 		return "", true
 	}

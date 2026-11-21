@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
-	whatwg "github.com/nlnwa/whatwg-url/url"
+	whatwg "github.com/nationallibraryofnorway/whatwg-url/url"
 )
 
 type Opener int
