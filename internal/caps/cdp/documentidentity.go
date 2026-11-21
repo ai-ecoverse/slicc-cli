@@ -243,11 +243,13 @@ func (g *guard) holdDocIdentityReplyLocked(k callKey, m *message, data []byte) (
 	}
 	if g.sessionDocIdentityHoldCountLocked(m.SessionID) >= maxDocIdentityHolds {
 		g.logf("cdp: too many document identity holds on a session; dropping one")
+		g.diagE7Disposition("REWRITTEN", g.paintMethods[k], m.SessionID, *m.ID, "retriable too-many-holds")
 		return nil, [][]byte{retriableContextDestroyed(*m.ID, m.SessionID)}, true
 	}
 	reservation, reserved := g.holdReservation(data)
 	if !reserved {
 		g.logf("cdp: document identity hold exceeded the write budget; refusing the reply")
+		g.diagE7Disposition("REWRITTEN", g.paintMethods[k], m.SessionID, *m.ID, "retriable hold-budget")
 		return nil, [][]byte{retriableContextDestroyed(*m.ID, m.SessionID)}, true
 	}
 	now := time.Now()
@@ -425,23 +427,29 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 	case chromeErrorDocument(current.url):
 		eventSeq, saw := g.docChromeErrorSeq[h.target]
 		if saw && h.seq < eventSeq {
+			g.diagE7Disposition("FORWARDED", "", h.session, h.id, "docIdentityHold release chrome-error-deliver url="+current.url)
 			g.pendingPage = append(g.pendingPage, h.data)
 		} else {
+			g.diagE7Disposition("REWRITTEN", "", h.session, h.id, "docIdentityHold release chrome-error-retriable url="+current.url)
 			g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
 		}
 	case g.docIdentityProtectedLocked(current):
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
+		g.diagE7Disposition("REWRITTEN", "", h.session, h.id, "docIdentityHold release protected-refusal url="+current.url)
 		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
 	case !g.docIdentityOrdinaryLocked(current):
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
+		g.diagE7Disposition("REWRITTEN", "", h.session, h.id, "docIdentityHold release non-ordinary-refusal url="+current.url)
 		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
 	case tainted:
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
+		g.diagE7Disposition("REWRITTEN", "", h.session, h.id, "docIdentityHold release taint-refusal url="+current.url)
 		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
 	default:
 		if current.full {
 			g.noteOrdinaryDocIdentityLocked(h.target, current.frameID, current.loaderID, current.url, true)
 		}
+		g.diagE7Disposition("FORWARDED", "", h.session, h.id, "docIdentityHold release ordinary-deliver url="+current.url)
 		g.pendingPage = append(g.pendingPage, h.data)
 	}
 	return send

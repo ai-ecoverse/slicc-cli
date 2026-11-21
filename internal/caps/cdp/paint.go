@@ -221,14 +221,5 @@ func (g *guard) answerLocked(m *message, data []byte) browserVerdict {
 			delete(g.extensionCaptureDirty, k)
 		}
 	}
-	if v.forward != nil {
-		if send, page, held := g.holdDocIdentityReplyLocked(k, m, v.forward); held {
-			v.forward = nil
-			v.send = append(v.send, send...)
-			v.page = append(v.page, page...)
-			return v
-		}
-	}
-	g.dropDocIdentityCallLocked(k)
-	return v
+	return g.diagE7AfterIdentityHold(method, m, k, v)
 }

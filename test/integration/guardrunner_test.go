@@ -663,6 +663,7 @@ type guardRun struct {
 	variant        string
 	slots          int
 	only           string
+	target         string
 	inject         string
 	rowTimeout     time.Duration
 	errorPageVault bool
@@ -787,6 +788,7 @@ func runGuard(t *testing.T, run guardRun) *guardSummary {
 		"sha":            sha,
 		"rowTimeoutMs":   run.rowTimeout.Milliseconds(),
 		"only":           run.only,
+		"target":         run.target,
 		"skips":          guardSkips,
 		"inject":         run.inject,
 		"errorPageVault": run.errorPageVault,
