@@ -193,7 +193,7 @@ func writeGuardReport(dir, variant string, sum *guardSummary) (string, error) {
 const guardLegacyInterceptionUndeclared = "legacyInterception is declared false: the deprecated Network.setRequestInterception and Network.continueInterceptedRequest are not a supported interception path on this route; intercept requests through Fetch instead (the extension declares the same after slicc-extension#424). The C10 legacy observations stay unmeasured here until slicc-cli#869"
 
 func guardCapabilities() map[string]bool {
-	return map[string]bool{"autoAttach": true, "iframeAutoAttach": true, "errorFrameClass": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "extensionFrame": true, "inboundDelay": true, "forwardAudit": true, "stockSetup": true, "closeProtected": true, "secureOrigin": true, "signInHold": false, "requestInterception": true, "fetchInterception": true, "legacyInterception": false}
+	return map[string]bool{"autoAttach": true, "iframeAutoAttach": true, "errorFrameClass": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "extensionFrame": true, "inboundDelay": true, "forwardAudit": true, "stockSetup": true, "closeProtected": true, "secureOrigin": true, "signInHold": false, "explicitAttach": false, "requestInterception": true, "fetchInterception": true, "legacyInterception": false}
 }
 
 func guardSetVerdict(sum *guardSummary) (ok bool, detail string) {
