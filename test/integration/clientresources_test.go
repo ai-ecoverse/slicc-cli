@@ -60,6 +60,7 @@ func TestCDPClientResourceRequestsRefuseProtectedHopsBeforeSending(t *testing.T)
 										Forwarded bool `json:"forwarded"`
 									} `json:"probes"`
 								} `json:"audit"`
+								LegacySetup              cdpOutcome     `json:"legacySetup"`
 								NativeControlUnavailable bool           `json:"nativeControlUnavailable"`
 								Counts                   map[string]int `json:"counts"`
 								Events                   []struct {
@@ -104,6 +105,9 @@ func TestCDPClientResourceRequestsRefuseProtectedHopsBeforeSending(t *testing.T)
 									t.Fatalf("native client request positive control did not follow or reach protected origin: %s", raw)
 								}
 								continue
+							}
+							if method == "Network.continueInterceptedRequest" && (row.LegacySetup.Error.Message != legacyInterceptionRefusal || row.Setup.Error.Message != legacyInterceptionRefusal) {
+								t.Errorf("the guarded legacy client path was not refused as unsupported: %s", raw)
 							}
 							mutation := strings.HasPrefix(method, "Fetch.") || method == "Network.continueInterceptedRequest"
 							if mutation && row.Setup.OK {

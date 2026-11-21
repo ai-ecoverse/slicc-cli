@@ -1889,7 +1889,8 @@ export function protectTest(getLink, describe) {
     legacyInterception: (browser, all, last) =>
       run(browser, async (c) => {
         const done = c.waitEvent((e) => e.method === 'Network.requestIntercepted' && e.params.interceptionId === last, 15000);
-        await c.send('Network.setRequestInterception', { patterns: [{ urlPattern: '*' }] });
+        const setup = await outcome(c.send('Network.setRequestInterception', { patterns: [{ urlPattern: '*' }] }));
+        await c.send('Network.enable', {});
         await done;
         await sleep(300);
         const seen = c.events.filter((e) => e.method === 'Network.requestIntercepted').map((e) => e.params.interceptionId);
@@ -1897,7 +1898,7 @@ export function protectTest(getLink, describe) {
         for (const id of all) {
           attempts[id] = await outcome(c.send('Network.continueInterceptedRequest', { interceptionId: id }));
         }
-        return { seen, attempts };
+        return { setup, seen, attempts };
       }),
     redirectHeaders: (browser, start, hops) =>
       run(browser, async (c) => {

@@ -400,8 +400,6 @@ func (e *unparsedEnv) testOtherDestinations(t *testing.T) {
 		Continued cdpOutcome `json:"continued"`
 		Body      string     `json:"body"`
 		Legacy    cdpOutcome `json:"legacyEnable"`
-		Intercept cdpOutcome `json:"continueIntercepted"`
-		LegacyOK  cdpOutcome `json:"legacyContinued"`
 	}
 	b, _ := json.Marshal(r)
 	_ = json.Unmarshal(b, &after)
@@ -411,10 +409,7 @@ func (e *unparsedEnv) testOtherDestinations(t *testing.T) {
 	if !after.Continued.OK || strings.Contains(after.Body, "cdp nav hole") {
 		t.Errorf("the paused request after the refusal: %+v, body %q", after.Continued, after.Body)
 	}
-	switch {
-	case !after.Legacy.OK:
-		t.Logf("this Chrome has no Network.setRequestInterception (%+v), so continueInterceptedRequest isn't tried", after.Legacy)
-	case after.Intercept.Error.Message != refusedParseText || !after.LegacyOK.OK:
-		t.Errorf("Network.continueInterceptedRequest with %q: %+v, then %+v", e.hole, after.Intercept, after.LegacyOK)
+	if !after.Legacy.refused() || after.Legacy.Error.Message != legacyInterceptionRefusal {
+		t.Errorf("Network.setRequestInterception: %+v", after.Legacy)
 	}
 }

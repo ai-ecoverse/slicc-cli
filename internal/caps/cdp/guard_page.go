@@ -596,6 +596,11 @@ var methodRules = map[string]func(g *guard, c *command) string{
 	"Storage.setCookies":          (*guard).cookiesRule,
 	"Network.getCookies":          (*guard).cookieURLsRule,
 	"Page.getCookies":             (*guard).cookieURLsRule,
+
+	"Network.setRequestInterception":                  legacyInterceptionRule(legacyRefuseSetup),
+	"Network.continueInterceptedRequest":              legacyInterceptionRule(legacyRefuseContinue),
+	"Network.getResponseBodyForInterception":          legacyInterceptionRule(legacyRefuseBodies),
+	"Network.takeResponseBodyForInterceptionAsStream": legacyInterceptionRule(legacyRefuseBodies),
 }
 
 func (g *guard) cookieURLsRule(c *command) string {
