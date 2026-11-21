@@ -226,7 +226,7 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	send = append(treeSend, send...)
 	acceptedAttach = kind != kindAttach || !hide
 	if hide {
-		return browserVerdict{forward: missingTarget(*m.ID, m.SessionID), send: send, page: treePage}
+		return g.hiddenResultLocked(kind, m, res, browserVerdict{send: send, page: treePage})
 	}
 	m.Result = encode(res)
 	return browserVerdict{forward: encode(m), send: send, page: treePage}
