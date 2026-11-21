@@ -719,6 +719,9 @@ func (g *guard) expireExtensionPaintLocked(k callKey, gen uint64) (page [][]byte
 	releases = g.takeReleasesLocked()
 	if g.sessionRefusedLocked(k.session) {
 		g.logf("cdp: extension-frame capture deadline skipped a refused session")
+		if heldReplyAnswerPaint() {
+			return [][]byte{refusal(k.id, k.session, refusedTarget)}, releases
+		}
 		return nil, releases
 	}
 	return [][]byte{refusal(k.id, k.session, protect.ShownReason())}, releases
@@ -753,8 +756,22 @@ func (g *guard) finishExtensionPaintLocked(k callKey, shown, ok bool) [][]byte {
 }
 
 func (g *guard) takePendingPageLocked() [][]byte {
-	out := g.pendingPage
+	out := append(g.pendingPage, g.takeAnsweredHeldLocked()...)
 	g.pendingPage = nil
+	return out
+}
+
+func (g *guard) answerHeldLocked(answer []byte) {
+	if heldReplyFlushAtOnce() {
+		g.answeredHeld = append(g.answeredHeld, answer)
+		return
+	}
+	g.pendingPage = append(g.pendingPage, answer)
+}
+
+func (g *guard) takeAnsweredHeldLocked() [][]byte {
+	out := g.answeredHeld
+	g.answeredHeld = nil
 	return out
 }
 
@@ -782,8 +799,11 @@ func (g *guard) releaseExtensionPaintsForSessionLocked(session string) {
 		}
 		if h != nil {
 			g.pendingRelease = append(g.pendingRelease, h.reservation)
-			if !g.sessionRefusedLocked(session) {
-				g.pendingPage = append(g.pendingPage, refusal(k.id, k.session, protect.ShownReason()))
+			switch {
+			case !g.sessionRefusedLocked(session):
+				g.answerHeldLocked(refusal(k.id, k.session, protect.ShownReason()))
+			case heldReplyAnswerPaint():
+				g.answerHeldLocked(refusal(k.id, k.session, refusedTarget))
 			}
 		}
 		delete(g.heldExtensionPaints, k)

@@ -148,8 +148,12 @@ func (g *guard) expireAnswer(k callKey) (page, send [][]byte, releases []*link.R
 func (g *guard) forgetAnswersLocked(session string) {
 	for k := range g.heldAnswers {
 		if k.session == session {
-			g.heldAnswers[k].reservation.Release()
+			h := g.heldAnswers[k]
+			h.reservation.Release()
 			delete(g.heldAnswers, k)
+			if heldReplyAnswerBody() {
+				g.answerHeldLocked(g.refuseAnswerLocked(k, h.call, &h.m, refusedUnknown).forward)
+			}
 		}
 	}
 }

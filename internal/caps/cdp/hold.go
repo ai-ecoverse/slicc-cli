@@ -570,7 +570,7 @@ func (g *guard) expireHold(sessionID string) (page, send [][]byte) {
 	g.fallthroughDocConfirmObserveLocked(h.target)
 	part := g.hideHeldPageAndTabsLocked(h, false, "unclassified expiry")
 	g.resolveUnknownLocked()
-	return part.page, append(send, part.send...)
+	return append(part.page, g.takeAnsweredHeldLocked()...), append(send, part.send...)
 }
 
 func (g *guard) dropHeldLocked(targetID string) (page, send [][]byte) {

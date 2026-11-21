@@ -308,6 +308,9 @@ func (g *guard) passDocConfirmLocked(dc *docConfirm) [][]byte {
 	}
 	var send [][]byte
 	for sid, h := range dc.holds {
+		if g.passCutHoldLocked(sid, h) {
+			continue
+		}
 		g.docPassed[sid] = true
 		typ := h.typ
 		if typ == "" {
@@ -340,6 +343,16 @@ func (g *guard) passDocConfirmLocked(dc *docConfirm) [][]byte {
 	return send
 }
 
+func (g *guard) passCutHoldLocked(sid string, h *docHold) bool {
+	if !attachPassRefuseCut() || (!g.hidden[sid] && !g.refused[sid]) {
+		return false
+	}
+	if h.hasReply {
+		g.pendingPage = append(g.pendingPage, refusal(h.replyID, h.replySid, refusedTarget))
+	}
+	return true
+}
+
 func (g *guard) pruneDocConfirmSessionLocked(session string) {
 	if session == "" {
 		return
@@ -349,6 +362,9 @@ func (g *guard) pruneDocConfirmSessionLocked(session string) {
 	for _, dc := range g.docInflight {
 		if dc == nil || dc.holds[session] == nil {
 			continue
+		}
+		if h := dc.holds[session]; heldReplyAnswerDocConfirm() && !dc.done && h.hasReply {
+			g.answerHeldLocked(refusal(h.replyID, h.replySid, refusedTarget))
 		}
 		delete(dc.holds, session)
 		if len(dc.holds) == 0 && !dc.done {

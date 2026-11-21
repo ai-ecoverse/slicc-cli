@@ -167,6 +167,8 @@ type guard struct {
 	attachParent             string
 	refused                  map[string]bool
 	refusedOrder             []string
+	attachCut                map[string]bool
+	attachCutOrder           []string
 	browserSessions          map[string]bool
 	ownContexts              map[string]bool
 	pending                  map[callKey]callKind
@@ -281,6 +283,7 @@ type guard struct {
 	debuggerLimit            int
 	heldExtensionPaints      map[callKey]*heldExtensionPaint
 	pendingPage              [][]byte
+	answeredHeld             [][]byte
 	paintMethods             map[callKey]string
 	extensionShownCleared    bool
 	extensionProbeWorlds     map[string]bool
@@ -1708,6 +1711,21 @@ func (g *guard) protectLocked(t *target) [][]byte {
 	return out
 }
 
+func (g *guard) noteAttachCutLocked(id string) {
+	if !attachCutSticky() || id == "" || g.attachCut[id] {
+		return
+	}
+	if g.attachCut == nil {
+		g.attachCut = map[string]bool{}
+	}
+	g.attachCut[id] = true
+	g.attachCutOrder = append(g.attachCutOrder, id)
+	if len(g.attachCutOrder) > maxRefused {
+		delete(g.attachCut, g.attachCutOrder[0])
+		g.attachCutOrder = g.attachCutOrder[1:]
+	}
+}
+
 func (g *guard) addRefusedLocked(id string) {
 	if g.refused[id] {
 		return
@@ -1721,6 +1739,13 @@ func (g *guard) addRefusedLocked(id string) {
 }
 
 func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
+	queued := len(g.pendingPage)
+	defer func() {
+		if heldReplyFlushAtOnce() && len(g.pendingPage) > queued {
+			page = append(page, g.pendingPage[queued:]...)
+			g.pendingPage = g.pendingPage[:queued]
+		}
+	}()
 	g.pruneDocConfirmTargetLocked(id)
 	g.pruneDocIdentityTargetLocked(id)
 	g.pruneDocConfirmObserveTargetLocked(id)
