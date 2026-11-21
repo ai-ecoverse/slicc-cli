@@ -289,15 +289,16 @@ func extensionPaintHoldDuration() time.Duration {
 }
 
 type heldExtensionPaint struct {
-	reservation *link.Reservation
-	m           message
-	data        []byte
-	session     string
-	target      string
-	frames      []string
-	deadline    time.Time
-	dirty       bool
-	generation  uint64
+	reservation   *link.Reservation
+	m             message
+	data          []byte
+	session       string
+	target        string
+	frames        []string
+	deadline      time.Time
+	dirty         bool
+	generation    uint64
+	probeDeferred bool
 }
 
 type extensionProbeWorld struct {
@@ -600,14 +601,22 @@ func (g *guard) afterExtensionShown(c *command, shown bool, ok bool) pageVerdict
 }
 
 func (g *guard) holdExtensionPaintLocked(m *message, data []byte, target string, frames []string) browserVerdict {
+	return g.armExtensionPaintLocked(m, data, target, frames, false)
+}
+
+func (g *guard) armExtensionPaintLocked(m *message, data []byte, target string, frames []string, probeDeferred bool) browserVerdict {
 	k := callKey{m.SessionID, *m.ID}
 	if g.heldExtensionPaints[k] != nil {
 		g.logf("cdp: dropped a screenshot that finished while another extension-frame capture was still checking")
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, protect.ShownReason())}
 	}
-	reservation, ok := g.holdReservation(data)
-	if !ok {
-		return browserVerdict{}
+	var reservation *link.Reservation
+	if !probeDeferred {
+		var ok bool
+		reservation, ok = g.holdReservation(data)
+		if !ok {
+			return browserVerdict{}
+		}
 	}
 	g.extensionPaintGen++
 	gen := g.extensionPaintGen
@@ -618,21 +627,80 @@ func (g *guard) holdExtensionPaintLocked(m *message, data []byte, target string,
 		g.heldExtensionPaints = map[callKey]*heldExtensionPaint{}
 	}
 	g.heldExtensionPaints[k] = &heldExtensionPaint{
-		reservation: reservation,
-		m:           *m,
-		data:        data,
-		session:     m.SessionID,
-		target:      target,
-		frames:      frames,
-		deadline:    deadline,
-		generation:  gen,
+		reservation:   reservation,
+		m:             *m,
+		data:          append([]byte(nil), data...),
+		session:       m.SessionID,
+		target:        target,
+		frames:        frames,
+		deadline:      deadline,
+		generation:    gen,
+		probeDeferred: probeDeferred,
+	}
+	g.scheduleExtensionPaintDeadlineLocked(k, gen, deadline)
+	var send [][]byte
+	if !probeDeferred {
+		send = g.probeExtensionShownLocked(m.SessionID, target, frames, func(shown, ok bool) [][]byte {
+			return g.finishExtensionPaintLocked(k, shown, ok)
+		})
 	}
 	return browserVerdict{
-		send: g.probeExtensionShownLocked(m.SessionID, target, frames, func(shown, ok bool) [][]byte {
-			return g.finishExtensionPaintLocked(k, shown, ok)
-		}),
+		send:            send,
 		extensionPaints: []extensionPaintDeadline{{key: k, generation: gen, deadline: deadline}},
 	}
+}
+
+func (g *guard) scheduleExtensionPaintDeadlineLocked(k callKey, gen uint64, deadline time.Time) {
+	d := time.Until(deadline)
+	if d < 0 {
+		d = 0
+	}
+	time.AfterFunc(d, func() {
+		page, releases := g.expireExtensionPaint(k, gen)
+		releaseReservations(releases)
+		if len(page) == 0 {
+			return
+		}
+		if flush := g.flushAsync; flush != nil {
+			flush(nil, page)
+			return
+		}
+		g.mu.Lock()
+		g.pendingPage = append(g.pendingPage, page...)
+		g.mu.Unlock()
+	})
+}
+
+func (g *guard) startDeferredExtensionPaintProbeLocked(k callKey) [][]byte {
+	h := g.heldExtensionPaints[k]
+	if h == nil {
+		return nil
+	}
+	if time.Now().After(h.deadline) {
+		page, releases := g.expireExtensionPaint(k, h.generation)
+		g.pendingRelease = append(g.pendingRelease, releases...)
+		g.pendingPage = append(g.pendingPage, page...)
+		return nil
+	}
+	if !h.probeDeferred {
+		return nil
+	}
+	h.probeDeferred = false
+	return g.probeExtensionShownLocked(h.session, h.target, h.frames, func(shown, ok bool) [][]byte {
+		return g.finishExtensionPaintLocked(k, shown, ok)
+	})
+}
+
+func (g *guard) dropDeferredExtensionPaintLocked(k callKey) {
+	h := g.heldExtensionPaints[k]
+	if h == nil {
+		return
+	}
+	if h.reservation != nil {
+		g.pendingRelease = append(g.pendingRelease, h.reservation)
+	}
+	delete(g.heldExtensionPaints, k)
+	delete(g.extensionCaptureDirty, k)
 }
 
 func (g *guard) expireExtensionPaint(k callKey, gen uint64) (page [][]byte, releases []*link.Reservation) {
@@ -643,9 +711,29 @@ func (g *guard) expireExtensionPaint(k callKey, gen uint64) (page [][]byte, rele
 		return nil, nil
 	}
 	g.logf("cdp: dropped a rendering that stayed held past the extension-frame check deadline")
-	g.pendingRelease = append(g.pendingRelease, h.reservation)
+	if h.reservation != nil {
+		g.pendingRelease = append(g.pendingRelease, h.reservation)
+	}
 	delete(g.heldExtensionPaints, k)
 	delete(g.extensionCaptureDirty, k)
+	if ih := g.docIdentityHolds[k]; ih != nil && ih.extensionAfter {
+		if ih.timer != nil {
+			ih.timer.Stop()
+			ih.timer = nil
+		}
+		g.releaseDocIdentityReservationLocked(ih)
+		delete(g.docIdentityHolds, k)
+		still := false
+		for _, o := range g.docIdentityHolds {
+			if o != nil && o.target == ih.target {
+				still = true
+				break
+			}
+		}
+		if !still {
+			delete(g.docIdentityAsks, ih.target)
+		}
+	}
 	releases = g.takeReleasesLocked()
 	if g.sessionRefusedLocked(k.session) {
 		g.logf("cdp: extension-frame capture deadline skipped a refused session")

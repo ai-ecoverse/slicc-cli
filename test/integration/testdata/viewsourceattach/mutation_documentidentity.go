@@ -1,6 +1,10 @@
 package cdp
 
-import "time"
+import (
+	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/link"
+)
 
 type docIdentity struct {
 	frameID  string
@@ -9,21 +13,32 @@ type docIdentity struct {
 	full     bool
 }
 
+func (a docIdentity) equal(b docIdentity) bool {
+	return a.frameID == b.frameID && a.loaderID == b.loaderID && a.url == b.url && a.full == b.full
+}
+
 type docIdentityAdmit struct {
 	baseline docIdentity
 	known    bool
+	taint    uint64
 }
 
 type docIdentityHold struct {
-	baseline docIdentity
-	known    bool
-	data     []byte
-	id       int64
-	session  string
-	target   string
-	arrived  time.Time
-	deadline time.Time
-	timer    *time.Timer
+	baseline        docIdentity
+	known           bool
+	taint           uint64
+	seq             uint64
+	data            []byte
+	id              int64
+	session         string
+	target          string
+	method          string
+	extensionAfter  bool
+	extensionFrames []string
+	arrived         time.Time
+	deadline        time.Time
+	timer           *time.Timer
+	reservation     *link.Reservation
 }
 
 type docIdentityAsk struct {
@@ -39,6 +54,12 @@ type docIdentityAsk struct {
 func (g *guard) noteOrdinaryDocIdentityFromTargetLocked(t *target) { _ = t }
 
 func (g *guard) noteOrdinaryDocIdentityFromNavLocked(nt *navTarget) { _ = nt }
+
+func (g *guard) noteDocIdentityWatchURLLocked(target, url string) { _, _ = target, url }
+
+func (g *guard) noteDocIdentityPlaceLocked(target, url string) { _, _ = target, url }
+
+func (g *guard) noteDocIdentityChromeErrorCommitLocked(target, url string) { _, _ = target, url }
 
 func (g *guard) noteDocIdentityAdmitLocked(c *command) { _ = c }
 

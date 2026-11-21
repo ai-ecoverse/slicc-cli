@@ -147,6 +147,48 @@ func TestExtensionProbeConcurrentFirstWorldShared(t *testing.T) {
 	}
 }
 
+func TestExtensionPaintDeadlineFiresWhileProbePending(t *testing.T) {
+	t.Setenv(extensionPaintHoldEnv, "40ms")
+	g := extensionFrameFixGuard(t)
+	g.reserveHold = func(data []byte) (*link.Reservation, bool) {
+		return nil, true
+	}
+	id := int64(21)
+	m := message{ID: &id, SessionID: "S"}
+	data := []byte(`{"id":21,"sessionId":"S","result":{"data":"YWFh"}}`)
+	g.mu.Lock()
+	v := g.holdExtensionPaintLocked(&m, data, "PAGE", []string{"FRAME"})
+	gen := uint64(0)
+	deadline := time.Time{}
+	if h := g.heldExtensionPaints[callKey{"S", 21}]; h != nil {
+		gen = h.generation
+		deadline = h.deadline
+	}
+	g.mu.Unlock()
+	if len(v.extensionPaints) != 1 || gen == 0 {
+		t.Fatalf("expected armed paint deadline: paints=%d gen=%d", len(v.extensionPaints), gen)
+	}
+	time.Sleep(time.Until(deadline) + 30*time.Millisecond)
+	g.mu.Lock()
+	page := g.takePendingPageLocked()
+	_, still := g.heldExtensionPaints[callKey{"S", 21}]
+	g.mu.Unlock()
+	if still {
+		extra, _ := g.expireExtensionPaint(callKey{"S", 21}, gen)
+		page = append(page, extra...)
+	}
+	joined := ""
+	for _, p := range page {
+		joined += string(p)
+	}
+	if !strings.Contains(joined, `"error"`) {
+		t.Fatalf("deadline must refuse a stuck probe: %v", page)
+	}
+	if _, ok := g.heldExtensionPaints[callKey{"S", 21}]; ok {
+		t.Fatal("held paint survived deadline")
+	}
+}
+
 func TestExtensionPaintReleasedOnSessionDetach(t *testing.T) {
 	t.Setenv(extensionPaintHoldEnv, "30s")
 	g := extensionFrameFixGuard(t)

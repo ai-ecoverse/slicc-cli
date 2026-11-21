@@ -1653,7 +1653,7 @@ func TestExistingSessionP1ExtensionShownPaintIdentityThenShown(t *testing.T) {
 		v := g.fromBrowser(reply)
 		o.take(v)
 		g.mu.Lock()
-		extHeld := len(g.heldExtensionPaints)
+		armed := g.heldExtensionPaints[callKey{esSession, id}]
 		idHeld := false
 		extAfter := false
 		for k, h := range g.docIdentityHolds {
@@ -1663,8 +1663,8 @@ func TestExistingSessionP1ExtensionShownPaintIdentityThenShown(t *testing.T) {
 			}
 		}
 		g.mu.Unlock()
-		if extHeld != 0 {
-			t.Fatalf("P1-2: identity must run before extension hold; heldExtensionPaints=%d", extHeld)
+		if armed == nil || !armed.probeDeferred {
+			t.Fatal("P1-2: paint deadline must arm at paint start even when identity will refuse")
 		}
 		if !idHeld || !extAfter {
 			t.Fatalf("P1-2: expected identity hold with extensionAfter; idHeld=%t extAfter=%t send=%d", idHeld, extAfter, len(v.send))
@@ -1708,10 +1708,12 @@ func TestExistingSessionP1ExtensionShownPaintIdentityThenShown(t *testing.T) {
 		v := g.fromBrowser(reply)
 		o.take(v)
 		g.mu.Lock()
-		if len(g.heldExtensionPaints) != 0 {
-			t.Fatalf("extension hold must wait for identity accept; got %d", len(g.heldExtensionPaints))
-		}
+		armed := g.heldExtensionPaints[callKey{esSession, id}]
+		deferred := armed != nil && armed.probeDeferred
 		g.mu.Unlock()
+		if !deferred {
+			t.Fatal("P1-2: paint deadline must arm at paint start (deferred probe) during identity hold")
+		}
 		var infoID int64
 		for _, raw := range v.send {
 			rid, mth, session := esOutbound(raw)
@@ -1720,27 +1722,171 @@ func TestExistingSessionP1ExtensionShownPaintIdentityThenShown(t *testing.T) {
 			}
 		}
 		if infoID == 0 {
-			t.Fatal("expected identity post-read before extension release")
+			t.Fatal("expected identity post-read before extension probe")
 		}
 		esDrain(g, &o, g.fromBrowser(esTargetInfoAnswer(infoID, esOrdinaryB)), esOrdinaryB)
 		g.mu.Lock()
-		extKeys := 0
-		for k := range g.heldExtensionPaints {
-			if k.session == esSession && k.id == id {
-				extKeys++
-				_ = g.finishExtensionPaintLocked(k, true, true)
-				o.payloads = append(o.payloads, stringBytes(g.takePendingPageLocked())...)
-			}
+		armed = g.heldExtensionPaints[callKey{esSession, id}]
+		if armed == nil || armed.probeDeferred {
+			t.Fatal("P1-2: identity accept must start the deferred extension probe")
 		}
+		_ = g.finishExtensionPaintLocked(callKey{esSession, id}, true, true)
+		o.payloads = append(o.payloads, stringBytes(g.takePendingPageLocked())...)
 		left := len(g.heldExtensionPaints)
 		g.mu.Unlock()
-		if extKeys != 1 {
-			t.Fatalf("P1-2: after identity accept expected one extension hold, got %d", extKeys)
-		}
 		if left != 0 {
 			t.Fatalf("extension finish must clear hold; left=%d", left)
 		}
 	})
+}
+
+func TestExistingSessionExtensionPaintDeadlineArmsAtPaintStart(t *testing.T) {
+	t.Setenv(extensionPaintHoldEnv, "40ms")
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	g.mu.Lock()
+	g.targets["ES-EXT"] = &target{id: "ES-EXT", typ: "iframe", url: esExtFrameURL, ctx: "CTX", parentFrame: esTarget}
+	g.noteExtensionFrameURLLocked(esTarget, "ES-EXT", esExtFrameURL)
+	g.mu.Unlock()
+	var o esOutcome
+	id := int64(esReadID)
+	method := "Page.captureScreenshot"
+	pv := g.afterExtensionShown(&command{id: id, method: method, session: esSession, params: map[string]any{}}, false, true)
+	if pv.forward == nil {
+		t.Fatalf("admit must forward: %s", pv.reply)
+	}
+	reply := esContentReply(esCommand{method: method}, id, esOrdinary, true)
+	v := g.fromBrowser(reply)
+	o.take(v)
+	g.mu.Lock()
+	armed := g.heldExtensionPaints[callKey{esSession, id}]
+	gen := uint64(0)
+	deadline := time.Time{}
+	if armed != nil {
+		gen = armed.generation
+		deadline = armed.deadline
+	}
+	g.mu.Unlock()
+	if armed == nil || !armed.probeDeferred || gen == 0 {
+		t.Fatal("paint deadline must arm at paint-reply arrival while identity holds")
+	}
+	if time.Until(deadline) > extensionPaintHoldDuration() {
+		t.Fatalf("deadline must be measured from paint start, not a later hold release")
+	}
+	time.Sleep(time.Until(deadline) + 20*time.Millisecond)
+	page, _ := g.expireExtensionPaint(callKey{esSession, id}, gen)
+	if len(page) == 0 {
+		g.mu.Lock()
+		page = g.takePendingPageLocked()
+		g.mu.Unlock()
+	}
+	joined := strings.Join(append(o.payloads, stringBytes(page)...), "")
+	if !strings.Contains(joined, protect.ShownReason()) && !strings.Contains(joined, "error") {
+		t.Fatalf("paint deadline must refuse without waiting on identity settle; got %q", joined)
+	}
+	g.mu.Lock()
+	_, idLeft := g.docIdentityHolds[callKey{esSession, id}]
+	_, paintLeft := g.heldExtensionPaints[callKey{esSession, id}]
+	g.mu.Unlock()
+	if idLeft || paintLeft {
+		t.Fatalf("deadline must clear identity and paint holds; id=%t paint=%t", idLeft, paintLeft)
+	}
+}
+
+func TestExistingSessionE7PinnedEvaluateOnProtectedWithoutShownPlaceWindow(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	vault := "https://vault.sliccy.ai/doc"
+	g.mu.Lock()
+	if nt := g.navTargets[esTarget]; nt != nil {
+		nt.documentURL = vault
+	}
+	g.noteDocIdentityPlaceLocked(esTarget, vault)
+	g.noteDocIdentityWatchURLLocked(esTarget, vault)
+	g.mu.Unlock()
+	pv := g.fromCommand(&command{
+		id: int64(esReadID), method: "Runtime.evaluate", session: esSession,
+		params: map[string]any{"expression": "1+1", "objectId": "isolated-world-obj"},
+	}, int64(esReadID), true)
+	if pv.reply != nil {
+		t.Fatalf("E7 model: objectId-pinned evaluate without a shown place-window must not refuse at admit: %s", pv.reply)
+	}
+	if pv.forward == nil {
+		t.Fatal("E7 model: expected forward")
+	}
+	g.mu.Lock()
+	_, admitted := g.docIdentityCalls[callKey{esSession, esReadID}]
+	g.mu.Unlock()
+	if admitted {
+		t.Fatal("E7 model: watch-bad documentURL alone must not admit pinned evaluate into identity hold (exact hunk: docIdentityPinnedNeedsHoldLocked watchBad before shownContextPlaceSeqLocked)")
+	}
+	reply := esEncode(map[string]any{
+		"id": int64(esReadID), "sessionId": esSession,
+		"result": map[string]any{"result": map[string]any{"type": "number", "value": 2}},
+	})
+	held := g.fromBrowser(reply)
+	o.take(held)
+	if held.forward == nil {
+		t.Fatalf("E7 model: evaluate reply must forward, not identity-hold; send=%v page=%v", held.send, o.payloads)
+	}
+	for _, raw := range held.send {
+		_, mth, session := esOutbound(raw)
+		if mth == "Target.getTargetInfo" && session == "RELAY" {
+			t.Fatal("E7 model: identity post-read must not run for this pinned evaluate (wire step that held the reply)")
+		}
+	}
+}
+
+func TestExistingSessionE7FrameTreeResolvesWhilePinnedEvaluateOnWatchBad(t *testing.T) {
+	g := esGuard(t)
+	_ = esAdmit(t, g)
+	var o esOutcome
+	vault := "https://vault.sliccy.ai/doc"
+	g.mu.Lock()
+	if nt := g.navTargets[esTarget]; nt != nil {
+		nt.documentURL = vault
+	}
+	g.noteDocIdentityWatchURLLocked(esTarget, vault)
+	g.mu.Unlock()
+	eval := g.fromCommand(&command{
+		id: int64(esReadID), method: "Runtime.evaluate", session: esSession,
+		params: map[string]any{"expression": "0", "objectId": "isolated-world-obj"},
+	}, int64(esReadID), true)
+	if eval.forward == nil {
+		t.Fatalf("evaluate admit: %s", eval.reply)
+	}
+	g.mu.Lock()
+	_, admitted := g.docIdentityCalls[callKey{esSession, esReadID}]
+	g.mu.Unlock()
+	if admitted {
+		t.Fatal("E7 model: pinned evaluate must not enter identity hold without a shown place-window")
+	}
+	tree := g.fromCommand(&command{id: int64(esReadID2), method: "Page.getFrameTree", session: esSession, params: map[string]any{}}, int64(esReadID2), true)
+	if tree.forward == nil {
+		t.Fatalf("getFrameTree must forward on the client session: %s", tree.reply)
+	}
+	treeReply := esEncode(map[string]any{
+		"id": int64(esReadID2), "sessionId": esSession,
+		"result": map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": esTarget, "url": esOrdinary}}},
+	})
+	tr := g.fromBrowser(treeReply)
+	o.take(tr)
+	if tr.forward == nil {
+		t.Fatalf("getFrameTree reply must reach the client (not be held/confused with identity): payloads=%v", o.payloads)
+	}
+	if !strings.Contains(string(tr.forward), esTarget) {
+		t.Fatalf("E7 model: frameTree.frame.id unresolved: %s", tr.forward)
+	}
+	evalReply := esEncode(map[string]any{
+		"id": int64(esReadID), "sessionId": esSession,
+		"result": map[string]any{"result": map[string]any{"type": "number", "value": 0}},
+	})
+	er := g.fromBrowser(evalReply)
+	o.take(er)
+	if er.forward == nil {
+		t.Fatalf("E7 model: evaluate reply must not be identity-held (would cut/confuse later frame-tree reads): send=%v", er.send)
+	}
 }
 
 func stringBytes(pages [][]byte) []string {

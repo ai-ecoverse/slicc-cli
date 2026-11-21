@@ -219,6 +219,16 @@ func (g *guard) answerIdentityOrExtensionLocked(k callKey, m *message, method, t
 				h.method = method
 				h.extensionAfter = true
 				h.extensionFrames = g.extensionFrameIDsLocked(target)
+				armed := g.armExtensionPaintLocked(m, v.forward, target, h.extensionFrames, true)
+				v.extensionPaints = append(v.extensionPaints, armed.extensionPaints...)
+				if armed.forward != nil {
+					g.dropDeferredExtensionPaintLocked(k)
+					v.forward = nil
+					v.send = append(v.send, send...)
+					v.page = append(v.page, page...)
+					v.page = append(v.page, armed.forward)
+					return v
+				}
 			}
 		}
 		v.forward = nil

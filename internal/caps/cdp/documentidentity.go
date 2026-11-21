@@ -210,19 +210,19 @@ func (g *guard) docIdentityPinnedNeedsHoldLocked(c *command) bool {
 	if t == nil || !navTypes[t.typ] {
 		return false
 	}
-	cur := g.currentDocIdentityLocked(t.id)
-	if cur.url == "" {
-		cur.url = t.url
-	}
-	if g.docIdentityWatchBadLocked(cur.url) || g.docIdentityWatchBadLocked(t.url) {
-		return true
-	}
 	place := g.docPlaceSeq[t.id]
 	ctxPlace, ok := g.shownContextPlaceSeqLocked(t.id, c.params)
 	if !ok {
 		return false
 	}
-	return ctxPlace < place
+	if ctxPlace < place {
+		return true
+	}
+	cur := g.currentDocIdentityLocked(t.id)
+	if cur.url == "" {
+		cur.url = t.url
+	}
+	return g.docIdentityWatchBadLocked(cur.url) || g.docIdentityWatchBadLocked(t.url)
 }
 
 func (g *guard) shownContextPlaceSeqLocked(target string, params map[string]any) (uint64, bool) {
@@ -514,31 +514,41 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 		h.timer = nil
 	}
 	delete(g.docIdentityHolds, k)
+	kPaint := callKey{h.session, h.id}
 	if h.reservation != nil {
-		g.pendingRelease = append(g.pendingRelease, h.reservation)
-		h.reservation = nil
+		if h.extensionAfter {
+			if p := g.heldExtensionPaints[kPaint]; p != nil && p.reservation == nil {
+				p.reservation = h.reservation
+				h.reservation = nil
+			}
+		}
+		if h.reservation != nil {
+			g.pendingRelease = append(g.pendingRelease, h.reservation)
+			h.reservation = nil
+		}
 	}
 	var send [][]byte
 	tainted := g.docIdentityTaint[h.target] != h.taint
 	switch {
 	case g.sessionRefusedLocked(h.session):
-		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
+		g.refuseDocIdentityHoldPageLocked(h)
 	case chromeErrorDocument(current.url):
 		eventSeq, saw := g.docChromeErrorSeq[h.target]
 		if saw && h.seq < eventSeq {
 			send = append(send, g.deliverDocIdentityDataLocked(h)...)
 		} else {
+			g.dropDeferredExtensionPaintLocked(kPaint)
 			g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
 		}
 	case g.docIdentityProtectedLocked(current):
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
-		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
+		g.refuseDocIdentityHoldPageLocked(h)
 	case !g.docIdentityOrdinaryLocked(current):
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
-		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
+		g.refuseDocIdentityHoldPageLocked(h)
 	case tainted:
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
-		g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
+		g.refuseDocIdentityHoldPageLocked(h)
 	default:
 		if current.full {
 			g.noteOrdinaryDocIdentityLocked(h.target, current.frameID, current.loaderID, current.url, true)
@@ -553,13 +563,19 @@ func (g *guard) deliverDocIdentityDataLocked(h *docIdentityHold) [][]byte {
 		return nil
 	}
 	if h.extensionAfter && protect.ExtensionShownMethod(h.method) && g.extensionFramesPresentLocked(h.target) {
-		id := h.id
-		m := &message{ID: &id, SessionID: h.session}
-		v := g.holdExtensionPaintLocked(m, h.data, h.target, h.extensionFrames)
-		return v.send
+		return g.startDeferredExtensionPaintProbeLocked(callKey{h.session, h.id})
 	}
+	g.dropDeferredExtensionPaintLocked(callKey{h.session, h.id})
 	g.pendingPage = append(g.pendingPage, h.data)
 	return nil
+}
+
+func (g *guard) refuseDocIdentityHoldPageLocked(h *docIdentityHold) {
+	if h == nil {
+		return
+	}
+	g.dropDeferredExtensionPaintLocked(callKey{h.session, h.id})
+	g.pendingPage = append(g.pendingPage, refusal(h.id, h.session, refusedTarget))
 }
 
 func (g *guard) releaseDocIdentityReservationLocked(h *docIdentityHold) {
