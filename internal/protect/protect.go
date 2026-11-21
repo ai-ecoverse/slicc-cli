@@ -12,7 +12,6 @@ import (
 	sliccbrowsers "github.com/ai-ecoverse/slicc-browsers"
 	whatwg "github.com/nationallibraryofnorway/whatwg-url/url"
 	"golang.org/x/net/idna"
-	"golang.org/x/text/unicode/rangetable"
 )
 
 type Opener int
@@ -139,7 +138,6 @@ const notEqualRunes = "\u2260\u226e\u226f"
 var (
 	parser      = whatwg.NewParser()
 	hostBase, _ = parser.Parse("http://host.invalid/")
-	unicode15   = rangetable.Assigned("15.0.0")
 	idnaProfile = idna.New(
 		idna.MapForLookup(),
 		idna.BidiRule(),
