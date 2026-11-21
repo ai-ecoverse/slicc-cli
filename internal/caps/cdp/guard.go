@@ -214,6 +214,10 @@ type guard struct {
 	docInflight              map[string]*docConfirm
 	docFailed                map[string]bool
 	docPassed                map[string]bool
+	docObserveSessions       map[string]string
+	docObservePending        map[string]bool
+	docObserveDone           map[string]bool
+	docObserveLog            []string
 	flushAsync               func(send, page [][]byte)
 	patterns                 []any
 	heldExtras               map[requestKey][]heldExtra
@@ -341,6 +345,9 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		docInflight:              map[string]*docConfirm{},
 		docFailed:                map[string]bool{},
 		docPassed:                map[string]bool{},
+		docObserveSessions:       map[string]string{},
+		docObservePending:        map[string]bool{},
+		docObserveDone:           map[string]bool{},
 		heldExtras:               map[requestKey][]heldExtra{},
 		seen:                     map[requestKey]reqLevel{},
 		handed:                   map[requestKey]int{},

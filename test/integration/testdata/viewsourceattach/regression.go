@@ -879,3 +879,103 @@ func TestViewSourceAttachDocFailedClearedOnDestroy(t *testing.T) {
 		t.Errorf("docFailed/hidden must clear on target destroy when detach never arrives (failed=%t hidden=%t)", failed, hidden)
 	}
 }
+
+const vsObserveSession = "S-OBSERVE"
+
+func vsObserveAttachedEvent(url string) []byte {
+	return encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          vsObserveSession,
+			"waitingForDebugger": false,
+			"targetInfo":         map[string]any{"targetId": vsTarget, "type": "page", "url": url, "browserContextId": "CTX"},
+		},
+	})
+}
+
+func vsObserveFrameTree(id int64, url string) []byte {
+	origin := "://"
+	lower := strings.ToLower(url)
+	if url != "" && lower != "about:blank" && !strings.HasPrefix(lower, "about:blank") && !strings.HasPrefix(lower, "chrome-error:") {
+		origin = url
+	}
+	return encode(map[string]any{
+		"id": id, "sessionId": vsObserveSession,
+		"result": map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": vsTarget, "url": url, "securityOrigin": origin}}},
+	})
+}
+
+func vsDrainObserve(g *guard, o *vsOutcome, v browserVerdict, live string) {
+	o.take(v)
+	for _, raw := range v.send {
+		id, method, session := vsOutbound(raw)
+		switch {
+		case method == "Target.getTargetInfo" && session == "RELAY":
+			vsDrainObserve(g, o, g.fromBrowser(vsTargetInfoAnswer(id, live)), live)
+		case method == "Target.attachToTarget" && session == "RELAY":
+			reply := encode(map[string]any{"id": id, "sessionId": "RELAY", "result": map[string]any{"sessionId": vsObserveSession}})
+			vsDrainObserve(g, o, g.fromBrowser(reply), live)
+			vsDrainObserve(g, o, g.fromBrowser(vsObserveAttachedEvent(live)), live)
+		case method == "Page.getFrameTree" && session == vsObserveSession:
+			vsDrainObserve(g, o, g.fromBrowser(vsObserveFrameTree(id, live)), live)
+		case method == "Target.detachFromTarget":
+			vsDrainObserve(g, o, g.fromBrowser(encode(map[string]any{"id": id, "sessionId": session, "result": map[string]any{}})), live)
+		}
+	}
+}
+
+func TestDocConfirmObserveNeverChangesVerdict(t *testing.T) {
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainObserve(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsWatchReady(g)
+	v := g.fromBrowser(vsAttachedEvent("about:blank"))
+	vsDrainObserve(g, &o, v, "about:blank")
+	o.summarize()
+	g.mu.Lock()
+	client := g.sessions[vsSession] != nil
+	observe := g.sessions[vsObserveSession] != nil
+	failed := g.docFailed[vsSession]
+	nSessions := len(g.sessions)
+	logs := append([]string(nil), g.docObserveLog...)
+	g.mu.Unlock()
+	t.Logf("observe-never-changes client=%t observeSession=%t sessions=%d failed=%t logs=%d", client, observe, nSessions, failed, len(logs))
+	if !client {
+		t.Fatal("client session must admit like main")
+	}
+	if observe || nSessions != 1 {
+		t.Fatalf("observe session must not enter sessions map; sessions=%d observe=%t", nSessions, observe)
+	}
+	if failed || o.attachRefused {
+		t.Fatal("observe must not refuse or latch the client attach")
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected DIAG document-confirm would-admit|would-refuse log")
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "DIAG document-confirm would-") {
+		t.Fatalf("missing greppable observe log: %q", joined)
+	}
+	if strings.Contains(joined, "https://") || strings.Contains(joined, "vault.") || strings.Contains(joined, "seven.") {
+		t.Fatalf("observe log must not carry URLs or hosts: %q", joined)
+	}
+}
+
+func TestDocConfirmObserveFilterMutantLeaks(t *testing.T) {
+	if os.Getenv("SLICC_DOC_CONFIRM_OBSERVE_FILTER_MUTANT") == "" {
+		t.Skip("observe filter mutant only")
+	}
+	g := vsGuard(t)
+	var o vsOutcome
+	vsDrainObserve(g, &o, g.fromBrowser(vsRelay("Target.targetCreated", "about:blank")), "about:blank")
+	vsWatchReady(g)
+	vsDrainObserve(g, &o, g.fromBrowser(vsAttachedEvent("about:blank")), "about:blank")
+	g.mu.Lock()
+	observe := g.sessions[vsObserveSession] != nil
+	nSessions := len(g.sessions)
+	g.mu.Unlock()
+	t.Logf("filter-mutant observeSession=%t sessions=%d", observe, nSessions)
+	if !observe && nSessions < 2 {
+		t.Fatal("filter mutant must leak the observe session into the sessions map")
+	}
+}
