@@ -27,8 +27,9 @@ func checkVaultErrorPages(t *testing.T, variant string) {
 			t.Fatalf("unexpected vault error-page row: %+v", row)
 		}
 		seen[row.ID] = true
+		checkEvaluateAnswers(t, row)
 		if row.Control != "pass" || row.Guarded != "pass" || row.Live != "pass" || len(row.Errors) != 0 {
-			t.Errorf("%s vault %s: control %s, guarded %s, live %s, why %s, errors %v, observed %s", row.ID, variant, row.Control, row.Guarded, row.Live, row.Why, row.Errors, row.Observed)
+			t.Errorf("%s vault %s: control %s, guarded %s, live %s, why %s, errors %v, observed %s%s", row.ID, variant, row.Control, row.Guarded, row.Live, row.Why, row.Errors, row.Observed, evaluateAnswersLine(row))
 		}
 		var observed struct {
 			Guarded struct {
