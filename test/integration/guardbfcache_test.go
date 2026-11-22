@@ -18,7 +18,7 @@ func sharedBFCache(t *testing.T, id string) {
 	}
 	for _, row := range sum.Results {
 		if row.ID != id || row.Control != "pass" || row.Guarded != "pass" || row.Live != "pass" {
-			t.Errorf("%s %s: control=%s guarded=%s live=%s why=%s errors=%v observed=%s", row.ID, row.Target, row.Control, row.Guarded, row.Live, row.Why, row.Errors, row.Observed)
+			t.Errorf("%s %s: control=%s guarded=%s live=%s why=%s errors=%v observed=%s%s", row.ID, row.Target, row.Control, row.Guarded, row.Live, row.Why, row.Errors, row.Observed, evaluateAnswersLine(row))
 		}
 	}
 	if !sum.Pass {

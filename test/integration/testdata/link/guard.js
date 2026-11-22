@@ -2,6 +2,7 @@ import { run } from '/vendor/slicc-browsers/guard-runner.mjs';
 import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
 import { failureEvidence, foregroundMouseCall } from './foreground.js';
+import { answerLog, attachAnswers } from './answers.js';
 
 const CALL_TIMEOUT_MS = 10000;
 
@@ -352,6 +353,13 @@ function sessionBound(c, name, { inject, gate, frameLeak, unfocusClick } = {}) {
   };
 }
 
+function answered(bound, answers) {
+  if (!answers) return bound;
+  const send = bound.send.bind(bound);
+  bound.send = (method, params, sessionId) => (method === 'Runtime.evaluate' ? answers(() => send(method, params, sessionId), params) : send(method, params, sessionId));
+  return bound;
+}
+
 function deepRewrite(value, from, to) {
   if (typeof value === 'string') return value.split(from).join(to);
   if (Array.isArray(value)) return value.map((item) => deepRewrite(item, from, to));
@@ -522,6 +530,7 @@ export function guardStart(getLink, opts) {
     });
     const mouseDiagnostics = new Map();
     const frameLeakByRow = new Map();
+    const answersByRow = new Map();
     const running = run(set, {
       clientFactory: async ({ slot, vector, target, variant }) => {
         const b = browsers[slot % browsers.length];
@@ -552,12 +561,32 @@ export function guardStart(getLink, opts) {
               }
             : null;
         await unguarded.send('Target.setDiscoverTargets', { discover: true });
-        const guarded = sessionBound(client, 'client', { inject: opts.inject, gate: b.gate, frameLeak });
+        const key = rowKey({ id: vector.id, target, variant });
+        const answers = vector.id.startsWith('C9.') ? null : (answersByRow.get(key) ?? answerLog());
+        if (answers) answersByRow.set(key, answers);
+        const legOf = () => state.running?.inFlight().find((row) => rowKey(row) === key)?.leg ?? 'none';
+        const guarded = answered(
+          sessionBound(client, 'client', { inject: opts.inject, gate: b.gate, frameLeak }),
+          answers &&
+            ((send, params) => {
+              const leg = legOf();
+              if (opts.inject === 'evaluate_answered' && leg === 'guarded' && params?.expression === 'document.title') return answers.record(leg, 'Runtime.evaluate', () => Promise.resolve({ result: { type: 'string', value: 'evaluate-answer-sentinel' } }));
+              return answers.record(leg, 'Runtime.evaluate', send);
+            }),
+        );
         guarded.inboundDelay = delayedInbound(b.gate, opts);
         if (frameLeak) frameLeakByRow.set(rowKey({ id: vector.id, target, variant }), frameLeak);
         return {
           client: guarded,
-          unguarded: sessionBound(unguarded, 'unguarded', { frameLeak, unfocusClick }),
+          unguarded: answered(
+            sessionBound(unguarded, 'unguarded', { frameLeak, unfocusClick }),
+            answers &&
+              vector.control?.via === 'unguarded' &&
+              ((send) => {
+                const leg = legOf();
+                return leg === 'control' ? answers.record(leg, 'Runtime.evaluate', send) : send();
+              }),
+          ),
           close: async () => {
             unguarded.close();
             await client.close().catch(() => {});
@@ -597,6 +626,8 @@ export function guardStart(getLink, opts) {
           }
           frameLeakByRow.delete(rowKey(row));
         }
+        attachAnswers(row, answersByRow.get(rowKey(row)));
+        answersByRow.delete(rowKey(row));
         state.started.delete(rowKey(row));
         if (row.inFlight) row.errors = [...(row.errors ?? []), ...describeSessions(row)];
         state.rows.push(row);
