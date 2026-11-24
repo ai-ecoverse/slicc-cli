@@ -532,13 +532,30 @@ var errorPageEvents = map[string]bool{
 	"Page.screencastVisibilityChanged": true,
 }
 
-func (g *guard) errorPageSessionLocked(sessionID string) bool {
+func (g *guard) errorPageNavLocked(sessionID string) *navTarget {
 	s, ok := g.sessions[sessionID]
 	if !ok {
-		return false
+		return nil
 	}
 	nt, ok := g.navTargets[s.target]
-	return ok && nt.errorURL != "" && g.o.Loaded(nt.errorURL)
+	if !ok || nt.errorURL == "" || !g.o.Loaded(nt.errorURL) {
+		return nil
+	}
+	return nt
+}
+
+func (g *guard) errorPageSessionLocked(sessionID string) bool {
+	return g.errorPageNavLocked(sessionID) != nil
+}
+
+var errorPageRecovery = map[string]bool{"Page.navigate": true, "Page.reload": true, "Page.navigateToHistoryEntry": true, "Page.close": true}
+
+func (g *guard) errorPageRecoveryLocked(c *command) bool {
+	if !errorPageRecovery[c.method] {
+		return false
+	}
+	nt := g.errorPageNavLocked(c.session)
+	return nt != nil && nt.done && !nt.failed
 }
 
 func (g *guard) errorPageCheckLocked(c *command) string {
