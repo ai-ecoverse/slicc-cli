@@ -193,7 +193,7 @@ func writeGuardReport(dir, variant string, sum *guardSummary) (string, error) {
 const guardLegacyInterceptionUndeclared = "legacyInterception is declared false: the guard refuses Network.setRequestInterception and Network.continueInterceptedRequest on this route, so the C10 cookie-plant probe finds no legacy transport and the legacy observations are not-supported; a true declaration would report the four C10 cookie-plant rows of each variant as forged (the extension declares the same after slicc-extension#424)"
 
 func guardCapabilities() map[string]bool {
-	return map[string]bool{"autoAttach": true, "iframeAutoAttach": true, "errorFrameClass": true, "browserSession": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "extensionFrame": true, "inboundDelay": true, "forwardAudit": true, "stockSetup": true, "closeProtected": true, "secureOrigin": true, "signInHold": false, "explicitAttach": false, "requestInterception": true, "fetchInterception": true, "legacyInterception": false}
+	return map[string]bool{"autoAttach": true, "iframeAutoAttach": true, "errorFrameClass": true, "browserSession": true, "browserStorage": true, "browserContexts": true, "chromeUrlsAttach": true, "clientExit": true, "discovery": true, "extensionWorld": true, "extensionFrame": true, "inboundDelay": true, "forwardAudit": true, "stockSetup": true, "closeProtected": true, "secureOrigin": true, "signInHold": false, "explicitAttach": false, "requestInterception": true, "fetchInterception": true, "legacyInterception": false}
 }
 
 func guardSetVerdict(sum *guardSummary) (ok bool, detail string) {
