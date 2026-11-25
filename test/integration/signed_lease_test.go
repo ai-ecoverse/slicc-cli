@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -23,6 +24,8 @@ type leaseSite struct {
 	Sites        struct{ Billing, Receipt string }
 	ChromiumArgs []string
 	OwnerStart   string
+	submitted    chan string
+	posts        *atomic.Int32
 }
 
 func signedSite(t *testing.T) leaseSite {
@@ -43,15 +46,31 @@ func signedSite(t *testing.T) leaseSite {
 		}
 		return site
 	}
+	site.submitted = make(chan string, 4)
+	site.posts = new(atomic.Int32)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		switch r.URL.Path {
 		case "/r/1042":
 			fmt.Fprint(w, "<p>Receipt 1042</p>")
 		case "/widget":
-			fmt.Fprint(w, "<p>PRIVATE WIDGET</p>")
+			fmt.Fprint(w, "<p>PRIVATE WIDGET</p><form method=post action=/submit><label>Note<input name=note></label><button>Save</button></form>")
+		case "/submit":
+			if r.Method == http.MethodPost {
+				site.posts.Add(1)
+				body, err := io.ReadAll(io.LimitReader(r.Body, 1024))
+				if err != nil {
+					http.Error(w, "bad fixture POST", 400)
+					return
+				}
+				select {
+				case site.submitted <- string(body):
+				default:
+				}
+				fmt.Fprint(w, "<p>Fixture note saved</p>")
+			}
 		default:
-			fmt.Fprint(w, `<h1>Invoice 1042 · paid</h1><iframe src="/widget"></iframe>`)
+			fmt.Fprintf(w, `<h1>Invoice 1042 · paid</h1><form method="post" action="/submit"><label>Note<input name="note"></label><button>Save</button></form><iframe src="https://receipt.example.test:%s/widget"></iframe>`, strings.Split(r.Host, ":")[1])
 		}
 	}))
 	t.Cleanup(server.Close)
@@ -67,15 +86,17 @@ func TestSignedLeaseVectors(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	ov := hrOverlay(t, t.TempDir(), map[string]string{filepath.Join(root, "internal/lease/fixture_test.go"): filepath.Join(root, "test/integration/testdata/lease/vectors.go")})
-	c := exec.CommandContext(t.Context(), "go", "test", "-overlay", ov, "-count=1", "./internal/lease")
+	ov := hrOverlay(t, t.TempDir(), map[string]string{filepath.Join(root, "internal/lease/form_cancel_test.go"): filepath.Join(root, "test/integration/testdata/lease/form_cancel.go"), filepath.Join(root, "internal/lease/fixture_test.go"): filepath.Join(root, "test/integration/testdata/lease/vectors.go"), filepath.Join(root, "internal/caps/cdp/form_guard_test.go"): filepath.Join(root, "test/integration/testdata/lease/form_guard.go")})
+	c := exec.CommandContext(t.Context(), "go", "test", "-overlay", ov, "-count=1", "./internal/lease", "./internal/caps/cdp")
 	c.Dir = root
 	if out, e := c.CombinedOutput(); e != nil {
 		t.Fatalf("%v: %s", e, out)
 	}
 }
 
-func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
+func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) { runSignedLease(t, false) }
+func TestSignedLeaseOrdinaryForm(t *testing.T)           { runSignedLease(t, true) }
+func runSignedLease(t *testing.T, forms bool) {
 	site := signedSite(t)
 	owner := launchBrowserOn(t, 0, append(site.ChromiumArgs, "--no-proxy-server")...)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -161,7 +182,11 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 	if strings.Contains(badlog.String(), "linked to ") {
 		t.Fatal("accepted wrong peer")
 	}
-	cmd := exec.Command(binary, "-", "follow", "--json", "--lease-browser", owner.endpoint, "--name", "fixture")
+	followArgs := []string{"-", "follow", "--json", "--lease-browser", owner.endpoint, "--name", "fixture"}
+	if forms {
+		followArgs = append(followArgs, "--lease-ordinary-forms")
+	}
+	cmd := exec.Command(binary, followArgs...)
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(h.joinURL(tr) + "\n")
 	log := &syncBuffer{}
@@ -196,6 +221,10 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 	}
 	request("origin", site.Sites.Billing, map[string]int{"ttlSeconds": 300})
 	approve := []string{"--to", "jkt:" + jkt, "--allow", site.Sites.Billing, "--for", "5m"}
+	if forms {
+		cli(false, "grant", "--no-input", "--browser", owner.endpoint, "--link", "fixture", "--ordinary-form", site.Sites.Receipt+"/submit", "--to", "jkt:"+jkt, "--allow", site.Sites.Billing, "--for", "5m")
+		approve = append(approve, "--ordinary-form", site.Sites.Billing+"/submit")
+	}
 	cli(false, append([]string{"review"}, approve...)...)
 	initial := cli(true, "status")
 	if !strings.Contains(initial, req.Request) || !strings.Contains(initial, `"active":[]`) {
@@ -218,6 +247,9 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 			_, _ = io.WriteString(tty, input+"\n")
 			b, _ := io.ReadAll(tty)
 			e = c.Wait()
+			if forms && (!strings.Contains(string(b), "one submit-button action") || !strings.Contains(string(b), site.Sites.Billing+"/submit") || !strings.Contains(string(b), "Type APPROVE FORM")) {
+				t.Fatal("write consequences not shown")
+			}
 			if (e == nil) != ok || !strings.Contains(string(b), "Type APPROVE") {
 				t.Fatalf("interactive review %v: %s", e, b)
 			}
@@ -226,7 +258,12 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 		if !strings.Contains(cli(true, "status"), req.Request) {
 			t.Fatal("Enter consumed request")
 		}
-		review("APPROVE", true)
+		if forms {
+			review("APPROVE", false)
+			review("APPROVE FORM", true)
+		} else {
+			review("APPROVE", true)
+		}
 	}
 	var l1, l2, ready string
 	p.eval("leaseTest.grant()", &l1)
@@ -259,7 +296,9 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 	if v := action("goto", map[string]string{"url": url}); v["reason"] != "E_SCOPE" {
 		t.Fatal(v)
 	}
-	if v := action("click", map[string]string{"ref": "e1"}); v["reason"] != "E_UNSUPPORTED" {
+	if forms {
+		exerciseLeaseForm(t, owner, own.TargetID, site, action)
+	} else if v := action("click", map[string]string{"ref": "e1"}); v["reason"] != "E_UNSUPPORTED" {
 		t.Fatal(v)
 	}
 	request("exact", url, map[string]string{"parent": l1})
@@ -269,6 +308,9 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 		t.Fatal(ready)
 	}
 	request("exact", url, map[string]string{"parent": l1})
+	if forms {
+		cli(false, "grant", req.Request, "--add", url, "--keep-expiry", "--ordinary-form", site.Sites.Billing+"/submit")
+	}
 	cli(true, "grant", req.Request, "--add", url, "--keep-expiry")
 	p.eval("leaseTest.grant()", &l2)
 	if l1 == l2 {
@@ -281,6 +323,11 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 	p.eval("leaseTest.connect()", &ready)
 	if ready != "ready" {
 		t.Fatal(ready)
+	}
+	if forms {
+		if v := action("fill", map[string]string{"ref": "e1", "value": "test"}); v["reason"] != "E_UNSUPPORTED" {
+			t.Fatal("replacement inherited writes", v)
+		}
 	}
 	if v := action("goto", map[string]string{"url": url}); v["type"] != "result" {
 		t.Fatal(v)
@@ -335,9 +382,17 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 	if ready != "ready" {
 		t.Fatal(ready)
 	}
+	if forms {
+		if r := action("click", map[string]string{"ref": "e1"}); r["reason"] != "E_UNSUPPORTED" {
+			t.Fatal("legacy approve unexpectedly admitted writes", r)
+		}
+	}
 	p.evalWithin("leaseTest.closed()", nil, 5*time.Second)
 	p.eval("leaseTest.connect()", &ready)
 	if ready != "E_EXPIRED" {
 		t.Fatal("expired grant", ready)
+	}
+	if forms && site.posts != nil && site.posts.Load() != 1 {
+		t.Fatalf("fixture observed %d POSTs, want exactly one", site.posts.Load())
 	}
 }

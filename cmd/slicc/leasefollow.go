@@ -32,12 +32,15 @@ func validateLeaseFollow(fs *flag.FlagSet, f followFlags) error {
 		switch v.Name {
 		case "lease-browser":
 			present = true
-		case "name", "json":
+		case "name", "json", "lease-ordinary-forms":
 		default:
 			bad = true
 		}
 	})
 	if !present {
+		if f.leaseForms {
+			return errors.New("--lease-ordinary-forms requires --lease-browser")
+		}
 		return nil
 	}
 	if bad || len(f.compute.runner)+len(f.compute.shell)+len(f.compute.eval) > 0 || !leaseLabel.MatchString(f.name) || !capcdp.LocalEndpoint(f.leaseBrowser) {
@@ -156,8 +159,12 @@ func (r *followRun) leaseOnly(ff followFlags, st *stopper, cert webrtc.Certifica
 	})
 	h := ctl.NewHolder("follow", version)
 	st.register(h)
-	h.Update(func(s *ctl.Status) { s.Device = r.device; s.Hub = r.hub; s.Offers = []string{lease.Cap} })
-	leaseControl(h, b)
+	h.Update(func(s *ctl.Status) {
+		s.Device = r.device
+		s.Hub = r.hub
+		s.Offers = ownerOffers(ff.leaseForms)
+	})
+	leaseControl(h, b, ff.leaseForms)
 	r.ctl = h
 	srv, e := ctl.Serve(h)
 	if e != nil {
@@ -168,15 +175,27 @@ func (r *followRun) leaseOnly(ff followFlags, st *stopper, cert webrtc.Certifica
 	r.closeSSH = func() { b.Close(); srv.Close() }
 	return r, nil
 }
-func leaseControl(h *ctl.Holder, b *lease.Broker) {
+func ownerOffers(forms bool) []string {
+	if forms {
+		return []string{lease.Cap, lease.FormOffer}
+	}
+	return []string{lease.Cap}
+}
+func leaseControl(h *ctl.Holder, b *lease.Broker, forms bool) {
 	h.Answer(ctl.OpLeaseList, func(ctl.Request) map[string]any {
 		s := b.List()
 		return map[string]any{"ok": true, "pending": s.Pending, "active": s.Active}
 	})
-	for _, op := range []string{ctl.OpLeaseApprove, ctl.OpLeaseDeny, ctl.OpLeaseRevoke} {
+	ops := []string{ctl.OpLeaseApprove, ctl.OpLeaseDeny, ctl.OpLeaseRevoke}
+	if forms {
+		ops = append(ops, ctl.OpLeaseApproveForm)
+	}
+	for _, op := range ops {
 		h.Answer(op, func(req ctl.Request) map[string]any {
 			var e error
 			switch op {
+			case ctl.OpLeaseApproveForm:
+				e = b.ApproveForm(req.Request, req.FormEnd)
 			case ctl.OpLeaseApprove:
 				e = b.Approve(req.Request)
 			case ctl.OpLeaseDeny:

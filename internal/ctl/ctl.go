@@ -30,21 +30,22 @@ const (
 const V = version
 
 const (
-	OpLeaseList    = "cdp-lease-list"
-	OpLeaseApprove = "cdp-lease-approve"
-	OpLeaseDeny    = "cdp-lease-deny"
-	OpLeaseRevoke  = "cdp-lease-revoke"
-	OpStatus       = "status"
-	OpDetach       = "detach"
-	OpStop         = "stop"
-	OpRevoke       = "revoke"
-	OpLeases       = "leases"
-	OpUnseal       = "unseal"
-	OpSealOff      = "seal-off"
-	OpSealOn       = "seal-on"
+	OpLeaseList        = "cdp-lease-list"
+	OpLeaseApprove     = "cdp-lease-approve"
+	OpLeaseApproveForm = "cdp-lease-approve-form"
+	OpLeaseDeny        = "cdp-lease-deny"
+	OpLeaseRevoke      = "cdp-lease-revoke"
+	OpStatus           = "status"
+	OpDetach           = "detach"
+	OpStop             = "stop"
+	OpRevoke           = "revoke"
+	OpLeases           = "leases"
+	OpUnseal           = "unseal"
+	OpSealOff          = "seal-off"
+	OpSealOn           = "seal-on"
 )
 
-var Ops = []string{OpStatus, OpDetach, OpStop, OpRevoke, OpLeases, OpUnseal, OpSealOff, OpSealOn, OpLeaseList, OpLeaseApprove, OpLeaseDeny, OpLeaseRevoke}
+var Ops = []string{OpStatus, OpDetach, OpStop, OpRevoke, OpLeases, OpUnseal, OpSealOff, OpSealOn, OpLeaseList, OpLeaseApprove, OpLeaseDeny, OpLeaseRevoke, OpLeaseApproveForm}
 
 const (
 	StateWaiting      = "waiting"
@@ -200,6 +201,7 @@ func (h *Holder) handler(op string) func() {
 }
 
 type Request struct {
+	FormEnd     string `json:"ordinaryForm,omitempty"`
 	Request     string `json:"request,omitempty"`
 	Lease       string `json:"lease,omitempty"`
 	V           int    `json:"v"`

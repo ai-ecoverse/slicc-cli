@@ -54,6 +54,9 @@ func failure(err error, id int) map[string]any {
 	if errors.Is(err, denied) {
 		m["message"] = "Outside scope or document changed. Request the exact URL or ask the owner for help; do not retry a site action automatically."
 	}
+	if errors.Is(err, unknown) {
+		m["message"] = "The form action may already have run. Inspect the task tab; do not retry automatically."
+	}
 	if id > 0 {
 		m["id"] = id
 	}
