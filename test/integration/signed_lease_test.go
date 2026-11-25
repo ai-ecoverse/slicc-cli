@@ -15,14 +15,17 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 type leaseSite struct {
-	Sites        struct{ Billing, Receipt string }
-	ChromiumArgs []string
-	OwnerStart   string
+	Sites            struct{ Billing, Receipt string }
+	ChromiumArgs     []string
+	OwnerStart       string
+	BillingDocReset  func()
+	BillingDocStatus func() (status int, site, referer string)
 }
 
 func signedSite(t *testing.T) leaseSite {
@@ -43,6 +46,11 @@ func signedSite(t *testing.T) leaseSite {
 		}
 		return site
 	}
+	var lastStatus atomic.Int32
+	var lastSite, lastReferer atomic.Value
+	lastSite.Store("")
+	lastReferer.Store("")
+	var recordedDoc atomic.Bool
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		switch r.URL.Path {
@@ -50,7 +58,31 @@ func signedSite(t *testing.T) leaseSite {
 			fmt.Fprint(w, "<p>Receipt 1042</p>")
 		case "/widget":
 			fmt.Fprint(w, "<p>PRIVATE WIDGET</p>")
+		case "/favicon.ico":
+			w.WriteHeader(http.StatusNoContent)
 		default:
+			if r.Header.Get("Sec-Fetch-Dest") != "document" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			secSite := r.Header.Get("Sec-Fetch-Site")
+			referer := r.Header.Get("Referer")
+			if recordedDoc.CompareAndSwap(false, true) {
+				lastSite.Store(secSite)
+				lastReferer.Store(referer)
+				if secSite != "none" || referer != "" {
+					lastStatus.Store(401)
+					w.WriteHeader(http.StatusUnauthorized)
+					fmt.Fprint(w, "unauthorized")
+					return
+				}
+				lastStatus.Store(200)
+			}
+			if lastStatus.Load() == 401 {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, "unauthorized")
+				return
+			}
 			fmt.Fprint(w, `<h1>Invoice 1042 · paid</h1><iframe src="/widget"></iframe>`)
 		}
 	}))
@@ -60,6 +92,15 @@ func signedSite(t *testing.T) leaseSite {
 	site.Sites.Billing = server.URL
 	site.Sites.Receipt = strings.Replace(server.URL, "127.0.0.1", "receipt.example.test", 1)
 	site.OwnerStart = server.URL + "/"
+	site.BillingDocReset = func() {
+		recordedDoc.Store(false)
+		lastStatus.Store(0)
+		lastSite.Store("")
+		lastReferer.Store("")
+	}
+	site.BillingDocStatus = func() (int, string, string) {
+		return int(lastStatus.Load()), lastSite.Load().(string), lastReferer.Load().(string)
+	}
 	return site
 }
 func TestSignedLeaseVectors(t *testing.T) {
@@ -240,6 +281,9 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 		p.eval("leaseTest.action("+jsArgs(op, args)+")", &reply)
 		return reply
 	}
+	if site.BillingDocReset != nil {
+		site.BillingDocReset()
+	}
 	if v := action("goto", map[string]string{"url": site.Sites.Billing + "/"}); v["type"] != "result" {
 		t.Fatalf("goto: %v", v)
 	}
@@ -252,8 +296,17 @@ func TestSignedLeaseOwnerAndGuardedBrowser(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	s := fmt.Sprint(snap)
-	if !strings.Contains(s, "Invoice 1042 · paid") || strings.Contains(s, "Support frame fixture only") || strings.Contains(s, "PRIVATE WIDGET") {
+	if !strings.Contains(s, "Invoice 1042 · paid") || strings.Contains(s, "Support frame fixture only") || strings.Contains(s, "PRIVATE WIDGET") || strings.Contains(s, "unauthorized") {
 		t.Fatalf("snapshot: %s", s)
+	}
+	if site.BillingDocStatus != nil {
+		st, secSite, referer := site.BillingDocStatus()
+		if st != 200 || secSite != "none" || referer != "" {
+			t.Fatalf("first billing document HTTP status=%d Sec-Fetch-Site=%q Referer=%q (want 200, none, empty; 401 means a non-browser-initiated hop)", st, secSite, referer)
+		}
+		t.Logf("lease-chrome-summary test=TestSignedLeaseOwnerAndGuardedBrowser rows=1 billing_doc_status=%d sec_fetch_site=%s protected_fixture_hits=n/a snapshot=Invoice", st, secSite)
+	} else {
+		t.Logf("lease-chrome-summary test=TestSignedLeaseOwnerAndGuardedBrowser rows=1 billing_doc_status=external-fixture snapshot=Invoice")
 	}
 	url := site.Sites.Receipt + "/r/1042"
 	if v := action("goto", map[string]string{"url": url}); v["reason"] != "E_SCOPE" {

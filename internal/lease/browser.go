@@ -101,7 +101,7 @@ func (bs *browserSession) create(ctx context.Context, t *tab, dest string) error
 	}
 	t.lost = true
 	var p struct{ TargetID string }
-	if bs.c.Call(ctx, "", "Target.createTarget", map[string]any{"url": dest, "background": false}, &p) != nil || p.TargetID == "" {
+	if bs.c.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": false}, &p) != nil || p.TargetID == "" {
 		return unsupported
 	}
 	t.target = p.TargetID
@@ -119,6 +119,9 @@ func (bs *browserSession) create(ctx context.Context, t *tab, dest string) error
 		if s.Call(ctx, m, nil, nil) != nil {
 			return unsupported
 		}
+	}
+	if s.Call(ctx, "Page.navigate", map[string]any{"url": dest}, nil) != nil {
+		return unsupported
 	}
 	t.lost = false
 	return nil
