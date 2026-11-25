@@ -102,6 +102,7 @@ type navTarget struct {
 	protectedHistory  map[string]string
 	confirm           *navTarget
 	confirming        bool
+	issuedSeq         int64
 	failedLoadGen     int
 	revision          int
 	documentsOnly     bool
@@ -279,9 +280,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	if nt.confirm != nil && !nt.confirm.done {
 		send = append(send, g.confirmTargetLocked(nt)...)
 	}
-	if nt.commits != before && (g.o.Loaded(nt.documentURL) || g.o.Loaded(nt.errorURL)) {
-		nt.historyLocked = true
-	}
+	send = append(send, g.noteHistoryLockedCommitLocked(nt, before)...)
 	if nt.commits != before && g.o.Loaded(nt.errorURL) {
 		nt.failCommit = nt.commits
 	}

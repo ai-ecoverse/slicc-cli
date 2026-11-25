@@ -222,6 +222,9 @@ func (b *chromeProc) tryOpenPage(t *testing.T, url string) (*page, error) {
 	if err := s.Call(ctx, "Page.bringToFront", nil, nil); err != nil {
 		return p, fmt.Errorf("foreground %s: %w", url, err)
 	}
+	if url == "about:blank" || url == "about:srcdoc" {
+		return p, nil
+	}
 	err = p.loaded(url, 15*time.Second)
 	if err == nil || !p.droppedModule() {
 		return p, err
@@ -396,9 +399,16 @@ func startAttach(t *testing.T, args ...string) *attachProc {
 	return startAttachEnv(t, false, nil, args...)
 }
 
+func attachBinary() string {
+	if p := os.Getenv("SLICC_TEST_ATTACH_BINARY"); p != "" {
+		return p
+	}
+	return binary
+}
+
 func startAttachEnv(t *testing.T, stdio bool, env []string, args ...string) *attachProc {
 	t.Helper()
-	cmd := exec.Command(binary, append([]string{"attach"}, args...)...)
+	cmd := exec.Command(attachBinary(), append([]string{"attach"}, args...)...)
 	cmd.Env = append(append(os.Environ(), "SLICC_DEBUG=1"), env...)
 	a := &attachProc{cmd: cmd, stderr: &syncBuffer{}}
 	cmd.Stderr = a.stderr

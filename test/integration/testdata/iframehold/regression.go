@@ -300,7 +300,7 @@ func chromeErrorConfirmGuard(t *testing.T, parent string) (*guard, *target, *nav
 
 func TestIframeHoldChromeErrorFrameTreeProtectedParent(t *testing.T) {
 	g, frame, nt := chromeErrorConfirmGuard(t, "SEVEN")
-	_ = g.confirmedTargetLocked(nt, nt.confirm, 0, chromeErrorConfirmMessage("CHILD", "SEVEN", "https://ordinary.test/fail"))
+	_ = g.confirmedTargetLocked(nt, nt.confirm, 0, 0, chromeErrorConfirmMessage("CHILD", "SEVEN", "https://ordinary.test/fail"))
 	if g.frameParents["CHILD"] != "SEVEN" {
 		t.Fatalf("frame-tree parent was not recorded: %q", g.frameParents["CHILD"])
 	}
@@ -324,7 +324,7 @@ func TestIframeHoldChromeErrorFrameTreeHeldOrUnknownParent(t *testing.T) {
 				id = "MID"
 			}
 			g, frame, nt := chromeErrorConfirmGuard(t, parent)
-			_ = g.confirmedTargetLocked(nt, nt.confirm, 0, chromeErrorConfirmMessage("CHILD", id, "https://ordinary.test/fail"))
+			_ = g.confirmedTargetLocked(nt, nt.confirm, 0, 0, chromeErrorConfirmMessage("CHILD", id, "https://ordinary.test/fail"))
 			if !nt.confirm.failed {
 				t.Fatalf("chrome-error with %s parent was confirmed: failed=%v parent=%q", parent, nt.confirm.failed, g.frameParents["CHILD"])
 			}
@@ -487,7 +487,7 @@ func TestIframeHoldChromeErrorFrameTreeOrdinaryOrMissingParent(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			g, frame, nt := chromeErrorConfirmGuard(t, parent)
-			_ = g.confirmedTargetLocked(nt, nt.confirm, 0, chromeErrorConfirmMessage("CHILD", parent, "https://ordinary.test/fail"))
+			_ = g.confirmedTargetLocked(nt, nt.confirm, 0, 0, chromeErrorConfirmMessage("CHILD", parent, "https://ordinary.test/fail"))
 			if frame.protected || nt.confirm.failed {
 				t.Fatalf("chrome-error with ordinary/missing parent stayed blocked: protected=%v failed=%v parent=%q", frame.protected, nt.confirm.failed, g.frameParents["CHILD"])
 			}
@@ -1530,7 +1530,7 @@ func TestIframeHoldOwnerConfirmReplySevenHidesHeld(t *testing.T) {
 		result, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": map[string]any{
 			"id": "P", "url": host + "/doc", "securityOrigin": host,
 		}}})
-		_ = g.confirmedTargetLocked(g.navTargets["P"], g.navTargets["P"].confirm, 0, message{Result: result})
+		_ = g.confirmedTargetLocked(g.navTargets["P"], g.navTargets["P"].confirm, 0, 0, message{Result: result})
 		settled := g.settleHeldWorkersLocked()
 		assertHeldHiddenAfterOwnerProtect(t, g, "confirm reply "+host)
 		if !chromeDetachSessions(settled.send)["S-F"] {
@@ -2293,7 +2293,7 @@ func TestIframeHoldConfirmRevisionChurnSettlesWithinHold(t *testing.T) {
 	check := nt.confirm
 	check.start = time.Now().Add(-holdTimeout() - time.Second)
 	nt.revision = 2
-	_ = g.confirmedTargetLocked(nt, check, 1, message{Result: json.RawMessage(`{"frameTree":{"frame":{"id":"PAGE","url":"https://ordinary.test/"}}}`)})
+	_ = g.confirmedTargetLocked(nt, check, 1, 0, message{Result: json.RawMessage(`{"frameTree":{"frame":{"id":"PAGE","url":"https://ordinary.test/"}}}`)})
 	if !check.done || !check.failed {
 		t.Fatalf("confirm churn past hold bound did not settle failed: done=%v failed=%v", check.done, check.failed)
 	}

@@ -133,7 +133,7 @@ func proveFailedLoad(t *testing.T, g *guard, unreachable string) [][]byte {
 		"id": "POPUP", "url": chromeErrorURL, "securityOrigin": "://", "unreachableUrl": unreachable,
 	}
 	raw, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": frame}})
-	return g.confirmedTargetLocked(nt, check, nt.revision, message{Result: raw})
+	return g.confirmedTargetLocked(nt, check, nt.revision, 0, message{Result: raw})
 }
 
 func assertNoFailedHost(t *testing.T, label string, payloads []string) {
@@ -242,7 +242,7 @@ func TestFailedLoadUnreadableProofStaysHeld(t *testing.T) {
 	g.navTargets["POPUP"] = nt
 	g.beginConfirmLocked(nt)
 	check := nt.confirm
-	_ = g.confirmedTargetLocked(nt, check, nt.revision, message{Error: json.RawMessage(`{"message":"boom"}`)})
+	_ = g.confirmedTargetLocked(nt, check, nt.revision, 0, message{Error: json.RawMessage(`{"message":"boom"}`)})
 	if g.sessions["S-POPUP"] != nil {
 		t.Fatal("unreadable proof admitted a client session")
 	}
@@ -432,7 +432,7 @@ func TestFailedLoadStaleProofDoesNotReleaseNewDocument(t *testing.T) {
 		"id": "POPUP", "url": chromeErrorURL, "securityOrigin": "://", "unreachableUrl": failedOrdinary,
 	}
 	raw, _ := json.Marshal(map[string]any{"frameTree": map[string]any{"frame": frame}})
-	_ = g.confirmedTargetLocked(nt, stale, staleRev, message{Result: raw})
+	_ = g.confirmedTargetLocked(nt, stale, staleRev, 0, message{Result: raw})
 	page := pageStrings(g.takePendingPageLocked())
 	if payloadsContain(page, "ordinary.test") {
 		t.Fatalf("stale ordinary proof released the new document: %v", page)
@@ -544,7 +544,7 @@ func TestFailedLoadStaleErrorReplyKeepsNewHold(t *testing.T) {
 	}
 	g.errorProofGen["POPUP"] = genAtConfirm + 1
 	g.setErrorProofLocked("POPUP", errorProofPending)
-	_ = g.confirmedTargetLocked(nt, check, rev, message{Error: json.RawMessage(`{"message":"stale"}`)})
+	_ = g.confirmedTargetLocked(nt, check, rev, 0, message{Error: json.RawMessage(`{"message":"stale"}`)})
 	if g.errorProofOfLocked("POPUP") == errorProofFailed && g.held["S-POPUP"] == nil {
 		t.Fatalf("stale error reply hid the hold despite generation bump: state=%d", g.errorProofOfLocked("POPUP"))
 	}

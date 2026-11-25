@@ -121,6 +121,160 @@ export async function measureProtectedOOPIF(getLink, opts) {
   }
 }
 
+function hrExplicitState() {
+  if (!globalThis.__hrExplicit) globalThis.__hrExplicit = {};
+  return globalThis.__hrExplicit;
+}
+
+export async function measureHistoryRestoreLockedOrdinaryExplicitOpen(getLink, opts) {
+  const prev = hrExplicitState().client;
+  if (prev) await prev.close().catch(() => {});
+  const c = await CdpClient.open(getLink(), opts.browser);
+  c.callTimeout = opts.callTimeoutMs || 60000;
+  const started = Date.now();
+  const at = () => Date.now() - started;
+  const steps = [];
+  const noteStep = (name, o) => {
+    const row = { name, at: at(), ok: o.ok, error: o.ok ? '' : o.error || '' };
+    steps.push(row);
+    return row;
+  };
+  const created = [];
+  c.on((e) => {
+    if (e.method !== 'Target.targetCreated' && e.method !== 'Target.targetInfoChanged') return;
+    const info = e.params?.targetInfo ?? {};
+    if (info.type === 'iframe' && typeof info.url === 'string' && info.url.startsWith(opts.framePrefix)) {
+      created.push({ at: at(), target: info.targetId ?? '', method: e.method });
+    }
+  });
+  const discover = await outcome(c.send('Target.setDiscoverTargets', { discover: true }));
+  noteStep('guarded-setDiscoverTargets', discover);
+  if (!discover.ok) {
+    await c.close();
+    return { steps, elapsedMs: at() };
+  }
+  const hostAttach = await outcome(c.send('Target.attachToTarget', { targetId: opts.hostTarget, flatten: true }));
+  noteStep('guarded-attach-host', hostAttach);
+  if (!hostAttach.ok) {
+    await c.close();
+    return { steps, hostAttachError: hostAttach.error, elapsedMs: at() };
+  }
+  const pageSession = hostAttach.result?.sessionId ?? '';
+  const pageEnable = await outcome(c.send('Page.enable', {}, pageSession));
+  noteStep('guarded-page-enable', pageEnable);
+  const runtimeEnable = await outcome(c.send('Runtime.enable', {}, pageSession));
+  noteStep('guarded-runtime-enable', runtimeEnable);
+  const listedOut = await outcome(c.send('Target.getTargets'));
+  const beforeIframes = (listedOut.ok ? listedOut.result?.targetInfos ?? [] : [])
+    .filter((t) => t.type === 'iframe')
+    .map((t) => t.targetId);
+  noteStep('guarded-getTargets-before', listedOut.ok ? { ok: true } : listedOut);
+  hrExplicitState().client = c;
+  hrExplicitState().pageSession = pageSession;
+  hrExplicitState().created = created;
+  hrExplicitState().started = started;
+  hrExplicitState().steps = steps;
+  hrExplicitState().opts = opts;
+  hrExplicitState().beforeIframes = beforeIframes;
+  return { steps, pageSession, hostAttached: true, beforeIframes, elapsedMs: at() };
+}
+
+export async function measureHistoryRestoreLockedOrdinaryExplicitLockProbe(opts) {
+  const st = hrExplicitState();
+  const c = st.client;
+  if (!c) return { steps: [{ name: 'guarded-lock-engaged', at: 0, ok: false, error: 'no open guarded client' }], elapsedMs: 0 };
+  const started = st.started || Date.now();
+  const at = () => Date.now() - started;
+  const steps = st.steps || [];
+  const pageSession = st.pageSession;
+  await sleep(opts.lockSettleMs ?? st.opts?.lockSettleMs ?? 800);
+  const ev = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, pageSession));
+  const err = ev.ok ? '' : (ev.error || '');
+  const historyRefused = !ev.ok && typeof err === 'string' && err.includes("history may restore a protected document");
+  steps.push({
+    name: 'guarded-lock-engaged',
+    at: at(),
+    ok: historyRefused,
+    error: historyRefused ? err : (ev.ok ? 'Runtime.evaluate unexpectedly allowed on locked ordinary host' : err),
+  });
+  st.steps = steps;
+  return { steps, lockEngaged: historyRefused, error: err, elapsedMs: at() };
+}
+
+export async function measureHistoryRestoreLockedOrdinaryExplicitAttach(opts) {
+  const st = hrExplicitState();
+  const c = st.client;
+  if (!c) return { steps: [{ name: 'guarded-explicit-attach', at: 0, ok: false, error: 'no open guarded client' }], elapsedMs: 0 };
+  const started = st.started || Date.now();
+  const at = () => Date.now() - started;
+  const steps = st.steps || [];
+  const noteStep = (name, o) => {
+    const row = { name, at: at(), ok: o.ok, error: o.ok ? '' : o.error || '' };
+    steps.push(row);
+    return row;
+  };
+  const framePrefix = opts.framePrefix || st.opts?.framePrefix || '';
+  const created = st.created || [];
+  const before = new Set(Array.isArray(opts.beforeIframes) ? opts.beforeIframes : (st.beforeIframes || []));
+  try {
+    let childId = '';
+    const findDeadline = Date.now() + (opts.findWaitMs ?? st.opts?.findWaitMs ?? 15000);
+    while (Date.now() < findDeadline && !childId) {
+      for (const row of created) {
+        if (row.target && !before.has(row.target)) {
+          childId = row.target;
+          break;
+        }
+      }
+      if (!childId) {
+        const listedOut = await outcome(c.send('Target.getTargets'));
+        const listed = listedOut.ok ? listedOut.result?.targetInfos ?? [] : [];
+        for (const t of listed) {
+          if (t.type === 'iframe' && typeof t.url === 'string' && t.url.startsWith(framePrefix) && !before.has(t.targetId)) {
+            childId = t.targetId;
+            break;
+          }
+        }
+      }
+      if (!childId) await sleep(100);
+    }
+    noteStep('guarded-discover-iframe', { ok: Boolean(childId), error: childId ? '' : 'no fresh third-party iframe target' });
+    if (!childId) return { steps, childId: '', elapsedMs: at() };
+    const attachAskedAt = at();
+    const childAttach = await outcome(c.send('Target.attachToTarget', { targetId: childId, flatten: true }));
+    const attachRepliedAt = at();
+    noteStep('guarded-explicit-attach-iframe', childAttach);
+    let childEval = { ok: false, error: 'attach failed', value: '' };
+    if (childAttach.ok) {
+      const sid = childAttach.result?.sessionId ?? '';
+      const ev = await outcome(c.send('Runtime.evaluate', { expression: "document.querySelector('#inner')?.textContent ?? ''", returnByValue: true }, sid));
+      childEval = {
+        ok: ev.ok,
+        error: ev.ok ? '' : ev.error,
+        value: ev.ok ? ev.result?.result?.value ?? '' : '',
+      };
+      noteStep('guarded-child-evaluate', childEval);
+    }
+    return {
+      steps,
+      childId,
+      explicitAttach: {
+        ok: childAttach.ok,
+        error: childAttach.ok ? '' : childAttach.error,
+        sessionId: childAttach.ok ? childAttach.result?.sessionId ?? '' : '',
+        askedAt: attachAskedAt,
+        repliedAt: attachRepliedAt,
+        replyMs: attachRepliedAt - attachAskedAt,
+      },
+      childEvaluate: childEval,
+      elapsedMs: at(),
+    };
+  } finally {
+    await c.close().catch(() => {});
+    hrExplicitState().client = null;
+  }
+}
+
 async function answered(promise) {
   try {
     return { ok: true, result: await promise };
