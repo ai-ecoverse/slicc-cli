@@ -181,6 +181,12 @@ func (bs *browserSession) action(ctx context.Context, t *tab, c claims, o *prote
 	if t.lost || !live() {
 		return nil, stamp{}, retired
 	}
+	if op == "goto" {
+		var ok bool
+		if url, ok = canonical(c.Allow, url, o); !ok {
+			return nil, stamp{}, denied
+		}
+	}
 	if t.session == "" {
 		if op != "goto" || !matches(c.Allow, url, o) {
 			return nil, stamp{}, denied

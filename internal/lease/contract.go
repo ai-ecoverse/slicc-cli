@@ -144,6 +144,14 @@ func matches(rules []Rule, raw string, o *protect.Origins) bool {
 		return false
 	})
 }
+func canonical(rules []Rule, raw string, o *protect.Origins) (string, bool) {
+	u, ok := safeURL(raw, o)
+	if !ok || !matches(rules, raw, o) {
+		return "", false
+	}
+	href := u.Href(false)
+	return href, matches(rules, href, o)
+}
 func ValidRules(rules []Rule, o *protect.Origins) bool {
 	if len(rules) == 0 || len(rules) > 8 {
 		return false
