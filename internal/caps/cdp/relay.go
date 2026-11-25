@@ -511,26 +511,21 @@ func filtered(data []byte) bool {
 	return false
 }
 
-func (rl *relay) forward(ctx context.Context, original, out []byte) error {
+func (rl *relay) forward(original, out []byte) error {
 	if local, ok := rl.s.(*localStream); ok {
 		var head struct{ ID int64 }
 		if json.Unmarshal(original, &head) != nil {
 			return errLocal
 		}
 		v, live := local.calls.Load(head.ID)
-		if !live {
-			return nil
-		}
-		ctx = v.(context.Context)
-		if ctx.Err() != nil {
+		if !live || v.(context.Context).Err() != nil {
 			return nil
 		}
 	}
-	return rl.conn.Write(ctx, websocket.MessageText, out)
+	return rl.conn.Write(context.Background(), websocket.MessageText, out)
 }
 
 func (rl *relay) toBrowser() {
-	ctx := context.Background()
 	var hdr [4]byte
 	var reservation *link.Reservation
 	defer func() { reservation.Release() }()
@@ -576,7 +571,7 @@ func (rl *relay) toBrowser() {
 		if out == nil {
 			continue
 		}
-		if err := rl.forward(ctx, buf, out); err != nil {
+		if err := rl.forward(buf, out); err != nil {
 			if rl.browserDone.Load() {
 				continue
 			}
