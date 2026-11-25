@@ -1618,6 +1618,7 @@ func (g *guard) observeLocked(info targetInfo) [][]byte {
 	t.gone = false
 	prev := t.protected
 	v := g.targetVerdictLocked(t)
+	g.noteSetupProtectedFromTargetLocked(g.navTargets[t.id], t, v)
 	if nt := g.navTargets[t.id]; !prev && navTypes[t.typ] && nt != nil && !nt.failed && v.protected && !v.unparseable {
 		nt.historyLocked = true
 		g.beginConfirmLocked(nt)

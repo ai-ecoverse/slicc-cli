@@ -601,6 +601,7 @@ type hrChromeLockedOrdinaryResult struct {
 	browser       string
 	frameHost     string
 	seven         string
+	ordinary      string
 	ctx           context.Context
 	holdAtMs      int64
 	deliveredAtMs int64
@@ -969,6 +970,7 @@ func historyRestoreChromeLockedOrdinaryExplicit(t *testing.T) *hrChromeLockedOrd
 		browser:       browser,
 		frameHost:     frameHost,
 		seven:         seven,
+		ordinary:      ordinary,
 		ctx:           ctx,
 		holdAtMs:      holdAtMs,
 		deliveredAtMs: deliveredAtMs,

@@ -201,6 +201,198 @@ export async function measureHistoryRestoreLockedOrdinaryExplicitLockProbe(opts)
   return { steps, lockEngaged: historyRefused, error: err, elapsedMs: at() };
 }
 
+export async function measureHistorySetupWaitConfirmSettled(opts) {
+  const st = hrExplicitState();
+  const c = st.client;
+  if (!c) return { steps: [{ name: 'guarded-wait-confirm-settled', at: 0, ok: false, error: 'no open guarded client' }], ok: false, error: 'no open guarded client', elapsedMs: 0 };
+  const started = st.started || Date.now();
+  const at = () => Date.now() - started;
+  const steps = st.steps || [];
+  const pageSession = st.pageSession;
+  const hist = await outcome(c.send('Page.getNavigationHistory', {}, pageSession));
+  const row = { name: 'guarded-wait-confirm-settled', at: at(), ok: hist.ok, error: hist.ok ? '' : hist.error || '' };
+  steps.push(row);
+  st.steps = steps;
+  return { steps, ok: hist.ok, error: hist.ok ? '' : hist.error || '', elapsedMs: at() };
+}
+
+export async function measureHistorySetupLockedOrdinarySetup(opts) {
+  const st = hrExplicitState();
+  const c = st.client;
+  if (!c) return { steps: [{ name: 'guarded-setup', at: 0, ok: false, error: 'no open guarded client' }], elapsedMs: 0 };
+  const started = st.started || Date.now();
+  const at = () => Date.now() - started;
+  const steps = st.steps || [];
+  const pageSession = st.pageSession;
+  const noteStep = (name, o) => {
+    const row = { name, at: at(), ok: o.ok, error: o.ok ? '' : o.error || '' };
+    steps.push(row);
+    return row;
+  };
+  const bypass = await outcome(c.send('Network.setBypassServiceWorker', { bypass: true }, pageSession));
+  noteStep('guarded-setBypassServiceWorker', bypass);
+  const auto = await outcome(c.send('Target.setAutoAttach', {
+    autoAttach: true,
+    flatten: true,
+    waitForDebuggerOnStart: false,
+    filter: FRAME_CHILDREN,
+  }, pageSession));
+  noteStep('guarded-setAutoAttach', auto);
+  const evaluate = await outcome(c.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, pageSession));
+  const evaluateHistory = !evaluate.ok && typeof evaluate.error === 'string' && evaluate.error.includes('history may restore a protected document');
+  steps.push({
+    name: 'guarded-evaluate-history-refused',
+    at: at(),
+    ok: evaluateHistory,
+    error: evaluateHistory ? (evaluate.error || '') : (evaluate.ok ? 'Runtime.evaluate unexpectedly allowed' : evaluate.error || ''),
+  });
+  const getDocument = await outcome(c.send('DOM.getDocument', { depth: -1, pierce: true }, pageSession));
+  const getDocumentHistory = !getDocument.ok && typeof getDocument.error === 'string' && getDocument.error.includes('history may restore a protected document');
+  steps.push({
+    name: 'guarded-getDocument-history-refused',
+    at: at(),
+    ok: getDocumentHistory,
+    error: getDocumentHistory ? (getDocument.error || '') : (getDocument.ok ? 'DOM.getDocument unexpectedly allowed' : getDocument.error || ''),
+  });
+  st.steps = steps;
+  st.autoAttachArmed = auto.ok;
+  return {
+    steps,
+    bypassOk: bypass.ok,
+    bypassError: bypass.ok ? '' : bypass.error,
+    autoAttachOk: auto.ok,
+    autoAttachError: auto.ok ? '' : auto.error,
+    evaluateRefused: evaluateHistory,
+    getDocumentRefused: getDocumentHistory,
+    elapsedMs: at(),
+  };
+}
+
+export async function measureHistorySetupLockedOrdinaryAutoChild(opts) {
+  const st = hrExplicitState();
+  const c = st.client;
+  if (!c) return { steps: [{ name: 'guarded-auto-child', at: 0, ok: false, error: 'no open guarded client' }], elapsedMs: 0 };
+  const started = st.started || Date.now();
+  const at = () => Date.now() - started;
+  const steps = st.steps || [];
+  const noteStep = (name, o) => {
+    const row = { name, at: at(), ok: o.ok, error: o.ok ? '' : o.error || '' };
+    steps.push(row);
+    return row;
+  };
+  const framePrefix = opts.framePrefix || st.opts?.framePrefix || '';
+  const before = new Set(Array.isArray(opts.beforeIframes) ? opts.beforeIframes : (st.beforeIframes || []));
+  const created = st.created || [];
+  const attached = [];
+  const targetEvents = [];
+  const noteTargetEvent = (e) => {
+    if (e.method !== 'Target.attachedToTarget' && e.method !== 'Target.detachedFromTarget') return;
+    const info = e.params?.targetInfo ?? {};
+    const targetId = info.targetId ?? e.params?.targetId ?? '';
+    targetEvents.push({
+      at: at(),
+      method: e.method,
+      sessionPrefix: typeof e.sessionId === 'string' ? e.sessionId.slice(0, 8) : '',
+      childSessionPrefix: typeof e.params?.sessionId === 'string' ? e.params.sessionId.slice(0, 8) : '',
+      targetPrefix: typeof targetId === 'string' ? targetId.slice(0, 8) : '',
+      type: info.type || '',
+    });
+    if (e.method !== 'Target.attachedToTarget') return;
+    if (info.type === 'iframe' && typeof info.targetId === 'string' && info.targetId && !before.has(info.targetId)) {
+      const childSession = typeof e.params?.sessionId === 'string' ? e.params.sessionId : '';
+      if (childSession) {
+        attached.push({
+          at: at(),
+          target: info.targetId,
+          sessionId: childSession,
+          waiting: e.params?.waitingForDebugger ?? false,
+          onSession: e.sessionId ?? '',
+          url: typeof info.url === 'string' ? info.url : '',
+        });
+      }
+    }
+  };
+  for (const e of c.events) noteTargetEvent(e);
+  c.on(noteTargetEvent);
+  const formatSeen = () => targetEvents.map((e) => `${e.at}ms ${e.method} sess=${e.sessionPrefix || '-'} child=${e.childSessionPrefix || '-'} target=${e.targetPrefix || '-'} type=${e.type || '-'}`).join('; ') || '(none)';
+  try {
+    let childId = '';
+    const findDeadline = Date.now() + (opts.findWaitMs ?? st.opts?.findWaitMs ?? 20000);
+    while (Date.now() < findDeadline && !childId) {
+      for (const row of created) {
+        if (row.target && !before.has(row.target)) {
+          childId = row.target;
+          break;
+        }
+      }
+      if (!childId) {
+        const listedOut = await outcome(c.send('Target.getTargets'));
+        const listed = listedOut.ok ? listedOut.result?.targetInfos ?? [] : [];
+        for (const t of listed) {
+          if (t.type === 'iframe' && typeof t.url === 'string' && t.url.startsWith(framePrefix) && !before.has(t.targetId)) {
+            childId = t.targetId;
+            break;
+          }
+        }
+      }
+      if (!childId) await sleep(100);
+    }
+    noteStep('guarded-discover-iframe', { ok: Boolean(childId), error: childId ? '' : 'no fresh third-party iframe target' });
+    if (!childId) return { steps, childId: '', targetEvents, elapsedMs: at() };
+    let childSession = '';
+    const attachDeadline = Date.now() + (opts.attachWaitMs ?? st.opts?.attachWaitMs ?? 20000);
+    while (Date.now() < attachDeadline && !childSession) {
+      for (const row of attached) {
+        if (row.target === childId && row.sessionId) {
+          childSession = row.sessionId;
+          break;
+        }
+      }
+      if (!childSession) await sleep(50);
+    }
+    const deliveredAt = at();
+    const childPrefix = childId.slice(0, 8);
+    const attachedDesc = attached.map((r) => `target=${(r.target || '').slice(0, 8)} sess=${(r.sessionId || '').slice(0, 8)} on=${(r.onSession || '').slice(0, 8) || '-'}`).join('; ') || '(none)';
+    const miss = childSession ? '' : `auto-attached child session not delivered; childIdPrefix=${childPrefix}; attached=[${attachedDesc}]; seen=[${formatSeen()}]`;
+    noteStep('guarded-auto-attach-iframe', {
+      ok: Boolean(childSession),
+      error: miss,
+    });
+    let childEval = { ok: false, error: 'no child session', value: '' };
+    if (childSession) {
+      const ev = await outcome(c.send('Runtime.evaluate', { expression: "document.querySelector('#inner')?.textContent ?? ''", returnByValue: true }, childSession));
+      childEval = {
+        ok: ev.ok,
+        error: ev.ok ? '' : ev.error,
+        value: ev.ok ? ev.result?.result?.value ?? '' : '',
+      };
+      noteStep('guarded-child-evaluate', childEval);
+    }
+    return {
+      steps,
+      childId,
+      targetEvents,
+      autoAttach: {
+        ok: Boolean(childSession),
+        error: miss,
+        sessionId: childSession,
+        deliveredAt,
+      },
+      childEvaluate: childEval,
+      elapsedMs: at(),
+    };
+  } catch (error) {
+    return {
+      steps,
+      childId: '',
+      targetEvents,
+      autoAttach: { ok: false, error: `${String(error?.message ?? error)}; seen=[${formatSeen()}]`, sessionId: '', deliveredAt: at() },
+      childEvaluate: { ok: false, error: String(error?.message ?? error), value: '' },
+      elapsedMs: at(),
+    };
+  }
+}
+
 export async function measureHistoryRestoreLockedOrdinaryExplicitAttach(opts) {
   const st = hrExplicitState();
   const c = st.client;

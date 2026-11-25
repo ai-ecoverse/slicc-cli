@@ -104,6 +104,7 @@ type confirmFrame struct {
 }
 
 func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, frame confirmFrame, raw json.RawMessage, issuedSeq int64) [][]byte {
+	g.noteSetupProtectedConfirmLocked(nt, t, frame)
 	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
 	if frame.LoaderID != "" {
 		nt.loaderID = frame.LoaderID
@@ -122,6 +123,7 @@ func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, fram
 		}
 		check.settle(false)
 		g.stampHistoryHoldReadIdentityLocked(nt.target, frame)
+		g.clearSetupProtectedLocked(nt, issuedSeq)
 		return g.releaseHistoryHoldsForConfirmLocked(nt.target, true, issuedSeq)
 	}
 	if frame.SecurityOrigin == "" {
@@ -139,6 +141,7 @@ func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, fram
 	}
 	check.settle(false)
 	g.stampHistoryHoldReadIdentityLocked(nt.target, frame)
+	g.clearSetupProtectedLocked(nt, issuedSeq)
 	return g.releaseHistoryHoldsForConfirmLocked(nt.target, true, issuedSeq)
 }
 
