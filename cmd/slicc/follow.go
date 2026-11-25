@@ -55,6 +55,7 @@ the command line, where ps shows it to every user of this machine.
 
 flags:
   --lease-browser <loopback-http-origin>  exclusive signed lease broker; requires --name
+  --lease-ordinary-forms  allow separate, local per-grant note-form approval on this broker
   --native-screen      native app view provider through inherited private bootstrap (off by default)
   --native-screen-proof  content-free verifier diagnostics (requires --native-screen --json)
   --exit               offer this machine's network to seven (tcp, resolve,
@@ -79,6 +80,7 @@ machine can read, and unless :ro, change the folders listed.
 
 type followFlags struct {
 	leaseBrowser      string
+	leaseForms        bool
 	exit              bool
 	nativeScreen      bool
 	nativeScreenProof bool
@@ -129,6 +131,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&f.exit, "exit", false, "")
 	fs.StringVar(&f.leaseBrowser, "lease-browser", "", "")
+	fs.BoolVar(&f.leaseForms, "lease-ordinary-forms", false, "")
 	fs.BoolVar(&f.nativeScreen, "native-screen", false, "")
 	fs.BoolVar(&f.nativeScreenProof, "native-screen-proof", false, "")
 	fs.StringVar(&f.name, "name", "", "")

@@ -57,6 +57,24 @@ func OpenLocal(ctx context.Context, base string, origins []string, observe func(
 	return nil, errLocal
 }
 
+type formDispatchKey struct{}
+type formDispatch struct{ target, session, world, loader string }
+
+func FormDispatch(ctx context.Context, target, session, world, loader string) context.Context {
+	return context.WithValue(ctx, formDispatchKey{}, formDispatch{target, session, world, loader})
+}
+func (g *guard) checkFormDispatch(d formDispatch, raw []byte) bool {
+	c, _, ok := parseCommand(raw)
+	if !ok || c.session != d.session || c.method != "Runtime.evaluate" || c.str("uniqueContextId") != d.world || d.world == "" {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	t := g.sessionTargetLocked(d.session)
+	nt := g.navTargets[d.target]
+	return t != nil && t.id == d.target && t.typ == "page" && !t.gone && !t.protected && !g.sessionRefusedLocked(d.session) && nt != nil && nt.fetchArmed && !nt.failed && !nt.historyLocked && !nt.documentsOnly && d.loader != "" && (nt.loaderID == "" || nt.loaderID == d.loader) && !g.extensionFramesPresentLocked(d.target)
+}
+
 type localStream struct {
 	net.Conn
 	ready, done chan struct{}

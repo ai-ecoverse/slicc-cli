@@ -310,34 +310,40 @@ func (rl *relay) toPage() {
 		if typ != websocket.MessageText || filtered(data) {
 			continue
 		}
-		v := rl.g.fromBrowser(data)
-		if v.lost {
-			time.AfterFunc(LostGrace, func() {
-				if !rl.browserDone.Load() {
-					rl.kill("ECONNRESET: " + refusedLost)
-				}
-			})
-		}
-		for _, p := range v.extensionPaints {
-			rl.expireExtensionPaintLater(p)
-		}
-		if !rl.sendGuardVerdict(ctx, v) {
-			releaseReservations(v.releases)
+		if !rl.handleBrowser(ctx, data) {
 			return
 		}
-		rl.scheduleBrowserVerdict(v)
-		if v.forward != nil {
-			v.page = append([][]byte{v.forward}, v.page...)
-		}
-		for _, msg := range v.page {
-			if err := rl.writePage(msg); err != nil {
-				_ = rl.conn.CloseNow()
-				releaseReservations(v.releases)
-				return
-			}
-		}
-		releaseReservations(v.releases)
 	}
+}
+func (rl *relay) handleBrowser(ctx context.Context, data []byte) bool {
+	v := rl.g.fromBrowser(data)
+	if v.lost {
+		time.AfterFunc(LostGrace, func() {
+			if !rl.browserDone.Load() {
+				rl.kill("ECONNRESET: " + refusedLost)
+			}
+		})
+	}
+	for _, p := range v.extensionPaints {
+		rl.expireExtensionPaintLater(p)
+	}
+	if !rl.sendGuardVerdict(ctx, v) {
+		releaseReservations(v.releases)
+		return false
+	}
+	rl.scheduleBrowserVerdict(v)
+	if v.forward != nil {
+		v.page = append([][]byte{v.forward}, v.page...)
+	}
+	for _, msg := range v.page {
+		if err := rl.writePage(msg); err != nil {
+			_ = rl.conn.CloseNow()
+			releaseReservations(v.releases)
+			return false
+		}
+	}
+	releaseReservations(v.releases)
+	return true
 }
 
 func (rl *relay) scheduleBrowserVerdict(v browserVerdict) {
@@ -523,6 +529,12 @@ func (rl *relay) forward(ctx context.Context, original, out []byte) error {
 		}
 		ctx = v.(context.Context)
 		if ctx.Err() != nil {
+			return nil
+		}
+		if d, ok := ctx.Value(formDispatchKey{}).(formDispatch); ok && !rl.g.checkFormDispatch(d, out) {
+			if !rl.handleBrowser(ctx, refusal(head.ID, d.session, "ordinary form placement is unconfirmed")) {
+				return errLocal
+			}
 			return nil
 		}
 	}

@@ -35,6 +35,7 @@ func (r refusal) Error() string { return string(r) }
 
 const (
 	invalid     refusal = "E_INVALID"
+	unknown     refusal = "E_OUTCOME_UNKNOWN"
 	denied      refusal = "E_SCOPE"
 	retired     refusal = "E_REVOKED"
 	expired     refusal = "E_EXPIRED"
@@ -143,6 +144,9 @@ func matches(rules []Rule, raw string, o *protect.Origins) bool {
 		}
 		return false
 	})
+}
+func FormEndpoint(raw string) bool {
+	return !strings.ContainsAny(raw, "?#") && (Rule{Kind: "exact", URL: raw}).Valid(nil)
 }
 func ValidRules(rules []Rule, o *protect.Origins) bool {
 	if len(rules) == 0 || len(rules) > 8 {

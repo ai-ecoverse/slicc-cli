@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,7 +25,7 @@ import (
 	"golang.org/x/term"
 )
 
-const leaseUsage = `Signed leases allow goto and scoped top-document snapshots only. No clicks, fills or form submissions.
+const leaseUsage = `Signed leases allow goto and scoped top-document snapshots. To also allow a Note/Comment form, the local owner must explicitly add --ordinary-form <exact HTTPS POST action> on initial review or grant.
 usage: slicc lease review --to jkt:<thumbprint> --allow <HTTPS rule> --for <duration>
        slicc lease grant --no-input --link <label> --browser <loopback HTTP origin> --to jkt:<thumbprint> --allow <rule> --for <duration>
        slicc lease grant <request> --add <rule> --keep-expiry
@@ -47,7 +48,7 @@ func leaseRoutes() ([]leaseRoute, error) {
 	out := []leaseRoute{}
 	for _, ent := range entries {
 		st := ent.Status
-		if st == nil || !slices.Equal(st.Offers, []string{lease.Cap}) {
+		if st == nil || !slices.Equal(st.Offers, []string{lease.Cap}) && !isFormBroker(st) {
 			continue
 		}
 		complete := true
@@ -68,6 +69,9 @@ func leaseRoutes() ([]leaseRoute, error) {
 		out = append(out, row)
 	}
 	return out, nil
+}
+func isFormBroker(st *ctl.Status) bool {
+	return slices.Equal(st.Offers, []string{lease.Cap, lease.FormOffer}) && slices.Contains(st.Ops, ctl.OpLeaseApproveForm)
 }
 func ownerRule(raw string) (lease.Rule, error) {
 	r := lease.Rule{URL: raw, Kind: "origin"}
@@ -102,18 +106,20 @@ type selection struct {
 	p    lease.Pending
 }
 type ownerFlags struct {
-	op, target, label, endpoint, to, peer string
-	ttl                                   time.Duration
-	keep, noInput                         bool
-	scope, delta                          stringList
+	op, target, label, endpoint, to, peer, formEnd string
+	ttl                                            time.Duration
+	keep, noInput                                  bool
+	scope, delta                                   stringList
 }
 
 var errLeaseUsage = errors.New(strings.TrimSpace(leaseUsage))
 
+var brokerID = regexp.MustCompile(`^[A-Za-z0-9_-]{24}$`)
+
 func parseOwner(args []string) (ownerFlags, error) {
 	f := ownerFlags{op: args[0]}
 	args = args[1:]
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	if len(args) > 0 && (f.op == "grant" || f.op == "deny" || f.op == "revoke") && brokerID.MatchString(args[0]) {
 		f.target = args[0]
 		args = args[1:]
 	}
@@ -123,6 +129,7 @@ func parseOwner(args []string) (ownerFlags, error) {
 	fs.StringVar(&f.endpoint, "browser", "", "")
 	fs.StringVar(&f.to, "to", "", "")
 	fs.StringVar(&f.peer, "peer", "", "")
+	fs.StringVar(&f.formEnd, "ordinary-form", "", "")
 	fs.DurationVar(&f.ttl, "for", 0, "")
 	fs.BoolVar(&f.keep, "keep-expiry", false, "")
 	fs.BoolVar(&f.noInput, "no-input", false, "")
@@ -141,6 +148,9 @@ func parseOwner(args []string) (ownerFlags, error) {
 			return f, errLeaseUsage
 		}
 	case "review", "grant":
+		if f.formEnd != "" && (f.target != "" || !lease.FormEndpoint(f.formEnd)) {
+			return f, errors.New("--ordinary-form needs an exact HTTPS POST action on an initial grant, without query or fragment")
+		}
 		if f.peer != "" {
 			return f, errLeaseUsage
 		}
@@ -151,6 +161,7 @@ func parseOwner(args []string) (ownerFlags, error) {
 }
 func (f ownerFlags) rules() ([]lease.Rule, error) {
 	scope := f.scope
+
 	if f.target != "" {
 		if f.op != "grant" || !f.keep || len(f.delta) == 0 || len(scope) > 0 || f.ttl != 0 || f.to != "" {
 			return nil, errLeaseUsage
@@ -232,7 +243,7 @@ func ownerLease(args []string, out, errOut io.Writer) error {
 	}
 	rd := bufio.NewReaderSize(os.Stdin, 2048)
 	if len(routes) == 0 && f.op == "review" {
-		if e := bootstrapLease(rd, errOut); e != nil {
+		if e := bootstrapLease(rd, errOut, f.formEnd != ""); e != nil {
 			return e
 		}
 		routes, e = leaseRoutes()
@@ -242,7 +253,7 @@ func ownerLease(args []string, out, errOut io.Writer) error {
 	}
 	var choices []selection
 	for _, r := range routes {
-		if r.status.State != ctl.StateConnected {
+		if r.status.State != ctl.StateConnected || f.formEnd != "" && !isFormBroker(r.status) {
 			continue
 		}
 		for _, p := range r.Pending {
@@ -275,8 +286,13 @@ func (f ownerFlags) decide(choices []selection, rules []lease.Rule, rd *bufio.Re
 			fmt.Fprintf(errOut, "%s: %s\n", r.Kind, r.URL)
 		}
 		fmt.Fprintf(errOut, "Until %s. Operates as you in the selected profile. This broker can navigate and read the top document; other tabs stay private.\n", time.Now().Add(f.ttl).Format(time.RFC3339))
-		switch line(rd, errOut, "Type APPROVE to issue, DENY to reject, or Enter to cancel: ") {
-		case "APPROVE":
+		approval := "APPROVE"
+		if f.formEnd != "" {
+			approval = "APPROVE FORM"
+			fmt.Fprintf(errOut, "Also permit editing a Note/Comment and one submit-button action on a form addressed to %s. Site scripts may send data elsewhere or perform other actions, even while typing.\n", f.formEnd)
+		}
+		switch line(rd, errOut, "Type "+approval+" to issue, DENY to reject, or Enter to cancel: ") {
+		case approval:
 		case "DENY":
 			return ownerCall(c.path, ctl.Request{Op: ctl.OpLeaseDeny, Request: c.p.Request})
 		default:
@@ -286,6 +302,9 @@ func (f ownerFlags) decide(choices []selection, rules []lease.Rule, rd *bufio.Re
 		return errors.New("ambiguous request; select a single paired link and browser")
 	}
 	c := choices[chosen]
+	if f.formEnd != "" {
+		return ownerCall(c.path, ctl.Request{Op: ctl.OpLeaseApproveForm, Request: c.p.Request, FormEnd: f.formEnd})
+	}
 	return ownerCall(c.path, ctl.Request{Op: ctl.OpLeaseApprove, Request: c.p.Request})
 }
 func ownerCall(path string, q ctl.Request) error {
@@ -306,7 +325,7 @@ func line(r *bufio.Reader, out io.Writer, prompt string) string {
 	}
 	return strings.TrimSpace(string(v))
 }
-func bootstrapLease(rd *bufio.Reader, out io.Writer) error {
+func bootstrapLease(rd *bufio.Reader, out io.Writer, forms bool) error {
 	endpoint := line(rd, out, "No lease-only link. Enter the chosen browser's literal loopback HTTP origin: ")
 	if !guarded.LocalEndpoint(endpoint) {
 		return errors.New("no browser selected")
@@ -326,7 +345,11 @@ func bootstrapLease(rd *bufio.Reader, out io.Writer) error {
 	if e != nil {
 		return e
 	}
-	cmd := exec.Command(exe, "-", "follow", "--lease-browser", endpoint, "--name", label)
+	args := []string{"-", "follow", "--lease-browser", endpoint, "--name", label}
+	if forms {
+		args = append(args, "--lease-ordinary-forms")
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Stdin = strings.NewReader(string(secret) + "\n")
 	detachLease(cmd)
 	if e := cmd.Start(); e != nil {
@@ -334,7 +357,7 @@ func bootstrapLease(rd *bufio.Reader, out io.Writer) error {
 	}
 	pid := cmd.Process.Pid
 	go func() { _ = cmd.Wait() }()
-	status, err := waitLeaseSocket(pid)
+	status, err := waitLeaseSocket(pid, ownerOffers(forms))
 	if err != nil {
 		return err
 	}
@@ -344,7 +367,7 @@ func bootstrapLease(rd *bufio.Reader, out io.Writer) error {
 	}
 	return nil
 }
-func waitLeaseSocket(pid int) (*ctl.Status, error) {
+func waitLeaseSocket(pid int, offers []string) (*ctl.Status, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	tick := time.NewTicker(150 * time.Millisecond)
@@ -352,7 +375,7 @@ func waitLeaseSocket(pid int) (*ctl.Status, error) {
 	for {
 		entries, _ := ctl.ListLocal(ctx)
 		for _, e := range entries {
-			if e.PID == pid && e.Status != nil && slices.Equal(e.Status.Offers, []string{lease.Cap}) {
+			if e.PID == pid && e.Status != nil && slices.Equal(e.Status.Offers, offers) {
 				return e.Status, nil
 			}
 		}

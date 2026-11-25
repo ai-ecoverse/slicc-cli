@@ -194,7 +194,8 @@
       "cdp-lease-list",
       "cdp-lease-approve",
       "cdp-lease-deny",
-      "cdp-lease-revoke"
+      "cdp-lease-revoke",
+      "cdp-lease-approve-form"
     ]
   }
 }

@@ -24,6 +24,7 @@ type Pending struct {
 	Parent  string `json:"parent,omitempty"`
 }
 type Active struct {
+	FormEnd string `json:"ordinaryForm,omitempty"`
 	Lease   string `json:"lease"`
 	JKT     string `json:"jkt"`
 	Browser string `json:"browser"`
@@ -46,6 +47,10 @@ type pending struct {
 	until   time.Time
 }
 type active struct {
+	formEnd   string
+	formTag   string
+	submitted bool
+	refs      refSet
 	claims
 	tab    *tab
 	ctx    context.Context
@@ -180,7 +185,7 @@ func (b *Broker) List() Snapshot {
 	}
 	for _, a := range b.active {
 		if time.Now().Unix() < a.Exp {
-			s.Active = append(s.Active, Active{a.ID, a.CNF.JKT, b.browser, b.link, slices.Clone(a.Allow), a.Exp})
+			s.Active = append(s.Active, Active{a.formEnd, a.ID, a.CNF.JKT, b.browser, b.link, slices.Clone(a.Allow), a.Exp})
 		}
 	}
 	sort.Slice(s.Pending, func(i, j int) bool { return s.Pending[i].Request < s.Pending[j].Request })
@@ -205,12 +210,22 @@ func (b *Broker) Revoke(id string) error {
 	b.retire(id, false)
 	return nil
 }
-func (b *Broker) Approve(id_ string) error {
+func (b *Broker) Approve(id_ string) error { return b.approve(id_, "") }
+func (b *Broker) ApproveForm(request, end string) error {
+	if !FormEndpoint(end) {
+		return invalid
+	}
+	return b.approve(request, end)
+}
+func (b *Broker) approve(id_, formEnd string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	p := b.pending[id_]
 	if b.closed || p == nil || p.stale() {
 		return retired
+	}
+	if formEnd != "" && (p.Parent != "" || !matches(p.Allow, formEnd, b.origins)) {
+		return denied
 	}
 	if len(b.active) >= 4 && p.Parent == "" {
 		return busy
@@ -240,7 +255,7 @@ func (b *Broker) Approve(id_ string) error {
 		b.retire(p.Parent, true)
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(end, 0))
-	a := &active{claims: c, ctx: ctx, cancel: cancel, tab: t}
+	a := &active{claims: c, ctx: ctx, cancel: cancel, tab: t, formEnd: formEnd, formTag: id()}
 	a.timer = time.AfterFunc(time.Until(time.Unix(end, 0)), func() { _ = b.Revoke(c.ID) })
 	b.active[c.ID] = a
 	p.deliver <- Decision{jwt: jwt}
@@ -259,6 +274,13 @@ func (b *Broker) currentAt(c claims, now time.Time) (*active, error) {
 	}
 	return a, nil
 }
+func withheldResult(op string, fallback refusal) refusal {
+	if op == "click" || op == "fill" {
+		return unknown
+	}
+	return fallback
+}
+
 func (b *Broker) action(parent context.Context, a *active, op string, args json.RawMessage, send func(any) bool) error {
 	var dest string
 	switch op {
@@ -275,6 +297,10 @@ func (b *Broker) action(parent context.Context, a *active, op string, args json.
 		if !strict(args, &empty) {
 			return invalid
 		}
+	case "click", "fill":
+		if a.formEnd == "" {
+			return unsupported
+		}
 	default:
 		return unsupported
 	}
@@ -284,8 +310,18 @@ func (b *Broker) action(parent context.Context, a *active, op string, args json.
 	defer a.tab.gate.Unlock()
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
+	stop := context.AfterFunc(a.ctx, cancel)
+	defer stop()
 	live := func() bool { _, e := b.current(a.claims); return e == nil }
-	result, st, e := b.bs.action(ctx, a.tab, a.claims, b.origins, op, dest, live)
+	var result map[string]any
+	var st stamp
+	var e error
+	if a.formEnd != "" && op != "goto" {
+		result, st, e = b.bs.formAction(ctx, a, b.origins, op, args, live)
+	} else {
+		a.refs = refSet{}
+		result, st, e = b.bs.action(ctx, a.tab, a.claims, b.origins, op, dest, live)
+	}
 	if e != nil {
 		return e
 	}
@@ -293,14 +329,14 @@ func (b *Broker) action(parent context.Context, a *active, op string, args json.
 	defer b.bs.mu.Unlock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.closed || b.active[a.ID] != a || time.Now().Unix() >= a.Exp {
-		return retired
+	if ctx.Err() != nil || b.closed || b.active[a.ID] != a || time.Now().Unix() >= a.Exp {
+		return withheldResult(op, retired)
 	}
 	if a.tab.generation != st.gen {
-		return denied
+		return withheldResult(op, denied)
 	}
 	if !send(result) {
-		return busy
+		return withheldResult(op, busy)
 	}
 	return nil
 }
