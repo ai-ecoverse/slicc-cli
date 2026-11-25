@@ -901,8 +901,8 @@ func (g *guard) contextCreatedEvent(m *message, data []byte) (verdict browserVer
 	case t == nil:
 		verdict = browserVerdict{forward: data, send: append(decided, settleSend...), page: settle}
 		return
-	case p.Context.AuxData.IsDefault && p.Context.AuxData.FrameID == t.id && g.o.Loaded(p.Context.Origin):
-		verdict = browserVerdict{send: append(append(decided, g.markLocked(t)...), settleSend...), page: settle}
+	case defaultContextProtected(g.o, p.Context, t):
+		verdict = browserVerdict{send: append(append(decided, g.markContextLocked(t)...), settleSend...), page: settle}
 		return
 	case g.frameUnderProtectedLocked(p.Context.AuxData.FrameID):
 		g.hideContextLocked(t.id, m.SessionID, p.Context)
