@@ -7,8 +7,23 @@ import (
 )
 
 func TestSignedLeaseLeadingDashIDIsData(t *testing.T) {
-	if _, errOut, code := slicc(t, "lease", "grant", "-"+strings.Repeat("a", 23), "--add", "https://receipt.example/one", "--keep-expiry"); code != 1 || !strings.Contains(errOut, "no matching proven request") {
-		t.Fatalf("ID was parsed as an option: %d %s", code, errOut)
+	for _, id := range []string{"-" + strings.Repeat("a", 23), "--" + strings.Repeat("b", 22), "_" + strings.Repeat("c", 23)} {
+		for _, op := range []string{"grant", "deny", "revoke"} {
+			args := []string{"lease", op, id}
+			want := "unknown or stale ID"
+			if op == "grant" {
+				args = append(args, "--add", "https://receipt.example/one", "--keep-expiry")
+				want = "no matching proven request"
+			}
+			if _, errOut, code := slicc(t, args...); code != 1 || !strings.Contains(errOut, want) {
+				t.Errorf("%s ID %q: %d %s", op, id, code, errOut)
+			}
+		}
+	}
+	for _, args := range [][]string{{"grant", "--keep-expiry", "--add", "https://receipt.example/one"}, {"grant", "--unknown", "--add", "https://receipt.example/one", "--keep-expiry"}, {"revoke", "--no-input"}, {"deny", "--"}, {"revoke", "--bad/" + strings.Repeat("a", 18)}, {"deny", "not-an-id"}, {"revoke", "-" + strings.Repeat("a", 24)}, {"status", "-" + strings.Repeat("a", 23)}, {"revoke", "-" + strings.Repeat("a", 23), "--typo"}} {
+		if _, errOut, code := slicc(t, append([]string{"lease"}, args...)...); code != 1 || !strings.Contains(errOut, "usage: slicc lease") {
+			t.Errorf("invalid/ambiguous %v: %d %s", args, code, errOut)
+		}
 	}
 }
 
