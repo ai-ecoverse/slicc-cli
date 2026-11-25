@@ -35,7 +35,7 @@ func (r refusal) Error() string { return string(r) }
 
 const (
 	invalid     refusal = "E_INVALID"
-	unknown     refusal = "E_UNKNOWN_OUTCOME"
+	unknown     refusal = "E_OUTCOME_UNKNOWN"
 	denied      refusal = "E_SCOPE"
 	retired     refusal = "E_REVOKED"
 	expired     refusal = "E_EXPIRED"

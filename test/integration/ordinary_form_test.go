@@ -145,7 +145,7 @@ func exerciseLeaseForm(t *testing.T, owner *chromeProc, preexisting string, site
 	}
 	f, _ = refs()
 	eval(`document.querySelector("input").addEventListener("input",()=>history.replaceState(null,"","#input-handler-ran"),{once:true})`, nil)
-	if v := fill(f, "fixture first edit"); v["reason"] != "E_UNKNOWN_OUTCOME" {
+	if v := fill(f, "fixture first edit"); v["reason"] != "E_OUTCOME_UNKNOWN" {
 		t.Fatalf("expected uncertain outcome after SPA history changed in input handler: %v", v)
 	}
 	refuse(fill(f, "no replay"))
@@ -156,7 +156,7 @@ func exerciseLeaseForm(t *testing.T, owner *chromeProc, preexisting string, site
 	refuse(fill(f, "replay"))
 	_, button := refs()
 	reply := action("click", map[string]string{"ref": button})
-	if reply["type"] != "result" && reply["reason"] != "E_UNKNOWN_OUTCOME" {
+	if reply["type"] != "result" && reply["reason"] != "E_OUTCOME_UNKNOWN" {
 		t.Fatal("click", reply)
 	}
 	if site.submitted != nil {
