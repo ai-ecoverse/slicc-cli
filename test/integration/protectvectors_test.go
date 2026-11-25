@@ -77,7 +77,7 @@ func TestCDPSettlesLegacyInterceptionsOfProtectedURLsItself(t *testing.T) {
 			return `{"method":"Network.requestIntercepted","params":{"interceptionId":"` + id + `","resourceType":"Fetch","request":{"url":"` + url + `","headers":{"Cookie":"s=secret"}}` + extra + `}}`
 		}
 		return func(method string, _ json.RawMessage) (string, []string) {
-			if method != "Network.setRequestInterception" {
+			if method != "Network.enable" {
 				return "{}", nil
 			}
 			return "{}", []string{
@@ -90,6 +90,12 @@ func TestCDPSettlesLegacyInterceptionsOfProtectedURLsItself(t *testing.T) {
 		}
 	})
 	var r struct {
+		Setup struct {
+			OK    bool `json:"ok"`
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"setup"`
 		Seen     []string `json:"seen"`
 		Attempts map[string]struct {
 			OK    bool `json:"ok"`
@@ -100,15 +106,15 @@ func TestCDPSettlesLegacyInterceptionsOfProtectedURLsItself(t *testing.T) {
 	}
 	protectedIDs := []string{"seven", "vault", "auth", "doc"}
 	env.evalJSON(t, "linkTest.protect.legacyInterception("+jsArgs("chrome-2", append(protectedIDs, "ordinary"), "ordinary")+")", &r)
+	if r.Setup.OK || r.Setup.Error.Message != legacyInterceptionRefusal {
+		t.Errorf("the client's Network.setRequestInterception: %+v", r.Setup)
+	}
 	if strings.Join(r.Seen, " ") != "ordinary" {
 		t.Errorf("the page saw interceptions %v, want only the ordinary one", r.Seen)
 	}
-	if a := r.Attempts["ordinary"]; !a.OK {
-		t.Errorf("the control: continuing the ordinary interception it was shown: %+v", a)
-	}
-	for _, id := range protectedIDs {
-		if a := r.Attempts[id]; a.OK || !strings.Contains(a.Error.Message, "slicc didn't pass this paused request to the page") {
-			t.Errorf("continuing the hidden %s interception: %+v", id, a)
+	for _, id := range append(protectedIDs, "ordinary") {
+		if a := r.Attempts[id]; a.OK || a.Error.Message != legacyInterceptionRefusal {
+			t.Errorf("the client continuing the %s interception: %+v", id, a)
 		}
 	}
 	want := map[string]string{
@@ -146,7 +152,7 @@ func TestCDPSettlesLegacyInterceptionsOfProtectedURLsItself(t *testing.T) {
 			t.Errorf("slicc settled %s with %s, want %s", id, settled[id], w)
 		}
 	}
-	if ordinaryForwarded != 1 {
-		t.Errorf("the unmodified page continuation reached the browser %d times, want once", ordinaryForwarded)
+	if ordinaryForwarded != 0 {
+		t.Errorf("the client's legacy continuation reached the browser %d times", ordinaryForwarded)
 	}
 }

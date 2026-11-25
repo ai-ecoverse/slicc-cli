@@ -96,7 +96,7 @@ func TestCDPChecksBodyAnswersAgainstTheirRequest(t *testing.T) {
 	if strings.Contains(string(b), "secret") {
 		t.Errorf("an answer carried seven's data: %s", b)
 	}
-	refused := map[int]string{0: "seven's origin", 3: "hasn't seen this request", 4: "seven's origin", 6: "seven's origin", 8: "didn't hand out this stream", 9: "didn't hand out this stream", 13: "Network.replayXHR follows redirects", 14: "hasn't seen this request", 15: "seven's origin"}
+	refused := map[int]string{0: "seven's origin", 3: "hasn't seen this request", 4: legacyInterceptionRefusal, 5: legacyInterceptionRefusal, 6: "seven's origin", 8: "didn't hand out this stream", 9: "didn't hand out this stream", 13: "Network.replayXHR follows redirects", 14: "hasn't seen this request", 15: "seven's origin"}
 	for i, o := range r.Out {
 		want, refuse := refused[i]
 		switch {
@@ -106,13 +106,10 @@ func TestCDPChecksBodyAnswersAgainstTheirRequest(t *testing.T) {
 			t.Errorf("call %d %s: refused: %s", i, o.Method, o.Error.Message)
 		}
 	}
-	if r.Out[5].MS > 1500 {
-		t.Errorf("an allowed intercepted stream waited %d ms, as if its interception were unknown", r.Out[5].MS)
-	}
 	if r.Out[3].MS < 1500 {
 		t.Errorf("the answer for an unknown request was refused after %d ms, before waiting for it", r.Out[3].MS)
 	}
-	for _, kept := range []string{"kept-plain", "kept-post", "stream-iplain", "stream-plain", "kept-stream", "kept-cookie"} {
+	for _, kept := range []string{"kept-plain", "kept-post", "stream-plain", "kept-stream", "kept-cookie"} {
 		if !strings.Contains(string(b), kept) {
 			t.Errorf("an allowed answer lost %s: %s", kept, b)
 		}
@@ -122,7 +119,7 @@ func TestCDPChecksBodyAnswersAgainstTheirRequest(t *testing.T) {
 		if strings.Contains(m, `"IO.read"`) && (strings.Contains(m, "stream-seven") || strings.Contains(m, "stream-guess")) {
 			t.Errorf("the browser got %s", m)
 		}
-		if strings.Contains(m, `"Network.replayXHR"`) {
+		if strings.Contains(m, `"Network.replayXHR"`) || strings.Contains(m, "ForInterception") {
 			t.Errorf("the browser got %s", m)
 		}
 		closed = closed || (strings.Contains(m, `"IO.close"`) && strings.Contains(m, "stream-seven"))

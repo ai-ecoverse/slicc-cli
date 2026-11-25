@@ -91,6 +91,10 @@ func TestCDPRefusesClientWritesOnPausedProtectedRequests(t *testing.T) {
 	refusedThrough := 21
 	for i, o := range r.Out {
 		switch {
+		case o.Method == "Network.continueInterceptedRequest":
+			if o.OK || o.Error.Message != legacyInterceptionRefusal {
+				t.Errorf("call %d %s: want the legacy interception refusal, got %+v (%s)", i, o.Method, o, b)
+			}
 		case i == 0:
 			if !o.OK {
 				t.Errorf("Network.enable refused: %s", b)
@@ -130,13 +134,16 @@ func TestCDPRefusesClientWritesOnPausedProtectedRequests(t *testing.T) {
 	}
 	forwarded := map[string]bool{}
 	for _, m := range fake.received() {
-		for _, id := range []string{"odoc", "oxhr", "oxhr2", "oxhr3", "oxhr4", "oxhr5", "oleg"} {
+		if strings.Contains(m, `"Network.continueInterceptedRequest"`) && strings.Contains(m, `"interceptionId":"oleg"`) {
+			t.Errorf("the client's legacy continue of an ordinary pause reached the browser: %s", m)
+		}
+		for _, id := range []string{"odoc", "oxhr", "oxhr2", "oxhr3", "oxhr4", "oxhr5"} {
 			if strings.Contains(m, `"`+id+`"`) && (strings.Contains(m, `"Fetch.`) || strings.Contains(m, `"Network.continueInterceptedRequest"`)) {
 				forwarded[id] = true
 			}
 		}
 	}
-	for _, id := range []string{"odoc", "oxhr", "oxhr2", "oxhr3", "oxhr4", "oxhr5", "oleg"} {
+	for _, id := range []string{"odoc", "oxhr", "oxhr2", "oxhr3", "oxhr4", "oxhr5"} {
 		if !forwarded[id] {
 			t.Errorf("ordinary control %s was not forwarded: %q", id, fake.received())
 		}

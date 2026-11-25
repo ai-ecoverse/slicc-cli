@@ -7,9 +7,19 @@ import (
 	"testing"
 )
 
+const legacyInterceptionRefusal = "slicc: refused: the guard doesn’t support the legacy Network interception methods; intercept requests through Fetch instead"
+
 func TestCDPLegacyClientURLAndRawResponseAreNeverForwarded(t *testing.T) {
 	env, fake := setupFakeProtect(t, bodyRaceScript)
-	calls := [][]any{{"Network.takeResponseBodyForInterceptionAsStream", map[string]any{"interceptionId": "iplain"}}, {"Network.continueInterceptedRequest", map[string]any{"interceptionId": "iplain"}}}
+	calls := [][]any{
+		{"Network.setRequestInterception", map[string]any{"patterns": []map[string]string{{"urlPattern": "*"}}}},
+		{"Network.setRequestInterception", map[string]any{"patterns": []map[string]string{}}},
+		{"Network.getResponseBodyForInterception", map[string]any{"interceptionId": "intercept"}},
+		{"Network.takeResponseBodyForInterceptionAsStream", map[string]any{"interceptionId": "iplain"}},
+		{"Network.continueInterceptedRequest", map[string]any{"interceptionId": "iplain"}},
+		{"Network.continueInterceptedRequest", map[string]any{"interceptionId": "iplain", "headers": map[string]string{"X-Legacy": "1"}}},
+		{"Network.continueInterceptedRequest", map[string]any{"interceptionId": "iplain", "errorReason": "Failed"}},
+	}
 	for _, url := range []string{env.plain.URL + "/ordinary", env.seven + "/protected", "https://vault.sliccy.ai/protected", "not-a-url", ""} {
 		calls = append(calls, []any{"Network.continueInterceptedRequest", map[string]any{"interceptionId": "legacy-probe", "url": url}})
 		raw := base64.StdEncoding.EncodeToString([]byte("HTTP/1.1 302 Found\r\nLocation: " + url + "\r\nContent-Length: 0\r\n\r\n"))
@@ -22,31 +32,24 @@ func TestCDPLegacyClientURLAndRawResponseAreNeverForwarded(t *testing.T) {
 	if len(result.Out) != len(calls) {
 		t.Fatal("missing terminal legacy refusals")
 	}
-	if !result.Out[0].OK || !result.Out[1].OK {
-		t.Fatal("unmodified page continuation no longer allowed")
-	}
-	for _, o := range result.Out[2:] {
-		if o.OK || !strings.Contains(o.Error.Message, "Network.continueInterceptedRequest with url or rawResponse") {
-			t.Errorf("legacy mutation did not fail closed: %+v", o)
+	for _, o := range result.Out {
+		if o.OK || o.Error.Message != legacyInterceptionRefusal {
+			t.Errorf("legacy interception command was not refused: %+v", o)
 		}
 	}
-	unmodifiedForwarded := false
 	for _, wire := range fake.received() {
 		var command struct {
-			Method string         `json:"method"`
-			Params map[string]any `json:"params"`
+			Method string `json:"method"`
 		}
 		if json.Unmarshal([]byte(wire), &command) != nil {
 			t.Fatal("invalid captured wire")
 		}
-		if command.Method == "Network.continueInterceptedRequest" && command.Params["interceptionId"] == "iplain" {
-			unmodifiedForwarded = true
-		}
-		if command.Method == "Network.continueInterceptedRequest" && command.Params["interceptionId"] == "legacy-probe" {
-			t.Fatalf("legacy client request reached browser wire: %s", wire)
+		switch command.Method {
+		case "Network.setRequestInterception", "Network.continueInterceptedRequest", "Network.getResponseBodyForInterception", "Network.takeResponseBodyForInterceptionAsStream":
+			t.Errorf("legacy client request reached browser wire: %s", wire)
 		}
 	}
-	if !unmodifiedForwarded {
-		t.Fatal("C5 unmodified legacy continuation was not forwarded")
+	if strings.Contains(strings.Join(fake.received(), "\n"), "legacy-probe") {
+		t.Error("a legacy probe reached the browser")
 	}
 }

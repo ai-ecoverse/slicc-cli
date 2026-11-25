@@ -6,7 +6,7 @@ import (
 )
 
 const refusedClientHop = "slicc can't classify every redirect of this client-issued request before sending it"
-const refusedLegacyMutation = "Network.continueInterceptedRequest with url or rawResponse follows redirects without hop control; use Fetch instead"
+const refusedLegacyInterception = "the guard doesn’t support the legacy Network interception methods; intercept requests through Fetch instead"
 
 type clientMark struct{ key requestKey }
 type clientRequestState struct {
@@ -124,10 +124,19 @@ func (g *guard) forgetClientTargetLocked(target string) {
 
 func (g *guard) legacyMutationRule(c *command) string {
 	if _, ok := c.params["url"]; ok {
-		return refusedLegacyMutation
+		return refusedLegacyInterception
 	}
 	if _, ok := c.params["rawResponse"]; ok {
-		return refusedLegacyMutation
+		return refusedLegacyInterception
 	}
 	return ""
+}
+
+func legacyInterceptionRule(refuse func() bool) func(*guard, *command) string {
+	return func(*guard, *command) string {
+		if refuse() {
+			return refusedLegacyInterception
+		}
+		return ""
+	}
 }

@@ -28,14 +28,14 @@ export async function clientMutationRow(getLink,opts) {
     });
     if(legacy) {
       const nativeSetup=await outcome(client.send('Network.setRequestInterception',{patterns:[{urlPattern:'*',interceptionStage:'Request'}]},sessionId));
-      if(!nativeSetup.ok&&nativeSetup.error.code===-32601) {
+      if(!nativeSetup.ok&&(nativeSetup.error.code===-32601||client!==reader&&nativeSetup.error.code===-32000)) {
         const params={interceptionId:'native-unavailable',url:opts.protected+'/resource?key='+opts.key};
         const before=client.sent.length;
         const setup=client===reader?nativeSetup:await outcome(client.send(opts.method,params,sessionId));
         const audit=client===reader?{applicable:false}:await auditSetter(opts.gate,sessionId,client.sent[before].id,setup);
         await reader.send('Target.closeTarget',{targetId});targetId=undefined;
         const counts=await(await fetch(opts.counts+'?key='+encodeURIComponent(opts.key))).json();
-        return {method:opts.method,key:opts.key,setup,audit,counts,nativeControlUnavailable:client===reader};
+        return {method:opts.method,key:opts.key,setup,legacySetup:nativeSetup,audit,counts,nativeControlUnavailable:client===reader};
       }
       if(!nativeSetup.ok)throw new Error(JSON.stringify(nativeSetup));
     }
