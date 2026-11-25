@@ -109,6 +109,7 @@ func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, fram
 	if frame.LoaderID != "" {
 		nt.loaderID = frame.LoaderID
 	}
+	g.contextMarkBaselineLocked(t, frame.ID, frame.LoaderID)
 	g.noteErrorPageSnapshotLocked(nt, frame.URL, frame.SecurityOrigin, frame.UnreachableURL)
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
 		check.settle(false)

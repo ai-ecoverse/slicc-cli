@@ -275,6 +275,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 	send := g.navWorldLocked(nt, m)
 	before := nt.commits
 	nt.commitLocked(m)
+	send = append(send, g.contextMarkNavLocked(nt, m)...)
 	g.noteDocIdentityNavEventLocked(nt, m)
 	g.resetFailedLoadProofOnNavLocked(nt, m.Method)
 	if m.Method == "Page.frameStartedNavigating" || m.Method == "Page.frameNavigated" || m.Method == "Page.frameStoppedLoading" {

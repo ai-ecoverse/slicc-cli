@@ -1,0 +1,114 @@
+package cdp
+
+import (
+	"encoding/json"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
+)
+
+type contextMark struct {
+	loader    string
+	baseline  bool
+	committed bool
+}
+
+func defaultContextOf(c execContext, t *target) bool {
+	return t != nil && c.AuxData.IsDefault && c.AuxData.FrameID != "" && c.AuxData.FrameID == t.id
+}
+
+func contextOriginProtected(o *protect.Origins, origin string) bool {
+	return o.Loaded(origin)
+}
+
+func defaultContextProtected(o *protect.Origins, c execContext, t *target) bool {
+	return defaultContextOf(c, t) && contextOriginProtected(o, c.Origin)
+}
+
+func ordinaryContextOrigin(o *protect.Origins, origin string) bool {
+	return origin != "" && origin != "://" && origin != "null" && !contextOriginProtected(o, origin)
+}
+
+func (g *guard) markContextLocked(t *target) [][]byte {
+	mark := &contextMark{}
+	nt := g.navTargets[t.id]
+	if nt != nil && nt.loaderID != "" {
+		mark.loader, mark.baseline = nt.loaderID, true
+	}
+	t.contextMark = mark
+	g.logf("cdp: a target's default context marks it protected target=%s baseline=%t", t.id, mark.baseline)
+	send := g.markLocked(t)
+	if !mark.baseline && nt != nil && nt.session != "" {
+		send = append(send, g.callbackLocked(nt.session, "Page.getFrameTree", nil, func(m message) [][]byte {
+			var res struct {
+				FrameTree struct {
+					Frame struct {
+						ID       string `json:"id"`
+						LoaderID string `json:"loaderId"`
+					} `json:"frame"`
+				} `json:"frameTree"`
+			}
+			if m.Error == nil && json.Unmarshal(m.Result, &res) == nil && t.contextMark == mark {
+				g.contextMarkBaselineLocked(t, res.FrameTree.Frame.ID, res.FrameTree.Frame.LoaderID)
+			}
+			return nil
+		}))
+	}
+	return send
+}
+
+func (g *guard) contextMarkBaselineLocked(t *target, frame, loader string) {
+	if t == nil || t.contextMark == nil || t.contextMark.baseline || frame != t.id || loader == "" {
+		return
+	}
+	t.contextMark.loader, t.contextMark.baseline = loader, true
+}
+
+func forgetContextMark(t *target) {
+	t.contextMark = nil
+}
+
+func (g *guard) contextMarkNavLocked(nt *navTarget, m *message) [][]byte {
+	t := g.targets[nt.target]
+	if t == nil || t.contextMark == nil || nt.session == "" || m.SessionID != nt.session {
+		return nil
+	}
+	switch m.Method {
+	case "Page.frameNavigated":
+		var p navCommitParams
+		if json.Unmarshal(m.Params, &p) != nil || p.Frame.ID != t.id {
+			return nil
+		}
+		if p.Frame.LoaderID == "" {
+			t.contextMark.committed = false
+			return nil
+		}
+		if !t.contextMark.baseline {
+			g.contextMarkBaselineLocked(t, p.Frame.ID, p.Frame.LoaderID)
+			return nil
+		}
+		if p.Frame.LoaderID != t.contextMark.loader {
+			t.contextMark.loader = p.Frame.LoaderID
+			t.contextMark.committed = true
+			g.logf("cdp: a new document committed on a target held by its default-context mark target=%s", t.id)
+		}
+	case "Runtime.executionContextCreated":
+		var p struct {
+			Context execContext `json:"context"`
+		}
+		if json.Unmarshal(m.Params, &p) != nil || !defaultContextOf(p.Context, t) {
+			return nil
+		}
+		if contextOriginProtected(g.o, p.Context.Origin) {
+			t.contextMark.committed = false
+			return nil
+		}
+		if !t.contextMark.committed || !ordinaryContextOrigin(g.o, p.Context.Origin) {
+			return nil
+		}
+		t.contextMark = nil
+		t.protected = g.decide(t, t.protected)
+		g.logf("cdp: a new document cleared a target's default-context mark target=%s protected=%t", t.id, t.protected)
+		return g.redecideWorkersLocked(t.id)
+	}
+	return nil
+}

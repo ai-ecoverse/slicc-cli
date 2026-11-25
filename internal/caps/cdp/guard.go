@@ -87,6 +87,7 @@ type target struct {
 	frameDocument    string
 	frameOwner       *frameOwnership
 	verdict          urlVerdict
+	contextMark      *contextMark
 }
 
 type urlVerdict struct {
@@ -589,6 +590,9 @@ func (g *guard) decide(t *target, previous bool) bool {
 func (g *guard) decideReasonLocked(t *target, previous bool) (bool, string) {
 	if t.typ == "browser" {
 		return false, ""
+	}
+	if t.contextMark != nil {
+		return true, "default-context-origin"
 	}
 	if (workerTypes[t.typ] || t.typ == "iframe") && previous {
 		return true, "sticky"
@@ -1775,6 +1779,7 @@ func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
 		return page, send
 	}
 	t.gone = true
+	forgetContextMark(t)
 	g.tombstones = append(g.tombstones, id)
 	for len(g.tombstones) > maxTombstones {
 		old := g.tombstones[0]

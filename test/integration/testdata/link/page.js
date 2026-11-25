@@ -596,6 +596,7 @@ globalThis.linkTest = {
   stockIsolatedWorld: (opts) => import('./stocksetup.js').then((m) => m.stockIsolatedWorld(() => state.link, opts)),
   stockScriptRemoveTwice: (opts) => import('./stocksetup.js').then((m) => m.stockScriptRemoveTwice(() => state.link, opts)),
   stickyAdmission: (opts) => import('./sticky.js').then((m) => m.stickyAdmissionProof(() => state.link, opts)),
+  contextMark: (opts) => import('./contextmark.js').then((m) => m.measureContextMark(() => state.link, opts)),
   clientResource: (opts) => import('./client-resource.js').then((m) => m.clientResourceRow(() => state.link, opts)),
   errorContent: (opts) => import('./errorcontent.js').then((m) => m.errorContent(() => state.link, opts)),
   resourceBlock: (opts) => import('./resource-block.js').then((m) => m.resourceBlockRow(() => state.link, opts)),
