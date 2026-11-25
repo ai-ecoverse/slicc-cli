@@ -48,7 +48,9 @@ type screenLimits struct {
 }
 
 func (l *Link) OnScreenLimit(f func()) { l.mu.Lock(); l.screen.onLimit = f; l.mu.Unlock() }
-func (l *Link) screenEnabled() bool    { return l.opts.Hello.Screen != nil }
+func (l *Link) screenEnabled() bool {
+	return l.opts.Hello.Screen != nil || l.opts.Hello.HasCap(LeaseCap)
+}
 func (l *Link) shedScreen() {
 	l.mu.Lock()
 	f := l.screen.onLimit
@@ -67,7 +69,7 @@ func (l *Link) admitChannel() bool {
 		return true
 	}
 	limit := 260
-	if l.role.peer() == RoleNode {
+	if l.role.peer() == RoleNode || l.opts.Hello.HasCap(LeaseCap) {
 		limit = 16
 	}
 	l.mu.Lock()
@@ -86,7 +88,7 @@ func (l *Link) admitOpen() bool {
 		return true
 	}
 	streams, pending, rate := 256, 32, 512.0
-	if l.role.peer() == RoleNode {
+	if l.role.peer() == RoleNode || l.opts.Hello.HasCap(LeaseCap) {
 		streams, pending, rate = 16, 8, 32
 	}
 	l.mu.Lock()

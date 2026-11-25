@@ -30,17 +30,21 @@ const (
 const V = version
 
 const (
-	OpStatus  = "status"
-	OpDetach  = "detach"
-	OpStop    = "stop"
-	OpRevoke  = "revoke"
-	OpLeases  = "leases"
-	OpUnseal  = "unseal"
-	OpSealOff = "seal-off"
-	OpSealOn  = "seal-on"
+	OpLeaseList    = "cdp-lease-list"
+	OpLeaseApprove = "cdp-lease-approve"
+	OpLeaseDeny    = "cdp-lease-deny"
+	OpLeaseRevoke  = "cdp-lease-revoke"
+	OpStatus       = "status"
+	OpDetach       = "detach"
+	OpStop         = "stop"
+	OpRevoke       = "revoke"
+	OpLeases       = "leases"
+	OpUnseal       = "unseal"
+	OpSealOff      = "seal-off"
+	OpSealOn       = "seal-on"
 )
 
-var Ops = []string{OpStatus, OpDetach, OpStop, OpRevoke, OpLeases, OpUnseal, OpSealOff, OpSealOn}
+var Ops = []string{OpStatus, OpDetach, OpStop, OpRevoke, OpLeases, OpUnseal, OpSealOff, OpSealOn, OpLeaseList, OpLeaseApprove, OpLeaseDeny, OpLeaseRevoke}
 
 const (
 	StateWaiting      = "waiting"
@@ -196,6 +200,8 @@ func (h *Holder) handler(op string) func() {
 }
 
 type Request struct {
+	Request     string `json:"request,omitempty"`
+	Lease       string `json:"lease,omitempty"`
 	V           int    `json:"v"`
 	Op          string `json:"op"`
 	Fingerprint string `json:"fingerprint,omitempty"`
@@ -364,6 +370,16 @@ func List(ctx context.Context) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	return listIn(ctx, dirs)
+}
+func ListLocal(ctx context.Context) ([]Entry, error) {
+	dir, e := Dir()
+	if e != nil {
+		return nil, e
+	}
+	return listIn(ctx, []string{dir})
+}
+func listIn(ctx context.Context, dirs []string) ([]Entry, error) {
 	var paths []string
 	seen := map[string]bool{}
 	for _, dir := range dirs {
@@ -428,10 +444,12 @@ func Query(ctx context.Context, path string) (*Status, error) {
 }
 
 type Reply struct {
-	V      int    `json:"v"`
-	OK     bool   `json:"ok"`
-	Error  string `json:"error,omitempty"`
-	Closed bool   `json:"closed,omitempty"`
+	Pending json.RawMessage `json:"pending,omitempty"`
+	Active  json.RawMessage `json:"active,omitempty"`
+	V       int             `json:"v"`
+	OK      bool            `json:"ok"`
+	Error   string          `json:"error,omitempty"`
+	Closed  bool            `json:"closed,omitempty"`
 }
 
 func Send(ctx context.Context, path, op string) (*Reply, error) {

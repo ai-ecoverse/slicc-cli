@@ -83,6 +83,7 @@ function teardown() {
 }
 
 function pageCaps() {
+  if (params.has('lease')) return ['cdp-lease-v1'];
   const caps = ['browsers', 'mounts', 'agent', 'jerk-revoke'];
   if (kernelIn) caps.push('kernel-in');
   if (cdpIn) caps.push('cdp-in');
@@ -102,7 +103,7 @@ async function setup(nonce, node) {
   const entry = { key, node: node ?? null, nonce, pc: null, link: null };
   freshReady(entry);
   state.hellos += 1;
-  const pc = new RTCPeerConnection();
+  const pc = new RTCPeerConnection(params.has('lease') ? {certificates:[await loadCertificate('lease-fixture')]} : {});
   const caps = pageCaps().filter((c) => c !== 'agent' || agentTest.state().allow);
   const ref = {};
   const link = new Link(pc, { hello: { name: 'link test page', caps }, handlers: pageHandlers(ref) });
@@ -359,6 +360,12 @@ const loopbackTest = {
     return sdp;
   },
 };
+
+if (params.has('lease')) {
+  const {leaseFixture} = await import('./lease.js');
+  globalThis.leaseTest = leaseFixture(() => state.link);
+  globalThis.leaseFingerprint = () => loadCertificate('lease-fixture').then(certificateFingerprint);
+}
 
 globalThis.linkTest = {
   status() {

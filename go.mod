@@ -6,6 +6,7 @@ require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.2
 	charm.land/lipgloss/v2 v2.1.1
+	filippo.io/edwards25519 v1.2.0
 	github.com/ai-ecoverse/go-optel v1.0.1
 	github.com/ai-ecoverse/slicc-browsers v1.36.0
 	github.com/andybalholm/brotli v1.3.0
@@ -14,6 +15,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/ebitengine/purego v0.11.3
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/gorilla/websocket v1.5.3
 	github.com/nationallibraryofnorway/whatwg-url v0.9.1
 	github.com/pion/ice/v4 v4.4.9

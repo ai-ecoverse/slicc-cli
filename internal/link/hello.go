@@ -6,6 +6,7 @@ import (
 )
 
 const (
+	LeaseCap    = "cdp-lease-v1"
 	Version     = 1
 	ControlName = "slicc.link.v1"
 	StreamName  = "slicc.link.v1.stream"

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -72,11 +73,24 @@ type channel struct {
 	countedClose bool
 }
 
+func leaseHello(h Hello) bool {
+	return slices.Equal(h.Caps, []string{LeaseCap}) && h.Kernel == nil && h.Screen == nil && h.SSHHostKey == "" && len(h.Browsers) == 0 && len(h.Mounts) == 0 && h.Jerk == nil && (h.Routes == nil || !h.Routes.Exit && len(h.Routes.Prefixes) == 0)
+}
 func New(pc *webrtc.PeerConnection, role Role, opts Options) (*Link, error) {
+	if opts.Hello.HasCap(LeaseCap) {
+		if !leaseHello(opts.Hello) {
+			return nil, errors.New("lease-only HELLO cannot offer other resources")
+		}
+		for kind := range opts.Handlers {
+			if kind != LeaseCap {
+				return nil, errors.New("lease-only link cannot handle other kinds")
+			}
+		}
+	}
 	if opts.HelloTimeout <= 0 {
 		opts.HelloTimeout = 10 * time.Second
 	}
-	if opts.Hello.Screen != nil {
+	if opts.Hello.Screen != nil || opts.Hello.HasCap(LeaseCap) {
 		opts.HelloTimeout = 3 * time.Second
 		opts.MaxChannels = 16
 	}
@@ -286,6 +300,10 @@ func (l *Link) onHello(data []byte) {
 	h, err := parseHello(data, l.role.peer())
 	if err != nil {
 		l.fail(fmt.Errorf("link: %w", err))
+		return
+	}
+	if h.HasCap(LeaseCap) != l.opts.Hello.HasCap(LeaseCap) || h.HasCap(LeaseCap) && !leaseHello(h) {
+		l.violation("incompatible lease peer")
 		return
 	}
 	l.mu.Lock()

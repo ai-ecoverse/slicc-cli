@@ -23,6 +23,12 @@ type Reservation struct {
 	once   sync.Once
 }
 
+func ReserveLocal(n int) *Reservation {
+	allocations.mu.Lock()
+	defer allocations.mu.Unlock()
+	return allocations.take(n)
+}
+
 func (b *AllocationBudget) Used() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()

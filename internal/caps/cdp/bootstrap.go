@@ -351,7 +351,7 @@ func (rl *relay) release(key parkKey) {
 			out, ok = rl.checkPage(data)
 		}
 		if ok && out != nil {
-			ok = rl.conn.Write(context.Background(), websocket.MessageText, out) == nil
+			ok = rl.forward(context.Background(), data, out) == nil
 		}
 		item.reservation.Release()
 		if !ok {

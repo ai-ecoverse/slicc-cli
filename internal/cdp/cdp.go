@@ -37,8 +37,15 @@ var ErrClosed = errors.New("cdp: connection closed")
 
 var errBadEndpoint = errors.New("cdp: the endpoint must be an http(s) or ws(s) URL")
 
+type Transport interface {
+	Read(context.Context) (websocket.MessageType, []byte, error)
+	Write(context.Context, websocket.MessageType, []byte) error
+	Close(websocket.StatusCode, string) error
+}
+
 type Client struct {
-	conn    *websocket.Conn
+	observe func(Event)
+	conn    Transport
 	writing chan struct{}
 
 	mu      sync.Mutex
@@ -123,7 +130,12 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 		return nil, fmt.Errorf("cdp: connect %s: %w", Redact(wsURL), RedactError(err, wsURL))
 	}
 	conn.SetReadLimit(-1)
+	return NewClient(conn, nil), nil
+}
+
+func NewClient(conn Transport, observe func(Event)) *Client {
 	c := &Client{
+		observe: observe,
 		conn:    conn,
 		writing: make(chan struct{}, 1),
 		pending: map[int64]chan reply{},
@@ -131,7 +143,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 		done:    make(chan struct{}),
 	}
 	go c.readLoop()
-	return c, nil
+	return c
 }
 
 func (c *Client) Done() <-chan struct{} { return c.done }
@@ -196,6 +208,9 @@ func (c *Client) readLoop() {
 }
 
 func (c *Client) dispatch(ev Event) {
+	if c.observe != nil {
+		c.observe(ev)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for s := range c.subs {
@@ -220,6 +235,11 @@ func (c *Client) Call(ctx context.Context, sessionID, method string, params, res
 	ch := make(chan reply, 1)
 	c.pending[id] = ch
 	c.mu.Unlock()
+	if local, ok := c.conn.(interface {
+		TrackCall(context.Context, int64) func()
+	}); ok {
+		defer local.TrackCall(ctx, id)()
+	}
 	data, err := json.Marshal(outbound{ID: id, Method: method, Params: params, SessionID: sessionID})
 	if err != nil {
 		c.forget(id)
