@@ -67,50 +67,53 @@ func (g *guard) startsUnheld(c *command) bool {
 }
 
 type navTarget struct {
-	target            string
-	session           string
-	start             time.Time
-	progress          time.Time
-	awayAt            time.Duration
-	reason            string
-	ready             chan struct{}
-	pending           int
-	done              bool
-	failed            bool
-	loading           map[string]int
-	started           int
-	unsure            bool
-	errorURL          string
-	documentURL       string
-	loaderID          string
-	navigationURL     string
-	securityOrigin    string
-	keptOrigin        string
-	failedURLs        []string
-	commits           int
-	failCommit        int
-	navGen            int
-	errorNavGen       int
-	errorRecorded     bool
-	closeProofGen     int
-	closeProofRev     int
-	closeProofPending bool
-	worker            bool
-	iframe            bool
-	shared            bool
-	historyLocked     bool
-	protectedHistory  map[string]string
-	confirm           *navTarget
-	confirming        bool
-	issuedSeq         int64
-	failedLoadGen     int
-	revision          int
-	documentsOnly     bool
-	documentsAsked    bool
-	fetchArmed        bool
-	framesGate        chan struct{}
-	framesReads       int
-	wake              *time.Timer
+	target             string
+	session            string
+	start              time.Time
+	progress           time.Time
+	awayAt             time.Duration
+	reason             string
+	ready              chan struct{}
+	pending            int
+	done               bool
+	failed             bool
+	loading            map[string]int
+	started            int
+	unsure             bool
+	errorURL           string
+	documentURL        string
+	loaderID           string
+	navigationURL      string
+	securityOrigin     string
+	keptOrigin         string
+	failedURLs         []string
+	commits            int
+	failCommit         int
+	navGen             int
+	errorNavGen        int
+	errorRecorded      bool
+	closeProofGen      int
+	closeProofRev      int
+	closeProofPending  bool
+	worker             bool
+	iframe             bool
+	shared             bool
+	historyLocked      bool
+	protectedHistory   map[string]string
+	setupProtectedSeen bool
+	setupProtectedSeq  int64
+	initialUnknowns    int
+	confirm            *navTarget
+	confirming         bool
+	issuedSeq          int64
+	failedLoadGen      int
+	revision           int
+	documentsOnly      bool
+	documentsAsked     bool
+	fetchArmed         bool
+	framesGate         chan struct{}
+	framesReads        int
+	wake               *time.Timer
 }
 
 func (nt *navTarget) settle(failed bool) {
@@ -293,6 +296,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		}
 	}
 	if m.Method != "Fetch.requestPaused" {
+		g.noteSetupProtectedNavLocked(nt, m)
 		return send
 	}
 	var p struct {
@@ -305,6 +309,7 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		} `json:"request"`
 	}
 	if json.Unmarshal(m.Params, &p) != nil || p.RequestID == "" {
+		g.noteSetupProtectedNavLocked(nt, m)
 		return send
 	}
 	if g.o.Loaded(p.Request.URL) && (p.ResourceType == "Document" || g.clientOwnedLocked(nt.target, p.NetworkID)) {
@@ -316,9 +321,11 @@ func (g *guard) navEventLocked(nt *navTarget, m *message) [][]byte {
 		}
 		g.logf("cdp: failed a protected document or client-issued request in a target this stream touched target=%s session=%s frame=%s", nt.target, nt.session, p.FrameID)
 		msg, _ := g.newCallLocked(nt.session, "Fetch.failRequest", map[string]any{"requestId": p.RequestID, "errorReason": "BlockedByClient"}, false)
+		g.noteSetupProtectedNavLocked(nt, m)
 		return append(send, msg)
 	}
 	msg, _ := g.newCallLocked(nt.session, "Fetch.continueRequest", map[string]any{"requestId": p.RequestID}, false)
+	g.noteSetupProtectedNavLocked(nt, m)
 	return append(send, msg)
 }
 

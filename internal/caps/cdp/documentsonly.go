@@ -138,6 +138,7 @@ func (g *guard) frameTreeCleanLocked(m message) bool {
 func (g *guard) lockFramesLocked(nt *navTarget) {
 	g.logf("cdp: a target holds a protected frame, or wouldn't list its frames target=%s", nt.target)
 	nt.historyLocked = true
+	g.noteSetupProtectedLocked(nt)
 }
 
 func (g *guard) readFramesLocked(nt *navTarget, next func() [][]byte) [][]byte {
