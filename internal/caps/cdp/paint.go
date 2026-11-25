@@ -1,6 +1,10 @@
 package cdp
 
-import "github.com/ai-ecoverse/slicc-cli/internal/protect"
+import (
+	"strings"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/protect"
+)
 
 var framePaintMethods = map[string]bool{
 	"Page.captureScreenshot":          true,
@@ -66,6 +70,9 @@ func (g *guard) frameContentEventsBlockedLocked(session string) bool {
 	if target == "" {
 		return false
 	}
+	if nt := g.navTargets[target]; nt != nil && nt.historyLocked {
+		return true
+	}
 	if g.framesProtectedLocked(target) {
 		return true
 	}
@@ -119,6 +126,12 @@ func (g *guard) childDocMarkBlocksEventsLocked(session string) bool {
 func (g *guard) frameContentEventDropped(m *message) bool {
 	if m == nil {
 		return false
+	}
+	if strings.HasPrefix(m.Method, "DOM.") {
+		target := g.worldTargetLocked(m.SessionID)
+		if nt := g.navTargets[target]; nt != nil && nt.historyLocked {
+			return true
+		}
 	}
 	if frameContentEventMethods[m.Method] {
 		return g.frameContentEventsBlockedLocked(m.SessionID)

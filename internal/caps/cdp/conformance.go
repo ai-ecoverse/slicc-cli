@@ -44,6 +44,8 @@ func (g *guard) conformanceLocked(c *command) string {
 var historySetupKeys = map[string]map[string]bool{
 	"Network.setBypassServiceWorker": {"bypass": true},
 	"Target.setAutoAttach":           {"autoAttach": true, "flatten": true, "waitForDebuggerOnStart": true, "filter": true},
+	"DOM.getDocument":                {"depth": true, "pierce": true},
+	"DOM.disable":                    {},
 }
 
 var historySetupFilter = []any{map[string]any{"type": "iframe", "exclude": false}, map[string]any{"exclude": true}}
@@ -137,7 +139,35 @@ func (g *guard) noteSetupProtectedConfirmLocked(nt *navTarget, t *target, frame 
 	}
 }
 
-func (g *guard) historySetupLocked(c *command, s *session, nt *navTarget) bool {
+func historySetupDepthMinusOne(params map[string]any) bool {
+	switch v := params["depth"].(type) {
+	case float64:
+		return v == -1
+	case int64:
+		return v == -1
+	case int:
+		return v == -1
+	case json.Number:
+		n, err := v.Int64()
+		return err == nil && n == -1
+	default:
+		return false
+	}
+}
+
+func historySetupProbeParams(params map[string]any) bool {
+	if !historySetupDepthMinusOne(params) || params["pierce"] != true {
+		return false
+	}
+	for key := range params {
+		if !historySetupKeys["DOM.getDocument"][key] {
+			return false
+		}
+	}
+	return true
+}
+
+func (g *guard) historySetupReadyLocked(c *command, s *session, nt *navTarget) bool {
 	if !historySetupAdmitEnabled() {
 		return false
 	}
@@ -150,11 +180,15 @@ func (g *guard) historySetupLocked(c *command, s *session, nt *navTarget) bool {
 	if nt.errorURL != "" || g.errorPageSessionLocked(c.session) {
 		return false
 	}
-	if nt.setupProtectedSeen {
-		return false
-	}
+	return !nt.setupProtectedSeen
+}
+
+func (g *guard) historySetupParamsLocked(c *command) bool {
 	keys, ok := historySetupKeys[c.method]
 	if !ok {
+		return false
+	}
+	if (c.method == "DOM.getDocument" || c.method == "DOM.disable") && !historySetupProbeAdmitEnabled() {
 		return false
 	}
 	for key := range c.params {
@@ -165,10 +199,60 @@ func (g *guard) historySetupLocked(c *command, s *session, nt *navTarget) bool {
 	switch c.method {
 	case "Network.setBypassServiceWorker":
 		return c.params["bypass"] == true
+	case "DOM.getDocument":
+		return historySetupProbeParams(c.params)
+	case "DOM.disable":
+		return g.historySetupProbe[c.session]
 	}
 	wait, waitNamed := c.params["waitForDebuggerOnStart"]
 	filter, filterNamed := c.params["filter"]
 	return c.params["autoAttach"] == true && c.params["flatten"] == true && (!waitNamed || wait == false) && filterNamed && reflect.DeepEqual(filter, historySetupFilter)
+}
+
+func (g *guard) historySetupDisableLocked(c *command, s *session) bool {
+	if !historySetupProbeAdmitEnabled() || c.method != "DOM.disable" {
+		return false
+	}
+	if s == nil || s.typ != "page" || g.browserSessions[c.session] {
+		return false
+	}
+	for key := range c.params {
+		if !historySetupKeys["DOM.disable"][key] {
+			return false
+		}
+	}
+	return g.historySetupProbe[c.session]
+}
+
+func (g *guard) historySetupLocked(c *command, s *session, nt *navTarget) bool {
+	if g.historySetupDisableLocked(c, s) {
+		return true
+	}
+	return g.historySetupReadyLocked(c, s, nt) && g.historySetupParamsLocked(c)
+}
+
+func (g *guard) noteHistorySetupProbeLocked(c *command) {
+	if c == nil || c.session == "" {
+		return
+	}
+	switch c.method {
+	case "DOM.getDocument":
+		s := g.sessions[c.session]
+		if s == nil {
+			return
+		}
+		nt := g.navTargets[s.target]
+		if nt == nil || !nt.historyLocked || !historySetupProbeAdmitEnabled() || !historySetupProbeParams(c.params) {
+			return
+		}
+		if g.historySetupProbe == nil {
+			g.historySetupProbe = map[string]bool{}
+		}
+		g.historySetupProbe[c.session] = true
+		g.domEnabled[c.session] = true
+	case "DOM.disable":
+		delete(g.historySetupProbe, c.session)
+	}
 }
 
 type historyState int

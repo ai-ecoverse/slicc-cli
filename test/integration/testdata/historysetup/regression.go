@@ -42,10 +42,12 @@ type hsChrome struct {
 	current    int
 	currentAlt int
 	hold       bool
+	holdInfo   bool
 	skipInfo   bool
 	asked      bool
 	kids       map[string]map[string]any
 	held       [][]byte
+	heldInfo   [][]byte
 	next       int64
 	client     []string
 	guardOut   []string
@@ -154,6 +156,10 @@ func (c *hsChrome) outbound(send [][]byte) {
 				}
 				continue
 			}
+			if c.holdInfo {
+				c.heldInfo = append(c.heldInfo, raw)
+				continue
+			}
 			if c.skipInfo && c.asked {
 				continue
 			}
@@ -207,6 +213,199 @@ func (c *hsChrome) answerHeld(fail bool) {
 			}
 			c.feed(hsReply(id, session, map[string]any{"frameTree": map[string]any{"frame": c.frame()}}))
 		}
+	}
+}
+
+func (c *hsChrome) answerHeldInfo(url string) {
+	c.t.Helper()
+	info := c.info()
+	if url != "" {
+		info["url"] = url
+	}
+	for round := 0; len(c.heldInfo) > 0 && round < 16; round++ {
+		held := c.heldInfo
+		c.heldInfo = nil
+		c.holdInfo = false
+		for _, raw := range held {
+			id, _, session, _ := hsOutbound(raw)
+			c.feed(hsReply(id, session, map[string]any{"targetInfo": info}))
+		}
+	}
+}
+
+func hsProbeTreeOrdinary(marker string) map[string]any {
+	text := "ordinary body"
+	if marker != "" {
+		text = marker
+	}
+	return map[string]any{
+		"root": map[string]any{
+			"nodeId": 1, "nodeName": "#document", "documentURL": hsOrdinary, "baseURL": hsOrdinary,
+			"children": []any{
+				map[string]any{"nodeId": 2, "nodeName": "#text", "nodeValue": text},
+			},
+		},
+	}
+}
+
+func hsProbeTreeProtected(marker string) map[string]any {
+	text := "ordinary body"
+	if marker != "" {
+		text = marker
+	}
+	return map[string]any{
+		"root": map[string]any{
+			"nodeId": 1, "nodeName": "#document", "documentURL": hsOrdinary, "baseURL": hsOrdinary,
+			"children": []any{
+				map[string]any{
+					"nodeId": 2, "nodeName": "IFRAME", "frameId": "HS-IFRAME",
+					"attributes": []any{"src", hsSeven + "embed"},
+					"contentDocument": map[string]any{
+						"nodeId": 3, "nodeName": "#document", "documentURL": hsSeven + "embed", "baseURL": hsSeven + "embed",
+						"children": []any{map[string]any{"nodeId": 4, "nodeName": "#text", "nodeValue": text}},
+					},
+				},
+			},
+		},
+	}
+}
+
+func hsProbeTreeOOPIFSrc(marker string) map[string]any {
+	text := "ordinary body"
+	if marker != "" {
+		text = marker
+	}
+	return map[string]any{
+		"root": map[string]any{
+			"nodeId": 1, "nodeName": "#document", "documentURL": hsOrdinary, "baseURL": hsOrdinary,
+			"children": []any{
+				map[string]any{
+					"nodeId": 2, "nodeName": "IFRAME", "frameId": "HS-OOPIF",
+					"attributes": []any{"src", hsSeven + "embed"},
+				},
+				map[string]any{"nodeId": 3, "nodeName": "#text", "nodeValue": text},
+			},
+		},
+	}
+}
+
+func hsDocumentUpdated() string {
+	return string(encode(map[string]any{"method": "DOM.documentUpdated", "sessionId": hsClient, "params": map[string]any{}}))
+}
+
+func (c *hsChrome) admitProbeHeld(tree map[string]any) (id int64, treeAnswer []byte) {
+	c.t.Helper()
+	c.holdInfo = true
+	raw, out, _ := c.call(hsProbe)
+	if out != "forward "+raw {
+		c.t.Fatalf("probe not forwarded: %s", out)
+	}
+	id, _, _, _ = hsOutbound([]byte(raw))
+	if _, ok := c.g.docIdentityCalls[callKey{hsClient, id}]; !ok {
+		c.t.Fatal("admitted probe must enter docIdentityCalls (#863)")
+	}
+	treeAnswer = hsReply(id, hsClient, tree)
+	c.client = nil
+	c.feed(treeAnswer)
+	if len(c.heldInfo) == 0 {
+		c.t.Fatal("probe reply must arm Target.getTargetInfo for the identity hold")
+	}
+	if len(c.client) != 0 {
+		c.t.Fatalf("probe reply must stay held until getTargetInfo settles: %q", c.client)
+	}
+	if len(c.g.docIdentityHolds) == 0 {
+		c.t.Fatal("probe reply must sit in docIdentityHolds")
+	}
+	return id, treeAnswer
+}
+
+func (c *hsChrome) admitProbeRefused(tree map[string]any, marker string) int64 {
+	c.t.Helper()
+	c.holdInfo = true
+	raw, out, _ := c.call(hsProbe)
+	if out != "forward "+raw {
+		c.t.Fatalf("probe not forwarded: %s", out)
+	}
+	id, _, _, _ := hsOutbound([]byte(raw))
+	if _, ok := c.g.docIdentityCalls[callKey{hsClient, id}]; !ok {
+		c.t.Fatal("admitted probe must enter docIdentityCalls (#863)")
+	}
+	c.client = nil
+	c.feed(hsReply(id, hsClient, tree))
+	if len(c.heldInfo) != 0 {
+		c.t.Fatal("protected child must refuse before the identity hold")
+	}
+	if len(c.g.docIdentityHolds) != 0 {
+		c.t.Fatal("protected child must not enter docIdentityHolds")
+	}
+	if _, ok := c.g.docIdentityCalls[callKey{hsClient, id}]; ok {
+		c.t.Fatal("refusal must drop the probe from docIdentityCalls")
+	}
+	want := strings.TrimPrefix(hsRefusal(id, hsTextTarget), "reply ")
+	updated := hsDocumentUpdated()
+	switch {
+	case len(c.client) == 2 && c.client[0] == want && c.client[1] == updated:
+	case len(c.client) == 1 && c.client[0] == want:
+		c.t.Fatalf("mark first latch must synthesize DOM.documentUpdated; got only the refusal: %q", c.client)
+	default:
+		c.t.Fatalf("want refusal then content-free DOM.documentUpdated; got %q", c.client)
+	}
+	for _, msg := range c.client {
+		if marker != "" && strings.Contains(msg, marker) {
+			c.t.Fatalf("refusal path must not carry marker: %s", msg)
+		}
+	}
+	page := c.g.targets[hsTarget]
+	if page == nil || !page.childDocDOMBlocked {
+		c.t.Fatalf("protected child must mark the tab: %+v", page)
+	}
+	return id
+}
+
+func (c *hsChrome) topFrameNavigated(loader string) {
+	c.t.Helper()
+	c.loader = loader
+	c.client = nil
+	c.feed(hsEvent(hsClient, "Page.frameNavigated", map[string]any{
+		"frame": map[string]any{"id": hsTarget, "loaderId": loader, "url": hsOrdinary, "securityOrigin": "https://ordinary.test", "mimeType": "text/html"},
+	}))
+}
+
+func (c *hsChrome) seedRootDocument() {
+	c.t.Helper()
+	loader := c.loader
+	if loader == "" {
+		loader = "L0"
+	}
+	c.topFrameNavigated(loader)
+	page := c.g.targets[hsTarget]
+	if page == nil || page.document != loader {
+		c.t.Fatalf("seedRootDocument must commit loader %s: %+v", loader, page)
+	}
+}
+
+func (c *hsChrome) clearChildDocMark() {
+	c.t.Helper()
+	page := c.g.targets[hsTarget]
+	if page == nil || !page.childDocDOMBlocked {
+		c.t.Fatalf("clearChildDocMark needs a marked tab: %+v", page)
+	}
+	same := page.document
+	if same == "" {
+		c.t.Fatal("clearChildDocMark needs a seeded page.document so same-loader keep is observable (commitRootDocumentLocked clears on the empty→loader commit)")
+	}
+	c.topFrameNavigated(same)
+	page = c.g.targets[hsTarget]
+	if page == nil || !page.childDocDOMBlocked {
+		c.t.Fatalf("same-loader frameNavigated must keep the child-doc mark (commitRootDocumentLocked): %+v", page)
+	}
+	c.topFrameNavigated(same + "-NEXT")
+	page = c.g.targets[hsTarget]
+	if page == nil || page.childDocDOMBlocked {
+		c.t.Fatalf("a new loaderId commit must clear the child-doc mark: %+v", page)
+	}
+	if nt := c.nt(); nt == nil || !nt.historyLocked {
+		c.t.Fatalf("top-level navigation must keep the history lock: %+v", nt)
 	}
 }
 
@@ -337,10 +536,16 @@ var hsSetupForms = append(append([]hsCall{}, hsSetup...),
 	hsCall{"autoattach-no-wait", "Target.setAutoAttach", map[string]any{"autoAttach": true, "flatten": true, "filter": hsFrameChildren()}},
 )
 
+var hsProbe = hsCall{"get-document", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true}}
+
+var hsProbeDisable = hsCall{"dom-disable", "DOM.disable", nil}
+
 var hsContent = []hsCall{
 	{"evaluate", "Runtime.evaluate", map[string]any{"expression": "document.title"}},
-	{"get-document", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true}},
-	{"dom-disable", "DOM.disable", nil},
+	{"get-document-depth-0", "DOM.getDocument", map[string]any{"depth": 0, "pierce": true}},
+	{"get-document-pierce-false", "DOM.getDocument", map[string]any{"depth": -1, "pierce": false}},
+	{"dom-enable", "DOM.enable", nil},
+	{"dom-disable-alone", "DOM.disable", nil},
 	{"snapshot", "DOMSnapshot.captureSnapshot", map[string]any{"computedStyles": []any{}}},
 	{"screenshot", "Page.captureScreenshot", map[string]any{}},
 }
@@ -383,6 +588,45 @@ func TestHistorySetupAdmittedOnLockedTab(t *testing.T) {
 			c.requireForwarded(k)
 			c.requireLocked()
 		})
+	}
+}
+
+func TestHistorySetupProbeAdmittedOnLockedTab(t *testing.T) {
+	c := hsLockedTab(t)
+	c.requireForwarded(hsProbe)
+	if !c.g.historySetupProbe[hsClient] {
+		t.Fatal("admitted probe must latch the session for DOM.disable")
+	}
+	c.requireForwarded(hsProbeDisable)
+	if c.g.historySetupProbe[hsClient] {
+		t.Fatal("DOM.disable must clear the probe latch")
+	}
+	c.requireLocked()
+}
+
+func TestHistorySetupDisableWithoutProbeRefused(t *testing.T) {
+	c := hsLockedTab(t)
+	c.requireRefused(hsProbeDisable, hsTextHistory)
+	c.requireLocked()
+}
+
+func TestHistorySetupProbeLatchRequiresHistoryLock(t *testing.T) {
+	c := hsCleanTab(t)
+	c.requireForwarded(hsProbe)
+	if c.g.historySetupProbe[hsClient] {
+		t.Fatal("a tab that is not history-locked must not latch DOM.disable from the ownership probe")
+	}
+}
+
+func TestHistorySetupProbeLatchClearedOnForget(t *testing.T) {
+	c := hsLockedTab(t)
+	c.requireForwarded(hsProbe)
+	if !c.g.historySetupProbe[hsClient] {
+		t.Fatal("admitted probe must latch the session")
+	}
+	c.feed(hsEvent("", "Target.detachedFromTarget", map[string]any{"sessionId": hsClient, "targetId": hsTarget}))
+	if c.g.historySetupProbe[hsClient] {
+		t.Fatal("forgetting the session must clear the probe latch")
 	}
 }
 
@@ -532,7 +776,7 @@ func TestHistorySetupShadowedConditions(t *testing.T) {
 		{"setup-protected-seen", func(nt *navTarget) { nt.setupProtectedSeen = true; nt.setupProtectedSeq = 1 }},
 	}
 	for _, st := range states {
-		for _, k := range hsSetup {
+		for _, k := range append(append([]hsCall{}, hsSetup...), hsProbe) {
 			t.Run(st.name+"/"+k.name, func(t *testing.T) {
 				c := hsLockedTab(t)
 				st.mut(c.nt())
@@ -550,7 +794,7 @@ func TestHistorySetupShadowedConditions(t *testing.T) {
 		}
 	}
 	t.Run("browser-flagged-session", func(t *testing.T) {
-		for _, k := range hsSetup {
+		for _, k := range append(append([]hsCall{}, hsSetup...), hsProbe) {
 			c := hsLockedTab(t)
 			c.g.browserSessions[hsClient] = true
 			cmd, _, _ := parseCommand([]byte(c.raw(k.method, k.params)))
@@ -605,8 +849,19 @@ var hsMethodsRefused = []hsCall{
 	{"network-cookies", "Network.getCookies", map[string]any{}},
 	{"lifecycle", "Page.setLifecycleEventsEnabled", map[string]any{"enabled": true}},
 	{"runtime-evaluate", "Runtime.evaluate", map[string]any{"expression": "1"}},
-	{"dom-get-document", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true}},
-	{"dom-disable", "DOM.disable", nil},
+	{"dom-get-document-depth-0", "DOM.getDocument", map[string]any{"depth": 0, "pierce": true}},
+	{"dom-get-document-pierce-false", "DOM.getDocument", map[string]any{"depth": -1, "pierce": false}},
+	{"dom-get-document-depth-string", "DOM.getDocument", map[string]any{"depth": "-1", "pierce": true}},
+	{"dom-get-document-pierce-string", "DOM.getDocument", map[string]any{"depth": -1, "pierce": "true"}},
+	{"dom-get-document-backend-node", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true, "backendNodeId": 1}},
+	{"dom-get-document-node-id", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true, "nodeId": 1}},
+	{"dom-get-document-extra-key", "DOM.getDocument", map[string]any{"depth": -1, "pierce": true, "x": 1}},
+	{"dom-get-document-missing-pierce", "DOM.getDocument", map[string]any{"depth": -1}},
+	{"dom-get-document-missing-depth", "DOM.getDocument", map[string]any{"pierce": true}},
+	{"dom-get-document-empty", "DOM.getDocument", map[string]any{}},
+	{"dom-enable", "DOM.enable", nil},
+	{"dom-disable-alone", "DOM.disable", nil},
+	{"dom-query", "DOM.querySelector", map[string]any{"nodeId": 1, "selector": "body"}},
 	{"snapshot", "DOMSnapshot.captureSnapshot", map[string]any{"computedStyles": []any{}}},
 }
 
@@ -617,6 +872,37 @@ func TestHistorySetupParamsRefused(t *testing.T) {
 			c.requireRefused(k, hsTextHistory)
 		})
 	}
+	t.Run("dom-get-document-depth-minus-one-point-zero", func(t *testing.T) {
+		c := hsLockedTab(t)
+		c.next++
+		raw := fmt.Sprintf(`{"id":%d,"method":"DOM.getDocument","sessionId":%q,"params":{"depth":-1.0,"pierce":true}}`, c.next, hsClient)
+		out, v := c.sendRaw(raw)
+		want := strings.TrimPrefix(hsRefusal(int64(c.next), hsTextHistory), "reply ")
+		if out != "reply "+want {
+			t.Fatalf("depth -1.0 (json.Number) must be history-refused: out=%s send=%q", out, v.send)
+		}
+	})
+}
+
+func TestHistorySetupDisableOtherSessionRefused(t *testing.T) {
+	c := hsLockedTab(t)
+	c.requireForwarded(hsProbe)
+	const other = "HS-CLIENT-2"
+	c.feed(hsEvent("", "Target.attachedToTarget", map[string]any{"sessionId": other, "waitingForDebugger": false, "targetInfo": c.info()}))
+	if c.g.sessions[other] == nil {
+		t.Fatal("second page session must register")
+	}
+	c.next++
+	raw := fmt.Sprintf(`{"id":%d,"method":"DOM.disable","sessionId":%q}`, c.next, other)
+	out, v := c.sendRaw(raw)
+	want := fmt.Sprintf(`{"error":{"code":-32000,"message":"slicc: refused: %s"},"id":%d,"sessionId":%q}`, hsTextHistory, c.next, other)
+	if out != "reply "+want {
+		t.Fatalf("DOM.disable on a session without the probe latch must be refused: out=%s send=%q", out, v.send)
+	}
+	if c.g.historySetupProbe[hsClient] != true {
+		t.Fatal("other-session disable must not clear the probing session's latch")
+	}
+	c.requireForwarded(hsProbeDisable)
 }
 
 func TestHistorySetupDuplicateKeys(t *testing.T) {
@@ -629,6 +915,9 @@ func TestHistorySetupDuplicateKeys(t *testing.T) {
 		{"wait-last-false", "Target.setAutoAttach", `{"autoAttach":true,"flatten":true,"waitForDebuggerOnStart":true,"waitForDebuggerOnStart":false,"filter":[{"type":"iframe","exclude":false},{"exclude":true}]}`, `{"autoAttach":true,"filter":[{"exclude":false,"type":"iframe"},{"exclude":true}],"flatten":true,"waitForDebuggerOnStart":false}`, true},
 		{"filter-last-exact", "Target.setAutoAttach", `{"autoAttach":true,"flatten":true,"filter":[{}],"filter":[{"type":"iframe","exclude":false},{"exclude":true}]}`, `{"autoAttach":true,"filter":[{"exclude":false,"type":"iframe"},{"exclude":true}],"flatten":true}`, true},
 		{"filter-last-all", "Target.setAutoAttach", `{"autoAttach":true,"flatten":true,"filter":[{"type":"iframe","exclude":false},{"exclude":true}],"filter":[{}]}`, "", false},
+		{"probe-depth-last-minus-one", "DOM.getDocument", `{"depth":0,"pierce":true,"depth":-1}`, `{"depth":-1,"pierce":true}`, true},
+		{"probe-pierce-last-true", "DOM.getDocument", `{"depth":-1,"pierce":false,"pierce":true}`, `{"depth":-1,"pierce":true}`, true},
+		{"probe-depth-last-zero", "DOM.getDocument", `{"depth":-1,"pierce":true,"depth":0}`, "", false},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			c := hsLockedTab(t)
@@ -657,6 +946,8 @@ func TestHistorySetupContentStaysRefused(t *testing.T) {
 			for _, s := range hsSetup {
 				c.requireForwarded(s)
 			}
+			c.requireForwarded(hsProbe)
+			c.requireForwarded(hsProbeDisable)
 			c.requireRefused(k, hsTextHistory)
 			c.requireLocked()
 		})
@@ -696,12 +987,265 @@ func TestHistorySetupLockedTranscript(t *testing.T) {
 }
 
 func TestHistorySetupProtectedTwin(t *testing.T) {
-	for _, k := range append(append([]hsCall{}, hsSetup...), hsContent...) {
+	for _, k := range append(append(append([]hsCall{}, hsSetup...), hsProbe, hsProbeDisable), hsContent...) {
 		t.Run(k.name, func(t *testing.T) {
 			c := hsLockedTab(t)
 			c.protectCurrent()
 			c.requireRefused(k, hsTextTarget)
 		})
+	}
+}
+
+func TestHistorySetupProbeReplyScrub(t *testing.T) {
+	const marker = "HS-PROBE-MARKER"
+	c := hsLockedTab(t)
+	id, answer := c.admitProbeHeld(hsProbeTreeOrdinary(marker))
+	scrubbedDirect := string(c.g.scrub(append([]byte(nil), answer...)))
+	if !strings.Contains(scrubbedDirect, "ordinary.test") {
+		t.Fatalf("scrub must keep the ordinary top documentURL: %s", scrubbedDirect)
+	}
+	if !strings.Contains(scrubbedDirect, marker) {
+		t.Fatalf("ordinary probe tree must keep its marker through scrub: %s", scrubbedDirect)
+	}
+	c.client = nil
+	c.answerHeldInfo(hsOrdinary)
+	if len(c.client) == 0 {
+		t.Fatal("ordinary unchanged getTargetInfo must deliver the held probe reply")
+	}
+	delivered := string(c.g.scrub([]byte(c.client[0])))
+	if !strings.Contains(delivered, marker) {
+		t.Fatalf("delivered ordinary probe reply must carry the marker: %s", delivered)
+	}
+	if !strings.Contains(c.client[0], fmt.Sprintf(`"id":%d`, id)) && !strings.Contains(c.client[0], fmt.Sprintf(`"id": %d`, id)) {
+		t.Fatalf("delivered reply must carry the probe id: %s", c.client[0])
+	}
+}
+
+func TestHistorySetupProbeOOPIFSrcScrubbed(t *testing.T) {
+	const marker = "HS-PROBE-MARKER"
+	c := hsLockedTab(t)
+	id, answer := c.admitProbeHeld(hsProbeTreeOOPIFSrc(marker))
+	scrubbedDirect := string(c.g.scrub(append([]byte(nil), answer...)))
+	if strings.Contains(scrubbedDirect, "/embed") || strings.Contains(scrubbedDirect, hsSeven+"embed") {
+		t.Fatalf("write-time scrub must cut the OOPIF src path: %s", scrubbedDirect)
+	}
+	if !strings.Contains(scrubbedDirect, marker) {
+		t.Fatalf("ordinary marker text must survive scrub: %s", scrubbedDirect)
+	}
+	c.client = nil
+	c.answerHeldInfo(hsOrdinary)
+	if len(c.client) != 1 {
+		t.Fatalf("want one delivered OOPIF probe reply; got %q", c.client)
+	}
+	delivered := string(c.g.scrub([]byte(c.client[0])))
+	if strings.Contains(delivered, "/embed") || strings.Contains(delivered, "seven.sliccy.ai/embed") {
+		t.Fatalf("delivered OOPIF probe must not carry a protected path: %s", delivered)
+	}
+	if !strings.Contains(delivered, marker) {
+		t.Fatalf("delivered OOPIF probe must keep the ordinary marker: %s", delivered)
+	}
+	if !strings.Contains(c.client[0], fmt.Sprintf(`"id":%d`, id)) && !strings.Contains(c.client[0], fmt.Sprintf(`"id": %d`, id)) {
+		t.Fatalf("delivered reply must carry the probe id: %s", c.client[0])
+	}
+}
+
+func TestHistorySetupProbeIdentityOrdinaryDelivered(t *testing.T) {
+	const marker = "HS-PROBE-MARKER"
+	c := hsLockedTab(t)
+	id, _ := c.admitProbeHeld(hsProbeTreeOrdinary(marker))
+	taint := c.g.docIdentityTaint[hsTarget]
+	c.client = nil
+	c.answerHeldInfo(hsOrdinary)
+	if len(c.client) != 1 {
+		t.Fatalf("want one delivered probe reply; got %q", c.client)
+	}
+	if strings.Contains(c.client[0], `"error"`) {
+		t.Fatalf("ordinary unchanged post-read must deliver, not refuse: %s", c.client[0])
+	}
+	if !strings.Contains(c.client[0], marker) {
+		t.Fatalf("ordinary delivered probe must carry the marker: %s", c.client[0])
+	}
+	if c.g.docIdentityTaint[hsTarget] != taint {
+		t.Fatalf("ordinary settle must not bump taint")
+	}
+	if c.g.sessions[hsClient] == nil || c.g.sessions[hsClient].refused {
+		t.Fatal("ordinary settle must keep the client session")
+	}
+	_ = id
+}
+
+func TestHistorySetupProbeProtectedChildRefused(t *testing.T) {
+	const marker = "HS-PROBE-MARKER"
+	c := hsLockedTab(t)
+	c.seedRootDocument()
+	_ = c.admitProbeRefused(hsProbeTreeProtected(marker), marker)
+	c.requireRefused(hsProbe, hsTextTarget)
+	c.requireForwarded(hsProbeDisable)
+	if c.g.historySetupProbe[hsClient] {
+		t.Fatal("DOM.disable must clear the probe latch")
+	}
+	if nt := c.nt(); nt == nil || !nt.historyLocked {
+		t.Fatalf("tab must stay history-locked after the mark: %+v", nt)
+	}
+	c.clearChildDocMark()
+	_ = c.admitProbeRefused(hsProbeTreeProtected(marker), marker)
+}
+
+func TestHistorySetupProbeIdentityTaintRace(t *testing.T) {
+	const marker = "HS-PROBE-MARKER"
+	c := hsLockedTab(t)
+	id, _ := c.admitProbeHeld(hsProbeTreeOrdinary(marker))
+	c.g.mu.Lock()
+	before := c.g.docIdentityTaint[hsTarget]
+	c.g.noteDocIdentityWatchURLLocked(hsTarget, hsSeven)
+	after := c.g.docIdentityTaint[hsTarget]
+	c.g.mu.Unlock()
+	if after <= before {
+		t.Fatalf("a protected sighting on the guard's target must bump docIdentityTaint: before=%d after=%d", before, after)
+	}
+	c.client = nil
+	c.guardOut = nil
+	c.answerHeldInfo(hsOrdinary)
+	want := strings.TrimPrefix(hsRefusal(id, hsTextTarget), "reply ")
+	if len(c.client) != 1 || c.client[0] != want {
+		t.Fatalf("tainted hold must refuse with target text:\n got: %q\nwant: %s", c.client, want)
+	}
+	for _, msg := range c.client {
+		if strings.Contains(msg, marker) {
+			t.Fatalf("tainted hold must not deliver the held marker: %s", msg)
+		}
+	}
+	if c.g.sessions[hsClient] == nil || !c.g.sessions[hsClient].refused {
+		t.Fatal("tainted hold must cut the client session")
+	}
+	detached := false
+	for _, o := range c.guardOut {
+		_, method, _, params := hsOutbound([]byte(o))
+		if method == "Target.detachFromTarget" && params["sessionId"] == hsClient {
+			detached = true
+		}
+	}
+	if !detached {
+		t.Fatalf("tainted hold must detach the client session: %q", c.guardOut)
+	}
+}
+
+func TestHistorySetupProbeIdentityProtectedInfo(t *testing.T) {
+	const marker = "HS-PROBE-MARKER"
+	c := hsLockedTab(t)
+	id, _ := c.admitProbeHeld(hsProbeTreeOrdinary(marker))
+	c.client = nil
+	c.guardOut = nil
+	c.answerHeldInfo(hsSeven)
+	want := strings.TrimPrefix(hsRefusal(id, hsTextTarget), "reply ")
+	if len(c.client) != 1 || c.client[0] != want {
+		t.Fatalf("protected getTargetInfo must refuse:\n got: %q\nwant: %s", c.client, want)
+	}
+	for _, msg := range c.client {
+		if strings.Contains(msg, marker) {
+			t.Fatalf("protected getTargetInfo must not deliver the held marker: %s", msg)
+		}
+	}
+	if c.g.sessions[hsClient] == nil || !c.g.sessions[hsClient].refused {
+		t.Fatal("protected getTargetInfo must cut the client session")
+	}
+}
+
+func TestHistorySetupProbeIdentityRelayLess(t *testing.T) {
+	const marker = "HS-PROBE-MARKER"
+	c := hsLockedTab(t)
+	c.holdInfo = true
+	raw, out, _ := c.call(hsProbe)
+	if out != "forward "+raw {
+		t.Fatalf("probe not forwarded: %s", out)
+	}
+	id, _, _, _ := hsOutbound([]byte(raw))
+	c.g.relaySession = ""
+	c.client = nil
+	c.feed(hsReply(id, hsClient, hsProbeTreeOrdinary(marker)))
+	if len(c.heldInfo) != 0 {
+		t.Fatalf("relay-less hold must not ask getTargetInfo: %d", len(c.heldInfo))
+	}
+	if len(c.client) != 1 {
+		t.Fatalf("relay-less hold must answer the client once; got %q", c.client)
+	}
+	if !strings.Contains(c.client[0], "Execution context was destroyed") {
+		t.Fatalf("relay-less hold must use the retriable text: %s", c.client[0])
+	}
+	if strings.Contains(c.client[0], marker) {
+		t.Fatalf("relay-less hold must not deliver the held marker: %s", c.client[0])
+	}
+}
+
+var hsDOMProtocolEvents = []string{
+	"DOM.attributeModified",
+	"DOM.adoptedStyleSheetsModified",
+	"DOM.attributeRemoved",
+	"DOM.characterDataModified",
+	"DOM.childNodeCountUpdated",
+	"DOM.childNodeInserted",
+	"DOM.childNodeRemoved",
+	"DOM.distributedNodesUpdated",
+	"DOM.documentUpdated",
+	"DOM.inlineStyleInvalidated",
+	"DOM.pseudoElementAdded",
+	"DOM.topLayerElementsUpdated",
+	"DOM.scrollableFlagUpdated",
+	"DOM.adRelatedStateUpdated",
+	"DOM.affectedByStartingStylesFlagUpdated",
+	"DOM.pseudoElementRemoved",
+	"DOM.setChildNodes",
+	"DOM.shadowRootPopped",
+	"DOM.shadowRootPushed",
+}
+
+func TestHistorySetupProbeEventsDropped(t *testing.T) {
+	c := hsLockedTab(t)
+	c.requireForwarded(hsProbe)
+	for _, method := range hsDOMProtocolEvents {
+		t.Run(method, func(t *testing.T) {
+			c.client = nil
+			c.feed(hsEvent(hsClient, method, map[string]any{"nodeId": 1}))
+			for _, msg := range c.client {
+				if strings.Contains(msg, method) {
+					t.Fatalf("history-locked page must drop every DOM.* event: %s", msg)
+				}
+			}
+		})
+	}
+	for _, method := range []string{"Accessibility.nodesUpdated", "Accessibility.loadComplete"} {
+		t.Run(method, func(t *testing.T) {
+			c.client = nil
+			c.feed(hsEvent(hsClient, method, map[string]any{}))
+			for _, msg := range c.client {
+				if strings.Contains(msg, method) {
+					t.Fatalf("history-locked page must still drop Accessibility content events: %s", msg)
+				}
+			}
+		})
+	}
+	c.requireForwarded(hsProbeDisable)
+}
+
+func TestHistorySetupDisableAfterProtectAdmitted(t *testing.T) {
+	c := hsLockedTab(t)
+	c.requireForwarded(hsProbe)
+	if !c.g.domEnabled[hsClient] {
+		t.Fatal("admitted probe must mark the DOM agent enabled")
+	}
+	c.nt().setupProtectedSeen = true
+	c.nt().setupProtectedSeq = 1
+	c.requireForwarded(hsProbeDisable)
+	if c.g.domEnabled[hsClient] {
+		t.Fatal("DOM.disable after a protected sighting must turn the agent off")
+	}
+	if c.g.historySetupProbe[hsClient] {
+		t.Fatal("DOM.disable must clear the probe latch")
+	}
+	c.requireRefused(hsProbeDisable, hsTextHistory)
+	c.requireLatched()
+	if nt := c.nt(); nt == nil || !nt.historyLocked {
+		t.Fatalf("tab must stay history-locked: %+v", nt)
 	}
 }
 
@@ -729,8 +1273,58 @@ func (c *hsChrome) protectCurrent() {
 }
 
 func TestHistorySetupRestoreOrders(t *testing.T) {
-	for _, k := range hsSetup {
+	const marker = "HS-PROBE-MARKER"
+	for _, k := range append(append([]hsCall{}, hsSetup...), hsProbe) {
 		t.Run("before-restore/"+k.name, func(t *testing.T) {
+			if k.method == "DOM.getDocument" {
+				for _, arm := range []struct {
+					name string
+					tree map[string]any
+					hold bool
+				}{
+					{"ordinary-marker", hsProbeTreeOrdinary(marker), true},
+					{"protected-child", hsProbeTreeProtected(marker), false},
+				} {
+					t.Run(arm.name, func(t *testing.T) {
+						c := hsLockedTab(t)
+						c.holdInfo = true
+						raw, out, _ := c.call(k)
+						if out != "forward "+raw {
+							t.Fatalf("not forwarded: %s", out)
+						}
+						c.protectCurrent()
+						id, _, _, _ := hsOutbound([]byte(raw))
+						c.client = nil
+						c.heldInfo = nil
+						c.feed(hsReply(id, hsClient, arm.tree))
+						if arm.hold {
+							if len(c.g.docIdentityHolds) == 0 {
+								t.Fatal("ordinary tree must still enter the identity hold after protect")
+							}
+							c.answerHeldInfo(hsSeven)
+						} else if len(c.g.docIdentityHolds) != 0 {
+							t.Fatal("protected child must refuse before the identity hold")
+						}
+						want := strings.TrimPrefix(hsRefusal(id, hsTextTarget), "reply ")
+						updated := hsDocumentUpdated()
+						for _, msg := range c.client {
+							if strings.Contains(msg, marker) {
+								t.Fatalf("restore refuse must not carry marker: %s", msg)
+							}
+						}
+						switch {
+						case arm.hold && len(c.client) == 1 && c.client[0] == want:
+						case !arm.hold && len(c.client) == 2 && c.client[0] == want && c.client[1] == updated:
+						case !arm.hold && len(c.client) == 1 && c.client[0] == want:
+							t.Fatalf("protected-child restore must synthesize DOM.documentUpdated onto the refused session; got %q", c.client)
+						default:
+							t.Fatalf("the answer after the restore:\n got: %q\nwant refusal%s", c.client, map[bool]string{false: " then DOM.documentUpdated"}[arm.hold])
+						}
+						c.requireRefused(k, hsTextTarget)
+					})
+				}
+				return
+			}
 			c := hsLockedTab(t)
 			raw, out, _ := c.call(k)
 			if out != "forward "+raw {

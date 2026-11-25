@@ -171,6 +171,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	if c.session != "" {
 		g.noteCastLocked(c)
 		g.noteDomainEnableLocked(c)
+		g.noteHistorySetupProbeLocked(c)
 	}
 	if t := c.str("targetId"); c.method == "Target.attachToTarget" && t != "" {
 		g.attachCalls[k] = t

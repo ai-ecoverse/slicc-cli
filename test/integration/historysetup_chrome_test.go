@@ -66,13 +66,18 @@ type hsChromeSetupProbe struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 	} `json:"steps"`
-	BypassOK           bool   `json:"bypassOk"`
-	BypassError        string `json:"bypassError"`
-	AutoAttachOK       bool   `json:"autoAttachOk"`
-	AutoAttachError    string `json:"autoAttachError"`
-	EvaluateRefused    bool   `json:"evaluateRefused"`
-	GetDocumentRefused bool   `json:"getDocumentRefused"`
-	ElapsedMs          int64  `json:"elapsedMs"`
+	BypassOK              bool   `json:"bypassOk"`
+	BypassError           string `json:"bypassError"`
+	AutoAttachOK          bool   `json:"autoAttachOk"`
+	AutoAttachError       string `json:"autoAttachError"`
+	EvaluateRefused       bool   `json:"evaluateRefused"`
+	GetDocumentOK         bool   `json:"getDocumentOk"`
+	GetDocumentError      string `json:"getDocumentError"`
+	GetDocumentReplyClean bool   `json:"getDocumentReplyClean"`
+	DisableOK             bool   `json:"disableOk"`
+	DisableError          string `json:"disableError"`
+	WrongDepthRefused     bool   `json:"wrongDepthRefused"`
+	ElapsedMs             int64  `json:"elapsedMs"`
 }
 
 type hsChromeAutoChildProbe struct {
@@ -318,8 +323,27 @@ func historySetupChromeLockedOrdinaryAuto(t *testing.T) (*hrChromeLockedOrdinary
 	}
 	t.Logf("step=guarded-lock-engaged ok refused err=%q", lockErr)
 
+	protectedExpr := fmt.Sprintf(`(() => { const f = document.createElement('iframe'); f.src = %q; document.body.appendChild(f); return true; })()`, seven+"/seven-host")
+	var protectedInject struct {
+		Result struct {
+			Value bool `json:"value"`
+		} `json:"result"`
+	}
+	if err := host.session.Call(ctx, "Runtime.evaluate", map[string]any{"expression": protectedExpr, "returnByValue": true}, &protectedInject); err != nil || !protectedInject.Result.Value {
+		close(stopWatch)
+		watchWG.Wait()
+		t.Fatalf("step=unguarded-inject-protected-iframe: err=%v value=%t", err, protectedInject.Result.Value)
+	}
+	t.Logf("step=unguarded-inject-protected-iframe ok")
+	time.Sleep(400 * time.Millisecond)
+
+	setupOpts := map[string]any{}
+	for k, v := range baseOpts {
+		setupOpts[k] = v
+	}
+	setupOpts["protectedPrefix"] = seven
 	var setupRaw rawJSON
-	env.p.evalWithin("linkTest.historySetupLockedOrdinarySetup("+jsArgs(baseOpts)+")", &setupRaw, 30*time.Second)
+	env.p.evalWithin("linkTest.historySetupLockedOrdinarySetup("+jsArgs(setupOpts)+")", &setupRaw, 30*time.Second)
 	var setup hsChromeSetupProbe
 	if err := json.Unmarshal(setupRaw, &setup); err != nil {
 		close(stopWatch)
@@ -409,7 +433,7 @@ func TestCDPHistorySetupChromeLockedOrdinaryAutoAttachHold(t *testing.T) {
 	r, setup, child := historySetupChromeLockedOrdinaryAuto(t)
 	for _, s := range setup.Steps {
 		switch s.Name {
-		case "guarded-setBypassServiceWorker", "guarded-setAutoAttach", "guarded-evaluate-history-refused", "guarded-getDocument-history-refused":
+		case "guarded-setBypassServiceWorker", "guarded-setAutoAttach", "guarded-evaluate-history-refused", "guarded-getDocument-admitted", "guarded-getDocument-reply-clean", "guarded-dom-disable", "guarded-getDocument-wrong-depth-refused":
 			if !s.OK {
 				t.Fatalf("step=%s: %s", s.Name, s.Error)
 			}
@@ -423,10 +447,22 @@ func TestCDPHistorySetupChromeLockedOrdinaryAutoAttachHold(t *testing.T) {
 		t.Fatalf("step=guarded-setAutoAttach: refused err=%q", setup.AutoAttachError)
 	}
 	t.Logf("step=guarded-setAutoAttach ok")
-	if !setup.EvaluateRefused || !setup.GetDocumentRefused {
-		t.Fatalf("step=content-stays-refused: evaluateRefused=%t getDocumentRefused=%t", setup.EvaluateRefused, setup.GetDocumentRefused)
+	if !setup.EvaluateRefused {
+		t.Fatalf("step=content-stays-refused: evaluateRefused=%t", setup.EvaluateRefused)
 	}
-	t.Logf("step=content-stays-refused ok")
+	if !setup.GetDocumentOK {
+		t.Fatalf("step=guarded-getDocument-admitted: err=%q", setup.GetDocumentError)
+	}
+	if !setup.GetDocumentReplyClean {
+		t.Fatalf("step=guarded-getDocument-reply-clean: probe reply carried a protected document")
+	}
+	if !setup.DisableOK {
+		t.Fatalf("step=guarded-dom-disable: err=%q", setup.DisableError)
+	}
+	if !setup.WrongDepthRefused {
+		t.Fatalf("step=guarded-getDocument-wrong-depth-refused: depth 0 was admitted")
+	}
+	t.Logf("step=bios-probe-sequence ok getDocument=%t replyClean=%t disable=%t evaluateRefused=%t wrongDepthRefused=%t", setup.GetDocumentOK, setup.GetDocumentReplyClean, setup.DisableOK, setup.EvaluateRefused, setup.WrongDepthRefused)
 
 	for _, s := range child.Steps {
 		switch s.Name {
@@ -811,4 +847,210 @@ func historySetupChromeLockedOrdinarySetupOnly(t *testing.T) hsChromeSetupProbe 
 	}
 	_ = hrExplicitClientClose(env)
 	return setup
+}
+
+func TestCDPHistorySetupChromeProbeMarkers(t *testing.T) {
+	historyRestoreRequireChrome(t)
+	fixture := historyRestoreChromeFixture(t)
+	port := fixture.URL[strings.LastIndexByte(fixture.URL, ':')+1:]
+	seven := "http://seven.protected.test:" + port
+	ordinary := "http://page.ordinary.test:" + port
+	const marker = "HS_B2_MARKER_7f3a9c"
+	b := launchBrowserOn(t, 0,
+		"--site-per-process",
+		"--enable-features=BackForwardCache",
+		"--disable-features=BackForwardCacheMemoryControls",
+		"--unsafely-treat-insecure-origin-as-secure="+seven,
+		"--host-resolver-rules=MAP *.test 127.0.0.1",
+	)
+	step := historyRestoreChromeStep(t)
+	host, err := b.tryOpenPage(t, seven+"/seven-host")
+	step("open-protected-host", err)
+	linkHost, err := b.tryOpenPage(t, seven+"/seven-host")
+	step("open-seven-link-host", err)
+	env := &linkEnv{t: t, b: b, origin: seven, p: linkHost}
+	env.a = startAttach(t, "--cdp", b.endpoint, "--origin", seven, "--name", "history-setup-chrome-probe-markers")
+	env.waitUp("")
+	var hello struct {
+		Browsers []helloBrowser `json:"browsers"`
+	}
+	env.p.eval("linkTest.ready()", &hello)
+	if len(hello.Browsers) != 1 {
+		t.Fatalf("step=linkTest.ready: browsers count=%d", len(hello.Browsers))
+	}
+	browser := hello.Browsers[0].ID
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	t.Cleanup(cancel)
+
+	step("navigate-ordinary-unguarded", host.session.Call(ctx, "Page.navigate", map[string]any{"url": ordinary + "/ordinary"}, nil))
+	deadline := time.Now().Add(15 * time.Second)
+	var hrefOut struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	for time.Now().Before(deadline) {
+		if err := host.session.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "location.href", "returnByValue": true}, &hrefOut); err == nil && strings.HasPrefix(hrefOut.Result.Value, ordinary) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !strings.HasPrefix(hrefOut.Result.Value, ordinary) {
+		t.Fatalf("step=unguarded-confirm-ordinary-href: href=%q", hrefOut.Result.Value)
+	}
+	t.Logf("step=unguarded-confirm-ordinary-href ok")
+
+	var openRaw rawJSON
+	env.p.evalWithin("linkTest.historyRestoreLockedOrdinaryExplicitOpen("+jsArgs(map[string]any{
+		"browser": browser, "hostTarget": host.target, "framePrefix": "http://frame.other.test:" + port, "lockSettleMs": 800, "callTimeoutMs": 60000,
+	})+")", &openRaw, 60*time.Second)
+	var open struct {
+		HostAttached    bool   `json:"hostAttached"`
+		HostAttachError string `json:"hostAttachError"`
+		Steps           []struct {
+			Name  string `json:"name"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(openRaw, &open); err != nil {
+		t.Fatalf("step=guarded-explicit-open-parse: %v", err)
+	}
+	for _, s := range open.Steps {
+		t.Logf("step=%s ok=%t err=%q", s.Name, s.OK, s.Error)
+	}
+	if open.HostAttachError != "" {
+		preHost, err := b.tryOpenPage(t, ordinary+"/ordinary")
+		step("open-ordinary-pre-seven", err)
+		host = preHost
+		env.p.evalWithin("linkTest.historyRestoreLockedOrdinaryExplicitOpen("+jsArgs(map[string]any{
+			"browser": browser, "hostTarget": host.target, "framePrefix": "http://frame.other.test:" + port, "lockSettleMs": 800, "callTimeoutMs": 60000,
+		})+")", &openRaw, 60*time.Second)
+		if err := json.Unmarshal(openRaw, &open); err != nil {
+			t.Fatalf("step=guarded-explicit-open-parse-retry: %v", err)
+		}
+		if open.HostAttachError != "" {
+			t.Fatalf("step=guarded-attach-host: %s", open.HostAttachError)
+		}
+		step("navigate-seven-after-pre-attach", host.session.Call(ctx, "Page.navigate", map[string]any{"url": seven + "/seven-host"}, nil))
+		time.Sleep(500 * time.Millisecond)
+		step("navigate-ordinary-after-seven", host.session.Call(ctx, "Page.navigate", map[string]any{"url": ordinary + "/ordinary"}, nil))
+	}
+
+	var lockRaw rawJSON
+	env.p.evalWithin("linkTest.historyRestoreLockedOrdinaryExplicitLockProbe("+jsArgs(map[string]any{
+		"browser": browser, "lockSettleMs": 800, "callTimeoutMs": 15000,
+	})+")", &lockRaw, 30*time.Second)
+	var lock struct {
+		Steps []struct {
+			Name string `json:"name"`
+			OK   bool   `json:"ok"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(lockRaw, &lock); err != nil {
+		t.Fatalf("step=guarded-lock-parse: %v", err)
+	}
+	lockOK := false
+	for _, s := range lock.Steps {
+		if s.Name == "guarded-lock-engaged" {
+			lockOK = s.OK
+		}
+	}
+	if !lockOK {
+		t.Fatalf("step=guarded-lock-engaged: not engaged")
+	}
+	t.Logf("step=guarded-lock-engaged ok")
+
+	inject := fmt.Sprintf(`(() => {
+  const blank = document.createElement('iframe');
+  blank.srcdoc = '<p id="srcdoc">same-process</p>';
+  document.body.appendChild(blank);
+  const about = document.createElement('iframe');
+  about.src = 'about:blank';
+  document.body.appendChild(about);
+  const marked = document.createElement('iframe');
+  marked.src = %q;
+  document.body.appendChild(marked);
+  return true;
+})()`, seven+"/seven-marked")
+	var injectOut struct {
+		Result struct {
+			Value bool `json:"value"`
+		} `json:"result"`
+	}
+	if err := host.session.Call(ctx, "Runtime.evaluate", map[string]any{"expression": inject, "returnByValue": true}, &injectOut); err != nil || !injectOut.Result.Value {
+		t.Fatalf("step=unguarded-inject-frames: err=%v value=%t", err, injectOut.Result.Value)
+	}
+	t.Logf("step=unguarded-inject-frames ok srcdoc+about:blank+oopif-marked")
+	time.Sleep(800 * time.Millisecond)
+
+	var probeRaw rawJSON
+	env.p.evalWithin("linkTest.historySetupProbeMarkers("+jsArgs(map[string]any{
+		"browser": browser, "protectedPrefix": seven, "marker": marker, "callTimeoutMs": 30000,
+	})+")", &probeRaw, 45*time.Second)
+	var probe struct {
+		Steps []struct {
+			Name  string `json:"name"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+			At    int64  `json:"at"`
+		} `json:"steps"`
+		BypassOK          bool   `json:"bypassOk"`
+		AutoAttachOK      bool   `json:"autoAttachOk"`
+		GetDocumentOK     bool   `json:"getDocumentOk"`
+		GetDocumentError  string `json:"getDocumentError"`
+		TargetTextRefusal bool   `json:"targetTextRefusal"`
+		DisableOK         bool   `json:"disableOk"`
+		DisableError      string `json:"disableError"`
+		ReplyClean        bool   `json:"replyClean"`
+		MarkerAbsent      bool   `json:"markerAbsent"`
+		PathLeak          bool   `json:"pathLeak"`
+		TreeNodeCount     int    `json:"treeNodeCount"`
+		MarkerHits        int    `json:"markerHits"`
+	}
+	if err := json.Unmarshal(probeRaw, &probe); err != nil {
+		t.Fatalf("step=probe-markers-parse: %v raw=%s", err, probeRaw)
+	}
+	rowsOK := 0
+	for _, s := range probe.Steps {
+		if s.OK {
+			rowsOK++
+			t.Logf("step=%s ok at+%dms", s.Name, s.At)
+		} else {
+			t.Logf("step=%s refused at+%dms err=%q", s.Name, s.At, s.Error)
+		}
+	}
+	lines := guardLines(env.a)
+	framesProt, iframeProt, measureRefused, worlds, protFrames, navFrames, reason, measureOK := childDocParseMeasure(lines)
+	if !probe.BypassOK {
+		t.Fatalf("step=bypass: want Network.setBypassServiceWorker ok")
+	}
+	if !probe.AutoAttachOK {
+		t.Fatalf("step=autoAttach: want Target.setAutoAttach ok")
+	}
+	if !probe.GetDocumentOK {
+		t.Fatalf("step=getDocument: want DOM.getDocument ok; err=%q targetTextRefusal=%t", probe.GetDocumentError, probe.TargetTextRefusal)
+	}
+	if !probe.ReplyClean {
+		t.Fatalf("step=replyClean: probe reply must not carry a protected document path")
+	}
+	if probe.PathLeak {
+		t.Fatalf("step=pathLeak: protected path must not leak in the probe reply")
+	}
+	if !probe.MarkerAbsent || probe.MarkerHits != 0 {
+		t.Fatalf("step=marker-absent: marker must be absent; hits=%d absent=%t", probe.MarkerHits, probe.MarkerAbsent)
+	}
+	if probe.TreeNodeCount < 1 {
+		t.Fatalf("step=treeNodeCount: want >= 1; got %d", probe.TreeNodeCount)
+	}
+	if !probe.DisableOK {
+		t.Fatalf("step=disable: want DOM.disable ok; err=%q", probe.DisableError)
+	}
+	t.Logf("ci-proof outcome branch=admit-clean measureLogged=%t framesProtected=%t iframeProtected=%t worlds=%d protectedFrames=%d navFrames=%d reason=%s getDocumentRefused=%t disableOk=%t disableError=%q",
+		measureOK, framesProt, iframeProt, worlds, protFrames, navFrames, reason, measureRefused, probe.DisableOK, probe.DisableError)
+	t.Logf("ci-proof rowsRun=%d rowsOK=%d replyClean=%t markerAbsent=%t markerHits=%d treeNodeCount=%d pathLeak=%t bypass=%t autoAttach=%t getDocument=%t getDocumentError=%q targetTextRefusal=%t disable=%t",
+		len(probe.Steps), rowsOK, probe.ReplyClean, probe.MarkerAbsent, probe.MarkerHits, probe.TreeNodeCount, probe.PathLeak, probe.BypassOK, probe.AutoAttachOK, probe.GetDocumentOK, probe.GetDocumentError, probe.TargetTextRefusal, probe.DisableOK)
+	t.Logf("ci-proof pin=admit-clean")
+	t.Logf("step=bios-probe-markers ok")
+	_ = hrExplicitClientClose(env)
 }

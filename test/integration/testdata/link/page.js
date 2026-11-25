@@ -588,6 +588,7 @@ globalThis.linkTest = {
   historyRestoreLockedOrdinaryExplicitLockProbe: (opts) => import('./ordinaryoopif.js').then((m) => m.measureHistoryRestoreLockedOrdinaryExplicitLockProbe(opts)),
   historyRestoreLockedOrdinaryExplicitAttach: (opts) => import('./ordinaryoopif.js').then((m) => m.measureHistoryRestoreLockedOrdinaryExplicitAttach(opts)),
   historySetupLockedOrdinarySetup: (opts) => import('./ordinaryoopif.js').then((m) => m.measureHistorySetupLockedOrdinarySetup(opts)),
+  historySetupProbeMarkers: (opts) => import('./ordinaryoopif.js').then((m) => m.measureHistorySetupProbeMarkers(opts)),
   historySetupWaitConfirmSettled: (opts) => import('./ordinaryoopif.js').then((m) => m.measureHistorySetupWaitConfirmSettled(opts)),
   historySetupLockedOrdinaryAutoChild: (opts) => import('./ordinaryoopif.js').then((m) => m.measureHistorySetupLockedOrdinaryAutoChild(opts)),
   childDocPierce: (opts) => import('./childdoc.js').then((m) => m.measureChildDocPierce(() => state.link, opts)),
