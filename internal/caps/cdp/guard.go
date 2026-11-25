@@ -195,6 +195,8 @@ type guard struct {
 	gone                     map[string]bool
 	goneOrder                []string
 	held                     map[string]*heldSession
+	confirmSeq               int64
+	confirmSecondReads       int
 	holdResumed              map[string]bool
 	holdResumedOrder         []string
 	heldContexts             map[heldContextKey]*heldContext
@@ -1685,7 +1687,8 @@ func (g *guard) markLocked(t *target) [][]byte {
 		t.protected = true
 		send = append(send, g.protectLocked(t)...)
 	}
-	return append(send, g.redecideWorkersLocked(t.id)...)
+	send = append(send, g.redecideWorkersLocked(t.id)...)
+	return append(send, g.hideHistoryHoldsForParentLocked(t.id)...)
 }
 
 func (g *guard) protectLocked(t *target) [][]byte {

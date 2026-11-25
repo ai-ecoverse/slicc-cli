@@ -61,6 +61,9 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		settled := g.settleHeldWorkersLocked()
 		verdict.send = append(verdict.send, settled.send...)
 		verdict.page = append(verdict.page, settled.page...)
+		unresolved := g.settleUnresolvedHistoryHoldsLocked()
+		verdict.send = append(verdict.send, unresolved.send...)
+		verdict.page = append(verdict.page, unresolved.page...)
 		verdict.page = append(verdict.page, g.takeContextSettlePageLocked()...)
 		verdict.send = append(verdict.send, g.takeContextSettleSendLocked()...)
 		verdict.send = append(verdict.send, frameSend...)
@@ -213,13 +216,9 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		return browserVerdict{forward: data, send: treeSend, page: treePage}
 	}
 	if kind == kindAttach {
-		if refused, cutSend := g.attachReplyCutLocked(attached, m, res); refused {
-			return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: append(treeSend, cutSend...), page: append(treePage, g.takePendingPageLocked()...)}
-		}
-		if held, holdSend, holdPage := g.holdDocConfirmReplyLocked(attached, m, res); held {
-			acceptedAttach = true
-			holdSend = append(holdSend, g.noteExplicitDocConfirmObserveLocked(attached)...)
-			return browserVerdict{send: append(treeSend, holdSend...), page: append(treePage, holdPage...)}
+		if v, handled, accepted := g.attachReplyHoldLocked(attached, m, res, treeSend, treePage); handled {
+			acceptedAttach = accepted
+			return v
 		}
 	}
 	send, hide := g.applyResultKindLocked(kind, attached, m.SessionID, res)
@@ -230,6 +229,21 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	}
 	m.Result = encode(res)
 	return browserVerdict{forward: encode(m), send: send, page: treePage}
+}
+
+func (g *guard) attachReplyHoldLocked(attached string, m *message, res map[string]any, treeSend, treePage [][]byte) (browserVerdict, bool, bool) {
+	if refused, cutSend := g.attachReplyCutLocked(attached, m, res); refused {
+		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: append(treeSend, cutSend...), page: append(treePage, g.takePendingPageLocked()...)}, true, false
+	}
+	if held, holdSend, holdPage := g.holdHistoryAttachReplyLocked(attached, m, res); held {
+		sid, _ := res["sessionId"].(string)
+		return browserVerdict{send: append(treeSend, holdSend...), page: append(treePage, holdPage...), hold: []string{sid}}, true, true
+	}
+	if held, holdSend, holdPage := g.holdDocConfirmReplyLocked(attached, m, res); held {
+		holdSend = append(holdSend, g.noteExplicitDocConfirmObserveLocked(attached)...)
+		return browserVerdict{send: append(treeSend, holdSend...), page: append(treePage, holdPage...)}, true, true
+	}
+	return browserVerdict{}, false, false
 }
 
 func (g *guard) applyResultKindLocked(kind callKind, attached, session string, res map[string]any) ([][]byte, bool) {
@@ -610,6 +624,10 @@ func (g *guard) attachedUnderHeldLocked(m *message, data []byte) browserVerdict 
 }
 
 func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bool, info targetInfo, send [][]byte) (browserVerdict, bool) {
+	return g.attachedHideOrHoldDecisionLocked(m, pSession, waiting, info, send, true)
+}
+
+func (g *guard) attachedHideOrHoldDecisionLocked(m *message, pSession string, waiting bool, info targetInfo, send [][]byte, allowHistory bool) (browserVerdict, bool) {
 	if workerTypes[info.Type] && g.sessionRefusedLocked(m.SessionID) {
 		if t := g.targets[info.TargetID]; t != nil {
 			t.protected = true
@@ -633,6 +651,11 @@ func (g *guard) attachedHideOrHoldLocked(m *message, pSession string, waiting bo
 	}
 	if v, handled := g.holdFailedLoadAttachLocked(m, pSession, waiting, info, send); handled {
 		return v, true
+	}
+	if allowHistory {
+		if v, handled := g.historyHoldAttachLocked(m, pSession, waiting, info, send); handled {
+			return v, true
+		}
 	}
 	if g.workerUnresolvedLocked(g.targets[info.TargetID]) || g.iframeUnresolvedLocked(g.targets[info.TargetID]) {
 		return browserVerdict{send: append(send, g.holdLocked(m.SessionID, g.attachedHoldParams(m, pSession, waiting, info), info, waiting)...), hold: []string{pSession}}, true
@@ -742,9 +765,12 @@ func (g *guard) detachedEvent(m *message, data []byte) browserVerdict {
 		g.logf("cdp: Chrome detached a held auto-attached session target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 		delete(g.held, p.SessionID)
 		g.refuseHeldWaitLocked(h.target)
+		if h.historyParent != "" || h.historyUnresolved {
+			g.answerHistoryHeldReplyLocked(h)
+		}
 		part := g.detachAnnouncedTabsForPageLocked(h, true, "destroy-while-held")
 		g.forgetSessionLocked(p.SessionID)
-		return browserVerdict{send: append(send, part.send...), page: append(append(page, part.page...), g.takePendingPageLocked()...)}
+		return browserVerdict{send: append(send, part.send...), page: append(append(append(page, part.page...), g.takeAnsweredHeldLocked()...), g.takePendingPageLocked()...)}
 	}
 	if g.hidden[p.SessionID] {
 		delete(g.hidden, p.SessionID)

@@ -15,20 +15,51 @@ func holdTimeout() time.Duration {
 }
 
 type heldSession struct {
-	id         string
-	parent     string
-	adoptedTab string
-	target     string
-	typ        string
-	params     map[string]any
-	waiting    bool
-	resumed    bool
-	at         time.Time
+	id                   string
+	parent               string
+	adoptedTab           string
+	target               string
+	typ                  string
+	params               map[string]any
+	waiting              bool
+	resumed              bool
+	at                   time.Time
+	historyParent        string
+	historySnap          docIdentity
+	historyUnresolved    bool
+	historyAttachMinSeq  int64
+	historyConfirmMinSeq int64
+	historyReadSeqs      []int64
+	historyDeadline      bool
+	historyReadStamped   bool
+	hasReply             bool
+	replyID              int64
+	replySid             string
+	reply                []byte
 }
 
 func (g *guard) holdLocked(parent string, params map[string]any, info targetInfo, waiting bool) [][]byte {
 	sid, _ := params["sessionId"].(string)
 	h := &heldSession{id: sid, parent: parent, target: info.TargetID, typ: info.Type, params: params, waiting: waiting, at: time.Now()}
+	if prev := g.held[sid]; prev != nil {
+		h.historyParent = prev.historyParent
+		h.historySnap = prev.historySnap
+		h.historyUnresolved = prev.historyUnresolved
+		h.historyAttachMinSeq = prev.historyAttachMinSeq
+		h.historyConfirmMinSeq = prev.historyConfirmMinSeq
+		h.historyReadSeqs = append([]int64(nil), prev.historyReadSeqs...)
+		h.historyDeadline = prev.historyDeadline
+		h.historyReadStamped = prev.historyReadStamped
+		h.hasReply = prev.hasReply
+		h.replyID = prev.replyID
+		h.replySid = prev.replySid
+		h.reply = prev.reply
+		h.resumed = prev.resumed
+		h.adoptedTab = prev.adoptedTab
+		if h.params == nil {
+			h.params = prev.params
+		}
+	}
 	if !holdResumeUnheldEnabled() {
 		g.held[sid] = h
 	}
@@ -318,6 +349,9 @@ func (g *guard) releaseLocked(targetID string, info any) browserVerdict {
 		if h.target != targetID {
 			continue
 		}
+		if h.historyParent != "" || h.historyUnresolved {
+			continue
+		}
 		if workerTypes[h.typ] && g.workerUnresolvedLocked(g.targets[targetID]) {
 			continue
 		}
@@ -419,7 +453,7 @@ func (g *guard) settleHeldWorkersLocked() browserVerdict {
 	}
 	for _, sid := range ids {
 		h := g.held[sid]
-		if h == nil {
+		if h == nil || h.historyParent != "" || h.historyUnresolved {
 			continue
 		}
 		t := g.targets[h.target]
@@ -564,6 +598,22 @@ func (g *guard) expireHold(sessionID string) (page, send [][]byte) {
 	if !ok {
 		return nil, nil
 	}
+	if h.historyParent != "" || h.historyUnresolved {
+		waited := time.Since(h.at).Milliseconds()
+		h.historyDeadline = true
+		if h.historyUnresolved {
+			g.logf("cdp: unresolved-owner child reached deadline kind=%s session=%s waitedMs=%d attachSeq=%d readSeqs=%v secondReads=%d", h.typ, h.id, waited, h.historyAttachMinSeq, h.historyReadSeqs, historyHoldSecondReads(h))
+		} else {
+			g.logf("cdp: a history-locked child hold reached its deadline target=%s session=%s parent=%s waiting=%t attachSeq=%d readSeqs=%v secondReads=%d", h.target, h.id, h.parent, h.waiting, h.historyAttachMinSeq, h.historyReadSeqs, historyHoldSecondReads(h))
+		}
+		deliver := !historyRestoreDeadlineHides()
+		if h.historyUnresolved {
+			deliver = !historyRestoreUnresolvedDeadlineHides()
+		}
+		part := g.deliverHistoryHoldLocked(h, deliver, 0)
+		g.resolveUnknownLocked()
+		return append(part.page, g.takeAnsweredHeldLocked()...), part.send
+	}
 	delete(g.held, sessionID)
 	g.logf("cdp: an auto-attached target never got a URL target=%s session=%s parent=%s waiting=%t", h.target, h.id, h.parent, h.waiting)
 	send = g.noteDocConfirmObserveLocked(h.target, "F")
@@ -579,9 +629,13 @@ func (g *guard) dropHeldLocked(targetID string) (page, send [][]byte) {
 			continue
 		}
 		delete(g.held, sid)
+		if h.historyParent != "" || h.historyUnresolved {
+			g.answerHistoryHeldReplyLocked(h)
+		}
 		part := g.hideHeldPageAndTabsLocked(h, true, "destroy-while-held")
 		send = append(send, part.send...)
 		page = append(page, part.page...)
+		page = append(page, g.takeAnsweredHeldLocked()...)
 	}
 	return page, send
 }

@@ -27,13 +27,17 @@ func (g *guard) confirmTargetLocked(nt *navTarget) [][]byte {
 		return nil
 	}
 	nt.confirming = true
+	g.confirmSeq++
+	issued := g.confirmSeq
+	check.issuedSeq = issued
 	revision := nt.revision
+	g.noteHistoryHoldConfirmIssuedLocked(nt.target, issued)
 	return [][]byte{g.callbackLocked(nt.session, "Page.getFrameTree", nil, func(m message) [][]byte {
-		return g.confirmedTargetLocked(nt, check, revision, m)
+		return g.confirmedTargetLocked(nt, check, revision, issued, m)
 	})}
 }
 
-func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m message) [][]byte {
+func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, issuedSeq int64, m message) [][]byte {
 	if g.navTargets[nt.target] != nt {
 		return nil
 	}
@@ -60,29 +64,30 @@ func (g *guard) confirmedTargetLocked(nt, check *navTarget, revision int, m mess
 	var frame confirmFrame
 	if m.Error != nil || json.Unmarshal(m.Result, &result) != nil || json.Unmarshal(result.FrameTree.Frame, &frame) != nil || frame.ID != nt.target || (frame.ParentID != "" && !nt.iframe) {
 		check.settle(true)
+		hide := g.releaseHistoryHoldsForConfirmLocked(nt.target, false, issuedSeq)
 		if check.failedLoadGen != g.errorProofGenOfLocked(nt.target) {
-			return nil
+			return hide
 		}
 		t := g.targets[nt.target]
 		if t != nil && !nt.iframe && chromeErrorDocument(t.url) && g.heldFailedLoadLocked(t.id) {
 			g.setErrorProofLocked(t.id, errorProofFailed)
-			return g.finishFailedLoadHeldLocked(t.id, true)
+			return append(hide, g.finishFailedLoadHeldLocked(t.id, true)...)
 		}
-		return nil
+		return hide
 	}
 	t := g.targets[nt.target]
 	if t == nil || t.gone {
 		check.settle(true)
-		return nil
+		return g.releaseHistoryHoldsForConfirmLocked(nt.target, false, issuedSeq)
 	}
 	if nt.iframe {
 		if send, blocked := g.confirmIframeParentLocked(t, frame.ParentID); blocked {
 			check.reason = g.frameParentReasonLocked(t, frame.ParentID)
 			check.settle(true)
-			return send
+			return append(send, g.releaseHistoryHoldsForConfirmLocked(nt.target, false, issuedSeq)...)
 		}
 	}
-	send := g.confirmFrameDocumentLocked(nt, check, t, frame, result.FrameTree.Frame)
+	send := g.confirmFrameDocumentLocked(nt, check, t, frame, result.FrameTree.Frame, issuedSeq)
 	if check.failedLoadGen != g.errorProofGenOfLocked(nt.target) {
 		return send
 	}
@@ -93,29 +98,35 @@ type confirmFrame struct {
 	ID             string `json:"id"`
 	ParentID       string `json:"parentId"`
 	URL            string `json:"url"`
+	LoaderID       string `json:"loaderId"`
 	SecurityOrigin string `json:"securityOrigin"`
 	UnreachableURL string `json:"unreachableUrl"`
 }
 
-func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, frame confirmFrame, raw json.RawMessage) [][]byte {
+func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, frame confirmFrame, raw json.RawMessage, issuedSeq int64) [][]byte {
 	g.noteFrameKeptLocked(nt, frame.URL, frame.SecurityOrigin)
+	if frame.LoaderID != "" {
+		nt.loaderID = frame.LoaderID
+	}
 	g.noteErrorPageSnapshotLocked(nt, frame.URL, frame.SecurityOrigin, frame.UnreachableURL)
 	if g.o.Loaded(frame.URL) || g.o.Loaded(frame.SecurityOrigin) {
 		check.settle(false)
-		return g.markLocked(t)
+		send := g.markLocked(t)
+		return append(send, g.releaseHistoryHoldsForConfirmLocked(nt.target, false, issuedSeq)...)
 	}
 	if inheritedDocument(frame.URL, frame.UnreachableURL) {
 		if g.o.Target(frame.URL, t.protected, g.openerState(t)) || !g.ordinaryFrameParentLocked(t, frame.ParentID) {
 			check.reason = g.frameParentReasonLocked(t, frame.ParentID)
 			check.settle(true)
-			return nil
+			return g.releaseHistoryHoldsForConfirmLocked(nt.target, false, issuedSeq)
 		}
 		check.settle(false)
-		return nil
+		g.stampHistoryHoldReadIdentityLocked(nt.target, frame)
+		return g.releaseHistoryHoldsForConfirmLocked(nt.target, true, issuedSeq)
 	}
 	if frame.SecurityOrigin == "" {
 		check.settle(true)
-		return nil
+		return g.releaseHistoryHoldsForConfirmLocked(nt.target, false, issuedSeq)
 	}
 	ev := protect.Evidence{DocumentURL: frame.URL, UnreachableURL: frame.UnreachableURL}
 	if protect.ErrorPage(frame.UnreachableURL, ev) && !protect.Inheriting(frame.UnreachableURL) {
@@ -124,10 +135,11 @@ func (g *guard) confirmFrameDocumentLocked(nt, check *navTarget, t *target, fram
 	}
 	if frame.URL == "" || protect.Inheriting(frame.URL) || protect.Unparseable(frame.URL) || frame.UnreachableURL != "" {
 		check.settle(true)
-		return nil
+		return g.releaseHistoryHoldsForConfirmLocked(nt.target, false, issuedSeq)
 	}
 	check.settle(false)
-	return nil
+	g.stampHistoryHoldReadIdentityLocked(nt.target, frame)
+	return g.releaseHistoryHoldsForConfirmLocked(nt.target, true, issuedSeq)
 }
 
 func (g *guard) confirmIframeParentLocked(t *target, parentID string) ([][]byte, bool) {
