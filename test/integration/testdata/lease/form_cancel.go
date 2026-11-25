@@ -56,14 +56,10 @@ func (f *formCDP) Write(_ context.Context, _ websocket.MessageType, data []byte)
 	return nil
 }
 func TestParkedFormResultCannotOutliveAuthority(t *testing.T) {
-	for _, expire := range []bool{false, true} {
-		name := "revoke"
-		if expire {
-			name = "expire"
-		}
+	for _, name := range []string{"revoke", "expire", "blocked-result"} {
 		t.Run(name, func(t *testing.T) {
 			exp := time.Now().Unix() + 120
-			if expire {
+			if name == "expire" {
 				exp = time.Now().Unix() + 2
 			}
 			ctx, cancel := context.WithDeadline(t.Context(), time.Unix(exp, 0))
@@ -82,7 +78,13 @@ func TestParkedFormResultCannotOutliveAuthority(t *testing.T) {
 			returned := make(chan bool, 1)
 			done := make(chan error, 1)
 			go func() {
-				done <- b.action(t.Context(), a, "click", json.RawMessage(`{"ref":"`+p+`_1"}`), func(any) bool { returned <- true; return true })
+				done <- b.action(t.Context(), a, "click", json.RawMessage(`{"ref":"`+p+`_1"}`), func(any) bool {
+					if name == "blocked-result" {
+						return false
+					}
+					returned <- true
+					return true
+				})
 			}()
 			select {
 			case <-f.sent:
@@ -91,15 +93,15 @@ func TestParkedFormResultCannotOutliveAuthority(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("did not dispatch")
 			}
-			if expire {
+			if name == "expire" {
 				<-ctx.Done()
-			} else {
+			} else if name == "revoke" {
 				b.mu.Lock()
 				b.retire(a.ID, true)
 				b.mu.Unlock()
 			}
 			close(f.release)
-			if e := <-done; e != unknown && e != retired {
+			if e := <-done; e != unknown {
 				t.Fatalf("stale result %v", e)
 			}
 			if !a.submitted {

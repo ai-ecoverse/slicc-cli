@@ -274,6 +274,13 @@ func (b *Broker) currentAt(c claims, now time.Time) (*active, error) {
 	}
 	return a, nil
 }
+func withheldResult(op string, fallback refusal) refusal {
+	if op == "click" || op == "fill" {
+		return unknown
+	}
+	return fallback
+}
+
 func (b *Broker) action(parent context.Context, a *active, op string, args json.RawMessage, send func(any) bool) error {
 	var dest string
 	switch op {
@@ -322,17 +329,14 @@ func (b *Broker) action(parent context.Context, a *active, op string, args json.
 	defer b.bs.mu.Unlock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.closed || b.active[a.ID] != a || time.Now().Unix() >= a.Exp {
-		return retired
+	if ctx.Err() != nil || b.closed || b.active[a.ID] != a || time.Now().Unix() >= a.Exp {
+		return withheldResult(op, retired)
 	}
 	if a.tab.generation != st.gen {
-		if op == "click" || op == "fill" {
-			return unknown
-		}
-		return denied
+		return withheldResult(op, denied)
 	}
 	if !send(result) {
-		return busy
+		return withheldResult(op, busy)
 	}
 	return nil
 }
