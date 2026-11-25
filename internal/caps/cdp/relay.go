@@ -44,6 +44,22 @@ func (r *Registry) Handler() link.Handler {
 }
 
 func (r *Registry) serve(s *link.Stream) {
+	r.serveStream(s)
+}
+
+type relayStream interface {
+	io.ReadWriter
+	OpenPayload() json.RawMessage
+	Done() <-chan struct{}
+	Accept(any) error
+	Reset(string) error
+	CloseWrite() error
+	ReserveAllocation(int, bool) *link.Reservation
+	WaitWritable(context.Context, int) error
+	TryWrite([]byte) (bool, error)
+}
+
+func (r *Registry) serveStream(s relayStream) {
 	var req Open
 	if err := json.Unmarshal(s.OpenPayload(), &req); err != nil || req.Browser == "" {
 		_ = s.Reset("EPROTO: cdp OPEN needs a browser")
@@ -223,7 +239,7 @@ type parkKey struct {
 
 type relay struct {
 	reader *messageReader
-	s      *link.Stream
+	s      relayStream
 	conn   *websocket.Conn
 	logf   func(format string, args ...any)
 	id     string
@@ -495,6 +511,24 @@ func filtered(data []byte) bool {
 	return false
 }
 
+func (rl *relay) forward(ctx context.Context, original, out []byte) error {
+	if local, ok := rl.s.(*localStream); ok {
+		var head struct{ ID int64 }
+		if json.Unmarshal(original, &head) != nil {
+			return errLocal
+		}
+		v, live := local.calls.Load(head.ID)
+		if !live {
+			return nil
+		}
+		ctx = v.(context.Context)
+		if ctx.Err() != nil {
+			return nil
+		}
+	}
+	return rl.conn.Write(ctx, websocket.MessageText, out)
+}
+
 func (rl *relay) toBrowser() {
 	ctx := context.Background()
 	var hdr [4]byte
@@ -542,7 +576,7 @@ func (rl *relay) toBrowser() {
 		if out == nil {
 			continue
 		}
-		if err := rl.conn.Write(ctx, websocket.MessageText, out); err != nil {
+		if err := rl.forward(ctx, buf, out); err != nil {
 			if rl.browserDone.Load() {
 				continue
 			}

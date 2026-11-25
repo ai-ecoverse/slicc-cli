@@ -43,6 +43,7 @@ wait, and the control socket's ops. It reads nothing and asks no network.
 `
 
 type commandInfo struct {
+	CDPLeaseV1 bool   `json:"cdpLeaseV1,omitempty"`
 	JSON       string `json:"json"`
 	Vocabulary string `json:"vocabulary,omitempty"`
 }
@@ -53,7 +54,7 @@ var commandTable = map[string]commandInfo{
 	"open":         {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"pair":         {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"unpair":       {JSON: jsonDocument},
-	"follow":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
+	"follow":       {JSON: jsonEvents, Vocabulary: vocabularyEvents, CDPLeaseV1: true},
 	"tray":         {JSON: jsonDocument},
 	"prompt":       {JSON: jsonEvents, Vocabulary: vocabularyAgent},
 	"watch":        {JSON: jsonEvents, Vocabulary: vocabularyAgent},
@@ -63,6 +64,7 @@ var commandTable = map[string]commandInfo{
 	"approvals":    {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"decide":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"cdp":          {JSON: jsonEvents, Vocabulary: vocabularyEvents},
+	"lease":        {JSON: jsonNone},
 	"browsers":     {JSON: jsonDocument},
 	"launch":       {JSON: jsonEvents, Vocabulary: vocabularyEvents},
 	"update":       {JSON: jsonNone},

@@ -26,6 +26,7 @@ import (
 	wscap "github.com/ai-ecoverse/slicc-cli/internal/caps/ws"
 	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
+	"github.com/ai-ecoverse/slicc-cli/internal/lease"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
 	"github.com/ai-ecoverse/slicc-cli/internal/node"
 	"github.com/ai-ecoverse/slicc-cli/internal/policy"
@@ -53,6 +54,7 @@ stdin, and with @<file> from the first line of that file, so it stays out of
 the command line, where ps shows it to every user of this machine.
 
 flags:
+  --lease-browser <loopback-http-origin>  exclusive signed lease broker; requires --name
   --native-screen      native app view provider through inherited private bootstrap (off by default)
   --native-screen-proof  content-free verifier diagnostics (requires --native-screen --json)
   --exit               offer this machine's network to seven (tcp, resolve,
@@ -76,6 +78,7 @@ machine can read, and unless :ro, change the folders listed.
 ` + debugPortsHelp
 
 type followFlags struct {
+	leaseBrowser      string
 	exit              bool
 	nativeScreen      bool
 	nativeScreenProof bool
@@ -125,6 +128,7 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	fs := flag.NewFlagSet("follow", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&f.exit, "exit", false, "")
+	fs.StringVar(&f.leaseBrowser, "lease-browser", "", "")
 	fs.BoolVar(&f.nativeScreen, "native-screen", false, "")
 	fs.BoolVar(&f.nativeScreenProof, "native-screen-proof", false, "")
 	fs.StringVar(&f.name, "name", "", "")
@@ -150,6 +154,10 @@ func parseFollow(args []string, stdout, stderr io.Writer) (followFlags, int) {
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "slicc follow: unexpected arguments\n\n%s", followUsage)
+		return f, 2
+	}
+	if err := validateLeaseFollow(fs, f); err != nil {
+		fmt.Fprintln(stderr, err)
 		return f, 2
 	}
 	if f.nativeScreenProof && (!f.nativeScreen || !f.json) {
@@ -224,6 +232,7 @@ type followEvent struct {
 }
 
 type followRun struct {
+	lease    *lease.Broker
 	f        *tray.Follower
 	joinURL  string
 	hub      string
@@ -273,6 +282,7 @@ func newFollowRunUsing(joinURL string, ff followFlags, st *stopper, stderr io.Wr
 	if r.certs, err = tray.OpenDefaultCerts(); err != nil {
 		return nil, errors.New("no user config directory")
 	}
+	logf = r.leaseIsolation(ff, logf)
 	if r.f, err = tray.NewFollower(tray.Config{JoinURL: joinURL, State: r.state, Logf: logf}); err != nil {
 		return nil, err
 	}
@@ -280,6 +290,9 @@ func newFollowRunUsing(joinURL string, ff followFlags, st *stopper, stderr io.Wr
 	cert, err := r.certificate()
 	if err != nil {
 		return nil, err
+	}
+	if ff.leaseBrowser != "" {
+		return r.leaseOnly(ff, st, cert)
 	}
 	pol := policy.Remote().With(ff.allow, ff.deny)
 	guardCtx, stopGuard := context.WithCancel(context.Background())
@@ -427,6 +440,9 @@ func (r *followRun) onLinkWithin(l *link.Link, timeout time.Duration) {
 			conn.Settle()
 			h, _ := l.PeerHello()
 			name := leaderName(h)
+			if r.lease != nil {
+				name = "paired lease peer"
+			}
 			_ = r.certs.SetLeader(r.hub, name)
 			r.emit(followEvent{kind: evUp, name: name, conn: conn})
 			<-l.Done()
@@ -544,6 +560,11 @@ func (r *followRun) once(ctx context.Context) (int, followOutcome) {
 	sess, err := r.f.Dial(ctx)
 	if err != nil {
 		return r.failed(ctx, err, false)
+	}
+	if r.lease != nil && sess.Trust() != "full" {
+		_ = sess.Close()
+		r.status("lease link requires a paired, non-guest tray")
+		return 1, outcomeStop
 	}
 	r.ctl.SetState(ctl.StateOffer)
 	conn := tray.NewConn(sess)

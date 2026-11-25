@@ -37,6 +37,7 @@
       "vocabulary": "events"
     },
     "follow": {
+      "cdpLeaseV1": true,
       "json": "events",
       "vocabulary": "events"
     },
@@ -49,6 +50,9 @@
     "launch": {
       "json": "events",
       "vocabulary": "events"
+    },
+    "lease": {
+      "json": "none"
     },
     "open": {
       "json": "events",
@@ -186,7 +190,11 @@
       "leases",
       "unseal",
       "seal-off",
-      "seal-on"
+      "seal-on",
+      "cdp-lease-list",
+      "cdp-lease-approve",
+      "cdp-lease-deny",
+      "cdp-lease-revoke"
     ]
   }
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 var version = "dev"
@@ -39,6 +40,7 @@ usage:
   slicc <join-url> cdp [--port <n>]
                             serve seven's browser as a CDP endpoint on this
                             machine, for Playwright and Puppeteer
+  slicc lease review|grant|status|deny|revoke   manage a signed, scoped browser lease
   slicc browsers            list CDP endpoints and installed browsers, ranked
   slicc launch              launch a browser with CDP in a separate SLICC profile
   slicc update [--check]    replace this binary with the latest release
@@ -51,6 +53,9 @@ usage:
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "capabilities" {
 		return runCapabilities(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "lease" {
+		return runLease(args[1:], stdout, stderr)
 	}
 	resumed = takeResume()
 	companionsOnPath()
@@ -95,6 +100,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return joinCommand(append([]string{join}, args[1:]...), stdout, stderr)
 		}
 		if looksLikeURL(args[0]) {
+			for _, arg := range args[1:] {
+				if strings.SplitN(strings.TrimLeft(arg, "-"), "=", 2)[0] == "lease-browser" {
+					fmt.Fprintln(stderr, "slicc: use - follow and pass the join URL on stdin for a lease-only link")
+					return 2
+				}
+			}
 			return joinCommand(args, stdout, stderr)
 		}
 		if six := sixFlagIn(args); six != "" {
