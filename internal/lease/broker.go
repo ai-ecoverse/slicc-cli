@@ -160,7 +160,7 @@ func (b *Broker) register(jkt string, o open, done <-chan struct{}) (*pending, e
 			return nil, invalid
 		}
 		for _, r := range o.Allow {
-			if slices.Contains(a.Allow, r) {
+			if r.Kind != "exact" || slices.Contains(a.Allow, r) {
 				return nil, invalid
 			}
 		}
