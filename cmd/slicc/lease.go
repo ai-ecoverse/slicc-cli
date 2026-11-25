@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -110,10 +111,12 @@ type ownerFlags struct {
 
 var errLeaseUsage = errors.New(strings.TrimSpace(leaseUsage))
 
+var brokerID = regexp.MustCompile(`^[A-Za-z0-9_-]{24}$`)
+
 func parseOwner(args []string) (ownerFlags, error) {
 	f := ownerFlags{op: args[0]}
 	args = args[1:]
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	if len(args) > 0 && (f.op == "grant" || f.op == "deny" || f.op == "revoke") && brokerID.MatchString(args[0]) {
 		f.target = args[0]
 		args = args[1:]
 	}
