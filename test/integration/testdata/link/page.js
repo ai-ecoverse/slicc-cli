@@ -364,6 +364,7 @@ const loopbackTest = {
 if (params.has('lease')) {
   const {leaseFixture} = await import('./lease.js');
   globalThis.leaseTest = leaseFixture(() => state.link);
+  globalThis.otherHolder = leaseFixture(() => state.link);
   globalThis.leaseFingerprint = () => loadCertificate('lease-fixture').then(certificateFingerprint);
 }
 
