@@ -137,7 +137,7 @@ func (g *guard) frameEventLocked(m *message) [][]byte {
 		}
 		if p.Frame.ID == id && p.Frame.ParentID == "" {
 			if page := g.targets[id]; page != nil && page.typ == "page" {
-				g.rootDocumentLocked(page, p.Frame.LoaderID)
+				g.commitRootDocumentLocked(page, p.Frame.LoaderID)
 			}
 			delete(g.frames, id)
 		}

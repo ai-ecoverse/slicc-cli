@@ -2196,13 +2196,13 @@ func TestChildDocMarkClearedOnRootDocument(t *testing.T) {
 	g.mu.Lock()
 	page := &target{id: "PAGE", typ: "page", url: cdOrdinary, ctx: "default", document: "L0", documentRevision: 1, childDocDOMBlocked: true}
 	g.targets["PAGE"] = page
-	g.worlds["PAGE"] = &worldSet{contexts: map[int64]*worldCtx{1: {frame: "F", protectedFrame: "F"}}}
-	g.rootDocumentLocked(page, "L1")
+	g.worlds["PAGE"] = &worldSet{contexts: map[int64]*worldCtx{1: {frame: "F", protectedFrame: "F", markLatch: true}}}
+	g.commitRootDocumentLocked(page, "L1")
 	if page.childDocDOMBlocked {
-		t.Fatalf("rootDocument must clear childDocDOMBlocked")
+		t.Fatalf("a new committed document must clear childDocDOMBlocked")
 	}
 	if g.worlds["PAGE"].contexts[1].protectedFrame != "" {
-		t.Fatalf("rootDocument must clear world protectedFrame latches")
+		t.Fatalf("a new committed document must clear the mark's protectedFrame latches")
 	}
 	g.mu.Unlock()
 }
