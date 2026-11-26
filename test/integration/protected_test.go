@@ -44,7 +44,7 @@ func TestProtectedVectors(t *testing.T) {
 			t.Fatalf("target vector %+v: unknown opener", c)
 		}
 		typ := typed.Targets[i].Type
-		ev := protect.Evidence{DocumentURL: c.DocumentURL, UnreachableURL: c.UnreachableURL, Navigating: c.Navigating}
+		ev := protect.Evidence{DocumentURL: c.DocumentURL, UnreachableURL: c.UnreachableURL, Navigating: c.Navigating, ContextOrigin: c.ContextOrigin}
 		if got := o.TargetWith(c.URL, typ, c.Previous, op, ev); got != c.Protected {
 			t.Errorf("Target(%+v, type %q) = %v", c, typ, got)
 		}

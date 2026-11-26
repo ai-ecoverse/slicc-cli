@@ -17,7 +17,7 @@ func defaultContextOf(c execContext, t *target) bool {
 }
 
 func contextOriginProtected(o *protect.Origins, origin string) bool {
-	return o.Loaded(origin)
+	return o.Loaded(origin) || protect.AboutLookalike(origin)
 }
 
 func defaultContextProtected(o *protect.Origins, c execContext, t *target) bool {

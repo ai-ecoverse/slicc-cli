@@ -48,7 +48,7 @@ func contextMarkOverlayRun(t *testing.T, mutant, run, row string) {
 }
 
 func TestCDPDefaultContextMarkEdges(t *testing.T) {
-	contextMarkOverlayRun(t, "", "^TestDefaultContextMark(Holds|PagesApart|InheritedBlank|Reason|EmptyLoader|TargetReuse|URLLagHeldByHistory|SetupLatch)$", "")
+	contextMarkOverlayRun(t, "", "^TestDefaultContextMark(Holds|PagesApart|InheritedBlank|Reason|EmptyLoader|TargetReuse|URLLagHeldByHistory|SetupLatch|Lookalike)$", "")
 }
 
 func TestCDPDefaultContextMarkMutants(t *testing.T) {
@@ -70,6 +70,7 @@ func TestCDPDefaultContextMarkMutants(t *testing.T) {
 		{"mutation_nobaseline.go", "EmptyLoader", "late-old-commit-is-baseline"},
 		{"mutation_notreeread.go", "EmptyLoader", "tree-baseline-then-commit-clears"},
 		{"mutation_firstcommitclears.go", "EmptyLoader", "new-document-before-baseline-holds-then-next-clears"},
+		{"mutation_lookalikeclears.go", "Holds", "commit-then-lookalike-context"},
 		{"mutation_noforget.go", "TargetReuse", ""},
 	} {
 		t.Run(m.mutant, func(t *testing.T) {
