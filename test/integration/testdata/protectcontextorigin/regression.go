@@ -27,8 +27,8 @@ func TestContextOriginVectors(t *testing.T) {
 			t.Errorf("vector %+v: got %v", c, got)
 		}
 	}
-	if n != 14 {
-		t.Fatalf("%d contextOrigin vectors, want 14", n)
+	if n != 25 {
+		t.Fatalf("%d contextOrigin vectors, want 25", n)
 	}
 }
 
