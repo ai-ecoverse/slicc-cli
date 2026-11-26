@@ -24,6 +24,7 @@ type worldCtx struct {
 	defaultWorld   bool
 	frame          string
 	protectedFrame string
+	markLatch      bool
 	unique         string
 	name           string
 	placeSeq       uint64
@@ -569,6 +570,7 @@ func (g *guard) hideContextLocked(target, session string, c execContext) {
 		}
 		if frame != "" {
 			wc.protectedFrame = frame
+			wc.markLatch = false
 		}
 		return
 	}
@@ -679,6 +681,7 @@ func (g *guard) latchHiddenUnderProtectedLocked(cut map[string]bool) {
 				continue
 			}
 			wc.protectedFrame = wc.frame
+			wc.markLatch = false
 			cut[target] = true
 			g.logf("cdp: a hidden execution context locks its page's frame content once its frame is protected target=%s frame=%s", target, wc.frame)
 		}

@@ -37,10 +37,18 @@ func (g *guard) rootDocumentLocked(page *target, loader string) {
 	}
 	page.document = loader
 	page.documentRevision++
+	g.forgetExtensionProbeWorldsForTargetLocked(page.id)
+}
+
+func (g *guard) commitRootDocumentLocked(page *target, loader string) {
+	same := page.document != "" && page.document == loader
+	g.rootDocumentLocked(page, loader)
+	if same {
+		return
+	}
 	page.childDocDOMBlocked = false
 	delete(g.childDocMeasureLogged, page.id)
 	g.clearChildDocWorldLatchesLocked(page.id)
-	g.forgetExtensionProbeWorldsForTargetLocked(page.id)
 }
 
 func (g *guard) probeIframeOwnersLocked() [][]byte {

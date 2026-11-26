@@ -531,8 +531,9 @@ func (g *guard) clearChildDocWorldLatchesLocked(pageID string) {
 		return
 	}
 	for _, wc := range w.contexts {
-		if wc != nil {
+		if wc != nil && wc.markLatch {
 			wc.protectedFrame = ""
+			wc.markLatch = false
 		}
 	}
 }
@@ -557,8 +558,9 @@ func (g *guard) applyChildDocMarksLocked(session string, st *childDocStripState)
 		}
 		w := g.worldsLocked(page.id)
 		for _, wc := range w.contexts {
-			if wc != nil && wc.frame == frameID {
+			if wc != nil && wc.frame == frameID && wc.protectedFrame == "" {
 				wc.protectedFrame = frameID
+				wc.markLatch = true
 			}
 		}
 	}
