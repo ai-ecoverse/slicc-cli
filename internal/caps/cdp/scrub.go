@@ -50,6 +50,13 @@ func (g *guard) scrub(data []byte) []byte {
 	if !ok {
 		return data
 	}
+	childDocs, refuse := g.scrubChildDocuments(m)
+	if refuse {
+		if refused := childDocRefuseMessage(m, nil, ""); refused != nil {
+			return refused
+		}
+		return data
+	}
 	carriers := frameCarrierClassifyFirst() && g.scrubFrameCarriers(m)
 	stripped := stripExtensionFrameMarkers(m)
 	worlds := g.scrubWorlds(m)
@@ -62,7 +69,7 @@ func (g *guard) scrub(data []byte) []byte {
 	}
 	marked := g.markExtensionFramePlacement(m)
 	routed := g.markSliccRoute(m)
-	if !carriers && !stripped && !worlds && !assets && !failed && !frames && !value && !marked && !routed {
+	if !carriers && !stripped && !worlds && !assets && !failed && !frames && !value && !childDocs && !marked && !routed {
 		return data
 	}
 	return encode(m)

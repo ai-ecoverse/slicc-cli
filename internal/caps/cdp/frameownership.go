@@ -37,6 +37,9 @@ func (g *guard) rootDocumentLocked(page *target, loader string) {
 	}
 	page.document = loader
 	page.documentRevision++
+	page.childDocDOMBlocked = false
+	delete(g.childDocMeasureLogged, page.id)
+	g.clearChildDocWorldLatchesLocked(page.id)
 	g.forgetExtensionProbeWorldsForTargetLocked(page.id)
 }
 

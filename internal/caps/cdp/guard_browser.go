@@ -31,12 +31,33 @@ type browserVerdict struct {
 	debuggerDeadlines []*debuggerPause
 }
 
+func (g *guard) childDocWalkOutsideMu(data []byte, m *message) (method string, out []byte, drop bool, st *childDocStripState, event bool) {
+	if m.ID != nil {
+		g.mu.Lock()
+		method, snap, _ := g.peekChildDocReplyLocked(m)
+		g.mu.Unlock()
+		if method != "" {
+			out, drop, st = applyChildDocOnSnapshot(data, method, snap, m.ID)
+		}
+		return method, out, drop, st, false
+	}
+	if !childDocEventWalkMethods[m.Method] || !childDocEventsStrip() || (m.Method == "DOM.childNodeInserted" && !childDocChildInsertedStrip()) {
+		return "", nil, false, nil, false
+	}
+	g.mu.Lock()
+	snap := g.snapshotChildDocLocked(m.SessionID)
+	g.mu.Unlock()
+	out, drop, st = applyChildDocOnSnapshot(data, m.Method, snap, nil)
+	return "", out, drop, st, true
+}
+
 func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	var m message
 	if err := json.Unmarshal(data, &m); err != nil {
 		g.logf("cdp: dropped a browser message that isn't JSON")
 		return browserVerdict{}
 	}
+	childMethod, childOut, childDrop, childSt, childEvent := g.childDocWalkOutsideMu(data, &m)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.docIdentitySeq++
@@ -70,6 +91,9 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 	}()
 	g.progressLocked(&m)
 	if m.ID != nil {
+		if childMethod != "" {
+			return g.finishChildDocReplyLocked(&m, data, childMethod, childOut, childDrop, childSt)
+		}
 		return g.answerLocked(&m, data)
 	}
 	if v, handled := g.debuggerEventLocked(&m, data); handled {
@@ -102,16 +126,77 @@ func (g *guard) fromBrowser(data []byte) (verdict browserVerdict) {
 		}
 		return browserVerdict{}
 	}
-	if h, ok := eventHandlers[m.Method]; ok {
-		return h(g, &m, data)
+	if childEvent {
+		return g.finishChildDocEventLocked(&m, data, childOut, childDrop, childSt)
 	}
-	if g.storageEventDropped(&m) {
+	return g.pageBrowserEventLocked(&m, data)
+}
+
+func (g *guard) finishChildDocEventLocked(m *message, raw, out []byte, drop bool, st *childDocStripState) browserVerdict {
+	rebuild := g.applyChildDocMarksLocked(m.SessionID, st)
+	if drop {
+		return browserVerdict{page: rebuild}
+	}
+	if out == nil {
+		out = raw
+	}
+	if childDocBytesReplaced(raw, out) {
+		if err := json.Unmarshal(out, m); err != nil {
+			return browserVerdict{page: rebuild}
+		}
+	}
+	v := g.pageBrowserEventAfterChildDocLocked(m, out)
+	v.page = append(rebuild, v.page...)
+	return v
+}
+
+func (g *guard) finishChildDocReplyLocked(m *message, raw []byte, method string, out []byte, drop bool, st *childDocStripState) browserVerdict {
+	k := callKey{m.SessionID, *m.ID}
+	if _, ok := g.pending[k]; !ok {
 		return browserVerdict{}
 	}
-	if g.frameContentEventDropped(&m) {
+	if g.pendingMethods[k] != method {
+		if _, ok := g.takeResponseMetaLocked(m); !ok {
+			return browserVerdict{}
+		}
+		rebuild := g.applyChildDocMarksLocked(m.SessionID, st)
+		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), page: rebuild}
+	}
+	delete(g.pendingMethods, k)
+	rebuild := g.applyChildDocMarksLocked(m.SessionID, st)
+	if drop {
+		return browserVerdict{page: rebuild}
+	}
+	if out == nil {
+		if st != nil && st.hitProtected {
+			out = refusal(*m.ID, m.SessionID, refusedTarget)
+		} else {
+			out = raw
+		}
+	}
+	if childDocBytesReplaced(raw, out) {
+		g.refreshChildDocMessage(m, out)
+	}
+	v := g.answerLocked(m, out)
+	v.page = append(rebuild, v.page...)
+	return v
+}
+
+func (g *guard) pageBrowserEventAfterChildDocLocked(m *message, data []byte) browserVerdict {
+	if h, ok := eventHandlers[m.Method]; ok {
+		return h(g, m, data)
+	}
+	if g.storageEventDropped(m) {
+		return browserVerdict{}
+	}
+	if g.frameContentEventDropped(m) {
 		return browserVerdict{}
 	}
 	return browserVerdict{forward: data}
+}
+
+func (g *guard) pageBrowserEventLocked(m *message, data []byte) browserVerdict {
+	return g.pageBrowserEventAfterChildDocLocked(m, data)
 }
 
 func (g *guard) storageEventDropped(m *message) bool {
@@ -147,58 +232,92 @@ func (g *guard) relayAnswerLocked(k callKey, m *message) (browserVerdict, bool) 
 	return browserVerdict{page: g.takePendingPageLocked()}, true
 }
 
+type responseMeta struct {
+	k           callKey
+	kind        callKind
+	childMethod string
+	ownerFrame  string
+	ownerCall   bool
+	versionCall bool
+	markMethod  string
+	treeCall    bool
+	attached    string
+	bc          bodyCall
+	body        bool
+	outlived    bool
+}
+
+func (g *guard) takeResponseMetaLocked(m *message) (responseMeta, bool) {
+	k := callKey{m.SessionID, *m.ID}
+	if !g.ownsClientAnswerLocked(k) {
+		g.dropChildDocMethodLocked(k)
+		return responseMeta{}, false
+	}
+	meta := responseMeta{k: k}
+	meta.ownerFrame, meta.ownerCall = g.extensionOwnerCalls[k]
+	delete(g.extensionOwnerCalls, k)
+	meta.versionCall = g.versionCalls[k]
+	delete(g.versionCalls, k)
+	meta.markMethod = g.extensionMarkCalls[k]
+	delete(g.extensionMarkCalls, k)
+	meta.kind = g.pending[k]
+	meta.childMethod = g.pendingMethods[k]
+	delete(g.pending, k)
+	delete(g.pendingMethods, k)
+	meta.treeCall = g.treeCalls[k]
+	delete(g.treeCalls, k)
+	g.clientRequestAnsweredLocked(k, m.Error != nil)
+	g.continuedLocked(k, m.Error != nil)
+	meta.attached = g.attachCalls[k]
+	g.attachDoneLocked(k)
+	meta.bc, meta.body = g.bodyCalls[k]
+	delete(g.bodyCalls, k)
+	meta.outlived = g.outlivedLocked(k)
+	return meta, true
+}
+
 func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 	k := callKey{m.SessionID, *m.ID}
 	if v, handled := g.relayAnswerLocked(k, m); handled {
 		return v
 	}
-	if !g.ownsClientAnswerLocked(k) {
+	meta, ok := g.takeResponseMetaLocked(m)
+	if !ok {
 		return browserVerdict{}
 	}
-	ownerFrame, ownerCall := g.extensionOwnerCalls[k]
-	delete(g.extensionOwnerCalls, k)
-	versionCall := g.versionCalls[k]
-	delete(g.versionCalls, k)
-	markMethod := g.extensionMarkCalls[k]
-	delete(g.extensionMarkCalls, k)
-	kind := g.pending[k]
-	delete(g.pending, k)
-	treeCall := g.treeCalls[k]
-	delete(g.treeCalls, k)
-	g.clientRequestAnsweredLocked(k, m.Error != nil)
-	g.continuedLocked(k, m.Error != nil)
-	attached := g.attachCalls[k]
-	g.attachDoneLocked(k)
 	acceptedAttach := false
 	defer func() {
-		if kind == kindAttach && !acceptedAttach {
-			g.dropPendingTouchLocked(k)
+		if meta.kind == kindAttach && !acceptedAttach {
+			g.dropPendingTouchLocked(meta.k)
 		}
 	}()
-	bc, body := g.bodyCalls[k]
-	delete(g.bodyCalls, k)
-	outlived := g.outlivedLocked(k)
-	if !g.debuggerReplyLocked(k, m) {
+	if !g.debuggerReplyLocked(meta.k, m) {
 		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget)}
 	}
 	if g.sessionRefusedLocked(m.SessionID) {
-		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: g.closeStreamLocked(bc, m)}
+		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: g.closeStreamLocked(meta.bc, m)}
 	}
-	if outlived {
+	if meta.outlived {
 		g.logf("cdp: dropped an answer from before a protected error page committed")
-		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedOutlived), send: g.closeStreamLocked(bc, m)}
+		return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedOutlived), send: g.closeStreamLocked(meta.bc, m)}
 	}
 	data = g.plainErrorLocked(m, data)
-	if body {
-		return g.bodyAnswerLocked(k, bc, m, data)
+	if stripped, drop, handled := g.stripChildDocReplyBeforeHoldLocked(m, data, meta.childMethod); handled {
+		if drop {
+			return browserVerdict{}
+		}
+		data = stripped
 	}
-	if ownerCall {
-		return g.extensionOwnerAnswerLocked(ownerFrame, m, data)
+	if meta.body {
+		return g.bodyAnswerLocked(meta.k, meta.bc, m, data)
 	}
-	g.noteVersionReplyLocked(k, !versionCall || m.Error != nil)
-	g.noteExtensionMarkReplyLocked(k, markMethod, m.Error != nil)
+	if meta.ownerCall {
+		return g.extensionOwnerAnswerLocked(meta.ownerFrame, m, data)
+	}
+	g.noteVersionReplyLocked(meta.k, !meta.versionCall || m.Error != nil)
+	g.noteExtensionMarkReplyLocked(meta.k, meta.markMethod, m.Error != nil)
 	var treePage, treeSend [][]byte
-	if treeCall && m.Error == nil {
+	if meta.treeCall && m.Error == nil {
 		if t := g.sessionTargetLocked(m.SessionID); t != nil {
 			if g.treeMainProtectedLocked(t, m.Result) {
 				return browserVerdict{forward: refusal(*m.ID, m.SessionID, refusedTarget), send: g.markLocked(t)}
@@ -208,24 +327,24 @@ func (g *guard) responseLocked(m *message, data []byte) browserVerdict {
 		treePage = g.takeContextSettlePageLocked()
 		treeSend = g.takeContextSettleSendLocked()
 	}
-	if m.Error != nil || kind == kindPlain {
+	if m.Error != nil || meta.kind == kindPlain {
 		return browserVerdict{forward: data, send: treeSend, page: treePage}
 	}
 	res, ok := decodeObject(m.Result)
 	if !ok {
 		return browserVerdict{forward: data, send: treeSend, page: treePage}
 	}
-	if kind == kindAttach {
-		if v, handled, accepted := g.attachReplyHoldLocked(attached, m, res, treeSend, treePage); handled {
+	if meta.kind == kindAttach {
+		if v, handled, accepted := g.attachReplyHoldLocked(meta.attached, m, res, treeSend, treePage); handled {
 			acceptedAttach = accepted
 			return v
 		}
 	}
-	send, hide := g.applyResultKindLocked(kind, attached, m.SessionID, res)
+	send, hide := g.applyResultKindLocked(meta.kind, meta.attached, m.SessionID, res)
 	send = append(treeSend, send...)
-	acceptedAttach = kind != kindAttach || !hide
+	acceptedAttach = meta.kind != kindAttach || !hide
 	if hide {
-		return g.hiddenResultLocked(kind, m, res, browserVerdict{send: send, page: treePage})
+		return g.hiddenResultLocked(meta.kind, m, res, browserVerdict{send: send, page: treePage})
 	}
 	m.Result = encode(res)
 	return browserVerdict{forward: encode(m), send: send, page: treePage}

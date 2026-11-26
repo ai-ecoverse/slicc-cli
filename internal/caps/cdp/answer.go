@@ -70,6 +70,7 @@ func (g *guard) bodyAnswerLocked(k callKey, bc bodyCall, m *message, data []byte
 	}
 	reservation, ok := g.holdReservation(data)
 	if !ok {
+		g.dropChildDocMethodLocked(k)
 		return browserVerdict{}
 	}
 	g.heldAnswers[k] = &heldAnswer{call: bc, m: *m, data: data, reservation: reservation}
