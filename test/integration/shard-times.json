@@ -690,6 +690,15 @@
     "TestUpdateTakesTheAPIAttestationWhenTheReleaseHasNoBundle": 2.4,
     "TestUpdateVerifiesTheReleasesBundle": 4.9,
     "TestWasiApprovals": 3.5,
-    "TestWatchJSONSinceOpenedAndReconnecting": 3.1
+    "TestWatchJSONSinceOpenedAndReconnecting": 3.1,
+    "TestCDPChildDocMutations": 57.7,
+    "TestCDPChildDocWalkRace": 29.7,
+    "TestCDPChildDocWalkRaceMutant": 28.8,
+    "TestCDPChildDocEdges": 23.1,
+    "TestCDPChildDocChromePierce": 9.0,
+    "TestCDPChildDocChromeBigOrdinaryPage": 6.2,
+    "TestCDPChildDocWalkRaceMustRun": 5.0,
+    "TestCDPChildDocChromeOrdinaryChildrenAdmitted": 2.3,
+    "TestCDPChildDocChromeFlattenedSameProcess": 2.3
   }
 }

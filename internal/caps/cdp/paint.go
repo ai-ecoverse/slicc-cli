@@ -15,6 +15,9 @@ var framePaintMethods = map[string]bool{
 }
 
 func (g *guard) framesProtectedLocked(target string) bool {
+	if t := g.targets[target]; t != nil && !t.gone && t.childDocDOMBlocked {
+		return true
+	}
 	if g.iframeProtectedLocked(target) {
 		return true
 	}
@@ -45,6 +48,19 @@ var frameContentEventMethods = map[string]bool{
 	"Accessibility.loadComplete": true,
 }
 
+var frameContentChildDocMarkMethods = map[string]bool{
+	"DOM.childNodeRemoved":        true,
+	"DOM.childNodeCountUpdated":   true,
+	"DOM.attributeModified":       true,
+	"DOM.attributeRemoved":        true,
+	"DOM.pseudoElementAdded":      true,
+	"DOM.pseudoElementRemoved":    true,
+	"DOM.shadowRootPushed":        true,
+	"DOM.shadowRootPopped":        true,
+	"DOM.distributedNodesUpdated": true,
+	"DOM.inlineStyleInvalidated":  true,
+}
+
 func (g *guard) frameContentEventsBlockedLocked(session string) bool {
 	target := g.worldTargetLocked(session)
 	if target == "" {
@@ -66,11 +82,51 @@ func (g *guard) frameContentEventsBlockedLocked(session string) bool {
 	return false
 }
 
-func (g *guard) frameContentEventDropped(m *message) bool {
-	if m == nil || !frameContentEventMethods[m.Method] {
+func (g *guard) childDocMarkBlocksEventsLocked(session string) bool {
+	target := g.worldTargetLocked(session)
+	if target == "" {
 		return false
 	}
-	return g.frameContentEventsBlockedLocked(m.SessionID)
+	page := g.targets[target]
+	if page != nil && !page.gone && page.childDocDOMBlocked {
+		return true
+	}
+	if w := g.worlds[target]; w != nil {
+		for _, context := range w.contexts {
+			if context != nil && context.protectedFrame != "" && !g.extensionFrameIDLocked(context.protectedFrame) {
+				return true
+			}
+		}
+	}
+	if page == nil || page.gone || page.typ != "page" {
+		return false
+	}
+	for _, t := range g.targets {
+		if t == nil || t.gone || t.typ != "iframe" || t.ctx != page.ctx || !t.protected || g.extensionFrameTargetLocked(t) {
+			continue
+		}
+		parent := g.iframePageLocked(t)
+		if parent == nil && t.framePage != nil && !t.framePage.gone {
+			parent = t.framePage
+		}
+		if parent == nil || parent == page {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *guard) frameContentEventDropped(m *message) bool {
+	if m == nil {
+		return false
+	}
+	if frameContentEventMethods[m.Method] {
+		return g.frameContentEventsBlockedLocked(m.SessionID)
+	}
+	if frameContentChildDocMarkMethods[m.Method] {
+		return g.childDocMarkBlocksEventsLocked(m.SessionID)
+	}
+	return false
 }
 
 func (g *guard) noteDomainEnableLocked(c *command) {

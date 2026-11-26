@@ -897,6 +897,39 @@ func (g *guard) frameContentCheckLocked(c *command, target string) string {
 	return ""
 }
 
+func (g *guard) logChildDocAdmitMeasureLocked(target string, refused bool, reason string) {
+	byReason := g.childDocMeasureLogged[target]
+	if byReason == nil {
+		byReason = map[string]bool{}
+		g.childDocMeasureLogged[target] = byReason
+	}
+	if byReason[reason] {
+		return
+	}
+	byReason[reason] = true
+	framesProt := g.framesProtectedLocked(target)
+	worldsN := 0
+	protFrames := 0
+	if w := g.worlds[target]; w != nil {
+		worldsN = len(w.contexts)
+		for _, ctx := range w.contexts {
+			if ctx != nil && ctx.protectedFrame != "" {
+				protFrames++
+			}
+		}
+	}
+	navFrames := 0
+	if f := g.frames[target]; f != nil {
+		navFrames = len(f)
+	}
+	iframeProt := false
+	if t := g.targets[target]; t != nil && !t.gone && t.typ == "page" {
+		iframeProt = g.iframeProtectedLocked(target)
+	}
+	g.logf("cdp: child-doc admit measure target=%s framesProtected=%t iframeProtected=%t worlds=%d protectedFrames=%d navFrames=%d reason=%s getDocumentRefused=%t",
+		target, framesProt, iframeProt, worldsN, protFrames, navFrames, reason, refused)
+}
+
 func (g *guard) worldCheckLocked(c *command) string {
 	if reason := g.debuggerCheckLocked(c); reason != "" {
 		return reason
@@ -904,6 +937,9 @@ func (g *guard) worldCheckLocked(c *command) string {
 	t := g.sessionTargetLocked(c.session)
 	if t != nil {
 		if reason := g.frameContentCheckLocked(c, t.id); reason != "" {
+			if c.method == "DOM.getDocument" {
+				g.logChildDocAdmitMeasureLocked(t.id, true, "admit-refusal")
+			}
 			return reason
 		}
 	}

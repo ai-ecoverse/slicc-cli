@@ -155,7 +155,7 @@ func (g *guard) admitLocked(c *command) pageVerdict {
 	}
 	k := callKey{c.session, c.id}
 	kind := resultKind(c.method)
-	g.pending[k] = kind
+	g.setPendingLocked(k, kind, c.method)
 	g.noteTreeCallLocked(k, c.method)
 	if kind == kindPaint || framePaintMethods[c.method] || kind == kindStreams && protect.ExtensionPresentMethod(c.method) {
 		g.paintMethods[k] = c.method

@@ -841,10 +841,14 @@ func (g *guard) pruneDocIdentityTargetLocked(target string) {
 }
 
 func (g *guard) answerPrunedDocIdentityLocked(h *docIdentityHold) {
-	if !heldReplyAnswerDocIdentity() || h == nil {
+	if h == nil {
 		return
 	}
-	g.dropDeferredExtensionPaintLocked(callKey{h.session, h.id})
+	k := callKey{h.session, h.id}
+	if !heldReplyAnswerDocIdentity() {
+		return
+	}
+	g.dropDeferredExtensionPaintLocked(k)
 	if g.sessionRefusedLocked(h.session) || g.targetProtectedLocked(h.target) {
 		g.answerHeldLocked(refusal(h.id, h.session, refusedTarget))
 		return

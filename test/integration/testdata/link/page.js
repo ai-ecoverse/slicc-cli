@@ -590,6 +590,8 @@ globalThis.linkTest = {
   historySetupLockedOrdinarySetup: (opts) => import('./ordinaryoopif.js').then((m) => m.measureHistorySetupLockedOrdinarySetup(opts)),
   historySetupWaitConfirmSettled: (opts) => import('./ordinaryoopif.js').then((m) => m.measureHistorySetupWaitConfirmSettled(opts)),
   historySetupLockedOrdinaryAutoChild: (opts) => import('./ordinaryoopif.js').then((m) => m.measureHistorySetupLockedOrdinaryAutoChild(opts)),
+  childDocPierce: (opts) => import('./childdoc.js').then((m) => m.measureChildDocPierce(() => state.link, opts)),
+  childDocFlattened: (opts) => import('./childdoc.js').then((m) => m.measureChildDocFlattened(() => state.link, opts)),
   cdp: cdpTest(() => state.link, describe),
   playwrightRelay: (url, browser) => import('./playwright.js').then((m) => m.playwrightRelay(() => state.link, url, browser)),
   laterAdmission: (opts) => import('./persistent.js').then((m) => m.laterAdmissionProof(() => state.link, opts)),

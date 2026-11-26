@@ -71,23 +71,24 @@ type relayCall struct {
 }
 
 type target struct {
-	id               string
-	typ              string
-	url              string
-	opener           string
-	parentFrame      string
-	openerFrame      string
-	ctx              string
-	protected        bool
-	shown            bool
-	gone             bool
-	document         string
-	documentRevision uint64
-	framePage        *target
-	frameDocument    string
-	frameOwner       *frameOwnership
-	verdict          urlVerdict
-	contextMark      *contextMark
+	id                 string
+	typ                string
+	url                string
+	opener             string
+	parentFrame        string
+	openerFrame        string
+	ctx                string
+	protected          bool
+	shown              bool
+	gone               bool
+	document           string
+	documentRevision   uint64
+	framePage          *target
+	frameDocument      string
+	frameOwner         *frameOwnership
+	verdict            urlVerdict
+	contextMark        *contextMark
+	childDocDOMBlocked bool
 }
 
 type urlVerdict struct {
@@ -206,6 +207,8 @@ type guard struct {
 	frameWorldWaits          map[string]*frameWorldWait
 	worldEpochs              map[string]*worldEpoch
 	treeCalls                map[callKey]bool
+	pendingMethods           map[callKey]string
+	childDocMeasureLogged    map[string]map[string]bool
 	childFrames              map[string]string
 	frameParents             map[string]string
 	frameParentsFull         bool
@@ -351,6 +354,8 @@ func newGuard(o *protect.Origins, logf func(format string, args ...any)) *guard 
 		frameWorldWaits:          map[string]*frameWorldWait{},
 		worldEpochs:              map[string]*worldEpoch{},
 		treeCalls:                map[callKey]bool{},
+		pendingMethods:           map[callKey]string{},
+		childDocMeasureLogged:    map[string]map[string]bool{},
 		childFrames:              map[string]string{},
 		frameParents:             map[string]string{},
 		ancestryDisputed:         map[string]bool{},
@@ -1774,10 +1779,12 @@ func (g *guard) destroyedLocked(id string) (page, send [][]byte) {
 	delete(g.errorProof, id)
 	delete(g.errorProofGen, id)
 	delete(g.errorTitles, id)
+	delete(g.childDocMeasureLogged, id)
 	t, ok := g.targets[id]
 	if !ok || t.gone {
 		return page, send
 	}
+	t.childDocDOMBlocked = false
 	t.gone = true
 	forgetContextMark(t)
 	g.tombstones = append(g.tombstones, id)
@@ -1816,7 +1823,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.forgetExtrasLocked(id)
 	for k := range g.pending {
 		if k.session == id {
-			delete(g.pending, k)
+			g.clearPendingLocked(k)
 			delete(g.paintMethods, k)
 			delete(g.commitMarks, k)
 			delete(g.bodyCalls, k)

@@ -949,6 +949,30 @@ func TestFailedLoadOrdinaryShapeFieldsUntouched(t *testing.T) {
 	assertOrdinaryShapeUntouched(t, "sibling-of-protected-failed", sib)
 }
 
+func TestFailedLoadNonWireSnapshotShapeRefused(t *testing.T) {
+	g := failedLoadGuard(t)
+	_ = g.fromBrowser(encode(map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":          "S-ORD",
+			"targetInfo":         map[string]any{"targetId": "ORD", "type": "page", "url": "https://ordinary.test/docs", "title": "Docs"},
+			"waitingForDebugger": false,
+		},
+	}))
+	linkName := "ordinary.test"
+	snap := map[string]any{"sessionId": "S-ORD", "id": 71, "result": map[string]any{
+		"documents": []any{map[string]any{"nodes": map[string]any{"nodeName": []any{"A", "#text"}, "backendNodeId": []any{1, 2}}, "strings": []any{"href", linkName, "Click " + linkName}}},
+	}}
+	raw := encode(snap)
+	g.mu.Lock()
+	stripped, _ := g.applyChildDocStripLocked(raw, "DOMSnapshot.captureSnapshot", "S-ORD", nil)
+	g.mu.Unlock()
+	out := string(g.scrub(stripped))
+	if !strings.Contains(out, `"error"`) || !strings.Contains(out, refusedTarget) {
+		t.Fatalf("non-wire nested-strings snapshot shape must be refused: %s", out)
+	}
+}
+
 func assertOrdinaryShapeUntouched(t *testing.T, label string, g *guard) {
 	t.Helper()
 	linkName := "ordinary.test"
@@ -963,16 +987,26 @@ func assertOrdinaryShapeUntouched(t *testing.T, label string, g *guard) {
 		t.Fatalf("%s Accessibility.getFullAXTree blanked ordinary link name: %s", label, axOut)
 	}
 	snap, _ := json.Marshal(map[string]any{"sessionId": "S-ORD", "id": 71, "result": map[string]any{
-		"documents": []any{map[string]any{"nodes": map[string]any{"nodeName": []any{"A", "#text"}, "backendNodeId": []any{1, 2}}, "strings": []any{"href", linkName, "Click " + linkName}}},
+		"documents": []any{map[string]any{
+			"documentURL": 0, "baseURL": 0,
+			"nodes": map[string]any{"nodeName": []any{"A", "#text"}, "backendNodeId": []any{1, 2}},
+		}},
+		"strings": []any{"https://ordinary.test/docs", "href", linkName, "Click " + linkName},
 	}})
-	snapOut := string(g.scrub(snap))
+	g.mu.Lock()
+	snapStripped, _ := g.applyChildDocStripLocked(snap, "DOMSnapshot.captureSnapshot", "S-ORD", nil)
+	g.mu.Unlock()
+	snapOut := string(g.scrub(snapStripped))
 	if !strings.Contains(snapOut, linkName) {
 		t.Fatalf("%s DOMSnapshot blanked ordinary strings: %s", label, snapOut)
 	}
 	doc, _ := json.Marshal(map[string]any{"sessionId": "S-ORD", "id": 72, "result": map[string]any{
 		"root": map[string]any{"nodeId": 1, "documentURL": "https://ordinary.test/docs", "baseURL": "https://ordinary.test/docs", "nodeName": "HTML"},
 	}})
-	docOut := string(g.scrub(doc))
+	g.mu.Lock()
+	docStripped, _ := g.applyChildDocStripLocked(doc, "DOM.getDocument", "S-ORD", nil)
+	g.mu.Unlock()
+	docOut := string(g.scrub(docStripped))
 	if !strings.Contains(docOut, "ordinary.test/docs") {
 		t.Fatalf("%s DOM.getDocument blanked ordinary urls: %s", label, docOut)
 	}
