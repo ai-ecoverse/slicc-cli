@@ -609,12 +609,15 @@ func (g *guard) decideReasonLocked(t *target, previous bool) (bool, string) {
 		return true, reason
 	}
 	opener := g.openerState(t)
-	if g.o.TargetWith(t.url, t.typ, previous, opener, g.evidenceLocked(t)) {
+	ev := g.evidenceLocked(t)
+	if g.o.TargetWith(t.url, t.typ, previous, opener, ev) {
 		switch {
 		case protect.HiddenType(t.typ):
 			return true, "hidden-type"
 		case protect.Inheriting(t.url) && (previous || opener == protect.OpenerProtected || opener == protect.OpenerUnknown):
 			return true, "inheriting-opener"
+		case protect.Inheriting(t.url) && protect.AboutLookalike(ev.ContextOrigin):
+			return true, "inheriting-context-origin"
 		default:
 			return true, "url"
 		}

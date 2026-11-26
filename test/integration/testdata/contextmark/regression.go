@@ -204,6 +204,12 @@ func TestDefaultContextMarkHolds(t *testing.T) {
 			markContext(g, "NAVP", "C", markOrdinary, "u1", true)
 			markInfo(g, "P", "https://example.test/other", "t1")
 		}, true},
+		{"commit-then-lookalike-context", func(g *guard) {
+			markCommit(g, "NAVP", "P", "", "L1P", "https://example.test/other")
+			markContext(g, "NAVP", "P", "about:blank", "u1", true)
+			markContext(g, "NAVP", "P", markOrdinary, "u2", true)
+			markInfo(g, "P", "https://example.test/other", "t1")
+		}, true},
 		{"commit-then-opaque-context", func(g *guard) {
 			markCommit(g, "NAVP", "P", "", "L1P", "https://example.test/other")
 			markContext(g, "NAVP", "P", "://", "u1", true)
@@ -560,4 +566,32 @@ func TestDefaultContextMarkSetupLatch(t *testing.T) {
 			t.Fatalf("setup command with the latch clear after the mark cleared: refused %q", msg)
 		}
 	})
+}
+
+func TestDefaultContextMarkLookalike(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		steps func(g *guard)
+		want  bool
+	}{
+		{"title-only", func(g *guard) { markInfo(g, "P", markURL, "t1") }, true},
+		{"commit-then-ordinary-context-clears", func(g *guard) {
+			markCommit(g, "NAVP", "P", "", "L1P", "https://example.test/other")
+			markContext(g, "NAVP", "P", markOrdinary, "u1", true)
+			markInfo(g, "P", "https://example.test/other", "t1")
+		}, false},
+		{"commit-then-lookalike-context-holds", func(g *guard) {
+			markCommit(g, "NAVP", "P", "", "L1P", "https://example.test/other")
+			markContext(g, "NAVP", "P", "ABOUT://", "u1", true)
+			markInfo(g, "P", "https://example.test/other", "t1")
+		}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := markGuard(t)
+			markPage(t, g, "P", markURL, "")
+			markByContext(t, g, "P", "about:blank")
+			c.steps(g)
+			markExpect(t, g, "P", c.want)
+		})
+	}
 }

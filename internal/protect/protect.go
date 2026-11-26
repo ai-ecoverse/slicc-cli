@@ -412,21 +412,12 @@ type Evidence struct {
 	DocumentURL    string
 	UnreachableURL string
 	Navigating     bool
+	ContextOrigin  string
 }
 
 func ErrorPage(raw string, ev Evidence) bool {
 	return rules.ErrorPage.Target == "previous" && rules.ErrorPage.URL != "" && ev.DocumentURL == rules.ErrorPage.URL &&
 		ev.UnreachableURL == raw && !ev.Navigating && !Unparseable(raw)
-}
-
-func (o *Origins) TargetWith(raw, typ string, previous bool, opener Opener, ev Evidence) bool {
-	if HiddenType(typ) {
-		return true
-	}
-	if ErrorPage(raw, ev) {
-		return previous
-	}
-	return o.Target(raw, previous, opener)
 }
 
 func (o *Origins) Target(raw string, previous bool, opener Opener) bool {
