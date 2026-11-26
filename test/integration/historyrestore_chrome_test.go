@@ -31,6 +31,8 @@ func historyRestoreChromeFixture(t *testing.T) *httptest.Server {
 			_, _ = fmt.Fprintf(w, `<!doctype html><body><script type="module" src="/page.js"></script><iframe src="%s"></iframe>`, frame)
 		case "/seven-host":
 			_, _ = fmt.Fprint(w, `<!doctype html><body><script type="module" src="/page.js"></script>`)
+		case "/seven-marked":
+			_, _ = fmt.Fprint(w, `<!doctype html><html><head><title>HS_B2_MARKER_7f3a9c title</title></head><body><!-- HS_B2_MARKER_7f3a9c comment --><p id="marked" data-mark="HS_B2_MARKER_7f3a9c">HS_B2_MARKER_7f3a9c text</p></body></html>`)
 		case "/ordinary":
 			_, _ = fmt.Fprint(w, `<!doctype html><body><p id="ordinary">ordinary</p>`)
 		case "/inner":

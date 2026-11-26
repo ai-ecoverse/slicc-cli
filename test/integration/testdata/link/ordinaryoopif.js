@@ -224,6 +224,7 @@ export async function measureHistorySetupLockedOrdinarySetup(opts) {
   const at = () => Date.now() - started;
   const steps = st.steps || [];
   const pageSession = st.pageSession;
+  const protectedPrefix = opts.protectedPrefix || '';
   const noteStep = (name, o) => {
     const row = { name, at: at(), ok: o.ok, error: o.ok ? '' : o.error || '' };
     steps.push(row);
@@ -247,12 +248,46 @@ export async function measureHistorySetupLockedOrdinarySetup(opts) {
     error: evaluateHistory ? (evaluate.error || '') : (evaluate.ok ? 'Runtime.evaluate unexpectedly allowed' : evaluate.error || ''),
   });
   const getDocument = await outcome(c.send('DOM.getDocument', { depth: -1, pierce: true }, pageSession));
-  const getDocumentHistory = !getDocument.ok && typeof getDocument.error === 'string' && getDocument.error.includes('history may restore a protected document');
+  const getDocumentOk = getDocument.ok === true;
+  const replyText = JSON.stringify(getDocument.result ?? getDocument.value ?? getDocument);
+  const replyClean =
+    !protectedPrefix ||
+    (!replyText.includes(`${protectedPrefix}/`) &&
+      !replyText.includes('/seven-host') &&
+      !/"documentURL":"http:\/\/seven\.protected\.test[^"]+\//.test(replyText));
   steps.push({
-    name: 'guarded-getDocument-history-refused',
+    name: 'guarded-getDocument-admitted',
     at: at(),
-    ok: getDocumentHistory,
-    error: getDocumentHistory ? (getDocument.error || '') : (getDocument.ok ? 'DOM.getDocument unexpectedly allowed' : getDocument.error || ''),
+    ok: getDocumentOk,
+    error: getDocumentOk ? '' : getDocument.error || 'DOM.getDocument refused',
+  });
+  steps.push({
+    name: 'guarded-getDocument-reply-clean',
+    at: at(),
+    ok: getDocumentOk && replyClean,
+    error:
+      getDocumentOk && replyClean
+        ? ''
+        : getDocumentOk
+          ? 'probe reply carried a protected document path'
+          : getDocument.error || 'DOM.getDocument refused',
+  });
+  const disable = await outcome(c.send('DOM.disable', {}, pageSession));
+  noteStep('guarded-dom-disable', disable);
+  const wrongDepth = await outcome(c.send('DOM.getDocument', { depth: 0, pierce: true }, pageSession));
+  const wrongDepthRefused =
+    !wrongDepth.ok &&
+    typeof wrongDepth.error === 'string' &&
+    wrongDepth.error.includes('history may restore a protected document');
+  steps.push({
+    name: 'guarded-getDocument-wrong-depth-refused',
+    at: at(),
+    ok: wrongDepthRefused,
+    error: wrongDepthRefused
+      ? wrongDepth.error || ''
+      : wrongDepth.ok
+        ? 'DOM.getDocument depth 0 unexpectedly allowed'
+        : wrongDepth.error || '',
   });
   st.steps = steps;
   st.autoAttachArmed = auto.ok;
@@ -263,7 +298,103 @@ export async function measureHistorySetupLockedOrdinarySetup(opts) {
     autoAttachOk: auto.ok,
     autoAttachError: auto.ok ? '' : auto.error,
     evaluateRefused: evaluateHistory,
-    getDocumentRefused: getDocumentHistory,
+    getDocumentOk,
+    getDocumentError: getDocumentOk ? '' : getDocument.error || '',
+    getDocumentReplyClean: getDocumentOk && replyClean,
+    disableOk: disable.ok,
+    disableError: disable.ok ? '' : disable.error || '',
+    wrongDepthRefused,
+    elapsedMs: at(),
+  };
+}
+
+function countDomNodes(node, acc = { nodes: 0, markers: 0, marker: '' }) {
+  if (!node || typeof node !== 'object') return acc;
+  acc.nodes += 1;
+  const marker = acc.marker || '';
+  const fields = [node.nodeValue, node.documentURL, node.baseURL, ...(node.attributes || [])];
+  for (const v of fields) {
+    if (marker && typeof v === 'string' && v.includes(marker)) acc.markers += 1;
+  }
+  for (const child of node.children || []) countDomNodes(child, acc);
+  for (const root of node.shadowRoots || []) countDomNodes(root, acc);
+  if (node.contentDocument) countDomNodes(node.contentDocument, acc);
+  if (node.templateContent) countDomNodes(node.templateContent, acc);
+  return acc;
+}
+
+export async function measureHistorySetupProbeMarkers(opts) {
+  const st = hrExplicitState();
+  const c = st.client;
+  if (!c) return { steps: [{ name: 'guarded-probe-markers', at: 0, ok: false, error: 'no open guarded client' }], elapsedMs: 0 };
+  const started = st.started || Date.now();
+  const at = () => Date.now() - started;
+  const steps = st.steps || [];
+  const pageSession = st.pageSession;
+  const marker = opts.marker || 'HS_B2_MARKER_7f3a9c';
+  const protectedPrefix = opts.protectedPrefix || '';
+  const noteStep = (name, o) => {
+    const row = { name, at: at(), ok: o.ok, error: o.ok ? '' : o.error || '' };
+    steps.push(row);
+    return row;
+  };
+  const bypass = await outcome(c.send('Network.setBypassServiceWorker', { bypass: true }, pageSession));
+  noteStep('guarded-setBypassServiceWorker', bypass);
+  const auto = await outcome(c.send('Target.setAutoAttach', {
+    autoAttach: true,
+    flatten: true,
+    waitForDebuggerOnStart: false,
+    filter: FRAME_CHILDREN,
+  }, pageSession));
+  noteStep('guarded-setAutoAttach', auto);
+  const getDocument = await outcome(c.send('DOM.getDocument', { depth: -1, pierce: true }, pageSession));
+  noteStep('guarded-getDocument', getDocument);
+  const root = getDocument.result?.root;
+  const counts = countDomNodes(root, { nodes: 0, markers: 0, marker });
+  const replyText = JSON.stringify(getDocument.result ?? getDocument.value ?? getDocument.error ?? getDocument);
+  const replyClean =
+    !protectedPrefix ||
+    (!replyText.includes(`${protectedPrefix}/`) &&
+      !replyText.includes('/seven-marked') &&
+      !/"documentURL":"http:\/\/seven\.protected\.test[^"]+\//.test(replyText));
+  const pathLeak = Boolean(protectedPrefix) && getDocument.ok && !replyClean;
+  const markerAbsent = counts.markers === 0 && !replyText.includes(marker);
+  const getDocumentError = getDocument.error || '';
+  const targetTextRefusal = !getDocument.ok && /target is on seven's origin/.test(getDocumentError);
+  steps.push({
+    name: 'guarded-getDocument-reply-clean',
+    at: at(),
+    ok: getDocument.ok && replyClean,
+    error:
+      getDocument.ok && replyClean
+        ? ''
+        : getDocument.ok
+          ? 'probe reply carried a protected document path'
+          : getDocumentError || 'DOM.getDocument refused',
+  });
+  steps.push({
+    name: 'guarded-getDocument-markers-absent',
+    at: at(),
+    ok: markerAbsent,
+    error: markerAbsent ? '' : `marker substring present in serialized reply; treeHits=${counts.markers}`,
+  });
+  const disable = await outcome(c.send('DOM.disable', {}, pageSession));
+  noteStep('guarded-dom-disable', disable);
+  st.steps = steps;
+  return {
+    steps,
+    bypassOk: bypass.ok,
+    autoAttachOk: auto.ok,
+    getDocumentOk: getDocument.ok,
+    getDocumentError,
+    targetTextRefusal,
+    disableOk: disable.ok,
+    disableError: disable.error || '',
+    replyClean: getDocument.ok && replyClean,
+    markerAbsent,
+    pathLeak,
+    treeNodeCount: counts.nodes,
+    markerHits: counts.markers,
     elapsedMs: at(),
   };
 }

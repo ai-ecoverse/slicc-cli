@@ -263,3 +263,14 @@ func TestGuardCapabilitiesDeclareLegacyInterceptionFalse(t *testing.T) {
 		}
 	}
 }
+
+func TestGuardCapabilitiesDeclareFrameOwnershipProbe(t *testing.T) {
+	caps := guardCapabilities()
+	probe, declared := caps["frameOwnershipProbe"]
+	if !declared || !probe {
+		t.Errorf("frameOwnershipProbe must be declared true (present %v, value %v)", declared, probe)
+	}
+	if !caps["forwardAudit"] {
+		t.Error("frameOwnershipProbe needs forwardAudit declared true")
+	}
+}

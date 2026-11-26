@@ -7,3 +7,7 @@ func historySetupAdmitEnabled() bool {
 func historySetupLatchEnabled() bool {
 	return false
 }
+
+func historySetupProbeAdmitEnabled() bool {
+	return true
+}

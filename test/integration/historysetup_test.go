@@ -96,8 +96,8 @@ func hsMutations() []hsMutation {
 		},
 		{
 			name:    "latch-check-removed",
-			from:    "\tif nt.setupProtectedSeen {\n\t\treturn false\n\t}\n",
-			to:      "",
+			from:    "\treturn !nt.setupProtectedSeen\n",
+			to:      "\treturn true\n",
 			run:     "^TestHistorySetupProtectedSightingLatch$/^in-flight$/^bypass$",
 			failing: "TestHistorySetupProtectedSightingLatch/in-flight/bypass",
 		},
@@ -395,8 +395,111 @@ func hsMutations() []hsMutation {
 			name:    "methods-widened-to-document-reads",
 			from:    "\tkeys, ok := historySetupKeys[c.method]\n",
 			to:      "\tif c.method == \"DOM.getDocument\" {\n\t\treturn true\n\t}\n\tkeys, ok := historySetupKeys[c.method]\n",
-			run:     "^TestHistorySetupContentStaysRefused$/^get-document$",
-			failing: "TestHistorySetupContentStaysRefused/get-document",
+			run:     "^TestHistorySetupContentStaysRefused$/^get-document-depth-0$",
+			failing: "TestHistorySetupContentStaysRefused/get-document-depth-0",
+		},
+		{
+			name:    "probe-switch-removed",
+			from:    "\tif (c.method == \"DOM.getDocument\" || c.method == \"DOM.disable\") && !historySetupProbeAdmitEnabled() {\n\t\treturn false\n\t}\n",
+			to:      "\tif (c.method == \"DOM.getDocument\" || c.method == \"DOM.disable\") && historySetupProbeAdmitEnabled() {\n\t\treturn false\n\t}\n",
+			run:     "^TestHistorySetupProbeAdmittedOnLockedTab$",
+			failing: "TestHistorySetupProbeAdmittedOnLockedTab",
+		},
+		{
+			name:    "probe-depth-unchecked",
+			from:    "\tif !historySetupDepthMinusOne(params) || params[\"pierce\"] != true {\n",
+			to:      "\tif params[\"pierce\"] != true {\n",
+			run:     "^TestHistorySetupParamsRefused$/^dom-get-document-depth-0$",
+			failing: "TestHistorySetupParamsRefused/dom-get-document-depth-0",
+		},
+		{
+			name:    "probe-pierce-unchecked",
+			from:    "\tif !historySetupDepthMinusOne(params) || params[\"pierce\"] != true {\n",
+			to:      "\tif !historySetupDepthMinusOne(params) {\n",
+			run:     "^TestHistorySetupParamsRefused$/^dom-get-document-pierce-false$",
+			failing: "TestHistorySetupParamsRefused/dom-get-document-pierce-false",
+		},
+		{
+			name:    "disable-without-probe-admitted",
+			from:    "\t\treturn g.historySetupProbe[c.session]\n",
+			to:      "\t\treturn true\n",
+			run:     "^TestHistorySetupDisableWithoutProbeRefused$",
+			failing: "TestHistorySetupDisableWithoutProbeRefused",
+		},
+		{
+			name:    "disable-blocked-after-protect",
+			from:    "\tif g.historySetupDisableLocked(c, s) {\n\t\treturn true\n\t}\n",
+			to:      "",
+			run:     "^TestHistorySetupDisableAfterProtectAdmitted$",
+			failing: "TestHistorySetupDisableAfterProtectAdmitted",
+		},
+		{
+			name:    "history-locked-events-narrowed-to-list",
+			from:    "\tif strings.HasPrefix(m.Method, \"DOM.\") {\n",
+			to:      "\tif false && strings.HasPrefix(m.Method, \"DOM.\") {\n",
+			file:    "internal/caps/cdp/paint.go",
+			run:     "^TestHistorySetupProbeEventsDropped$",
+			failing: "TestHistorySetupProbeEventsDropped",
+		},
+		{
+			name:    "probe-identity-hold-bypassed",
+			from:    "\tif !ok || m == nil || m.ID == nil {\n\t\treturn nil, nil, false\n\t}\n\tif g.relaySession == \"\" {\n",
+			to:      "\tif !ok || m == nil || m.ID == nil {\n\t\treturn nil, nil, false\n\t}\n\treturn nil, nil, false\n\tif g.relaySession == \"\" {\n",
+			file:    "internal/caps/cdp/documentidentity.go",
+			run:     "^TestHistorySetupProbeIdentityTaintRace$",
+			failing: "TestHistorySetupProbeIdentityTaintRace",
+		},
+		{
+			name:    "probe-child-doc-strip-disabled",
+			from:    "func childDocStripEnabled() bool {\n\treturn true\n}",
+			to:      "func childDocStripEnabled() bool {\n\treturn false\n}",
+			file:    "internal/caps/cdp/childdoc_switches.go",
+			run:     "^TestHistorySetupProbeProtectedChildRefused$",
+			failing: "TestHistorySetupProbeProtectedChildRefused",
+		},
+		{
+			name:    "probe-oopif-src-scrub-disabled",
+			from:    "func (g *guard) cutEmbeddedKind(s, kind string) (string, bool) {\n\tif !strings.ContainsAny(s, \"/%\") || !strings.Contains(s, \"%\") && !strings.Contains(s, \"://\") && !g.o.MayNameHost(s) && !g.hasProtectedIP() {\n\t\treturn s, false\n\t}\n",
+			to:      "func (g *guard) cutEmbeddedKind(s, kind string) (string, bool) {\n\treturn s, false\n\tif !strings.ContainsAny(s, \"/%\") || !strings.Contains(s, \"%\") && !strings.Contains(s, \"://\") && !g.o.MayNameHost(s) && !g.hasProtectedIP() {\n\t\treturn s, false\n\t}\n",
+			file:    "internal/caps/cdp/scrub.go",
+			run:     "^TestHistorySetupProbeOOPIFSrcScrubbed$",
+			failing: "TestHistorySetupProbeOOPIFSrcScrubbed",
+		},
+		{
+			name:    "disable-latch-map-unchecked",
+			from:    "\tfor key := range c.params {\n\t\tif !historySetupKeys[\"DOM.disable\"][key] {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn g.historySetupProbe[c.session]\n",
+			to:      "\tfor key := range c.params {\n\t\tif !historySetupKeys[\"DOM.disable\"][key] {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn true\n",
+			run:     "^TestHistorySetupDisableWithoutProbeRefused$",
+			failing: "TestHistorySetupDisableWithoutProbeRefused",
+		},
+		{
+			name:    "probe-latch-writer-skips-history-lock",
+			from:    "\t\tif nt == nil || !nt.historyLocked || !historySetupProbeAdmitEnabled() || !historySetupProbeParams(c.params) {\n\t\t\treturn\n\t\t}\n",
+			to:      "\t\tif nt == nil || !historySetupProbeAdmitEnabled() || !historySetupProbeParams(c.params) {\n\t\t\treturn\n\t\t}\n",
+			run:     "^TestHistorySetupProbeLatchRequiresHistoryLock$",
+			failing: "TestHistorySetupProbeLatchRequiresHistoryLock",
+		},
+		{
+			name:    "probe-latch-writer-switch-forced-off",
+			from:    "\t\tif nt == nil || !nt.historyLocked || !historySetupProbeAdmitEnabled() || !historySetupProbeParams(c.params) {\n\t\t\treturn\n\t\t}\n",
+			to:      "\t\tif nt == nil || !nt.historyLocked || true || !historySetupProbeParams(c.params) {\n\t\t\treturn\n\t\t}\n",
+			run:     "^TestHistorySetupProbeAdmittedOnLockedTab$",
+			failing: "TestHistorySetupProbeAdmittedOnLockedTab",
+		},
+		{
+			name:    "probe-latch-forget-removed",
+			from:    "\tdelete(g.domEnabled, id)\n\tdelete(g.axEnabled, id)\n\tdelete(g.historySetupProbe, id)\n",
+			to:      "\tdelete(g.domEnabled, id)\n\tdelete(g.axEnabled, id)\n",
+			file:    "internal/caps/cdp/guard.go",
+			run:     "^TestHistorySetupProbeLatchClearedOnForget$",
+			failing: "TestHistorySetupProbeLatchClearedOnForget",
+		},
+		{
+			name:    "probe-disable-switch-forced-off",
+			from:    "\tif !historySetupProbeAdmitEnabled() || c.method != \"DOM.disable\" {\n\t\treturn false\n\t}\n",
+			to:      "\tif true || c.method != \"DOM.disable\" {\n\t\treturn false\n\t}\n",
+			run:     "^TestHistorySetupDisableAfterProtectAdmitted$",
+			failing: "TestHistorySetupDisableAfterProtectAdmitted",
 		},
 		{
 			name:    "page-sessions-only-removed",
@@ -442,6 +545,37 @@ func TestCDPHistorySetupHoldMutant(t *testing.T) {
 		t.Fatalf("hold-removed mutant must fail AutoAttachHold\n%s", output)
 	}
 	if !strings.Contains(string(output), "TestHistorySetupAutoAttachHold") {
+		t.Fatalf("mutant did not fail named row:\n%s", output)
+	}
+}
+
+func TestCDPHistorySetupProbeRemovedMutant(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := t.TempDir()
+	mutant := filepath.Join(scratch, "mutation_probe_removed.go")
+	data, err := os.ReadFile(filepath.Join(root, "test/integration/testdata/historysetup/mutation_probe_removed.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mutant, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	overlay := hsOverlay(t, scratch, map[string]string{
+		filepath.Join(root, "internal/caps/cdp/history_setup_edges_test.go"): filepath.Join(root, "test/integration/testdata/historysetup/regression.go"),
+		filepath.Join(root, "internal/caps/cdp/history_setup_switches.go"):   mutant,
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-run", "^TestHistorySetupProbeAdmittedOnLockedTab$", "./internal/caps/cdp")
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("probe-removed mutant must fail ProbeAdmittedOnLockedTab\n%s", output)
+	}
+	if !strings.Contains(string(output), "--- FAIL: TestHistorySetupProbeAdmittedOnLockedTab ") {
 		t.Fatalf("mutant did not fail named row:\n%s", output)
 	}
 }

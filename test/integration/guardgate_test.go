@@ -1,12 +1,15 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,6 +44,8 @@ type gateConnection struct {
 	urls             map[string][]string
 	forwarded        map[string]bool
 	ledger           []map[string]any
+	auditFrom        int
+	invalidFrames    int
 	hold             chan struct{}
 	target           string
 	minimum          time.Duration
@@ -151,32 +156,7 @@ func (g *guardGate) socket(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			var m gateCommand
-			if json.Unmarshal(data, &m) == nil {
-				if g.observe != nil {
-					g.observe(m)
-				}
-				c.mu.Lock()
-				c.forwarded[gateKey(m.Session, m.ID)] = true
-				var params any
-				_ = json.Unmarshal(m.Params, &params)
-				entry := map[string]any{"method": m.Method, "id": m.ID}
-				if m.Session != "" {
-					entry["sessionId"] = m.Session
-				}
-				if params != nil {
-					entry["params"] = params
-				}
-				c.ledger = append(c.ledger, entry)
-				if m.Method == "Target.attachToTarget" {
-					var attach struct {
-						Target string `json:"targetId"`
-					}
-					_ = json.Unmarshal(m.Params, &attach)
-					c.attaches[gateKey(m.Session, m.ID)] = attach.Target
-				}
-				c.mu.Unlock()
-			}
+			c.noteInbound(data, g.observe)
 			if up.Write(ctx, kind, data) != nil {
 				return
 			}
@@ -308,6 +288,200 @@ func (g *guardGate) connection(session string) *gateConnection {
 	return nil
 }
 
+func gateTopKeyConflict(data []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return true
+	}
+	seen := map[string]bool{}
+	folded := map[string]bool{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return true
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return true
+		}
+		fold := strings.ToLower(key)
+		if seen[key] || folded[fold] {
+			return true
+		}
+		seen[key] = true
+		folded[fold] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return true
+		}
+	}
+	end, err := dec.Token()
+	if err != nil || end != json.Delim('}') {
+		return true
+	}
+	_, err = dec.Token()
+	return err != io.EOF
+}
+
+func gateNestedKeyConflict(raw json.RawMessage) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	return gateWalkDupKeys(dec)
+}
+
+func gateWalkDupKeys(dec *json.Decoder) bool {
+	tok, err := dec.Token()
+	if err != nil {
+		return true
+	}
+	switch t := tok.(type) {
+	case json.Delim:
+		switch t {
+		case '{':
+			seen := map[string]bool{}
+			for dec.More() {
+				keyTok, err := dec.Token()
+				if err != nil {
+					return true
+				}
+				key, ok := keyTok.(string)
+				if !ok || seen[key] {
+					return true
+				}
+				seen[key] = true
+				if gateWalkDupKeys(dec) {
+					return true
+				}
+			}
+			end, err := dec.Token()
+			return err != nil || end != json.Delim('}')
+		case '[':
+			for dec.More() {
+				if gateWalkDupKeys(dec) {
+					return true
+				}
+			}
+			end, err := dec.Token()
+			return err != nil || end != json.Delim(']')
+		default:
+			return true
+		}
+	default:
+		return false
+	}
+}
+
+func gateParseCommand(data []byte) (gateCommand, bool) {
+	if !json.Valid(data) || gateTopKeyConflict(data) {
+		return gateCommand{}, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var raw map[string]json.RawMessage
+	if dec.Decode(&raw) != nil {
+		return gateCommand{}, false
+	}
+	for key := range raw {
+		switch key {
+		case "id", "method", "sessionId", "params":
+		default:
+			return gateCommand{}, false
+		}
+	}
+	if idRaw, ok := raw["id"]; ok {
+		var num json.Number
+		if json.Unmarshal(idRaw, &num) != nil {
+			return gateCommand{}, false
+		}
+		lit := num.String()
+		if strings.ContainsAny(lit, ".eE") {
+			return gateCommand{}, false
+		}
+		if _, err := strconv.ParseInt(lit, 10, 64); err != nil {
+			return gateCommand{}, false
+		}
+	}
+	var m gateCommand
+	if json.Unmarshal(data, &m) != nil {
+		return gateCommand{}, false
+	}
+	canon := map[string]any{}
+	if _, ok := raw["id"]; ok {
+		canon["id"] = m.ID
+	}
+	if _, ok := raw["method"]; ok {
+		canon["method"] = m.Method
+	}
+	if m.Session != "" {
+		canon["sessionId"] = m.Session
+	} else if _, ok := raw["sessionId"]; ok {
+		canon["sessionId"] = ""
+	}
+	if len(m.Params) > 0 && string(m.Params) != "null" {
+		if gateNestedKeyConflict(m.Params) {
+			return gateCommand{}, false
+		}
+		var params any
+		if json.Unmarshal(m.Params, &params) != nil {
+			return gateCommand{}, false
+		}
+		canon["params"] = params
+	} else if _, ok := raw["params"]; ok && string(raw["params"]) != "null" {
+		return gateCommand{}, false
+	}
+	encoded, err := json.Marshal(canon)
+	if err != nil {
+		return gateCommand{}, false
+	}
+	var original any
+	var rebuilt any
+	if json.Unmarshal(data, &original) != nil || json.Unmarshal(encoded, &rebuilt) != nil {
+		return gateCommand{}, false
+	}
+	same, err := json.Marshal(original)
+	if err != nil {
+		return gateCommand{}, false
+	}
+	again, err := json.Marshal(rebuilt)
+	if err != nil || !bytes.Equal(same, again) {
+		return gateCommand{}, false
+	}
+	return m, true
+}
+
+func (c *gateConnection) noteInbound(data []byte, observe func(gateCommand)) {
+	m, ok := gateParseCommand(data)
+	if !ok {
+		c.mu.Lock()
+		c.invalidFrames++
+		c.mu.Unlock()
+		return
+	}
+	if observe != nil {
+		observe(m)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.forwarded[gateKey(m.Session, m.ID)] = true
+	var params any
+	_ = json.Unmarshal(m.Params, &params)
+	entry := map[string]any{"method": m.Method, "id": m.ID}
+	if m.Session != "" {
+		entry["sessionId"] = m.Session
+	}
+	if params != nil {
+		entry["params"] = params
+	}
+	c.ledger = append(c.ledger, entry)
+	if m.Method == "Target.attachToTarget" {
+		var attach struct {
+			Target string `json:"targetId"`
+		}
+		_ = json.Unmarshal(m.Params, &attach)
+		c.attaches[gateKey(m.Session, m.ID)] = attach.Target
+	}
+}
+
 func ledgerID(entry map[string]any) (int64, bool) {
 	switch v := entry["id"].(type) {
 	case int64:
@@ -317,6 +491,33 @@ func ledgerID(entry map[string]any) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func (c *gateConnection) sessionCommandsLocked(session string) []map[string]any {
+	start := c.auditFrom
+	if start < 0 {
+		start = 0
+	}
+	if start > len(c.ledger) {
+		start = len(c.ledger)
+	}
+	commands := make([]map[string]any, 0)
+	for _, e := range c.ledger[start:] {
+		sid, _ := e["sessionId"].(string)
+		if sid != session {
+			continue
+		}
+		method, _ := e["method"].(string)
+		if method == "" {
+			continue
+		}
+		cmd := map[string]any{"method": method}
+		if params, ok := e["params"]; ok && params != nil {
+			cmd["params"] = params
+		}
+		commands = append(commands, cmd)
+	}
+	return commands
 }
 
 func (c *gateConnection) ledgerEntry(id int64, method, session string) map[string]any {
@@ -459,14 +660,15 @@ func (g *guardGate) control(w http.ResponseWriter, r *http.Request) {
 		c.hold, c.target, c.minimum = make(chan struct{}), req.Target, time.Duration(req.MS)*time.Millisecond
 		c.session, c.controlOnly = req.Session, req.Side == "control"
 		c.protectedOrigins = append([]string(nil), req.Protected...)
-		c.first, c.released, c.events = 0, 0, 0
+		c.first, c.released, c.events, c.invalidFrames = 0, 0, 0, 0
+		c.auditFrom = len(c.ledger)
 		result = map[string]any{"gate": true, "targetId": req.Target, "sessionId": req.Session, "ms": req.MS, "protectedObserved": protected, "ordinaryObserved": ordinary}
 	case "audit":
 		entries := make([]map[string]any, 0, len(req.Probes))
 		for _, p := range req.Probes {
 			entries = append(entries, map[string]any{"id": p.ID, "forwarded": c.forwarded[gateKey(req.Session, p.WireID)]})
 		}
-		result = map[string]any{"probes": entries}
+		result = map[string]any{"probes": entries, "commands": c.sessionCommandsLocked(req.Session), "invalidFrames": c.invalidFrames}
 	default:
 		http.Error(w, "invalid action", http.StatusBadRequest)
 		return

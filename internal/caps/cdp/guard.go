@@ -282,6 +282,7 @@ type guard struct {
 	castCut                  map[string]bool
 	domEnabled               map[string]bool
 	axEnabled                map[string]bool
+	historySetupProbe        map[string]bool
 	softLatched              map[string]bool
 	debuggers                map[string]*debuggerState
 	debuggerReplies          map[callKey]debuggerReply
@@ -1810,6 +1811,7 @@ func (g *guard) forgetSessionLocked(id string) {
 	g.forgetCastLocked(id)
 	delete(g.domEnabled, id)
 	delete(g.axEnabled, id)
+	delete(g.historySetupProbe, id)
 	g.forgetExtensionProbeWorldSessionLocked(id)
 	g.forgetExtensionOwnerCallsLocked(id)
 	g.forgetVersionCallsLocked(id)

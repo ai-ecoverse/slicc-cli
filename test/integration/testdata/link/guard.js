@@ -3,6 +3,7 @@ import { CdpClient } from './cdp.js';
 import { SocketClient } from './observer.js';
 import { failureEvidence, foregroundMouseCall } from './foreground.js';
 import { answerLog, attachAnswers } from './answers.js';
+import { delayedInboundAudit } from './gate-audit-complete.mjs';
 
 const CALL_TIMEOUT_MS = 10000;
 
@@ -456,14 +457,7 @@ function delayedInbound(gateURL, opts) {
     return {
       ...ack,
       release: () => control({ action: 'release', sessionId }),
-      audit: async ({ probes }) => {
-        const sent = client.sent.slice(start).filter((m) => m.sessionId === sessionId && methods.has(m.method));
-        const matched = probes.length === sent.length && probes.every((p, i) => p.method === sent[i].method && JSON.stringify(p.params) === JSON.stringify(sent[i].params));
-        if (!matched) return { complete: false, probes: [] };
-        const ledger = await control({ action: 'audit', sessionId, probes: probes.map((p, i) => ({ id: p.id, wireId: sent[i].id })) });
-        const complete = ledger.probes.length === probes.length && ledger.probes.every((entry, i) => entry.id === probes[i].id && typeof entry.forwarded === 'boolean' && (entry.forwarded || probes[i].reply?.ok === true || Number.isInteger(probes[i].reply?.error?.code)));
-        return { ...ledger, complete };
-      },
+      audit: ({ probes }) => delayedInboundAudit(control, methods, sessionId, client.sent, start, probes),
     };
   };
 }
