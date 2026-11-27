@@ -203,6 +203,16 @@ func follow(joinURL string, args []string, stdout, stderr io.Writer) int {
 	}
 	r, err := newFollowRun(joinURL, f, st, stderr)
 	if err != nil {
+		if errors.Is(err, errLeaseClaimHeld) {
+			return leaseClaimBusyExit
+		}
+		if errors.Is(err, errLeaseDeviceMismatch) {
+			return leaseDeviceMismatchExit
+		}
+		if errors.Is(err, errLeaseClaimFailed) {
+			fmt.Fprintf(stderr, "slicc follow: %v\n", err)
+			return leaseClaimErrorExit
+		}
 		fmt.Fprintf(stderr, "slicc follow: %v\n", err)
 		out.fail(strings.ReplaceAll(err.Error(), strings.TrimSpace(joinURL), "<join-url>"), "", false)
 		return 1
@@ -253,6 +263,9 @@ type followRun struct {
 
 	mu   sync.Mutex
 	conn *tray.Conn
+
+	leaseCert  bool
+	leaseClaim *os.File
 }
 
 func newFollowRun(joinURL string, ff followFlags, st *stopper, stderr io.Writer) (*followRun, error) {
@@ -275,14 +288,13 @@ func newFollowRunUsing(joinURL string, ff followFlags, st *stopper, stderr io.Wr
 		logf = func(format string, a ...any) { fmt.Fprintf(stderr, "slicc debug: "+format+"\n", a...) }
 	}
 	r := &followRun{joinURL: joinURL, hub: tray.HubOrigin(joinURL), status: status, events: make(chan followEvent, 16)}
+	if err := r.openStores(); err != nil {
+		return nil, err
+	}
 	var err error
-	if r.state, err = tray.OpenDefaultState(); err != nil {
-		return nil, errors.New("no user config directory")
+	if logf, err = r.leaseIsolation(ff, logf); err != nil {
+		return nil, err
 	}
-	if r.certs, err = tray.OpenDefaultCerts(); err != nil {
-		return nil, errors.New("no user config directory")
-	}
-	logf = r.leaseIsolation(ff, logf)
 	if r.f, err = tray.NewFollower(tray.Config{JoinURL: joinURL, State: r.state, Logf: logf}); err != nil {
 		return nil, err
 	}
@@ -292,7 +304,7 @@ func newFollowRunUsing(joinURL string, ff followFlags, st *stopper, stderr io.Wr
 		return nil, err
 	}
 	if ff.leaseBrowser != "" {
-		return r.leaseOnly(ff, st, cert)
+		return r.startLeaseOnly(ff, st, cert)
 	}
 	pol := policy.Remote().With(ff.allow, ff.deny)
 	guardCtx, stopGuard := context.WithCancel(context.Background())
@@ -371,24 +383,20 @@ func redactingLogf(f *tray.Follower, logf func(string, ...any)) func(string, ...
 }
 
 func (r *followRun) certificate() (webrtc.Certificate, error) {
-	pemData, created, err := r.certs.Load(r.hub)
+	pemData, created, err := r.loadCert()
 	if err != nil {
 		return webrtc.Certificate{}, err
 	}
-	cert, err := webrtc.CertificateFromPEM(pemData)
+	cert, fp, err := pemIdentity(pemData)
 	if err != nil {
-		return webrtc.Certificate{}, fmt.Errorf("the device certificate: %w", err)
+		return webrtc.Certificate{}, err
 	}
-	fps, err := cert.GetFingerprints()
-	if err != nil || len(fps) == 0 {
-		return webrtc.Certificate{}, errors.New("the device certificate has no fingerprint")
-	}
-	r.device = strings.ToLower(strings.ReplaceAll(fps[0].Value, ":", ""))
+	r.device = deviceHex(fp)
 	verb := "device"
 	if created {
 		verb = "new device"
 	}
-	r.status("%s, fingerprint %s %s", verb, fps[0].Algorithm, strings.ToUpper(fps[0].Value))
+	r.status("%s, fingerprint %s %s", verb, fp.Algorithm, strings.ToUpper(fp.Value))
 	return *cert, nil
 }
 
@@ -443,7 +451,7 @@ func (r *followRun) onLinkWithin(l *link.Link, timeout time.Duration) {
 			if r.lease != nil {
 				name = "paired lease peer"
 			}
-			_ = r.certs.SetLeader(r.hub, name)
+			_ = r.leaseCertMutate(func(c *tray.Certs) error { return c.SetLeader(r.hub, name) })
 			r.emit(followEvent{kind: evUp, name: name, conn: conn})
 			<-l.Done()
 			r.emit(followEvent{kind: evDown, conn: conn, reason: screenLostReason(l)})
@@ -504,8 +512,10 @@ func (r *followRun) unlink(name string) int {
 	if name == "" {
 		name = "seven"
 	}
-	_ = r.state.ForgetHub(r.joinURL)
-	_ = r.certs.Delete(r.hub)
+	if r.state != nil {
+		_ = r.state.ForgetHub(r.joinURL)
+	}
+	_ = r.leaseCertMutate(func(c *tray.Certs) error { return c.Delete(r.hub) })
 	r.ctl.Update(func(s *ctl.Status) { s.State, s.Code, s.RetryAt = ctl.StateStopped, "UNLINKED", nil })
 	r.status("unlinked by %s", name)
 	r.out.emit(flow.Event{Event: flow.LinkLost, Mode: modeTray, Reason: "unlinked by " + name, Code: "UNLINKED"})

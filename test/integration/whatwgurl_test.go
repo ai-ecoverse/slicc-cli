@@ -25,12 +25,20 @@ type protectOverlayRun struct {
 	pkg     string
 	file    string
 	regress string
+	extra   map[string]string
 	run     string
+	timeout time.Duration
 }
 
 var (
-	whatwgURLTable   = protectOverlayRun{"./internal/caps/cdp", "internal/caps/cdp/whatwgurl_test.go", "test/integration/testdata/whatwgurl/regression.go", "^TestWhatwgURLDecisionTable$"}
-	protectHostRunes = protectOverlayRun{"./internal/protect", "internal/protect/hostrunes_test.go", "test/integration/testdata/whatwgurl/hostrunes.go", "^TestHostRunes"}
+	whatwgURLTable = protectOverlayRun{
+		pkg: "./internal/caps/cdp", file: "internal/caps/cdp/whatwgurl_test.go",
+		regress: "test/integration/testdata/whatwgurl/regression.go", run: "^TestWhatwgURLDecisionTable$",
+	}
+	protectHostRunes = protectOverlayRun{
+		pkg: "./internal/protect", file: "internal/protect/hostrunes_test.go",
+		regress: "test/integration/testdata/whatwgurl/hostrunes.go", run: "^TestHostRunes",
+	}
 )
 
 func whatwgURLTableRun(t *testing.T, mutant map[string]string, files map[string]string) (string, error) {
@@ -50,6 +58,9 @@ func protectOverlay(t *testing.T, target protectOverlayRun, mutant map[string]st
 	scratch := t.TempDir()
 	replacements := map[string]string{
 		filepath.Join(root, target.file): filepath.Join(root, target.regress),
+	}
+	for dest, src := range target.extra {
+		replacements[filepath.Join(root, dest)] = filepath.Join(root, src)
 	}
 	if mutant != nil {
 		source := filepath.Join(root, "internal/protect/protect.go")
@@ -89,7 +100,11 @@ func protectOverlay(t *testing.T, target protectOverlayRun, mutant map[string]st
 	if err := os.WriteFile(overlay, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+	limit := target.timeout
+	if limit <= 0 {
+		limit = 180 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), limit)
 	defer cancel()
 	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-v", "-run", target.run, target.pkg)
 	command.Dir = root

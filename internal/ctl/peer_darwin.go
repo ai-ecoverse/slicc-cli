@@ -23,3 +23,21 @@ func peerIsUs(c net.Conn) bool {
 	}
 	return int(cred.Uid) == os.Getuid()
 }
+
+const PeerPIDs = true
+
+func peerPID(c net.Conn) (int, bool) {
+	if !peerIsUs(c) {
+		return 0, false
+	}
+	raw, err := c.(*net.UnixConn).SyscallConn()
+	if err != nil {
+		return 0, false
+	}
+	var pid int
+	var perr error
+	if err := raw.Control(func(fd uintptr) { pid, perr = unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID) }); err != nil || perr != nil {
+		return 0, false
+	}
+	return pid, pid > 0
+}

@@ -410,12 +410,42 @@ func listIn(ctx context.Context, dirs []string) ([]Entry, error) {
 	return entries, nil
 }
 
-func Query(ctx context.Context, path string) (*Status, error) {
-	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
-	defer cancel()
+var ErrPeer = errors.New("answered by another process")
+
+func Query(ctx context.Context, path string) (*Status, error) { return query(ctx, path, 0) }
+
+func QueryPID(ctx context.Context, path string, pid int) (*Status, error) {
+	if pid <= 0 {
+		return nil, ErrPeer
+	}
+	st, err := query(ctx, path, pid)
+	if err == nil && st.PID != pid {
+		return nil, ErrPeer
+	}
+	return st, err
+}
+
+func dialPeer(ctx context.Context, path string, pid int) (net.Conn, error) {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "unix", path)
+	if err != nil || pid == 0 {
+		return c, err
+	}
+	if got, ok := peerPID(c); !ok || got != pid {
+		_ = c.Close()
+		return nil, ErrPeer
+	}
+	return c, nil
+}
+
+func query(ctx context.Context, path string, pid int) (*Status, error) {
+	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
+	defer cancel()
+	c, err := dialPeer(ctx, path, pid)
 	if err != nil {
+		if errors.Is(err, ErrPeer) {
+			return nil, err
+		}
 		if refused(err) {
 			return nil, ErrStale
 		}
@@ -457,11 +487,21 @@ func Send(ctx context.Context, path, op string) (*Reply, error) {
 }
 
 func Call(ctx context.Context, path string, req Request) (*Reply, error) {
+	return call(ctx, path, 0, req)
+}
+
+func CallPID(ctx context.Context, path string, pid int, req Request) (*Reply, error) {
+	if pid <= 0 {
+		return nil, ErrPeer
+	}
+	return call(ctx, path, pid, req)
+}
+
+func call(ctx context.Context, path string, pid int, req Request) (*Reply, error) {
 	req.V = version
 	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
 	defer cancel()
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "unix", path)
+	c, err := dialPeer(ctx, path, pid)
 	if err != nil {
 		return nil, err
 	}

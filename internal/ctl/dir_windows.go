@@ -119,3 +119,7 @@ func refused(err error) bool {
 }
 
 func peerIsUs(net.Conn) bool { return true }
+
+const PeerPIDs = false
+
+func peerPID(net.Conn) (int, bool) { return 0, false }
