@@ -378,6 +378,9 @@ globalThis.linkTest = {
       ice: state.pc?.iceConnectionState ?? null,
       connection: state.pc?.connectionState ?? null,
       linkError: state.link?.error?.message ?? null,
+      inboundControlRecords: state.link?.inboundControlRecords ?? 0,
+      inboundControlBytes: state.link?.inboundControlBytes ?? 0,
+      helloReceived: Boolean(state.link?.helloReceived),
     };
   },
   async ready() {

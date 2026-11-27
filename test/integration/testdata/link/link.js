@@ -262,6 +262,8 @@ export class Link {
     this.#handlers = handlers;
     this.helloReceived = false;
     this.dropped = [];
+    this.inboundControlRecords = 0;
+    this.inboundControlBytes = 0;
     this.#peerHello.promise.catch(() => {});
     this.control = pc.createDataChannel(CONTROL_LABEL);
     this.#wireControl(this.control);
@@ -337,12 +339,16 @@ export class Link {
     channel.addEventListener('open', () => channel.send(JSON.stringify(this.#hello)));
     channel.addEventListener('close', () => this.close('control channel closed'));
     channel.addEventListener('message', (event) => {
+      const raw = event.data;
+      const n = typeof raw === 'string' ? new TextEncoder().encode(raw).byteLength : (raw?.byteLength ?? 0);
+      this.inboundControlRecords++;
+      this.inboundControlBytes += n;
       if (!this.helloReceived) {
-        if (typeof event.data !== 'string') return this.#violation('first control message is not HELLO');
-        return this.#onHello(event.data);
+        if (typeof raw !== 'string') return this.#violation('first control message is not HELLO');
+        return this.#onHello(raw);
       }
-      if (typeof event.data === 'string') return this.#violation('text message after HELLO');
-      this.#onFrame(channel, event.data);
+      if (typeof raw === 'string') return this.#violation('text message after HELLO');
+      this.#onFrame(channel, raw);
     });
   }
 
