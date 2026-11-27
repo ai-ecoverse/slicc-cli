@@ -85,6 +85,9 @@ type fakeTray struct {
 	SupersedeOnPoll  string
 	LegacySupersede  bool
 	LinkOnly         bool
+	JSONOnly         bool
+	PlainRedirect    string
+	BareRedirect     bool
 	OnJoin           func(b *hubBootstrap)
 	OnFollower       func(action string, b *hubBootstrap, body map[string]any)
 
@@ -192,6 +195,13 @@ func (h *fakeHub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if tr := h.trays[token]; tr != nil && (tr.PlainRedirect != "" || tr.BareRedirect) {
+		if tr.PlainRedirect != "" {
+			w.Header().Set("Location", tr.PlainRedirect)
+		}
+		w.WriteHeader(http.StatusFound)
+		return
+	}
 	status, payload := h.handle(token, action, body)
 	if tr := h.trays[token]; tr != nil && tr.SupersededBy != "" {
 		h.supersede(w, r, tr, payload)
@@ -201,16 +211,28 @@ func (h *fakeHub) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *fakeHub) supersede(w http.ResponseWriter, r *http.Request, tr *fakeTray, payload any) {
-	w.Header().Add("Link", `<`+h.srv.URL+`/status>; rel="status"; type="application/json"`)
-	w.Header().Add("Link", `<`+tr.SupersededBy+`>; rel="successor-version"`)
+	if !tr.JSONOnly {
+		w.Header().Add("Link", `<`+h.srv.URL+`/status>; rel="status"; type="application/json"`)
+		w.Header().Add("Link", `<`+tr.SupersededBy+`>; rel="successor-version"`)
+	}
 	status := http.StatusPermanentRedirect
 	if tr.LegacySupersede || r.URL.Query().Get("redirect") == "manual" {
 		status = http.StatusConflict
-	} else {
+	} else if !tr.JSONOnly {
 		w.Header().Set("Location", tr.SupersededBy+"?json=true")
 		if m, ok := payload.(map[string]any); ok {
 			if res, ok := m["result"].(map[string]any); ok {
 				res["action"] = "redirect"
+			}
+		}
+	}
+	if tr.JSONOnly {
+		status = http.StatusOK
+		if m, ok := payload.(map[string]any); ok {
+			if res, ok := m["result"].(map[string]any); ok {
+				res["action"] = "fail"
+				res["code"] = "TRAY_SUPERSEDED"
+				res["joinUrl"] = tr.SupersededBy
 			}
 		}
 	}

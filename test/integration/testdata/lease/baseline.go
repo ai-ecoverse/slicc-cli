@@ -77,12 +77,12 @@ type blGate struct {
 }
 
 type blSite struct {
-	main, other *httptest.Server
-	mu          sync.Mutex
-	events      []blEvent
-	gates       map[string]*blGate
-	protected   int
-	closed      string
+	main, other, api *httptest.Server
+	mu               sync.Mutex
+	events           []blEvent
+	gates            map[string]*blGate
+	protected        int
+	closed           string
 }
 
 func (s *blSite) note(kind, n, path string) {
@@ -233,6 +233,31 @@ func (s *blSite) serve(w http.ResponseWriter, r *http.Request) {
 	case p == "/page/frames":
 		u, _ := url.Parse(s.main.URL)
 		blHTML(w, `<h1>Framed top %s</h1><iframe src="https://seven.sliccy.ai:%s/child/%s"></iframe><iframe src="%s/child/%s"></iframe><iframe src="/child/%s"></iframe>`, n, u.Port(), n, s.other.URL, n, n)
+	case p == "/page/frame/same":
+		blHTML(w, `<h1>Top same %s</h1><iframe src="/child/%s"></iframe>`, n, n)
+	case p == "/page/frame/cross":
+		blHTML(w, `<h1>Top cross %s</h1><iframe src="%s/child/%s"></iframe>`, n, s.other.URL, n)
+	case p == "/page/frame/blank":
+		blHTML(w, `<h1>Top blank %s</h1><iframe src="about:blank"></iframe>`, n)
+	case p == "/page/frame/srcdoc":
+		blHTML(w, `<h1>Top srcdoc %s</h1><iframe srcdoc="<p>SRCDOC CHILD</p>"></iframe>`, n)
+	case p == "/page/frame/sandbox":
+		blHTML(w, `<h1>Top sandbox %s</h1><iframe sandbox src="/child/%s"></iframe>`, n, n)
+	case p == "/page/frame/data":
+		blHTML(w, `<h1>Top data %s</h1><iframe src="data:text/html,<p>DATA CHILD</p>"></iframe>`, n)
+	case p == "/page/frame/protected":
+		u, _ := url.Parse(s.main.URL)
+		blHTML(w, `<h1>Top protected %s</h1><iframe src="https://seven.sliccy.ai:%s/child/%s"></iframe>`, n, u.Port(), n)
+	case p == "/page/frame/widget":
+		blHTML(w, `<h1>Top widget %s</h1><iframe src="%s/widget/%s" width="40" height="20"></iframe>`, n, s.other.URL, n)
+	case p == "/page/stable":
+		support := r.URL.Query().Get("support") == "1"
+		frame := ""
+		if support {
+			frame = fmt.Sprintf(`<iframe src="%s/widget/%s" width="40" height="20"></iframe>`, s.other.URL, n)
+		}
+		blHTML(w, `<h1 id="t">Top stable %s</h1><p id="cdn">cdn_pending</p><p id="api">api_pending</p>%s<script src="%s/cdn/render.js?n=%s"></script><script>fetch(%q).then(r=>r.json()).then(j=>{document.getElementById('api').textContent=j.text}).catch(()=>{document.getElementById('api').textContent='api_fail'})</script>`,
+			n, frame, s.other.URL, n, s.api.URL+"/api/msg?n="+n)
 	case strings.HasPrefix(p, "/child/"):
 		blHTML(w, "<p>CHILD SAME ORIGIN %s</p>", n)
 	case p == "/race/nav":
@@ -258,10 +283,33 @@ func newBLSite(t *testing.T) *blSite {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		s.note("doc", strings.TrimPrefix(r.URL.Path[strings.LastIndex(r.URL.Path, "/"):], "/"), "other"+r.URL.Path)
+		n := r.URL.Query().Get("n")
+		s.note("doc", n, "other"+r.URL.Path)
+		if strings.HasPrefix(r.URL.Path, "/widget/") {
+			blHTML(w, "<p>WIDGET</p>")
+			return
+		}
+		if r.URL.Path == "/cdn/render.js" {
+			w.Header().Set("Content-Type", "application/javascript")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			fmt.Fprintf(w, `document.getElementById('cdn').textContent='cdn_ok';`)
+			return
+		}
 		blHTML(w, "<p>OTHER ORIGIN DOCUMENT</p>")
 	}))
 	t.Cleanup(s.other.Close)
+	s.api = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := r.URL.Query().Get("n")
+		s.note("doc", n, "api"+r.URL.Path)
+		if r.URL.Path == "/api/msg" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			fmt.Fprintf(w, `{"text":"api_ok"}`)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(s.api.Close)
 	l, e := net.Listen("tcp", "127.0.0.1:0")
 	if e != nil {
 		t.Fatal(e)

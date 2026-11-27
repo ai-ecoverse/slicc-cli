@@ -177,6 +177,58 @@ func TestLeaseBaselineR12ScopeMatch(t *testing.T) {
 	blLine(t, "R12-scope-match-candidates", "c0", "rule", "c1", "other-query", "c2", "no-query", "c3", "plus-fragment", "c4", "prefix-base", "c5", "prefix-slash", "c6", "sibling", "c7", "dot-segment", "c8", "encoded-slash", "c9", "upper-scheme")
 }
 
+func TestLeaseBaselineR12FramesGate(t *testing.T) {
+	r := blSetup(t)
+	fixtures := []struct {
+		name, path string
+		support    bool
+		kinds      []string
+	}{
+		{"same", "/page/frame/same", false, []string{"exact", "origin"}},
+		{"cross", "/page/frame/cross", false, []string{"exact", "origin"}},
+		{"blank", "/page/frame/blank", false, []string{"exact", "origin"}},
+		{"srcdoc", "/page/frame/srcdoc", false, []string{"exact", "origin"}},
+		{"sandbox", "/page/frame/sandbox", false, []string{"exact", "origin"}},
+		{"data", "/page/frame/data", false, []string{"exact", "origin"}},
+		{"protected", "/page/frame/protected", false, []string{"exact", "origin"}},
+		{"control-cdn-api", "/page/stable", false, []string{"exact"}},
+		{"stable-no-support", "/page/stable", false, []string{"exact", "origin"}},
+		{"stable-one-support", "/page/stable", true, []string{"exact", "origin"}},
+		{"mixed", "/page/frames", false, []string{"exact", "origin"}},
+	}
+	for _, fx := range fixtures {
+		for _, kind := range fx.kinds {
+			b := r.broker()
+			n := fx.name + "-" + kind
+			q := "?n=" + n
+			if fx.support {
+				q = "?support=1&n=" + n
+			}
+			start := r.site.url(fx.path + q)
+			rule := Rule{Kind: "origin", URL: r.site.main.URL}
+			if kind == "exact" {
+				rule = Rule{Kind: "exact", URL: start}
+			}
+			a, _ := blGrant(t, b, 60, []Rule{rule})
+			ph0 := r.site.protectedHits()
+			g := r.do(b, a, "goto", blGoto(start))
+			time.Sleep(900 * time.Millisecond)
+			blGateSet("unset")
+			s := r.do(b, a, "snapshot", "{}")
+			txt := s.text()
+			tab := r.tabURL(a.tab.target)
+			blLine(t, "R12-frames-gate-broker", "fixture", fx.name, "kind", kind, "support_frame", fx.support,
+				"goto_err", blErr(g.err), "tab", tab,
+				"document_url_stable", map[bool]string{true: "yes", false: "no"}[tab != "none" && !strings.Contains(tab, "/final/")],
+				"snapshot_err", blErr(s.err), "text_delivered", map[bool]string{true: "yes", false: "no"}[s.err == nil && txt != "none"],
+				"rendered_cdn", strings.Contains(txt, "cdn_ok"), "rendered_api", strings.Contains(txt, "api_ok"),
+				"snapshot_text", txt, "failing_gate", blGateGet(),
+				"site_hops", r.site.hops(n), "protected_hits", r.site.protectedHits()-ph0)
+			_ = b.Revoke(a.ID)
+		}
+	}
+}
+
 func TestLeaseBaselineR12ContractFacts(t *testing.T) {
 	r := blSetup(t)
 	b := r.broker()

@@ -25,6 +25,7 @@ func TestSignedLeaseBaselineR12(t *testing.T) {
 	ov := hrOverlay(t, t.TempDir(), map[string]string{
 		filepath.Join(root, "internal/lease/baseline_test.go"): filepath.Join(root, "test/integration/testdata/lease/baseline.go"),
 		filepath.Join(root, "internal/lease/r12_test.go"):      filepath.Join(root, "test/integration/testdata/lease/r12.go"),
+		filepath.Join(root, "internal/lease/browser.go"):       filepath.Join(root, "test/integration/testdata/lease/browser_gated.go"),
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), 420*time.Second)
 	defer cancel()
@@ -43,6 +44,7 @@ func TestSignedLeaseBaselineR12(t *testing.T) {
 		"TestLeaseBaselineR12SnapshotIdentity",
 		"TestLeaseBaselineR12CaptureRace",
 		"TestLeaseBaselineR12ScopeMatch",
+		"TestLeaseBaselineR12FramesGate",
 		"TestLeaseBaselineR12ContractFacts",
 	} {
 		if !strings.Contains(string(out), "--- PASS: "+name+" ") {
