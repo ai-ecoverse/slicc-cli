@@ -167,6 +167,10 @@ func blHTML(w http.ResponseWriter, format string, args ...any) {
 func (s *blSite) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
 	n := r.URL.Query().Get("n")
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if n == "" && len(parts) >= 1 && parts[0] != "" {
+		n = parts[len(parts)-1]
+	}
 	if strings.HasPrefix(r.Host, "seven.sliccy.ai") {
 		s.mu.Lock()
 		s.protected++
@@ -174,10 +178,6 @@ func (s *blSite) serve(w http.ResponseWriter, r *http.Request) {
 		s.note("doc", n, "protected"+p)
 		blHTML(w, "<h1>PROTECTED DOCUMENT</h1>")
 		return
-	}
-	parts := strings.Split(strings.Trim(p, "/"), "/")
-	if len(parts) >= 2 && n == "" {
-		n = parts[len(parts)-1]
 	}
 	if p == "/favicon.ico" {
 		w.WriteHeader(http.StatusNoContent)
@@ -236,7 +236,7 @@ func (s *blSite) serve(w http.ResponseWriter, r *http.Request) {
 	case p == "/page/frame/same":
 		blHTML(w, `<h1>Top same %s</h1><iframe src="/child/%s"></iframe>`, n, n)
 	case p == "/page/frame/cross":
-		blHTML(w, `<h1>Top cross %s</h1><iframe src="%s/child/%s"></iframe>`, n, s.other.URL, n)
+		blHTML(w, `<h1>Top cross %s</h1><iframe src="%s/child/%s?n=%s"></iframe>`, n, s.other.URL, n, n)
 	case p == "/page/frame/blank":
 		blHTML(w, `<h1>Top blank %s</h1><iframe src="about:blank"></iframe>`, n)
 	case p == "/page/frame/srcdoc":
@@ -247,14 +247,14 @@ func (s *blSite) serve(w http.ResponseWriter, r *http.Request) {
 		blHTML(w, `<h1>Top data %s</h1><iframe src="data:text/html,<p>DATA CHILD</p>"></iframe>`, n)
 	case p == "/page/frame/protected":
 		u, _ := url.Parse(s.main.URL)
-		blHTML(w, `<h1>Top protected %s</h1><iframe src="https://seven.sliccy.ai:%s/child/%s"></iframe>`, n, u.Port(), n)
+		blHTML(w, `<h1>Top protected %s</h1><iframe src="https://seven.sliccy.ai:%s/child/%s?n=%s"></iframe>`, n, u.Port(), n, n)
 	case p == "/page/frame/widget":
-		blHTML(w, `<h1>Top widget %s</h1><iframe src="%s/widget/%s" width="40" height="20"></iframe>`, n, s.other.URL, n)
+		blHTML(w, `<h1>Top widget %s</h1><iframe src="%s/widget/%s?n=%s" width="40" height="20"></iframe>`, n, s.other.URL, n, n)
 	case p == "/page/stable":
 		support := r.URL.Query().Get("support") == "1"
 		frame := ""
 		if support {
-			frame = fmt.Sprintf(`<iframe src="%s/widget/%s" width="40" height="20"></iframe>`, s.other.URL, n)
+			frame = fmt.Sprintf(`<iframe src="%s/support-frame/%s?n=%s" width="40" height="20"></iframe>`, s.other.URL, n, n)
 		}
 		blHTML(w, `<h1 id="t">Top stable %s</h1><p id="cdn">cdn_pending</p><p id="api">api_pending</p>%s<script src="%s/cdn/render.js?n=%s"></script><script>fetch(%q).then(r=>r.json()).then(j=>{document.getElementById('api').textContent=j.text}).catch(()=>{document.getElementById('api').textContent='api_fail'})</script>`,
 			n, frame, s.other.URL, n, s.api.URL+"/api/msg?n="+n)
@@ -284,9 +284,20 @@ func newBLSite(t *testing.T) *blSite {
 			return
 		}
 		n := r.URL.Query().Get("n")
-		s.note("doc", n, "other"+r.URL.Path)
-		if strings.HasPrefix(r.URL.Path, "/widget/") {
-			blHTML(w, "<p>WIDGET</p>")
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if n == "" && len(parts) >= 1 && parts[0] != "" {
+			n = parts[len(parts)-1]
+		}
+		dest := r.Header.Get("Sec-Fetch-Dest")
+		if dest == "document" || dest == "iframe" || strings.HasPrefix(r.URL.Path, "/child/") || strings.HasPrefix(r.URL.Path, "/support-frame/") || strings.HasPrefix(r.URL.Path, "/widget/") || r.URL.Path == "/cdn/render.js" {
+			s.note("doc", n, "other"+r.URL.Path)
+		}
+		if strings.HasPrefix(r.URL.Path, "/support-frame/") || strings.HasPrefix(r.URL.Path, "/widget/") {
+			blHTML(w, "<p>SUPPORT FRAME</p>")
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/child/") {
+			blHTML(w, "<p>OTHER CHILD %s</p>", n)
 			return
 		}
 		if r.URL.Path == "/cdn/render.js" {

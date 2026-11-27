@@ -146,9 +146,6 @@ func TestSignedLeaseBaselineR13ShellLine(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err == nil {
 		shells = append(shells, "bash")
 	}
-	if _, err := exec.LookPath("zsh"); err == nil {
-		shells = append(shells, "zsh")
-	}
 	for _, sh := range shells {
 		for _, quoted := range []bool{true, false} {
 			allow := scope
@@ -161,11 +158,27 @@ func TestSignedLeaseBaselineR13ShellLine(t *testing.T) {
 			var stdout, stderr strings.Builder
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 			_ = cmd.Run()
+			errText := stderr.String()
+			reason := "other"
+			switch {
+			case strings.Contains(errText, "review requires a local terminal"):
+				reason = "review_requires_local_terminal"
+			case strings.Contains(errText, "no matching proven request"):
+				reason = "no_matching_proven_request"
+			case strings.Contains(errText, "invalid or protected"):
+				reason = "invalid_or_protected_rule"
+			case strings.Contains(errText, "Type APPROVE"):
+				reason = "reached_approve_prompt"
+			}
 			leaseBLLine(t, "R13/shell-line", "shell", sh, "quoted", quoted, "exit", cmd.ProcessState.ExitCode(),
-				"stderr_has_no_matching_or_prompt", strings.Contains(stderr.String(), "no matching") || strings.Contains(stderr.String(), "APPROVE") || strings.Contains(stderr.String(), "Select"),
-				"argv_allow_once", true)
+				"exit_reason", reason,
+				"stderr", strings.TrimSpace(errText),
+				"stderr_has_no_matching_or_prompt", strings.Contains(errText, "no matching") || strings.Contains(errText, "APPROVE") || strings.Contains(errText, "Select"),
+				"argv_allow_once", true,
+				"measured", false)
 		}
 	}
+	leaseBLLine(t, "R13/shell-line-zsh", "measured", false, "reason", "zsh_unmeasured_on_this_vehicle")
 	e.cli("deny", id)
 }
 

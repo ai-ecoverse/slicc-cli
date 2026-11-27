@@ -3,6 +3,8 @@ package lease
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +15,7 @@ import (
 )
 
 var blGateLast atomic.Value
+var blStampDiffLast atomic.Value
 
 func blGateSet(name string) {
 	blGateLast.Store(name)
@@ -24,6 +27,52 @@ func blGateGet() string {
 		return "none"
 	}
 	return v
+}
+
+func blStampDiffSet(v string) {
+	blStampDiffLast.Store(v)
+}
+
+func blStampDiffGet() string {
+	v, _ := blStampDiffLast.Load().(string)
+	if v == "" {
+		return "none"
+	}
+	return v
+}
+
+func blStampFields(st stamp, unique string) string {
+	return fmt.Sprintf("url=%s|loader=%s|frame=%s|origin=%s|unreachable=%s|gen=%d|unique=%s",
+		st.f.URL, st.f.LoaderID, st.f.ID, st.f.SecurityOrigin, st.f.UnreachableURL, st.gen, unique)
+}
+
+func blStampDiffer(a, b stamp, ua, ub string) string {
+	var d []string
+	if a.f.URL != b.f.URL {
+		d = append(d, "url")
+	}
+	if a.f.LoaderID != b.f.LoaderID {
+		d = append(d, "loader")
+	}
+	if a.f.ID != b.f.ID {
+		d = append(d, "frame")
+	}
+	if a.f.SecurityOrigin != b.f.SecurityOrigin {
+		d = append(d, "origin")
+	}
+	if a.f.UnreachableURL != b.f.UnreachableURL {
+		d = append(d, "unreachable")
+	}
+	if a.gen != b.gen {
+		d = append(d, "gen")
+	}
+	if ua != ub {
+		d = append(d, "unique")
+	}
+	if len(d) == 0 {
+		return "none"
+	}
+	return strings.Join(d, ",")
 }
 
 type browserSession struct {
@@ -253,8 +302,21 @@ func (bs *browserSession) action(ctx context.Context, t *tab, c claims, o *prote
 		return nil, stamp{}, denied
 	}
 	if op == "snapshot" {
+		bs.mu.Lock()
+		uniqueBefore := t.unique
+		bs.mu.Unlock()
 		now, e := bs.stamp(ctx, t)
-		if e != nil || st != now || !live() {
+		bs.mu.Lock()
+		uniqueAfter := t.unique
+		bs.mu.Unlock()
+		if e != nil {
+			blStampDiffSet("before={" + blStampFields(st, uniqueBefore) + "} after={stamp_err} differ=stamp_err")
+			blGateSet("post-stamp-mismatch")
+			return nil, stamp{}, denied
+		}
+		diff := blStampDiffer(st, now, uniqueBefore, uniqueAfter)
+		blStampDiffSet("before={" + blStampFields(st, uniqueBefore) + "} after={" + blStampFields(now, uniqueAfter) + "} differ=" + diff)
+		if st != now || !live() {
 			blGateSet("post-stamp-mismatch")
 			return nil, stamp{}, denied
 		}

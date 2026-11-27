@@ -183,18 +183,20 @@ func TestLeaseBaselineR12FramesGate(t *testing.T) {
 		name, path string
 		support    bool
 		kinds      []string
+		needChild  bool
+		domProof   bool
 	}{
-		{"same", "/page/frame/same", false, []string{"exact", "origin"}},
-		{"cross", "/page/frame/cross", false, []string{"exact", "origin"}},
-		{"blank", "/page/frame/blank", false, []string{"exact", "origin"}},
-		{"srcdoc", "/page/frame/srcdoc", false, []string{"exact", "origin"}},
-		{"sandbox", "/page/frame/sandbox", false, []string{"exact", "origin"}},
-		{"data", "/page/frame/data", false, []string{"exact", "origin"}},
-		{"protected", "/page/frame/protected", false, []string{"exact", "origin"}},
-		{"control-cdn-api", "/page/stable", false, []string{"exact"}},
-		{"stable-no-support", "/page/stable", false, []string{"exact", "origin"}},
-		{"stable-one-support", "/page/stable", true, []string{"exact", "origin"}},
-		{"mixed", "/page/frames", false, []string{"exact", "origin"}},
+		{"same", "/page/frame/same", false, []string{"exact", "origin"}, true, false},
+		{"cross", "/page/frame/cross", false, []string{"exact", "origin"}, true, false},
+		{"blank", "/page/frame/blank", false, []string{"exact", "origin"}, true, true},
+		{"srcdoc", "/page/frame/srcdoc", false, []string{"exact", "origin"}, true, true},
+		{"sandbox", "/page/frame/sandbox", false, []string{"exact", "origin"}, true, true},
+		{"data", "/page/frame/data", false, []string{"exact", "origin"}, true, true},
+		{"protected", "/page/frame/protected", false, []string{"exact", "origin"}, true, false},
+		{"control-cdn-api", "/page/stable", false, []string{"exact"}, false, false},
+		{"stable-no-support", "/page/stable", false, []string{"exact", "origin"}, false, false},
+		{"stable-one-support", "/page/stable", true, []string{"exact", "origin"}, true, false},
+		{"mixed", "/page/frames", false, []string{"exact", "origin"}, true, false},
 	}
 	for _, fx := range fixtures {
 		for _, kind := range fx.kinds {
@@ -213,20 +215,74 @@ func TestLeaseBaselineR12FramesGate(t *testing.T) {
 			ph0 := r.site.protectedHits()
 			g := r.do(b, a, "goto", blGoto(start))
 			time.Sleep(900 * time.Millisecond)
+			hops := r.site.hops(n)
+			childNet := strings.Contains(hops, "/child/") || strings.Contains(hops, "/support-frame/") || strings.Contains(hops, "/widget/") || strings.Contains(hops, "protected/child")
+			dom := blFrameDOMProof(b, a)
+			childOK := childNet || (fx.domProof && dom.frames >= 1 && dom.hasIframe)
+			if fx.needChild && !childOK && fx.name != "protected" {
+				t.Fatalf("%s/%s: child not present before snapshot hops=%q dom=%+v", fx.name, kind, hops, dom)
+			}
 			blGateSet("unset")
+			blStampDiffSet("unset")
 			s := r.do(b, a, "snapshot", "{}")
 			txt := s.text()
 			tab := r.tabURL(a.tab.target)
+			stampDiff := blStampDiffGet()
+			wantStamp := fx.name == "protected" || fx.name == "mixed" || fx.name == "same"
+			if wantStamp && stampDiff == "unset" {
+				t.Fatalf("%s/%s: missing stamp_diff", fx.name, kind)
+			}
 			blLine(t, "R12-frames-gate-broker", "fixture", fx.name, "kind", kind, "support_frame", fx.support,
 				"goto_err", blErr(g.err), "tab", tab,
 				"document_url_stable", map[bool]string{true: "yes", false: "no"}[tab != "none" && !strings.Contains(tab, "/final/")],
 				"snapshot_err", blErr(s.err), "text_delivered", map[bool]string{true: "yes", false: "no"}[s.err == nil && txt != "none"],
 				"rendered_cdn", strings.Contains(txt, "cdn_ok"), "rendered_api", strings.Contains(txt, "api_ok"),
 				"snapshot_text", txt, "failing_gate", blGateGet(),
-				"site_hops", r.site.hops(n), "protected_hits", r.site.protectedHits()-ph0)
+				"child_requested", map[bool]string{true: "yes", false: "no"}[childOK],
+				"child_dom_frames", dom.frames, "child_dom_has_iframe", dom.hasIframe,
+				"child_dom_src", dom.src, "child_dom_content_doc", dom.contentDoc,
+				"stamp_diff", stampDiff,
+				"site_hops", hops, "protected_hits", r.site.protectedHits()-ph0)
 			_ = b.Revoke(a.ID)
 		}
 	}
+}
+
+type blDOMProof struct {
+	frames     int
+	hasIframe  bool
+	src        string
+	contentDoc string
+}
+
+func blFrameDOMProof(b *Broker, a *active) blDOMProof {
+	out := blDOMProof{src: "none", contentDoc: "none"}
+	if a == nil || a.tab == nil || a.tab.session == "" || b.bs == nil || b.bs.c == nil {
+		return out
+	}
+	var r struct {
+		Result struct {
+			Value struct {
+				Frames     int
+				HasIframe  bool
+				Src        string
+				ContentDoc string
+			}
+		}
+	}
+	expr := `(()=>{const f=document.querySelector('iframe');let cd='none';if(f){try{cd=f.contentDocument?'same-origin-doc':'null-doc'}catch(e){cd='opaque'}}return {frames:window.frames.length,hasIframe:!!f,src:(f&&(f.getAttribute('src')||f.src||''))||'',contentDoc:cd}})()`
+	if b.bs.c.Call(context.Background(), a.tab.session, "Runtime.evaluate", map[string]any{"expression": expr, "returnByValue": true, "timeout": 2000}, &r) != nil {
+		return out
+	}
+	out.frames = r.Result.Value.Frames
+	out.hasIframe = r.Result.Value.HasIframe
+	if r.Result.Value.Src != "" {
+		out.src = blWord(r.Result.Value.Src, 48)
+	}
+	if r.Result.Value.ContentDoc != "" {
+		out.contentDoc = r.Result.Value.ContentDoc
+	}
+	return out
 }
 
 func TestLeaseBaselineR12ContractFacts(t *testing.T) {
