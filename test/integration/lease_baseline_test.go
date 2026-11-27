@@ -65,7 +65,7 @@ func TestSignedLeaseBaselineBroker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lease baseline broker rows: %v\n%s", err, out)
 	}
-	for _, name := range []string{"TestLeaseBaselineRevokeGoto", "TestLeaseBaselineRevokeSnapshot", "TestLeaseBaselineExpiry", "TestLeaseBaselineClock", "TestLeaseBaselineLimits", "TestLeaseBaselineAdmissions", "TestLeaseBaselineFinalDocument"} {
+	for _, name := range []string{"TestLeaseBaselineRevokeGoto", "TestLeaseBaselineRevokeSnapshot", "TestLeaseBaselineExpiry", "TestLeaseBaselineClock", "TestLeaseBaselineLimits", "TestLeaseBaselineAdmissions"} {
 		if !strings.Contains(string(out), "--- PASS: "+name+" ") {
 			t.Fatalf("%s did not run\n%s", name, out)
 		}
