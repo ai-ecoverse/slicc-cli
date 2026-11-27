@@ -23,11 +23,13 @@ type docIdentity struct {
 }
 
 type docIdentityAdmit struct {
-	taint uint64
+	taint  uint64
+	loader string
 }
 
 type docIdentityHold struct {
 	taint           uint64
+	loader          string
 	seq             uint64
 	data            []byte
 	id              int64
@@ -382,7 +384,7 @@ func (g *guard) noteDocIdentityAdmitLocked(c *command) {
 	if t == nil || !navTypes[t.typ] || g.docIdentitySkipTargetLocked(t.id) {
 		return
 	}
-	admit := docIdentityAdmit{taint: g.docIdentityTaint[t.id]}
+	admit := docIdentityAdmit{taint: g.docIdentityTaint[t.id], loader: g.currentDocIdentityLocked(t.id).loaderID}
 	k := callKey{c.session, c.id}
 	if g.docIdentityCalls == nil {
 		g.docIdentityCalls = map[callKey]docIdentityAdmit{}
@@ -437,6 +439,7 @@ func (g *guard) holdDocIdentityReplyLocked(k callKey, m *message, data []byte) (
 	now := time.Now()
 	h := &docIdentityHold{
 		taint:       admit.taint,
+		loader:      admit.loader,
 		seq:         g.docIdentitySeq,
 		data:        append([]byte(nil), data...),
 		id:          *m.ID,
@@ -540,6 +543,7 @@ func (g *guard) settleDocIdentityAskLocked(target string) [][]byte {
 	if id.frameID == "" && id.loaderID == "" && id.url == "" {
 		return g.failDocIdentityHoldsLocked(target, true)
 	}
+	id.loaderID = g.docLoaderCurrentLocked(target)
 	var send [][]byte
 	var again []callKey
 	for k, h := range g.docIdentityHolds {
@@ -635,6 +639,10 @@ func (g *guard) releaseDocIdentityHoldLocked(k callKey, h *docIdentityHold, curr
 	case tainted:
 		send = append(send, g.cutDocIdentitySessionLocked(h.session, h.target)...)
 		g.refuseDocIdentityHoldPageLocked(h)
+	case docLoaderReplaced(h.loader, current.loaderID):
+		g.logf("cdp: a held reply's document was replaced; dropping it target=%s admitted=%s current=%s", h.target, h.loader, current.loaderID)
+		g.dropDeferredExtensionPaintLocked(kPaint)
+		g.pendingPage = append(g.pendingPage, retriableContextDestroyed(h.id, h.session))
 	default:
 		send = append(send, g.deliverDocIdentityDataLocked(h)...)
 	}

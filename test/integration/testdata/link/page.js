@@ -601,6 +601,8 @@ globalThis.linkTest = {
   stickyAdmission: (opts) => import('./sticky.js').then((m) => m.stickyAdmissionProof(() => state.link, opts)),
   contextMark: (opts) => import('./contextmark.js').then((m) => m.measureContextMark(() => state.link, opts)),
   navContextOrigin: (opts) => import('./navcontextorigin.js').then((m) => m.measureNavContextOrigin(() => state.link, opts)),
+  docLoader: (opts) => import('./docloader.js').then((m) => m.measureDocLoader(() => state.link, opts)),
+  docLoaderKeep: (opts) => import('./docloader.js').then((m) => m.measureDocLoaderKeep(() => state.link, opts)),
   clientResource: (opts) => import('./client-resource.js').then((m) => m.clientResourceRow(() => state.link, opts)),
   errorContent: (opts) => import('./errorcontent.js').then((m) => m.errorContent(() => state.link, opts)),
   resourceBlock: (opts) => import('./resource-block.js').then((m) => m.resourceBlockRow(() => state.link, opts)),
