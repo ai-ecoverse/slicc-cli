@@ -17,6 +17,9 @@ func defaultContextOf(c execContext, t *target) bool {
 }
 
 func contextOriginProtected(o *protect.Origins, origin string) bool {
+	if protect.OpaqueContextOrigin(origin) {
+		return false
+	}
 	return o.Loaded(origin)
 }
 
@@ -25,7 +28,7 @@ func defaultContextProtected(o *protect.Origins, c execContext, t *target) bool 
 }
 
 func ordinaryContextOrigin(o *protect.Origins, origin string) bool {
-	return origin != "" && origin != "://" && origin != "null" && !contextOriginProtected(o, origin)
+	return origin != "" && !protect.OpaqueContextOrigin(origin) && origin != "null" && !contextOriginProtected(o, origin)
 }
 
 func (g *guard) markContextLocked(t *target) [][]byte {
@@ -67,9 +70,50 @@ func forgetContextMark(t *target) {
 	t.contextMark = nil
 }
 
+func forgetDefaultOrigin(nt *navTarget) {
+	nt.defaultOrigin, nt.defaultContext, nt.defaultUnique, nt.defaultLoader = "", 0, "", ""
+}
+
+func defaultOriginNavLocked(nt *navTarget, t *target, m *message) (string, bool) {
+	switch m.Method {
+	case "Runtime.executionContextCreated":
+		var p struct {
+			Context execContext `json:"context"`
+		}
+		if json.Unmarshal(m.Params, &p) != nil || !defaultContextOf(p.Context, t) {
+			return "", false
+		}
+		nt.defaultOrigin, nt.defaultContext, nt.defaultUnique, nt.defaultLoader = p.Context.Origin, p.Context.ID, p.Context.UniqueID, nt.loaderID
+		return p.Context.Origin, true
+	case "Runtime.executionContextDestroyed":
+		var p struct {
+			ID       int64  `json:"executionContextId"`
+			UniqueID string `json:"executionContextUniqueId"`
+		}
+		if json.Unmarshal(m.Params, &p) == nil && (p.UniqueID != "" && p.UniqueID == nt.defaultUnique || p.ID != 0 && p.ID == nt.defaultContext) {
+			forgetDefaultOrigin(nt)
+		}
+	case "Runtime.executionContextsCleared":
+		forgetDefaultOrigin(nt)
+	case "Page.frameNavigated":
+		var p navCommitParams
+		if json.Unmarshal(m.Params, &p) == nil && p.Frame.ID == t.id && (nt.defaultLoader == "" || nt.defaultLoader != p.Frame.LoaderID) {
+			forgetDefaultOrigin(nt)
+		}
+	}
+	return "", false
+}
+
 func (g *guard) contextMarkNavLocked(nt *navTarget, m *message) [][]byte {
 	t := g.targets[nt.target]
-	if t == nil || t.contextMark == nil || nt.session == "" || m.SessionID != nt.session {
+	if t == nil || nt.session == "" || m.SessionID != nt.session {
+		return nil
+	}
+	origin, created := defaultOriginNavLocked(nt, t, m)
+	if t.contextMark == nil {
+		if created && contextOriginProtected(g.o, origin) && !g.targetLoadedLocked(t) {
+			return g.markContextLocked(t)
+		}
 		return nil
 	}
 	switch m.Method {

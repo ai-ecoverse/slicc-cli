@@ -48,7 +48,7 @@ func protectContextOriginOverlayRun(t *testing.T, mutant, run, row string) {
 }
 
 func TestProtectContextOriginEdges(t *testing.T) {
-	protectContextOriginOverlayRun(t, "", "^TestContextOrigin(Vectors|Rows)$", "")
+	protectContextOriginOverlayRun(t, "", "^TestContextOrigin(Vectors|Rows|Opaque)$", "")
 }
 
 func TestProtectContextOriginMutants(t *testing.T) {
@@ -64,6 +64,7 @@ func TestProtectContextOriginMutants(t *testing.T) {
 		{"mutation_trim.go", "^TestContextOriginRows$/^not-lookalike$/^leading-space$", "TestContextOriginRows/not-lookalike/leading-space"},
 		{"mutation_nocolon.go", "^TestContextOriginRows$/^not-lookalike$/^no-colon$", "TestContextOriginRows/not-lookalike/no-colon"},
 		{"mutation_errorpageorder.go", "^TestContextOriginRows$/^error-page$/^previous-wins$", "TestContextOriginRows/error-page/previous-wins"},
+		{"mutation_foldopaque.go", "^TestContextOriginOpaque$/^upper$", "TestContextOriginOpaque/upper"},
 	} {
 		t.Run(m.mutant, func(t *testing.T) {
 			protectContextOriginOverlayRun(t, m.mutant, m.run, m.row)

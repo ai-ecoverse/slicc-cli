@@ -22,3 +22,7 @@ func (o *Origins) TargetWith(raw, typ string, previous bool, opener Opener, ev E
 	}
 	return o.Target(raw, previous, opener)
 }
+
+func OpaqueContextOrigin(origin string) bool {
+	return origin == "://" || origin == "about://"
+}
