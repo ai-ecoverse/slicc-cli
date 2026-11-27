@@ -24,17 +24,6 @@ func TestSignedLeaseBaselineR13WarmMatching(t *testing.T) {
 	hostA := origin + "/a"
 	nav0 := len(e.pageTargets())
 
-	request := func(holder string, allow []map[string]string, ttl int) string {
-		t.Helper()
-		var r struct{ Type, Request string }
-		params, _ := json.Marshal(allow)
-		e.p.eval(holder+".request("+string(params)+",{ttlSeconds:"+fmt.Sprint(ttl)+"})", &r)
-		if r.Type != "pending" || r.Request == "" {
-			t.Fatalf("%s request: %+v", holder, r)
-		}
-		return r.Request
-	}
-
 	rows := []struct {
 		name, typed, forDur string
 		allow               []map[string]string
@@ -51,7 +40,7 @@ func TestSignedLeaseBaselineR13WarmMatching(t *testing.T) {
 	}
 
 	for _, row := range rows {
-		id := request("leaseTest", row.allow, row.ttl)
+		id := requestOn(t, e, "leaseTest", row.allow, row.ttl)
 		before := e.status()
 		p := startTTY(t, e.env, "lease", "review", "--to", "jkt:"+e.jkt, "--allow", row.typed, "--for", row.forDur)
 		time.Sleep(2 * time.Second)
@@ -81,19 +70,17 @@ func TestSignedLeaseBaselineR13WarmMatching(t *testing.T) {
 		if !row.wantMatch && (len(list.Active) != 0 || !pending || nav1 != nav0) {
 			t.Fatalf("%s: mismatch must leave pending, no active, no nav; active=%d pending=%t nav=%d->%d", row.name, len(list.Active), pending, nav0, nav1)
 		}
+		e.cli("deny", id)
 	}
 
-	id1 := request("leaseTest", []map[string]string{{"kind": "origin", "url": origin}}, 900)
-	id2 := request("leaseTest", []map[string]string{{"kind": "exact", "url": hostA}}, 900)
-	p := startTTY(t, e.env, "lease", "review", "--to", "jkt:"+e.jkt, "--allow", origin, "--for", "15m")
-	screen := p.wait(t, 0, "Type APPROVE")
-	p.keys(t, "\n")
-	leaseBLDrainTTY(t, p, 8*time.Second)
+	id1 := requestOn(t, e, "leaseTest", []map[string]string{{"kind": "origin", "url": origin}}, 900)
+	var second struct{ Type, Request, Code string }
+	e.p.eval("leaseTest.tryRequest([{kind:'exact',url:'"+hostA+"'}],{ttlSeconds:900})", &second)
 	var list lease.Snapshot
 	_ = json.Unmarshal([]byte(rawCtl(t, e.ctlPath(), ctl.OpLeaseList)), &list)
-	shown := strings.Count(screen, "holder jkt:")
-	leaseBLLine(t, "R13/two-pending-same-jkt-only-matching-shown", "pending_total", len(list.Pending), "prompt_entries", shown,
-		"origin_pending", id1 != "", "exact_pending", id2 != "", "screen_has_origin", strings.Contains(screen, "origin: "+origin))
+	leaseBLLine(t, "R13/two-pending-same-jkt-only-matching-shown", "first_pending", id1 != "", "second_type", second.Type, "second_code", second.Code,
+		"pending_total", len(list.Pending), "same_jkt_second_accepted", second.Type == "pending")
+	e.cli("deny", id1)
 }
 
 func leaseBLDrainTTY(t *testing.T, p *ttyProc, d time.Duration) {
@@ -154,7 +141,7 @@ func TestSignedLeaseBaselineR13Seams(t *testing.T) {
 func TestSignedLeaseBaselineR13ShellLine(t *testing.T) {
 	e := newLeaseBLEnv(t, 1)
 	scope := "https://billing.example/Alpha-1_b.c~d/e"
-	e.p.eval("leaseTest.request([{kind:'exact',url:'"+scope+"'}],{ttlSeconds:900})", nil)
+	id := requestOn(t, e, "leaseTest", []map[string]string{{"kind": "exact", "url": scope}}, 900)
 	shells := []string{"sh"}
 	if _, err := exec.LookPath("bash"); err == nil {
 		shells = append(shells, "bash")
@@ -179,6 +166,18 @@ func TestSignedLeaseBaselineR13ShellLine(t *testing.T) {
 				"argv_allow_once", true)
 		}
 	}
+	e.cli("deny", id)
+}
+
+func requestOn(t *testing.T, e *leaseBLEnv, holder string, allow []map[string]string, ttl int) string {
+	t.Helper()
+	var r struct{ Type, Request string }
+	params, _ := json.Marshal(allow)
+	e.p.eval(holder+".request("+string(params)+",{ttlSeconds:"+fmt.Sprint(ttl)+"})", &r)
+	if r.Type != "pending" || r.Request == "" {
+		t.Fatalf("%s request: %+v", holder, r)
+	}
+	return r.Request
 }
 
 func TestSignedLeaseBaselineR13Mutants(t *testing.T) {
