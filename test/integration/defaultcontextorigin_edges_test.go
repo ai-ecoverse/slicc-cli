@@ -61,7 +61,7 @@ func TestCDPDefaultContextOriginMutants(t *testing.T) {
 		{"mutation_missing.go", "^TestDefaultContextOrigin$/^missing$", "TestDefaultContextOrigin/missing"},
 		{"mutation_inheritingonly.go", "^TestDefaultContextOrigin$/^lookalike$/^ordinary-document$", "TestDefaultContextOrigin/lookalike/ordinary-document"},
 		{"mutation_inheritingorigin.go", "^TestDefaultContextOrigin$/^lookalike$/^newtab$", "TestDefaultContextOrigin/lookalike/newtab"},
-		{"mutation_kitesurf.go", "^TestDefaultContextOrigin$/^kitesurf$/^fail-closed$", "TestDefaultContextOrigin/kitesurf/fail-closed"},
+		{"mutation_kitesurf.go", "^TestDefaultContextOrigin$/^kitesurf$/^opaque$", "TestDefaultContextOrigin/kitesurf/opaque"},
 	} {
 		t.Run(m.mutant, func(t *testing.T) {
 			defaultContextOriginOverlayRun(t, m.mutant, m.run, m.row)

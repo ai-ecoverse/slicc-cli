@@ -104,3 +104,34 @@ func TestContextOriginRows(t *testing.T) {
 		t.Fatal("a hidden target type is no longer protected with an opaque context origin")
 	}
 }
+
+func TestContextOriginOpaque(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		origin string
+		want   bool
+	}{
+		{"opaque", "://", true},
+		{"kitesurf", "about://", true},
+		{"upper", "ABOUT://", false},
+		{"mixed", "About://", false},
+		{"trailing-slash", "about:///", false},
+		{"trailing-space", "about:// ", false},
+		{"host", "about://x", false},
+		{"bare-about", "about", false},
+		{"about-colon", "about:", false},
+		{"blank", "about:blank", false},
+		{"null", "null", false},
+		{"missing", "", false},
+		{"ordinary", "https://example.test", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := OpaqueContextOrigin(c.origin); got != c.want {
+				t.Fatalf("OpaqueContextOrigin(%q) = %v, want %v", c.origin, got, c.want)
+			}
+			if c.want && AboutLookalike(c.origin) {
+				t.Fatalf("an opaque report %q is also a lookalike", c.origin)
+			}
+		})
+	}
+}

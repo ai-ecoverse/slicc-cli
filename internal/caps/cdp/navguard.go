@@ -83,6 +83,10 @@ type navTarget struct {
 	errorURL           string
 	documentURL        string
 	loaderID           string
+	defaultOrigin      string
+	defaultContext     int64
+	defaultUnique      string
+	defaultLoader      string
 	navigationURL      string
 	securityOrigin     string
 	keptOrigin         string
@@ -511,10 +515,13 @@ func (nt *navTarget) commitFrameNavigatedLocked(p navCommitParams) {
 
 func (g *guard) evidenceLocked(t *target) protect.Evidence {
 	nt, ok := g.navTargets[t.id]
-	if !ok || !nt.done || nt.failed || nt.errorURL == "" {
+	if !ok {
 		return protect.Evidence{}
 	}
-	return protect.Evidence{DocumentURL: nt.documentURL, UnreachableURL: nt.errorURL, Navigating: nt.unsure || len(nt.loading) > 0}
+	if !nt.done || nt.failed || nt.errorURL == "" {
+		return protect.Evidence{ContextOrigin: nt.defaultOrigin}
+	}
+	return protect.Evidence{DocumentURL: nt.documentURL, UnreachableURL: nt.errorURL, Navigating: nt.unsure || len(nt.loading) > 0, ContextOrigin: nt.defaultOrigin}
 }
 
 var errorPageMethods = map[string]bool{
