@@ -10,12 +10,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"io/fs"
 	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+)
+
+var (
+	ErrCertUnreadable = errors.New("certificate store unreadable")
+	ErrCertDamaged    = errors.New("certificate store damaged")
 )
 
 const (
@@ -73,10 +80,29 @@ func HubOrigin(joinURL string) string {
 func (c *Certs) Load(origin string) (pemData string, created bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	f := c.load()
+	return c.loadOrigin(origin, false)
+}
+
+func (c *Certs) LoadLease(origin string) (pemData string, created bool, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.loadOrigin(origin, true)
+}
+
+func (c *Certs) loadOrigin(origin string, strict bool) (pemData string, created bool, err error) {
+	f, err := c.readFile(strict)
+	if err != nil {
+		return "", false, err
+	}
 	for _, e := range f.Hubs {
-		if e.Origin == origin && certUsable(e.PEM) {
+		if e.Origin != origin {
+			continue
+		}
+		if certUsable(e.PEM) {
 			return e.PEM, false, nil
+		}
+		if strict {
+			return "", false, ErrCertDamaged
 		}
 	}
 	pemData, err = newCertPEM()
@@ -139,15 +165,29 @@ func (c *Certs) Delete(origin string) error {
 }
 
 func (c *Certs) load() certFile {
+	f, _ := c.readFile(false)
+	return f
+}
+
+func (c *Certs) readFile(strict bool) (certFile, error) {
 	data, err := os.ReadFile(c.path)
 	if err != nil {
-		return certFile{Version: stateVersion}
+		if errors.Is(err, fs.ErrNotExist) {
+			return certFile{Version: stateVersion}, nil
+		}
+		if strict {
+			return certFile{}, ErrCertUnreadable
+		}
+		return certFile{Version: stateVersion}, nil
 	}
 	var f certFile
 	if json.Unmarshal(data, &f) != nil || f.Version != stateVersion {
-		return certFile{Version: stateVersion}
+		if strict {
+			return certFile{}, ErrCertDamaged
+		}
+		return certFile{Version: stateVersion}, nil
 	}
-	return f
+	return f, nil
 }
 
 func certUsable(pemData string) bool {

@@ -45,10 +45,16 @@ func validateLeaseFollow(fs *flag.FlagSet, f followFlags) error {
 	}
 	return nil
 }
+
+var errPinStore = errors.New("the link pin cannot be saved")
+
 func pinPath(label string) (string, error) {
 	base, e := os.UserConfigDir()
-	if e != nil || !leaseLabel.MatchString(label) {
+	if !leaseLabel.MatchString(label) {
 		return "", errors.New("invalid local link label")
+	}
+	if e != nil {
+		return "", errors.New("no user config directory")
 	}
 	return filepath.Join(base, "slicc", "lease-pins", label), nil
 }
@@ -70,7 +76,7 @@ func pairPin(label, fingerprint string) error {
 		return e
 	}
 	if e = os.MkdirAll(filepath.Dir(path), 0700); e != nil {
-		return e
+		return errPinStore
 	}
 	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if errors.Is(e, os.ErrExist) {
@@ -81,11 +87,14 @@ func pairPin(label, fingerprint string) error {
 		return errors.New("link label already pins a different peer; choose a new label")
 	}
 	if e != nil {
-		return e
+		return errPinStore
 	}
 	_, e = f.WriteString(pin)
 	closeErr := f.Close()
-	return errors.Join(e, closeErr)
+	if e != nil || closeErr != nil {
+		return errPinStore
+	}
+	return nil
 }
 func peerPinned(l *link.Link, pin string) bool {
 	pc := l.PeerConnection()
@@ -96,13 +105,44 @@ func peerPinned(l *link.Link, pin string) bool {
 	h := sha256.Sum256(der)
 	return len(der) > 0 && hex.EncodeToString(h[:]) == pin
 }
-func (r *followRun) leaseIsolation(ff followFlags, logf func(string, ...any)) func(string, ...any) {
-	if ff.leaseBrowser != "" {
-		r.state = tray.OpenState(r.state.Path() + ".lease")
-		r.certs = tray.OpenCerts(r.certs.Path() + ".lease")
-		return func(string, ...any) {}
+func (r *followRun) openStores() error {
+	var err error
+	if r.state, err = tray.OpenDefaultState(); err != nil {
+		return errors.New("no user config directory")
 	}
-	return logf
+	if r.certs, err = tray.OpenDefaultCerts(); err != nil {
+		return errors.New("no user config directory")
+	}
+	return nil
+}
+
+func (r *followRun) leaseIsolation(ff followFlags, logf func(string, ...any)) (func(string, ...any), error) {
+	if ff.leaseBrowser != "" {
+		r.state = nil
+		r.certs = leaseCertStore(r.certs.Path())
+		r.leaseCert = true
+		if err := r.claimLeaseDevice(); err != nil {
+			return nil, err
+		}
+		return func(string, ...any) {}, nil
+	}
+	return logf, nil
+}
+func (r *followRun) requireLeaseDevice() error {
+	if want := os.Getenv("SLICC_LEASE_DEVICE"); want != "" && r.device != want {
+		if r.leaseClaim != nil {
+			_ = r.leaseClaim.Close()
+			r.leaseClaim = nil
+		}
+		return errLeaseDeviceMismatch
+	}
+	return nil
+}
+func (r *followRun) startLeaseOnly(ff followFlags, st *stopper, cert webrtc.Certificate) (*followRun, error) {
+	if err := r.requireLeaseDevice(); err != nil {
+		return nil, err
+	}
+	return r.leaseOnly(ff, st, cert)
 }
 func (r *followRun) leaseOnly(ff followFlags, st *stopper, cert webrtc.Certificate) (*followRun, error) {
 	path, e := pinPath(ff.name)
