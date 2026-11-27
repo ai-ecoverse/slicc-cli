@@ -16,6 +16,8 @@ import (
 
 var blGateLast atomic.Value
 var blStampDiffLast atomic.Value
+var blStampStepLast atomic.Value
+var blStampRawFrameLast atomic.Value
 
 func blGateSet(name string) {
 	blGateLast.Store(name)
@@ -39,6 +41,40 @@ func blStampDiffGet() string {
 		return "none"
 	}
 	return v
+}
+
+func blStampStepSet(call, err string, f frame) {
+	blStampStepLast.Store("call=" + call + " err=" + blStampRedact(err))
+	blStampRawFrameLast.Store(fmt.Sprintf("loader=%s|frame=%s|url=%s|origin=%s|unreachable=%s|parent=%s",
+		f.LoaderID, f.ID, f.URL, f.SecurityOrigin, f.UnreachableURL, f.ParentID))
+}
+
+func blStampStepGet() string {
+	v, _ := blStampStepLast.Load().(string)
+	if v == "" {
+		return "none"
+	}
+	return v
+}
+
+func blStampRawFrameGet() string {
+	v, _ := blStampRawFrameLast.Load().(string)
+	if v == "" {
+		return "none"
+	}
+	return v
+}
+
+func blStampRedact(s string) string {
+	s = strings.Join(strings.Fields(s), "_")
+	s = strings.ReplaceAll(s, "https://", "https://")
+	if len(s) > 96 {
+		s = s[:96]
+	}
+	if s == "" {
+		return "empty"
+	}
+	return s
 }
 
 func blStampFields(st stamp, unique string) string {
@@ -150,7 +186,24 @@ func (bs *browserSession) frame(ctx context.Context, t *tab) (frame, error) {
 	var p struct{ FrameTree struct{ Frame frame } }
 	e := bs.c.Call(ctx, t.session, "Page.getFrameTree", nil, &p)
 	f := p.FrameTree.Frame
-	if e != nil || f.ID != t.target || f.ParentID != "" || f.LoaderID == "" || f.UnreachableURL != "" {
+	if e != nil {
+		blStampStepSet("frame-tree-call", e.Error(), f)
+		return frame{}, denied
+	}
+	if f.ID != t.target {
+		blStampStepSet("frame-tree-reject-id", "got="+f.ID+" want="+t.target, f)
+		return frame{}, denied
+	}
+	if f.ParentID != "" {
+		blStampStepSet("frame-tree-reject-parent", "parent="+f.ParentID, f)
+		return frame{}, denied
+	}
+	if f.LoaderID == "" {
+		blStampStepSet("frame-tree-reject-loader", "empty-loader", f)
+		return frame{}, denied
+	}
+	if f.UnreachableURL != "" {
+		blStampStepSet("frame-tree-reject-unreachable", f.UnreachableURL, f)
 		return frame{}, denied
 	}
 	f.URL += f.URLFragment
@@ -216,7 +269,11 @@ func (bs *browserSession) stamp(ctx context.Context, t *tab) (stamp, error) {
 	f, e := bs.frame(ctx, t)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
-	if e != nil || g != t.generation {
+	if e != nil {
+		return stamp{}, denied
+	}
+	if g != t.generation {
+		blStampStepSet("generation-changed", fmt.Sprintf("before=%d_after=%d", g, t.generation), f)
 		return stamp{}, denied
 	}
 	return stamp{f, g}, nil
@@ -305,19 +362,21 @@ func (bs *browserSession) action(ctx context.Context, t *tab, c claims, o *prote
 		bs.mu.Lock()
 		uniqueBefore := t.unique
 		bs.mu.Unlock()
+		blStampStepLast.Store("none")
+		blStampRawFrameLast.Store("none")
 		now, e := bs.stamp(ctx, t)
 		bs.mu.Lock()
 		uniqueAfter := t.unique
 		bs.mu.Unlock()
 		if e != nil {
 			blStampDiffSet("before={" + blStampFields(st, uniqueBefore) + "} after={stamp_err} differ=stamp_err")
-			blGateSet("post-stamp-mismatch")
+			blGateSet("stamp-error")
 			return nil, stamp{}, denied
 		}
 		diff := blStampDiffer(st, now, uniqueBefore, uniqueAfter)
 		blStampDiffSet("before={" + blStampFields(st, uniqueBefore) + "} after={" + blStampFields(now, uniqueAfter) + "} differ=" + diff)
 		if st != now || !live() {
-			blGateSet("post-stamp-mismatch")
+			blGateSet("stamp-mismatch")
 			return nil, stamp{}, denied
 		}
 		blGateSet("ok")

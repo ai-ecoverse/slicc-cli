@@ -232,20 +232,79 @@ func TestLeaseBaselineR12FramesGate(t *testing.T) {
 			if wantStamp && stampDiff == "unset" {
 				t.Fatalf("%s/%s: missing stamp_diff", fx.name, kind)
 			}
+			gate := blGateGet()
 			blLine(t, "R12-frames-gate-broker", "fixture", fx.name, "kind", kind, "support_frame", fx.support,
 				"goto_err", blErr(g.err), "tab", tab,
 				"document_url_stable", map[bool]string{true: "yes", false: "no"}[tab != "none" && !strings.Contains(tab, "/final/")],
 				"snapshot_err", blErr(s.err), "text_delivered", map[bool]string{true: "yes", false: "no"}[s.err == nil && txt != "none"],
 				"rendered_cdn", strings.Contains(txt, "cdn_ok"), "rendered_api", strings.Contains(txt, "api_ok"),
-				"snapshot_text", txt, "failing_gate", blGateGet(),
+				"snapshot_text", txt, "failing_gate", gate,
 				"child_requested", map[bool]string{true: "yes", false: "no"}[childOK],
 				"child_dom_frames", dom.frames, "child_dom_has_iframe", dom.hasIframe,
 				"child_dom_src", dom.src, "child_dom_content_doc", dom.contentDoc,
 				"stamp_diff", stampDiff,
 				"site_hops", hops, "protected_hits", r.site.protectedHits()-ph0)
+			if fx.name == "protected" || fx.name == "mixed" || fx.name == "same" {
+				blEmitStampDiag(t, b, a, fx.name, kind, gate, stampDiff)
+			}
 			_ = b.Revoke(a.ID)
 		}
 	}
+}
+
+func blEmitStampDiag(t *testing.T, b *Broker, a *active, fixture, kind, gate, stampDiff string) {
+	t.Helper()
+	step := blStampStepGet()
+	raw := blStampRawFrameGet()
+	firstLoader, firstFrame := "none", "none"
+	if i := strings.Index(stampDiff, "loader="); i >= 0 {
+		rest := stampDiff[i+len("loader="):]
+		if j := strings.Index(rest, "|"); j >= 0 {
+			firstLoader = rest[:j]
+		}
+	}
+	if i := strings.Index(stampDiff, "frame="); i >= 0 {
+		rest := stampDiff[i+len("frame="):]
+		if j := strings.Index(rest, "|"); j >= 0 {
+			firstFrame = rest[:j]
+		}
+	}
+	pageLoader, pageFrame, pageErr := blPageFrameTree(b, a)
+	blLine(t, "R12-stamp-diag", "fixture", fixture, "kind", kind, "failing_gate", gate,
+		"second_stamp_step", step, "second_stamp_raw_frame", raw,
+		"first_stamp_loader", firstLoader, "first_stamp_frame", firstFrame,
+		"page_tree_loader", pageLoader, "page_tree_frame", pageFrame, "page_tree_err", pageErr,
+		"first_vs_page_loader_differ", map[bool]string{true: "yes", false: "no"}[firstLoader != "none" && pageLoader != "none" && firstLoader != pageLoader],
+		"first_vs_page_frame_differ", map[bool]string{true: "yes", false: "no"}[firstFrame != "none" && pageFrame != "none" && firstFrame != pageFrame],
+		"observation", "open_not_a_gate")
+}
+
+func blPageFrameTree(b *Broker, a *active) (loader, frameID, errName string) {
+	if a == nil || a.tab == nil || a.tab.session == "" || b.bs == nil || b.bs.c == nil {
+		return "none", "none", "no-session"
+	}
+	var p struct {
+		FrameTree struct {
+			Frame struct {
+				ID, LoaderID, ParentID, URL, UnreachableURL string
+			}
+		}
+	}
+	if e := b.bs.c.Call(context.Background(), a.tab.session, "Page.getFrameTree", nil, &p); e != nil {
+		return "none", "none", blStampRedact(e.Error())
+	}
+	f := p.FrameTree.Frame
+	if f.LoaderID == "" {
+		loader = "empty"
+	} else {
+		loader = f.LoaderID
+	}
+	if f.ID == "" {
+		frameID = "empty"
+	} else {
+		frameID = f.ID
+	}
+	return loader, frameID, "nil"
 }
 
 type blDOMProof struct {

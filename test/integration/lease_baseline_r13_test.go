@@ -140,7 +140,7 @@ func TestSignedLeaseBaselineR13Seams(t *testing.T) {
 
 func TestSignedLeaseBaselineR13ShellLine(t *testing.T) {
 	e := newLeaseBLEnv(t, 1)
-	scope := "https://billing.example/Alpha-1_b.c~d/e"
+	scope := "https://billing.example/a%20b?x=1&y=2"
 	id := requestOn(t, e, "leaseTest", []map[string]string{{"kind": "exact", "url": scope}}, 900)
 	shells := []string{"sh"}
 	if _, err := exec.LookPath("bash"); err == nil {
@@ -153,31 +153,52 @@ func TestSignedLeaseBaselineR13ShellLine(t *testing.T) {
 				allow = "'" + scope + "'"
 			}
 			line := fmt.Sprintf("%s lease review --to jkt:%s --allow %s --for 15m", binary, e.jkt, allow)
-			cmd := exec.Command(sh, "-c", line)
-			cmd.Env = e.env
-			var stdout, stderr strings.Builder
-			cmd.Stdout, cmd.Stderr = &stdout, &stderr
-			_ = cmd.Run()
-			errText := stderr.String()
+			p := startTTYBin(t, sh, e.env, "-c", line)
+			time.Sleep(2 * time.Second)
+			screen := p.text()
+			matched := strings.Contains(screen, "Type APPROVE") || strings.Contains(screen, "Select the browser")
+			noMatch := strings.Contains(screen, "no matching")
+			termRefuse := strings.Contains(screen, "review requires a local terminal")
 			reason := "other"
 			switch {
-			case strings.Contains(errText, "review requires a local terminal"):
-				reason = "review_requires_local_terminal"
-			case strings.Contains(errText, "no matching proven request"):
-				reason = "no_matching_proven_request"
-			case strings.Contains(errText, "invalid or protected"):
-				reason = "invalid_or_protected_rule"
-			case strings.Contains(errText, "Type APPROVE"):
+			case matched:
 				reason = "reached_approve_prompt"
+			case termRefuse:
+				reason = "review_requires_local_terminal"
+			case noMatch:
+				reason = "no_matching_proven_request"
 			}
-			leaseBLLine(t, "R13/shell-line", "shell", sh, "quoted", quoted, "exit", cmd.ProcessState.ExitCode(),
+			leaseBLDrainTTY(t, p, 4*time.Second)
+			exit := 0
+			if p.cmd.ProcessState != nil {
+				exit = p.cmd.ProcessState.ExitCode()
+			}
+			if quoted && !matched {
+				t.Fatalf("%s quoted shell-line did not reach APPROVE screen=%q", sh, screen)
+			}
+			if !quoted && matched {
+				t.Fatalf("%s unquoted shell-line reached APPROVE; copy-format specials not enforced screen=%q", sh, screen)
+			}
+			leaseBLLine(t, "R13/shell-line", "shell", sh, "quoted", quoted, "exit", exit,
 				"exit_reason", reason,
-				"stderr", strings.TrimSpace(errText),
-				"stderr_has_no_matching_or_prompt", strings.Contains(errText, "no matching") || strings.Contains(errText, "APPROVE") || strings.Contains(errText, "Select"),
+				"saw_approve_prompt", matched,
+				"stderr", strings.TrimSpace(screen),
+				"stderr_has_no_matching_or_prompt", noMatch || matched,
 				"argv_allow_once", true,
-				"measured", false)
+				"measured", true)
 		}
 	}
+	mutLine := fmt.Sprintf("%s lease review --to jkt:%s --allow %s --for 15m", binary, e.jkt, scope)
+	mut := startTTYBin(t, "sh", e.env, "-c", mutLine)
+	time.Sleep(2 * time.Second)
+	mutScreen := mut.text()
+	mutMatched := strings.Contains(mutScreen, "Type APPROVE") || strings.Contains(mutScreen, "Select the browser")
+	leaseBLDrainTTY(t, mut, 4*time.Second)
+	if mutMatched {
+		t.Fatalf("copy-format mutant: unquoted feed reached APPROVE; want fail screen=%q", mutScreen)
+	}
+	leaseBLLine(t, "R13/shell-line-copy-format-mutant", "fed_unquoted", true, "saw_approve_prompt", false, "turned_red", true,
+		"named_row", "R13/shell-line-quoted-required")
 	leaseBLLine(t, "R13/shell-line-zsh", "measured", false, "reason", "zsh_unmeasured_on_this_vehicle")
 	e.cli("deny", id)
 }
