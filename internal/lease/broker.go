@@ -53,7 +53,7 @@ type active struct {
 	timer  *time.Timer
 }
 type Broker struct {
-	cleanup                                sync.WaitGroup
+	retiring                               sync.WaitGroup
 	mu                                     sync.Mutex
 	browser, link, epoch, issuer, audience string
 	public                                 verifyKey
@@ -103,8 +103,23 @@ func (b *Broker) Close() {
 		b.reject(id, retired)
 	}
 	b.mu.Unlock()
-	b.cleanup.Wait()
+	done := make(chan struct{})
+	go func() {
+		b.retiring.Wait()
+		b.bs.stopCleanup()
+		b.bs.cleanup.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		b.bs.stopCleanup()
+	}
 	_ = b.bs.c.Close()
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+	}
 }
 func (b *Broker) reject(id string, e error) {
 	if p := b.pending[id]; p != nil {
@@ -121,7 +136,7 @@ func (b *Broker) retire(id string, keepTab bool) {
 	a.timer.Stop()
 	a.cancel()
 	if !keepTab {
-		b.cleanup.Go(func() { b.bs.discard(a.tab) })
+		b.retiring.Go(func() { b.bs.discard(a.tab) })
 	}
 	for k, p := range b.pending {
 		if p.Parent == id {

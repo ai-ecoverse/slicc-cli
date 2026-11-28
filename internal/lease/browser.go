@@ -12,9 +12,11 @@ import (
 )
 
 type browserSession struct {
-	c    *cdp.Client
-	mu   sync.Mutex
-	tabs map[string]*tab
+	c       *cdp.Client
+	mu      sync.Mutex
+	tabs    map[string]*tab
+	cleanup sync.WaitGroup
+	stopped bool
 }
 type tab struct {
 	gate                   sync.Mutex
@@ -23,7 +25,7 @@ type tab struct {
 	context                int
 	generation             uint64
 	changed                chan struct{}
-	lost                   bool
+	lost, cut, closing     bool
 }
 
 func openBrowser(ctx context.Context, endpoint string, o *protect.Origins) (*browserSession, error) {
@@ -38,6 +40,15 @@ func openBrowser(ctx context.Context, endpoint string, o *protect.Origins) (*bro
 func (bs *browserSession) observe(e cdp.Event) {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
+	if e.Method == "Target.detachedFromTarget" && e.SessionID == "" {
+		var p struct{ SessionID string }
+		if json.Unmarshal(e.Params, &p) == nil {
+			if t := bs.tabs[p.SessionID]; t != nil && !t.lost && !t.closing {
+				bs.closeTabLocked(t, true)
+			}
+		}
+		return
+	}
 	t := bs.tabs[e.SessionID]
 	if t == nil {
 		return
@@ -83,29 +94,39 @@ func (bs *browserSession) observe(e cdp.Event) {
 type frame struct{ ID, ParentID, URL, URLFragment, SecurityOrigin, LoaderID, UnreachableURL string }
 
 func (bs *browserSession) frame(ctx context.Context, t *tab) (frame, error) {
+	bs.mu.Lock()
+	target := t.target
+	bs.mu.Unlock()
 	var p struct{ FrameTree struct{ Frame frame } }
 	e := bs.c.Call(ctx, t.session, "Page.getFrameTree", nil, &p)
 	f := p.FrameTree.Frame
-	if e != nil || f.ID != t.target || f.ParentID != "" || f.LoaderID == "" || f.UnreachableURL != "" {
+	if e != nil || target == "" || f.ID != target || f.ParentID != "" {
+		return frame{}, denied
+	}
+	if f.UnreachableURL != "" {
+		return f, denied
+	}
+	if f.LoaderID == "" {
 		return frame{}, denied
 	}
 	f.URL += f.URLFragment
 	return f, nil
 }
-func (bs *browserSession) create(ctx context.Context, t *tab, dest string) error {
-	if t.lost {
-		return retired
-	}
+func (bs *browserSession) create(ctx context.Context, t *tab, dest string) (err error) {
 	if t.session != "" {
 		return nil
 	}
-	t.lost = true
+	defer func() {
+		if err != nil {
+			bs.closeTab(t, false)
+		}
+	}()
 	var p struct{ TargetID string }
 	if bs.c.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": false}, &p) != nil || p.TargetID == "" {
 		return unsupported
 	}
 	t.target = p.TargetID
-	s, e := bs.c.Attach(ctx, t.target)
+	s, e := bs.c.Attach(ctx, p.TargetID)
 	if e != nil || s.ID == "" {
 		return unsupported
 	}
@@ -123,21 +144,50 @@ func (bs *browserSession) create(ctx context.Context, t *tab, dest string) error
 	if s.Call(ctx, "Page.navigate", map[string]any{"url": dest}, nil) != nil {
 		return unsupported
 	}
-	t.lost = false
 	return nil
 }
 func (bs *browserSession) discard(t *tab) {
 	t.gate.Lock()
 	defer t.gate.Unlock()
 	bs.mu.Lock()
-	delete(bs.tabs, t.session)
-	bs.mu.Unlock()
+	defer bs.mu.Unlock()
 	if t.target != "" {
+		bs.closeTabLocked(t, false)
+	}
+}
+
+func (bs *browserSession) closeTab(t *tab, cut bool) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	bs.closeTabLocked(t, cut)
+}
+
+func (bs *browserSession) stopCleanup() {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	bs.stopped = true
+}
+
+func (bs *browserSession) closeTabLocked(t *tab, cut bool) {
+	if !t.lost {
+		t.generation++
+	}
+	t.lost, t.cut = true, cut
+	target := t.target
+	if target == "" {
+		return
+	}
+	t.target = ""
+	delete(bs.tabs, t.session)
+	if bs.stopped {
+		return
+	}
+	t.closing = true
+	bs.cleanup.Go(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = bs.c.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": t.target}, nil)
-	}
-	t.lost = true
+		_ = bs.c.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": target}, nil)
+	})
 }
 
 type stamp struct {
@@ -152,18 +202,32 @@ func (bs *browserSession) stamp(ctx context.Context, t *tab) (stamp, error) {
 	f, e := bs.frame(ctx, t)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
-	if e != nil || g != t.generation {
+	if g != t.generation {
 		return stamp{}, denied
 	}
-	return stamp{f, g}, nil
+	return stamp{f, g}, e
 }
 func (st stamp) allowed(c claims, o *protect.Origins) bool {
 	u, ok := safeURL(st.f.URL, o)
 	return ok && st.f.SecurityOrigin == "https://"+u.Host() && matches(c.Allow, st.f.URL, o)
 }
+
+func (st stamp) refusedNavigation(previous stamp, allowed bool, readErr error) (bad, prompt bool) {
+	if st.f.UnreachableURL != "" {
+		return true, false
+	}
+	if readErr != nil || allowed || st.f.URL == "about:blank" {
+		return false, false
+	}
+	prompt = st.f.URL != previous.f.URL
+	return prompt || st.f.LoaderID != previous.f.LoaderID, prompt
+}
 func (bs *browserSession) world(ctx context.Context, t *tab) (string, error) {
+	bs.mu.Lock()
+	target := t.target
+	bs.mu.Unlock()
 	var w struct{ ExecutionContextID int }
-	if bs.c.Call(ctx, t.session, "Page.createIsolatedWorld", map[string]any{"frameId": t.target, "worldName": t.world}, &w) != nil {
+	if bs.c.Call(ctx, t.session, "Page.createIsolatedWorld", map[string]any{"frameId": target, "worldName": t.world}, &w) != nil {
 		return "", unsupported
 	}
 	bs.mu.Lock()
@@ -178,7 +242,16 @@ const snapshotBody = `let out=[],n=0,size=0;const walk=document.createTreeWalker
 
 func literal(v any) string { b, _ := json.Marshal(v); return string(b) }
 func (bs *browserSession) action(ctx context.Context, t *tab, c claims, o *protect.Origins, op, url string, live func() bool) (map[string]any, stamp, error) {
-	if t.lost || !live() {
+	if !live() {
+		return nil, stamp{}, retired
+	}
+	bs.mu.Lock()
+	lost, cut := t.lost, t.cut
+	bs.mu.Unlock()
+	if cut {
+		return nil, stamp{}, denied
+	}
+	if lost {
 		return nil, stamp{}, retired
 	}
 	if op == "goto" {
@@ -239,19 +312,30 @@ func (bs *browserSession) action(ctx context.Context, t *tab, c claims, o *prote
 	return bs.navigation(ctx, t, c, o, st)
 }
 func (bs *browserSession) navigation(ctx context.Context, t *tab, c claims, o *protect.Origins, st stamp) (map[string]any, stamp, error) {
+	knownBad := false
 	for {
 		bs.mu.Lock()
 		changed := t.changed
 		bs.mu.Unlock()
 		now, e := bs.stamp(ctx, t)
-		if e == nil && now.allowed(c, o) && (now.f.LoaderID != st.f.LoaderID || now.f.URL != st.f.URL) {
+		allowed := e == nil && now.allowed(c, o)
+		if allowed && (now.f.LoaderID != st.f.LoaderID || now.f.URL != st.f.URL) {
 			return map[string]any{}, now, nil
 		}
-		if e == nil && now.f.URL != st.f.URL && now.f.URL != "about:blank" && !now.allowed(c, o) {
+		if allowed {
+			knownBad = false
+		}
+		bad, prompt := now.refusedNavigation(st, allowed, e)
+		knownBad = knownBad || bad
+		if prompt {
+			bs.closeTab(t, true)
 			return nil, stamp{}, denied
 		}
 		select {
 		case <-ctx.Done():
+			if knownBad {
+				bs.closeTab(t, true)
+			}
 			return nil, stamp{}, denied
 		case <-changed:
 		}
