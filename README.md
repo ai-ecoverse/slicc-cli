@@ -1838,7 +1838,7 @@ One seven (A) follows another seven's (B) tray, so that a program in A's kernel,
 
 ### 2. Channels
 
-- **Control channel:** label `slicc.link.v1`. The page creates it, ordered and reliable. Each side's **first message on it is HELLO** (text, JSON, [§4](#4-hello)). Every later message on any channel is a binary frame ([§3](#3-frames)). A text message after HELLO closes the link.
+- **Control channel:** label `slicc.link.v1`. The page creates it, ordered and reliable. Each side's **first message on it is HELLO** (text, JSON, [§4](#4-hello)). Every later message on any channel is a binary frame ([§3](#3-frames)). A text message after HELLO closes the link. A lease-only link sends no HELLO to a peer whose DTLS certificate is not the paired fingerprint and closes the channel; the peer sees no HELLO and a closed channel.
 - **Stream channels:** label `slicc.link.v1.stream`, ordered and reliable. A stream's opener may create a new channel for it. That channel then carries exactly that stream and is closed once the stream has ended in both directions or been reset.
 - **Shared streams:** an opener may instead put a stream on the control channel, for short streams like `resolve` or once it has 256 stream channels open. Chrome caps SCTP stream ids at 1023, so about 512 per side.
 - **A stream lives on the channel its OPEN arrived on.** Receivers must handle both layouts. Closing a stream channel resets any stream that hasn't ended.

@@ -96,14 +96,25 @@ func pairPin(label, fingerprint string) error {
 	}
 	return nil
 }
-func peerPinned(l *link.Link, pin string) bool {
-	pc := l.PeerConnection()
-	if pc.SCTP() == nil || pc.SCTP().Transport() == nil {
+func pinMatches(pc *webrtc.PeerConnection, pin string) bool {
+	if pc == nil || pc.SCTP() == nil || pc.SCTP().Transport() == nil {
 		return false
 	}
 	der := pc.SCTP().Transport().GetRemoteCertificate()
+	if len(der) == 0 {
+		return false
+	}
 	h := sha256.Sum256(der)
-	return len(der) > 0 && hex.EncodeToString(h[:]) == pin
+	return hex.EncodeToString(h[:]) == pin
+}
+func peerPinned(l *link.Link, pin string) bool {
+	return pinMatches(l.PeerConnection(), pin)
+}
+func leaseLinkFailMessage(err error) string {
+	if errors.Is(err, link.ErrPeerRefused) {
+		return "paired fingerprint mismatch"
+	}
+	return "lease peer did not establish an exclusive link"
 }
 func (r *followRun) openStores() error {
 	var err error
@@ -164,7 +175,7 @@ func (r *followRun) leaseOnly(ff followFlags, st *stopper, cert webrtc.Certifica
 		return nil, e
 	}
 	r.lease = b
-	r.node = node.New(node.Config{Name: ff.name, Host: ff.name, Version: version, Mode: "remote", Certificates: []webrtc.Certificate{cert}})
+	r.node = node.New(node.Config{Name: ff.name, Host: ff.name, Version: version, Mode: "remote", Certificates: []webrtc.Certificate{cert}, PeerGate: func(pc *webrtc.PeerConnection) bool { return pinMatches(pc, pin) }})
 	r.node.Handle(lease.Cap, lease.Cap, func(s *link.Stream) {
 		if !peerPinned(s.Link(), pin) {
 			_ = s.Reset("E_AUTH")
@@ -188,7 +199,7 @@ func (r *followRun) leaseOnly(ff followFlags, st *stopper, cert webrtc.Certifica
 					r.onLink(ev.Link)
 				case <-ev.Link.Done():
 					if conn := r.currentConn(); conn != nil {
-						r.emit(followEvent{kind: evFailed, conn: conn, nonce: conn.Session().BootstrapID(), err: errors.New("lease peer did not establish an exclusive link")})
+						r.emit(followEvent{kind: evFailed, conn: conn, nonce: conn.Session().BootstrapID(), err: errors.New(leaseLinkFailMessage(ev.Link.Err()))})
 					}
 				}
 			}()

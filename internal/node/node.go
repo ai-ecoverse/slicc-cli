@@ -28,6 +28,7 @@ type Config struct {
 	Logf         func(format string, args ...any)
 	Status       func(format string, args ...any)
 	Certificates []webrtc.Certificate
+	PeerGate     func(pc *webrtc.PeerConnection) bool
 }
 
 type Node struct {
@@ -153,7 +154,7 @@ func (n *Node) Options() link.Options {
 	for k, v := range n.handlers {
 		handlers[k] = n.counted(k, v)
 	}
-	return link.Options{Hello: n.Hello(), Handlers: handlers, Logf: n.cfg.Logf, Certificates: n.cfg.Certificates}
+	return link.Options{Hello: n.Hello(), Handlers: handlers, Logf: n.cfg.Logf, Certificates: n.cfg.Certificates, PeerGate: n.cfg.PeerGate}
 }
 
 func (n *Node) API() *link.API {

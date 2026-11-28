@@ -22,6 +22,7 @@ type Options struct {
 	HelloTimeout     time.Duration
 	MaxChannels      int
 	Certificates     []webrtc.Certificate
+	PeerGate         func(pc *webrtc.PeerConnection) bool
 }
 
 type OpenOptions struct {
@@ -32,6 +33,7 @@ var (
 	ErrClosed           = errors.New("link: closed")
 	ErrHelloTimeout     = errors.New("link: no HELLO from the peer")
 	ErrPeerClosed       = errors.New("link: control channel closed")
+	ErrPeerRefused      = errors.New("link: peer certificate not accepted")
 	ErrConnectionFailed = errors.New("link: connection failed")
 	ErrICEFailed        = fmt.Errorf("%w during ICE: no candidate pair", ErrConnectionFailed)
 )
@@ -86,6 +88,9 @@ func New(pc *webrtc.PeerConnection, role Role, opts Options) (*Link, error) {
 				return nil, errors.New("lease-only link cannot handle other kinds")
 			}
 		}
+	}
+	if opts.PeerGate != nil && role == RolePage {
+		return nil, errors.New("link: PeerGate is not supported for the page role")
 	}
 	if opts.HelloTimeout <= 0 {
 		opts.HelloTimeout = 10 * time.Second
@@ -207,6 +212,11 @@ func (l *Link) violation(format string, args ...any) {
 }
 
 func (l *Link) onDataChannel(dc *webrtc.DataChannel) {
+	if l.opts.PeerGate != nil && !l.opts.PeerGate(l.pc) {
+		l.fail(ErrPeerRefused)
+		_ = dc.Close()
+		return
+	}
 	if l.screenEnabled() {
 		l.mu.Lock()
 		ok := l.screen.channelRate.take(time.Now(), 512)
