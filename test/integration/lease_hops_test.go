@@ -80,7 +80,7 @@ func TestSignedLeaseHopPipeMutantCreateDest(t *testing.T) {
 		return unsupported
 	}
 	t.target = p.TargetID
-	s, e := bs.c.Attach(ctx, t.target)
+	s, e := bs.c.Attach(ctx, p.TargetID)
 	if e != nil || s.ID == "" {
 		return unsupported
 	}
@@ -98,14 +98,13 @@ func TestSignedLeaseHopPipeMutantCreateDest(t *testing.T) {
 	if s.Call(ctx, "Page.navigate", map[string]any{"url": dest}, nil) != nil {
 		return unsupported
 	}
-	t.lost = false
 	return nil
 }`
 	to := `if bs.c.Call(ctx, "", "Target.createTarget", map[string]any{"url": dest, "background": false}, &p) != nil || p.TargetID == "" {
 		return unsupported
 	}
 	t.target = p.TargetID
-	s, e := bs.c.Attach(ctx, t.target)
+	s, e := bs.c.Attach(ctx, p.TargetID)
 	if e != nil || s.ID == "" {
 		return unsupported
 	}
@@ -120,7 +119,6 @@ func TestSignedLeaseHopPipeMutantCreateDest(t *testing.T) {
 			return unsupported
 		}
 	}
-	t.lost = false
 	return nil
 }`
 	if strings.Count(text, from) != 1 {
