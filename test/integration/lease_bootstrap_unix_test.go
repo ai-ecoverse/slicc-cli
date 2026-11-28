@@ -62,6 +62,53 @@ func countedHub(t *testing.T) (*fakeHub, *atomic.Int64) {
 	return h, n
 }
 
+func holdCDPStartup(t *testing.T) (endpoint string, dialed <-chan struct{}, release func()) {
+	t.Helper()
+	ready := make(chan struct{})
+	var dialOnce sync.Once
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	release = func() {
+		stopOnce.Do(func() { close(stop) })
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"Browser":              "Chrome/0.0.0.0",
+			"Protocol-Version":     "1.3",
+			"webSocketDebuggerUrl": "ws://" + r.Host + "/devtools/browser/hold",
+		})
+	})
+	mux.HandleFunc("/devtools/browser/hold", func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijack", http.StatusInternalServerError)
+			return
+		}
+		c, _, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		select {
+		case <-stop:
+		case <-r.Context().Done():
+		}
+	})
+	srv := httptest.NewUnstartedServer(mux)
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			dialOnce.Do(func() { close(ready) })
+		}
+	}
+	srv.Start()
+	t.Cleanup(func() {
+		release()
+		srv.Close()
+	})
+	return srv.URL, ready, release
+}
+
 func newColdFixture(t *testing.T, chrome bool) *coldFixture {
 	t.Helper()
 	fx := &coldFixture{seven: strings.Repeat("5e", 32), endpoint: "http://127.0.0.1:9"}
@@ -528,32 +575,35 @@ func TestSignedLeaseFirstPairReview(t *testing.T) {
 		fx.secretsHidden(t, p)
 	})
 	t.Run("InterruptDuringStartup", func(t *testing.T) {
-		fx := newColdFixture(t, true)
+		fx := newColdFixture(t, false)
+		endpoint, dialed, release := holdCDPStartup(t)
+		fx.endpoint = endpoint
 		p := fx.review(t)
 		fx.toJoin(t, p, fx.hub.srv.URL)
 		p.keys(t, fx.hub.joinURL(fx.tray)+"\n")
-		var child int
-		dir, err := ctl.Dir()
-		if err != nil {
-			t.Fatal(err)
+		select {
+		case <-dialed:
+		case <-time.After(15 * time.Second):
+			t.Fatal("review started no broker")
 		}
-		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		var child int
+		for deadline := time.Now().Add(2 * time.Second); child == 0; time.Sleep(10 * time.Millisecond) {
 			if time.Now().After(deadline) {
 				t.Fatal("review started no broker")
 			}
 			out, _ := exec.Command("pgrep", "-P", strconv.Itoa(p.cmd.Process.Pid)).Output()
 			child, _ = strconv.Atoi(strings.TrimSpace(string(out)))
-			if child == 0 {
-				continue
-			}
-			sock := filepath.Join(dir, strconv.Itoa(child)+".sock")
-			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-			_, qerr := ctl.QueryPID(ctx, sock, child)
-			cancel()
-			if qerr != nil {
-				break
-			}
-			child = 0
+		}
+		dir, err := ctl.Dir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sock := filepath.Join(dir, strconv.Itoa(child)+".sock")
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		_, qerr := ctl.QueryPID(ctx, sock, child)
+		cancel()
+		if qerr == nil {
+			t.Fatal("the broker published its control socket before lease.New returned")
 		}
 		if strings.Contains(p.text(), "type REVIEW") {
 			t.Fatal("the review had already trusted the broker before the startup interrupt")
@@ -561,6 +611,7 @@ func TestSignedLeaseFirstPairReview(t *testing.T) {
 		if err := p.cmd.Process.Signal(syscall.SIGINT); err != nil {
 			t.Fatal(err)
 		}
+		release()
 		p.exit(t, 1, 20*time.Second)
 		if !p.saw("nothing was issued") {
 			t.Fatalf("startup interrupt:\n%s", p.text())
