@@ -28,6 +28,7 @@ type protectOverlayRun struct {
 	extra   map[string]string
 	run     string
 	timeout time.Duration
+	race    bool
 }
 
 var (
@@ -106,7 +107,11 @@ func protectOverlay(t *testing.T, target protectOverlayRun, mutant map[string]st
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), limit)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "test", "-count=1", "-overlay", overlay, "-v", "-run", target.run, target.pkg)
+	args := []string{"test", "-count=1", "-overlay", overlay, "-v", "-run", target.run, target.pkg}
+	if target.race {
+		args = append([]string{"test", "-race"}, args[1:]...)
+	}
+	command := exec.CommandContext(ctx, "go", args...)
 	command.Dir = root
 	command.Env = append(os.Environ(), "SLICC_FIXTURE_WRITE=", "SLICC_WHATWG_INPUTS=", "SLICC_WHATWG_TABLE=")
 	output, err := command.CombinedOutput()

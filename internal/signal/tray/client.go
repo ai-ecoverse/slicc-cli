@@ -97,6 +97,8 @@ type client struct {
 	backoff time.Duration
 	red     *redactor
 	logf    func(format string, args ...any)
+	halted  func() error
+	wake    <-chan struct{}
 }
 
 func newHTTPClient(base *http.Client) *http.Client {
@@ -119,6 +121,9 @@ func (c *client) post(ctx context.Context, joinURL string, body map[string]any) 
 	backoff := c.backoff
 	var last *Error
 	for attempt := 1; attempt <= requestAttempts; attempt++ {
+		if err := c.halted(); err != nil {
+			return nil, err
+		}
 		resp, err := c.attempt(ctx, joinURL, payload, deadline)
 		var te *transientError
 		if !errors.As(err, &te) {
@@ -129,7 +134,7 @@ func (c *client) post(ctx context.Context, joinURL string, body map[string]any) 
 			break
 		}
 		c.logf("tray: %s, retrying in %s", last.Message, backoff)
-		if err := sleepCtx(ctx, nil, backoff); err != nil {
+		if err := sleepCtx(ctx, nil, c.wake, backoff); err != nil && !errors.Is(err, ErrClosed) {
 			return nil, err
 		}
 		backoff = min(backoff*2, maxRetryBackoff)
