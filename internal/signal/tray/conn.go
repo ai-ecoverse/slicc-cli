@@ -70,7 +70,9 @@ func (c *Conn) idle(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-c.s.done:
-		return io.EOF
+		return c.s.f.refusedOr(io.EOF)
+	case <-c.s.f.wake:
+		return c.s.f.Refused()
 	}
 }
 

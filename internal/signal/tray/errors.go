@@ -19,6 +19,8 @@ const (
 	CodeState                 = "STATE"
 )
 
+const CodeSupersededForeignOrigin = "TRAY_SUPERSEDED_FOREIGN_ORIGIN"
+
 var ErrClosed = errors.New("tray session closed")
 
 type Error struct {

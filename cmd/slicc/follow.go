@@ -295,7 +295,7 @@ func newFollowRunUsing(joinURL string, ff followFlags, st *stopper, stderr io.Wr
 	if logf, err = r.leaseIsolation(ff, logf); err != nil {
 		return nil, err
 	}
-	if r.f, err = tray.NewFollower(tray.Config{JoinURL: joinURL, State: r.state, Logf: logf}); err != nil {
+	if r.f, err = tray.NewFollower(followerConfig(joinURL, ff, r.state, logf)); err != nil {
 		return nil, err
 	}
 	logf = redactingLogf(r.f, logf)
@@ -376,6 +376,14 @@ func newFollowRunUsing(joinURL string, ff followFlags, st *stopper, stderr io.Wr
 	closeRest := r.closeSSH
 	r.closeSSH = func() { closeCtl(); closeRest() }
 	return r, nil
+}
+
+func followerConfig(joinURL string, ff followFlags, state *tray.JoinState, logf func(string, ...any)) tray.Config {
+	cfg := tray.Config{JoinURL: joinURL, State: state, Logf: logf}
+	if ff.leaseBrowser != "" {
+		cfg.PinnedJoinURL = joinURL
+	}
+	return cfg
 }
 
 func redactingLogf(f *tray.Follower, logf func(string, ...any)) func(string, ...any) {
@@ -544,6 +552,10 @@ func (r *followRun) run(ctx context.Context) int {
 		if outcome == outcomeStop {
 			return code
 		}
+		if refused := r.f.Refused(); refused != nil {
+			code, _ = r.failed(ctx, refused, false)
+			return code
+		}
 		if outcome == outcomeUp {
 			backoff = followBackoffBase
 			attempt = 0
@@ -681,12 +693,13 @@ func (r *followRun) after(up bool) followOutcome {
 }
 
 var fatalFollowCodes = map[string]string{
-	tray.CodeInvalidJoin:           "the join URL is not valid; get a new one from seven",
-	tray.CodeTrayExpired:           "seven's tray has expired; get a new join URL from seven",
-	tray.CodeSupersededMissingJoin: "seven's tray moved without saying where; get a new join URL from seven",
-	"UNSUPPORTED_RUNTIME":          "seven does not support this slicc version; update slicc or seven",
-	"UNTRUSTED":                    "seven does not trust this device; link it again from seven",
-	"NO_FINGERPRINT":               "internal error: seven found no SHA-256 fingerprint in this device's answer; please report this",
+	tray.CodeInvalidJoin:             "the join URL is not valid; get a new one from seven",
+	tray.CodeTrayExpired:             "seven's tray has expired; get a new join URL from seven",
+	tray.CodeSupersededMissingJoin:   "seven's tray moved without saying where; get a new join URL from seven",
+	tray.CodeSupersededForeignOrigin: "the tray hub moved this link to another origin; it was not followed",
+	"UNSUPPORTED_RUNTIME":            "seven does not support this slicc version; update slicc or seven",
+	"UNTRUSTED":                      "seven does not trust this device; link it again from seven",
+	"NO_FINGERPRINT":                 "internal error: seven found no SHA-256 fingerprint in this device's answer; please report this",
 }
 
 func (r *followRun) failed(ctx context.Context, err error, up bool) (int, followOutcome) {

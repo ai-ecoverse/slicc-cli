@@ -126,6 +126,14 @@ func (s *Session) current() string {
 }
 
 func (s *Session) Recv(ctx context.Context) (Event, error) {
+	ev, err := s.recv(ctx)
+	if err != nil {
+		return Event{}, s.f.refusedOr(err)
+	}
+	return ev, nil
+}
+
+func (s *Session) recv(ctx context.Context) (Event, error) {
 	s.recvMu.Lock()
 	defer s.recvMu.Unlock()
 	for {
@@ -140,7 +148,7 @@ func (s *Session) Recv(ctx context.Context) (Event, error) {
 		if !s.offered && time.Since(s.started) > s.f.cfg.OfferTimeout {
 			return Event{}, &Error{Code: CodeOfferTimeout, Message: fmt.Sprintf("no offer from the tray leader within %s", s.f.cfg.OfferTimeout), Retryable: true}
 		}
-		if err := sleepCtx(ctx, s.done, time.Until(s.lastPoll.Add(s.f.cfg.PollInterval))); err != nil {
+		if err := sleepCtx(ctx, s.done, s.f.wake, time.Until(s.lastPoll.Add(s.f.cfg.PollInterval))); err != nil {
 			return Event{}, err
 		}
 		if err := s.poll(ctx); err != nil {
@@ -159,6 +167,9 @@ func (s *Session) poll(ctx context.Context) error {
 		"cursor":       s.cursor,
 	})
 	if err != nil {
+		return err
+	}
+	if err := s.f.Refused(); err != nil {
 		return err
 	}
 	status := resp.Bootstrap
@@ -202,7 +213,7 @@ func (s *Session) failed(ctx context.Context, status *bootstrapStatus, failure *
 		wait = clampWait(status.RetryAfterMs)
 	}
 	s.f.logf("tray: bootstrap failed (%s), retrying in %s", s.f.red.redact(failure.Code), wait)
-	if err := sleepCtx(ctx, s.done, wait); err != nil {
+	if err := sleepCtx(ctx, s.done, s.f.wake, wait); err != nil {
 		return err
 	}
 	return s.retry(ctx, status.BootstrapID, failure)
@@ -273,6 +284,10 @@ func (s *Session) SendCandidate(ctx context.Context, c Candidate) error {
 		return nil
 	}
 	s.trickleMu.Lock()
+	if err := s.f.Refused(); err != nil {
+		s.trickleMu.Unlock()
+		return err
+	}
 	if !s.answered {
 		s.pending = append(s.pending, c)
 		s.trickleMu.Unlock()
@@ -322,8 +337,10 @@ func (s *Session) superseded(next string) error {
 	if err := s.f.checkSuccessor(next); err != nil {
 		return err
 	}
+	if err := s.f.advance(next, false, nil); err != nil {
+		return err
+	}
 	s.f.logf("tray: superseded during the bootstrap")
-	s.f.advance(next)
 	return &Error{Code: CodeSuperseded, Message: supersedeMovedMessage, Retryable: true}
 }
 

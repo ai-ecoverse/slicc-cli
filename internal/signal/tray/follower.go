@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,6 +32,7 @@ const (
 
 type Config struct {
 	JoinURL          string
+	PinnedJoinURL    string
 	State            *JoinState
 	Runtime          string
 	HTTPClient       *http.Client
@@ -49,6 +52,10 @@ type Follower struct {
 	red     *redactor
 	mu      sync.Mutex
 	current string
+	pin     *url.URL
+	pinKey  string
+	refused atomic.Pointer[Error]
+	wake    chan struct{}
 }
 
 func NewFollower(cfg Config) (*Follower, error) {
@@ -76,12 +83,23 @@ func NewFollower(cfg Config) (*Follower, error) {
 	red := &redactor{}
 	origin := strings.TrimSpace(cfg.JoinURL)
 	red.add(origin)
-	current := origin
-	if cfg.State != nil {
-		current = cfg.State.Current(origin)
-		red.add(current)
+	f := &Follower{cfg: cfg, origin: origin, red: red, current: origin, wake: make(chan struct{})}
+	if cfg.PinnedJoinURL != "" {
+		pin, err := ParseJoinURL(cfg.PinnedJoinURL)
+		if err != nil {
+			return nil, err
+		}
+		f.pin, f.pinKey = pin, HubOrigin(cfg.PinnedJoinURL)
+		if err := f.admit(origin); err != nil {
+			return nil, err
+		}
 	}
-	f := &Follower{cfg: cfg, origin: origin, red: red, current: current}
+	if cfg.State != nil {
+		if restored := cfg.State.Current(origin); f.admit(restored) == nil {
+			red.add(restored)
+			f.current = restored
+		}
+	}
 	f.client = &client{
 		http:    newHTTPClient(cfg.HTTPClient),
 		timeout: cfg.RequestTimeout,
@@ -89,6 +107,8 @@ func NewFollower(cfg Config) (*Follower, error) {
 		backoff: cfg.RetryBackoff,
 		red:     red,
 		logf:    f.logf,
+		halted:  f.Refused,
+		wake:    f.wake,
 	}
 	return f, nil
 }
@@ -113,19 +133,79 @@ func (f *Follower) logf(format string, args ...any) {
 	}
 }
 
-func (f *Follower) advance(next string) {
-	f.red.add(next)
+func (f *Follower) admit(next string) error {
+	if f.pin == nil {
+		return nil
+	}
+	u, err := ParseJoinURL(next)
+	if err != nil || !sameOrigin(f.pin, u) || HubOrigin(next) != f.pinKey {
+		return errForeignOrigin()
+	}
+	if strings.Contains(f.pin.Hostname()+u.Hostname(), "%") && f.pin.Hostname() != u.Hostname() {
+		return errForeignOrigin()
+	}
+	return nil
+}
+
+func errForeignOrigin() *Error {
+	return &Error{Code: CodeSupersededForeignOrigin, Message: "the tray moved to another hub origin; it was not followed"}
+}
+
+func (f *Follower) refuse() error {
 	f.mu.Lock()
+	if f.refused.CompareAndSwap(nil, errForeignOrigin()) {
+		close(f.wake)
+	}
+	f.mu.Unlock()
+	return f.Refused()
+}
+
+func (f *Follower) Refused() error {
+	if e := f.refused.Load(); e != nil {
+		return e
+	}
+	return nil
+}
+
+func (f *Follower) refusedOr(err error) error {
+	if e := f.Refused(); e != nil {
+		return e
+	}
+	return err
+}
+
+func (f *Follower) advance(next string, mustSave bool, stop error) error {
+	if err := f.Refused(); err != nil {
+		return err
+	}
+	if f.admit(next) != nil {
+		return f.refuse()
+	}
+	if stop != nil {
+		return stop
+	}
+	f.red.add(next)
+	if mustSave && f.cfg.State != nil {
+		if err := f.cfg.State.Save(f.origin, next); err != nil {
+			return err
+		}
+	}
+	f.mu.Lock()
+	if err := f.Refused(); err != nil {
+		f.mu.Unlock()
+		return err
+	}
 	f.current = next
 	f.mu.Unlock()
-	if f.cfg.State != nil {
+	if !mustSave && f.cfg.State != nil && f.Refused() == nil {
 		if err := f.cfg.State.Save(f.origin, next); err != nil {
 			f.logf("tray: %v", err)
 		}
 	}
-	if f.cfg.OnJoinURLChanged != nil {
+	if f.cfg.OnJoinURLChanged != nil && f.Refused() == nil {
 		f.cfg.OnJoinURLChanged(next)
 	}
+	return nil
 }
 
 func (f *Follower) Dial(ctx context.Context) (*Session, error) {
@@ -134,6 +214,9 @@ func (f *Follower) Dial(ctx context.Context) (*Session, error) {
 		joinURL := f.currentURL()
 		resp, err := f.attachWait(ctx, joinURL, controllerID)
 		if err != nil {
+			return nil, err
+		}
+		if err := f.Refused(); err != nil {
 			return nil, err
 		}
 		if resp.superseded {
@@ -178,11 +261,14 @@ func (f *Follower) followSupersede(next string, redirects int) error {
 	if err := f.checkSuccessor(next); err != nil {
 		return err
 	}
+	var stop error
 	if redirects >= MaxRedirects {
-		return &Error{Code: CodeSupersedeExhausted, Message: fmt.Sprintf("the tray moved %d times without settling", MaxRedirects), Retryable: true}
+		stop = &Error{Code: CodeSupersedeExhausted, Message: fmt.Sprintf("the tray moved %d times without settling", MaxRedirects), Retryable: true}
+	}
+	if err := f.advance(next, false, stop); err != nil {
+		return err
 	}
 	f.logf("tray: superseded, following redirect %d/%d", redirects+1, MaxRedirects)
-	f.advance(next)
 	return nil
 }
 
@@ -200,9 +286,12 @@ func (f *Follower) attachError(res *attachResult) error {
 
 func (f *Follower) attachWait(ctx context.Context, joinURL, controllerID string) (*hubResponse, error) {
 	for {
+		if err := f.Refused(); err != nil {
+			return nil, err
+		}
 		resp, err := f.client.post(ctx, joinURL, map[string]any{"controllerId": controllerID, "runtime": f.cfg.Runtime})
 		if err != nil {
-			return nil, err
+			return nil, f.refusedOr(err)
 		}
 		if resp.superseded {
 			return resp, nil
@@ -215,8 +304,8 @@ func (f *Follower) attachWait(ctx context.Context, joinURL, controllerID string)
 		}
 		wait := clampWait(resp.Result.RetryAfterMs)
 		f.logf("tray: waiting for the leader (%s), next attach in %s", f.red.redact(resp.Result.Code), wait)
-		if err := sleepCtx(ctx, nil, wait); err != nil {
-			return nil, err
+		if err := sleepCtx(ctx, nil, f.wake, wait); err != nil {
+			return nil, f.refusedOr(err)
 		}
 	}
 }
@@ -229,7 +318,7 @@ func clampWait(ms *int) time.Duration {
 	return min(max(d, minWaitInterval), maxWaitInterval)
 }
 
-func sleepCtx(ctx context.Context, done <-chan struct{}, d time.Duration) error {
+func sleepCtx(ctx context.Context, done, refused <-chan struct{}, d time.Duration) error {
 	if d <= 0 {
 		return ctx.Err()
 	}
@@ -239,6 +328,8 @@ func sleepCtx(ctx context.Context, done <-chan struct{}, d time.Duration) error 
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-done:
+		return ErrClosed
+	case <-refused:
 		return ErrClosed
 	case <-t.C:
 		return nil
@@ -262,18 +353,10 @@ func (f *Follower) Rejoin(joinURL string) error {
 	}
 	cur, err := ParseJoinURL(f.currentURL())
 	if err != nil || !sameOrigin(cur, next) {
+		if f.admit(joinURL) != nil {
+			return f.refuse()
+		}
 		return ErrJoinOrigin
 	}
-	if f.cfg.State != nil {
-		if err := f.cfg.State.Save(f.origin, joinURL); err != nil {
-			return err
-		}
-	}
-	f.mu.Lock()
-	f.current = joinURL
-	f.mu.Unlock()
-	if f.cfg.OnJoinURLChanged != nil {
-		f.cfg.OnJoinURLChanged(joinURL)
-	}
-	return nil
+	return f.advance(joinURL, true, nil)
 }
