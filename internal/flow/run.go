@@ -96,8 +96,12 @@ func PageOrigins(page string, extra []string) ([]string, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("--page %q is not an http(s) URL", page)
 	}
+	o := browser.OriginOf(page)
+	if !browser.IsSevenOrigin(o, nil) && protect.MustNew(nil).Loaded(o) {
+		return nil, fmt.Errorf("--page %s is on a protected host and is not a seven page", o)
+	}
 	origins := append([]string(nil), extra...)
-	if o := browser.OriginOf(page); !browser.IsSevenOrigin(o, extra) {
+	if !browser.IsSevenOrigin(o, extra) {
 		origins = append(origins, o)
 	}
 	if _, err := signal.NewOrigins(origins); err != nil {
