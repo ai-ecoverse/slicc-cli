@@ -182,12 +182,12 @@ func attach(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		out.fail(err.Error(), "", false)
 		return code
 	}
-	if !f.noKernel {
-		f.kernelPort = kernelin.Pick(f.kernelPort, status)
-	}
 	origins, err := signal.NewOrigins(f.origins)
 	if err != nil {
 		return fail(err, 2)
+	}
+	if !f.noKernel {
+		f.kernelPort = kernelin.Pick(f.kernelPort, status)
 	}
 	ctx, stop := signalContext(context.Background(), st, false)
 	defer stop()

@@ -249,6 +249,33 @@ func under(host, domain string) bool {
 	return host == domain || strings.HasSuffix(host, "."+domain)
 }
 
+func ZoneHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	h = strings.Map(func(r rune) rune {
+		switch r {
+		case '\u3002', '\uff0e', '\uff61':
+			return '.'
+		default:
+			return r
+		}
+	}, h)
+	for strings.HasSuffix(h, ".") {
+		h = strings.TrimSuffix(h, ".")
+	}
+	if h == "" {
+		return false
+	}
+	if slices.Contains(rules.Hosts, h) {
+		return true
+	}
+	for _, d := range rules.Domains {
+		if under(h, d) {
+			return true
+		}
+	}
+	return false
+}
+
 func unwrap(u *whatwg.Url) *whatwg.Url {
 	for i := 0; u != nil && i < maxUnwrap && slices.Contains(rules.InnerSchemes, scheme(u)); i++ {
 		u = parse(strings.TrimPrefix(u.Href(false), u.Protocol()))

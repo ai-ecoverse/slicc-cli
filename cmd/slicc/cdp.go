@@ -17,6 +17,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/ctl"
 	"github.com/ai-ecoverse/slicc-cli/internal/flow"
 	"github.com/ai-ecoverse/slicc-cli/internal/link"
+	"github.com/ai-ecoverse/slicc-cli/internal/signal"
 	"github.com/ai-ecoverse/slicc-cli/internal/signal/tray"
 )
 
@@ -105,6 +106,10 @@ func parseCDP(joinURL string, args []string, aio agentIO) (cdpFlags, int) {
 		return f, 2
 	case joinURL == "" && f.cdp == "" && f.signal != "stdio":
 		fmt.Fprintf(aio.stderr, "slicc cdp: give a join URL (slicc <join-url> cdp) or --cdp <url>\n\n%s", cdpUsage)
+		return f, 2
+	}
+	if _, err := signal.NewOrigins(f.origins); err != nil {
+		fmt.Fprintf(aio.stderr, "slicc cdp: %v\n", err)
 		return f, 2
 	}
 	return f, -1

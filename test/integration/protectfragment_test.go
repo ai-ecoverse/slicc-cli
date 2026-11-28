@@ -23,14 +23,14 @@ type fragmentTarget struct {
 }
 
 func TestCDPKeepsSevensURLFragmentOutOfTargets(t *testing.T) {
-	b := launchBrowserOn(t, 0, "--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1")
+	b := launchBrowserOn(t, 0, "--host-resolver-rules=MAP *.protected.test 127.0.0.1")
 	srv := pageServer(t)
 	seven := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(fragmentPage))
 	}))
 	t.Cleanup(seven.Close)
-	origin := "http://seven.sliccy.ai:" + seven.URL[strings.LastIndexByte(seven.URL, ':')+1:]
+	origin := "http://seven.protected.test:" + seven.URL[strings.LastIndexByte(seven.URL, ':')+1:]
 	e := &protectEnv{linkEnv: &linkEnv{t: t, b: b, origin: srv.URL}, seven: origin}
 	e.a = startAttach(t, "--cdp", b.endpoint, "--origin", srv.URL, "--origin", origin, "--name", "it-node")
 	e.p = b.openPage(t, srv.URL+"/index.html")
